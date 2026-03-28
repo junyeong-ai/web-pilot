@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { width: 250px; padding: 12px; font-family: system-ui; font-size: 13px; }
+    .status { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.on { background: #22c55e; }
+    .dot.off { background: #ef4444; }
+    code { background: #f1f5f9; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="status">
+    <div class="dot" id="dot"></div>
+    <span id="statusText">Checking...</span>
+  </div>
+  <div id="info"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

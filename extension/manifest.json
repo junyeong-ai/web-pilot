@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "WebPilot",
+  "version": "1.0.0",
+  "description": "Browser control tool for AI agents",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx7vFClyetYaGjjssPpAGlkMUj/jZO/Gq8ALEtcUPT/FaMXVSjwOX8gHkth2TYzPUtzW96/Nrmw+naKm7iYVIfRQJ5wBHVlVjeUHmVm5Js5cRPpagF5MgQAaODTq52HN9Ew2FOPAToDdJPhrVp+tY/2wffVME1pg9LtiOoLn0muVAgnzVLsHAK1D7cv5F5A5mjFxAZVmYTLtnItud2+JsVF254xIoyoh6Fi76e4AYCX0wwBwKy271ogocccFIH2myCDK1cB20PNdR19GmMCvOPFeC9vvN64rm8Mm8tmVI3F9NyvcFAAb4FG8FrMv9Qc+IW4lBQAYLUEPgsCrs6o2mpQIDAQAB",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "nativeMessaging",
+    "sidePanel",
+    "webNavigation",
+    "cookies",
+    "debugger",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "content_scripts": [{
+    "matches": ["http://*/*", "https://*/*"],
+    "js": ["content/bridge.js"],
+    "all_frames": true,
+    "run_at": "document_idle"
+  }],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'"
+  },
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/panel.html"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
