@@ -49,7 +49,7 @@ webpilot capture --dom                                # 4. Verify
 | | `capture --annotate` | Screenshot with numbered labels |
 | | `capture --dom --text --screenshot` | All at once (single JSON) |
 | | `capture --dom --occlusion` | Mark occluded elements |
-| | `capture --screenshot --fullpage` | Full-page screenshot |
+| | `--browser capture --screenshot --fullpage` | Full-page screenshot (browser only) |
 | **Find** | `find --role button --text "Submit"` | Semantic search |
 | | `find --placeholder "Search" --click` | Find + click |
 | | `find --label "Email" --fill "a@b.com"` | Find + type |
@@ -60,7 +60,7 @@ webpilot capture --dom                                # 4. Verify
 | | `action scroll down` / `up` | Scroll page |
 | | `action hover N` / `focus N` | Hover/focus |
 | | `action select N "value"` | Select dropdown option |
-| | `action upload N "/path"` | File upload (CDP) |
+| | `--browser action upload N "/path"` | File upload (browser only) |
 | **Wait** | `wait --selector ".results"` | Wait for element |
 | | `wait --text "Success"` | Wait for text |
 | | `wait --navigation` | Wait for page load |

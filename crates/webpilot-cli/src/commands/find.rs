@@ -116,30 +116,28 @@ pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
                     return false;
                 }
             }
-            if let Some(ref label) = label_lower {
-                if !el
+            if let Some(ref label) = label_lower
+                && !el
                     .label
                     .as_ref()
                     .map(|l| l.to_lowercase().contains(label.as_str()))
                     .unwrap_or(false)
-                {
-                    return false;
-                }
+            {
+                return false;
             }
-            if let Some(ref ph) = ph_lower {
-                if !el
+            if let Some(ref ph) = ph_lower
+                && !el
                     .placeholder
                     .as_ref()
                     .map(|p| p.to_lowercase().contains(ph.as_str()))
                     .unwrap_or(false)
-                {
-                    return false;
-                }
+            {
+                return false;
             }
-            if let Some(ref tag) = tag_lower {
-                if el.tag.to_lowercase() != *tag {
-                    return false;
-                }
+            if let Some(ref tag) = tag_lower
+                && el.tag.to_lowercase() != *tag
+            {
+                return false;
             }
             true
         })

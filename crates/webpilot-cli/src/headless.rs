@@ -127,9 +127,7 @@ async fn capture(
     let mut out = serde_json::Map::new();
 
     // DOM extraction
-    let dom = args.dom
-        || args.annotate
-        || (!args.dom && !args.screenshot && !args.text && !args.accessibility);
+    let dom = args.dom || args.annotate || (!args.screenshot && !args.text && !args.accessibility);
     let bounds = args.bounds || args.annotate;
 
     if dom {
@@ -159,34 +157,34 @@ async fn capture(
     let screenshot = args.screenshot || args.annotate;
     if screenshot {
         // Add annotations if requested
-        if args.annotate {
-            if let Some(elements) = out.get("elements").and_then(|v| v.as_array()) {
-                let annotations: Vec<_> = elements
-                    .iter()
-                    .filter(|e| {
-                        e.get("in_viewport")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                            && e.get("bounds").is_some()
-                    })
-                    .filter_map(|e| {
-                        let b = e.get("bounds")?;
-                        Some(serde_json::json!({
-                            "index": e.get("index")?,
-                            "x": b.get("x")?, "y": b.get("y")?,
-                            "w": b.get("w")?, "h": b.get("h")?,
-                        }))
-                    })
-                    .collect();
-                if !annotations.is_empty() {
-                    call_bridge(
-                        cdp,
-                        &serde_json::json!({"type": "addAnnotations", "elements": annotations})
-                            .to_string(),
-                    )
-                    .await?;
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                }
+        if args.annotate
+            && let Some(elements) = out.get("elements").and_then(|v| v.as_array())
+        {
+            let annotations: Vec<_> = elements
+                .iter()
+                .filter(|e| {
+                    e.get("in_viewport")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                        && e.get("bounds").is_some()
+                })
+                .filter_map(|e| {
+                    let b = e.get("bounds")?;
+                    Some(serde_json::json!({
+                        "index": e.get("index")?,
+                        "x": b.get("x")?, "y": b.get("y")?,
+                        "w": b.get("w")?, "h": b.get("h")?,
+                    }))
+                })
+                .collect();
+            if !annotations.is_empty() {
+                call_bridge(
+                    cdp,
+                    &serde_json::json!({"type": "addAnnotations", "elements": annotations})
+                        .to_string(),
+                )
+                .await?;
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
         }
 
@@ -220,12 +218,12 @@ async fn capture(
     // Output
     match output_mode {
         OutputMode::Human => {
-            if let Some(elements) = out.get("elements").and_then(|v| v.as_array()) {
-                if !elements.is_empty() {
-                    let snapshot: webpilot::types::DomSnapshot =
-                        serde_json::from_value(serde_json::Value::Object(out.clone()))?;
-                    print!("{}", webpilot::types::serialize_dom(&snapshot));
-                }
+            if let Some(elements) = out.get("elements").and_then(|v| v.as_array())
+                && !elements.is_empty()
+            {
+                let snapshot: webpilot::types::DomSnapshot =
+                    serde_json::from_value(serde_json::Value::Object(out.clone()))?;
+                print!("{}", webpilot::types::serialize_dom(&snapshot));
             }
             if let Some(path) = out.get("screenshot_path").and_then(|v| v.as_str()) {
                 eprintln!("Screenshot: {path}");
@@ -247,16 +245,13 @@ async fn action(
     let action_json = serde_json::to_value(&browser_action)?;
 
     // Handle navigation actions directly via CDP
-    match browser_action {
-        webpilot::protocol::BrowserAction::Navigate { ref url } => {
-            cdp.navigate(url).await?;
-            match output_mode {
-                OutputMode::Human => eprintln!("OK"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
-            return Ok(());
+    if let webpilot::protocol::BrowserAction::Navigate { ref url } = browser_action {
+        cdp.navigate(url).await?;
+        match output_mode {
+            OutputMode::Human => eprintln!("OK"),
+            OutputMode::Json => println!("{{\"success\":true}}"),
         }
-        _ => {}
+        return Ok(());
     }
 
     let result = call_bridge(
@@ -381,52 +376,48 @@ async fn find(
     let matches: Vec<&webpilot::types::InteractiveElement> = elements
         .iter()
         .filter(|el| {
-            if let Some(ref role) = role_lower {
-                if !(el
+            if let Some(ref role) = role_lower
+                && !(el
                     .role
                     .as_ref()
                     .map(|r| r.to_lowercase() == *role)
                     .unwrap_or(false)
                     || el.tag.to_lowercase() == *role)
-                {
-                    return false;
-                }
+            {
+                return false;
             }
-            if let Some(ref text) = text_lower {
-                if !(el.text.to_lowercase().contains(text.as_str())
+            if let Some(ref text) = text_lower
+                && !(el.text.to_lowercase().contains(text.as_str())
                     || el
                         .name
                         .as_ref()
                         .map(|n| n.to_lowercase().contains(text.as_str()))
                         .unwrap_or(false))
-                {
-                    return false;
-                }
+            {
+                return false;
             }
-            if let Some(ref label) = label_lower {
-                if !el
+            if let Some(ref label) = label_lower
+                && !el
                     .label
                     .as_ref()
                     .map(|l| l.to_lowercase().contains(label.as_str()))
                     .unwrap_or(false)
-                {
-                    return false;
-                }
+            {
+                return false;
             }
-            if let Some(ref ph) = ph_lower {
-                if !el
+            if let Some(ref ph) = ph_lower
+                && !el
                     .placeholder
                     .as_ref()
                     .map(|p| p.to_lowercase().contains(ph.as_str()))
                     .unwrap_or(false)
-                {
-                    return false;
-                }
+            {
+                return false;
             }
-            if let Some(ref tag) = tag_lower {
-                if el.tag.to_lowercase() != *tag {
-                    return false;
-                }
+            if let Some(ref tag) = tag_lower
+                && el.tag.to_lowercase() != *tag
+            {
+                return false;
             }
             true
         })

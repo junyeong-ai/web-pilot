@@ -2,9 +2,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.94.0%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 
-> **[English](#) | [한국어](#)**
-
-**AI 에이전트를 위한 업계 최고 수준의 브라우저 제어 CLI.** 설정 없이 바로 사용 — Chrome이 자동으로 실행됩니다.
+**AI 에이전트를 위한 브라우저 제어 CLI.** 설정 없이 바로 사용 — Chrome이 자동으로 실행됩니다.
 
 ---
 
@@ -120,7 +118,7 @@ Browser (--browser):
 | 후속 명령 속도 | **10ms** | 190ms | — |
 | SSO 지원 | **--browser** | ✗ | ✗ |
 | 네트워크 모니터링 | **내장** | ✗ | CDP |
-| 콘솔 캡처 | **내장** | ✗ | ✗ |
+| 콘솔 캡처 | **내장** | ✗ | CDP |
 | 시맨틱 검색 (find) | **내장** | ✗ | XPath |
 | DOM 직접 조작 | **내장** | ✗ | ✗ |
 | Annotated 스크린샷 | **내장** | 내장 | PIL |

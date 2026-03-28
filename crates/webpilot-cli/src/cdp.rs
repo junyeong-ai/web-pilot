@@ -36,14 +36,13 @@ impl CdpClient {
         let pending_clone = pending.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = reader.next().await {
-                if let Message::Text(text) = msg {
-                    if let Ok(json) = serde_json::from_str::<Value>(text.as_ref()) {
-                        if let Some(id) = json.get("id").and_then(|v| v.as_u64()) {
-                            let mut map = pending_clone.lock().await;
-                            if let Some(sender) = map.remove(&id) {
-                                let _ = sender.send(json);
-                            }
-                        }
+                if let Message::Text(text) = msg
+                    && let Ok(json) = serde_json::from_str::<Value>(text.as_ref())
+                    && let Some(id) = json.get("id").and_then(|v| v.as_u64())
+                {
+                    let mut map = pending_clone.lock().await;
+                    if let Some(sender) = map.remove(&id) {
+                        let _ = sender.send(json);
                     }
                 }
             }

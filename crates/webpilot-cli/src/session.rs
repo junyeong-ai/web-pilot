@@ -26,23 +26,23 @@ pub fn find_chrome() -> Result<PathBuf> {
     // Check agent-browser's Chrome for Testing (preferred — no single-instance lock)
     let home = std::env::var("HOME").unwrap_or_default();
     let browsers_dir = PathBuf::from(&home).join(".agent-browser/browsers");
-    if browsers_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&browsers_dir) {
-            let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-            versions.sort_by(|a, b| b.file_name().cmp(&a.file_name())); // Latest first
-            for entry in versions {
-                let app = entry
-                    .path()
-                    .join("Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
-                if app.exists() {
-                    return Ok(app);
-                }
-                // Alternative layout
-                let app2 = entry.path()
+    if browsers_dir.exists()
+        && let Ok(entries) = std::fs::read_dir(&browsers_dir)
+    {
+        let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+        versions.sort_by_key(|b| std::cmp::Reverse(b.file_name())); // Latest first
+        for entry in versions {
+            let app = entry
+                .path()
+                .join("Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
+            if app.exists() {
+                return Ok(app);
+            }
+            // Alternative layout
+            let app2 = entry.path()
                     .join("chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
-                if app2.exists() {
-                    return Ok(app2);
-                }
+            if app2.exists() {
+                return Ok(app2);
             }
         }
     }
@@ -59,12 +59,11 @@ pub fn find_chrome() -> Result<PathBuf> {
     if let Ok(out) = std::process::Command::new("which")
         .arg("google-chrome")
         .output()
+        && out.status.success()
     {
-        if out.status.success() {
-            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(PathBuf::from(path));
-            }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
         }
     }
 
@@ -136,11 +135,11 @@ pub fn launch_chrome() -> Result<(u32, String)> {
         if std::time::Instant::now() > deadline {
             break;
         }
-        if let Ok(line) = line {
-            if let Some(url) = line.strip_prefix("DevTools listening on ") {
-                ws_url = Some(url.trim().to_string());
-                break;
-            }
+        if let Ok(line) = line
+            && let Some(url) = line.strip_prefix("DevTools listening on ")
+        {
+            ws_url = Some(url.trim().to_string());
+            break;
         }
     }
 
@@ -167,14 +166,14 @@ pub fn get_existing_session() -> Option<String> {
     }
 
     // Check if Chrome is still alive
-    if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            let alive = unsafe { libc::kill(pid, 0) == 0 };
-            if alive {
-                return std::fs::read_to_string(&ws_file)
-                    .ok()
-                    .map(|s| s.trim().to_string());
-            }
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
+        && let Ok(pid) = pid_str.trim().parse::<i32>()
+    {
+        let alive = unsafe { libc::kill(pid, 0) == 0 };
+        if alive {
+            return std::fs::read_to_string(&ws_file)
+                .ok()
+                .map(|s| s.trim().to_string());
         }
     }
 
@@ -191,13 +190,13 @@ pub fn ensure_session() -> Result<String> {
     }
 
     // Clean up orphaned Chrome
-    if let Ok(pid_str) = std::fs::read_to_string(pid_path()) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            unsafe {
-                if libc::kill(pid, 0) == 0 {
-                    libc::kill(pid, libc::SIGTERM);
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                }
+    if let Ok(pid_str) = std::fs::read_to_string(pid_path())
+        && let Ok(pid) = pid_str.trim().parse::<i32>()
+    {
+        unsafe {
+            if libc::kill(pid, 0) == 0 {
+                libc::kill(pid, libc::SIGTERM);
+                std::thread::sleep(std::time::Duration::from_secs(1));
             }
         }
     }
@@ -212,16 +211,16 @@ pub fn ensure_session() -> Result<String> {
 pub fn quit_session() -> Result<()> {
     let pid_file = pid_path();
     if pid_file.exists() {
-        if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
-            if let Ok(pid) = pid_str.trim().parse::<i32>() {
-                unsafe {
-                    libc::kill(pid, libc::SIGTERM);
-                }
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                unsafe {
-                    if libc::kill(pid, 0) == 0 {
-                        libc::kill(pid, libc::SIGKILL);
-                    }
+        if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
+            && let Ok(pid) = pid_str.trim().parse::<i32>()
+        {
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            unsafe {
+                if libc::kill(pid, 0) == 0 {
+                    libc::kill(pid, libc::SIGKILL);
                 }
             }
         }

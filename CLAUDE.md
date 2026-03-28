@@ -85,7 +85,7 @@ webpilot action reload                     # Reload page
 webpilot action hover 7                    # Hover over element [7]
 webpilot action focus 4                    # Focus element [4]
 webpilot action select 8 "option_value"    # Select dropdown option
-webpilot action upload 5 "/path/to/file"   # Upload file (CDP, shows debugger banner)
+webpilot --browser action upload 5 "/path/to/file"   # Upload file (--browser mode only)
 ```
 
 ### Evaluate JavaScript
@@ -197,8 +197,8 @@ webpilot cookies delete "https://example.com" "name"
 ```bash
 webpilot capture --annotate                          # Annotated screenshot: numbered labels on elements
 webpilot capture --dom --occlusion                   # Detect elements hidden behind overlays
-webpilot capture --screenshot --fullpage             # Full-page screenshot (tile-and-stitch)
-webpilot capture --accessibility                     # Accessibility tree via CDP (shows debugger banner)
+webpilot --browser capture --screenshot --fullpage   # Full-page screenshot (--browser mode only)
+webpilot --browser capture --accessibility           # Accessibility tree (--browser mode only)
 ```
 
 ### Check Status
@@ -253,21 +253,30 @@ Single binary `webpilot` with three modes:
 
 ## Troubleshooting
 
-### "Not connected" error
-1. Check that the Extension is loaded in Chrome: `chrome://extensions`
-2. Check that NM manifest is installed: `cat ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.webpilot.host.json`
-3. Verify the extension ID in the manifest matches Chrome's Extension ID
-4. Reload the Extension in Chrome (click ↻ icon)
-5. Check service worker console: click "service worker" link on the Extension page
+### Headless mode (default)
 
-### Extension shows errors
-- Open `chrome://extensions` → WebPilot → click "service worker" link
-- Check the Console tab for `[WebPilot]` logs and errors
+**"Chrome not found"**
+- Install Chrome or Chrome for Testing, or set `WEBPILOT_CHROME=/path/to/chrome`
+- If agent-browser is installed, its Chrome for Testing is auto-detected
 
-### Socket file
-The IPC socket is at `/tmp/webpilot-<username>.sock`.
-If it exists but status fails, the host process may have crashed.
-Delete it and reload the Extension: `rm /tmp/webpilot-*.sock`
+**"CDP timeout"**
+- Chrome may be busy. Run `webpilot quit` and retry
+- Check if Chrome process is running: `ps aux | grep "Chrome for Testing"`
+
+**Session stuck**
+- `webpilot quit` stops the headless Chrome
+- PID file at `/tmp/webpilot-<user>-headless.pid`
+- WebSocket URL at `/tmp/webpilot-<user>-headless.ws`
+
+### Browser mode (--browser)
+
+**"Not connected"**
+1. Run `webpilot install --extension-id <ID>`
+2. Load extension in Chrome: `chrome://extensions` → Load unpacked → `extension/`
+3. Reload the extension (↻ icon)
+
+**Extension errors**
+- `chrome://extensions` → WebPilot → "service worker" link → Console tab
 
 ## Project Structure
 

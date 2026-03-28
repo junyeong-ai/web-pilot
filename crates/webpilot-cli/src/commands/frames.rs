@@ -57,7 +57,7 @@ async fn list_frames(output_mode: OutputMode) -> Result<()> {
         } => match output_mode {
             OutputMode::Human => {
                 for f in &frames {
-                    let marker = if f.frame_id as i64 == active_frame_id {
+                    let marker = if f.frame_id == active_frame_id {
                         "*"
                     } else {
                         " "

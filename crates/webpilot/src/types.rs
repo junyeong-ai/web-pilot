@@ -197,10 +197,10 @@ pub fn serialize_dom(snapshot: &DomSnapshot) -> String {
         };
         out.push_str(&format!("{new_marker}[{}] {tag_id} ", el.index));
 
-        if let Some(ref role) = el.role {
-            if role != &el.tag {
-                out.push_str(&format!("role={role} "));
-            }
+        if let Some(ref role) = el.role
+            && role != &el.tag
+        {
+            out.push_str(&format!("role={role} "));
         }
 
         if !el.text.is_empty() {
@@ -213,10 +213,10 @@ pub fn serialize_dom(snapshot: &DomSnapshot) -> String {
             out.push_str(&format!("label=\"{label}\" "));
         }
         // Only show placeholder if different from text
-        if let Some(ref ph) = el.placeholder {
-            if ph != &el.text {
-                out.push_str(&format!("placeholder=\"{ph}\" "));
-            }
+        if let Some(ref ph) = el.placeholder
+            && ph != &el.text
+        {
+            out.push_str(&format!("placeholder=\"{ph}\" "));
         }
         if let Some(ref href) = el.href {
             if href.len() > 50 {
@@ -225,10 +225,10 @@ pub fn serialize_dom(snapshot: &DomSnapshot) -> String {
                 out.push_str(&format!("href=\"{href}\" "));
             }
         }
-        if let Some(ref val) = el.value {
-            if !val.is_empty() {
-                out.push_str(&format!("value=\"{val}\" "));
-            }
+        if let Some(ref val) = el.value
+            && !val.is_empty()
+        {
+            out.push_str(&format!("value=\"{val}\" "));
         }
         if let Some(ref it) = el.input_type {
             out.push_str(&format!("type={it} "));
