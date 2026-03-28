@@ -18,7 +18,7 @@ serde_json = "1"
 
 # Image (screenshot processing in host)
 image = "0.25"
-fast_image_resize = "5"
+fast_image_resize = "6"
 base64 = "0.22"
 
 # CLI
