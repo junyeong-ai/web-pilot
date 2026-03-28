@@ -1,0 +1,27 @@
+[package]
+name = "webpilot-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Browser control CLI for AI agents"
+
+[[bin]]
+name = "webpilot"
+path = "src/main.rs"
+
+[dependencies]
+webpilot = { path = "../webpilot" }
+tokio.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+similar.workspace = true
+base64.workspace = true
+image.workspace = true
+libc = "0.2"
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
