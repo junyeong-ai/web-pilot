@@ -31,11 +31,12 @@ Then load the extension in Chrome (`chrome://extensions` → Load unpacked → `
 webpilot --browser capture --dom   # Uses your Chrome with SSO
 ```
 
-### 4. Install Claude Code Skill (Optional)
+### 4. Global Install (Optional)
 ```bash
-./scripts/install-skill.sh
+./scripts/install.sh
 ```
-Installs the `/webpilot` skill for Claude Code. Auto-activates on browser tasks.
+Installs the `webpilot` binary to `~/.local/bin` and the `/webpilot` Claude Code skill.
+Supports `--yes`, `--quiet`, `--no-skill`, `--source`, `--download` flags.
 
 ## Commands
 

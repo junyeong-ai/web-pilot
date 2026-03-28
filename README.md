@@ -130,7 +130,7 @@ Browser (--browser):
 ## Claude Code 스킬
 
 ```bash
-./scripts/install-skill.sh    # 인터랙티브 설치
+./scripts/install.sh          # 바이너리 + 스킬 통합 설치
 ```
 
 설치 후 Claude Code에서 `/webpilot` 또는 자연어로 자동 활성화됩니다.
