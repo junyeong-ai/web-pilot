@@ -54,8 +54,9 @@ pub async fn run(command: commands::Command, output_mode: OutputMode) -> Result<
         commands::Command::Eval(args) => eval(&cdp, args, output_mode).await,
         commands::Command::Wait(args) => wait(&cdp, args, output_mode).await,
         commands::Command::Find(args) => find(&cdp, args, output_mode).await,
-        commands::Command::Status => unreachable!(), // handled above
-        commands::Command::Quit => unreachable!(),   // handled above
+        commands::Command::Status | commands::Command::Quit => {
+            anyhow::bail!("internal error: should have been handled above")
+        }
         commands::Command::Tabs(args) => tabs(&cdp, args, output_mode).await,
         commands::Command::Dom(args) => dom(&cdp, args, output_mode).await,
         commands::Command::Frames(_) => frames(&cdp, output_mode).await,
@@ -75,8 +76,7 @@ pub async fn run(command: commands::Command, output_mode: OutputMode) -> Result<
 }
 
 async fn status_check(output_mode: OutputMode) -> Result<()> {
-    let session = crate::session::get_existing_session();
-    if session.is_none() {
+    let Some(ws_url) = crate::session::get_existing_session() else {
         match output_mode {
             OutputMode::Human => eprintln!("Mode: headless\nStatus: no active session"),
             OutputMode::Json => println!(
@@ -85,8 +85,7 @@ async fn status_check(output_mode: OutputMode) -> Result<()> {
             ),
         }
         return Ok(());
-    }
-    let ws_url = session.unwrap();
+    };
 
     let Ok(browser) = CdpClient::connect(&ws_url).await else {
         match output_mode {

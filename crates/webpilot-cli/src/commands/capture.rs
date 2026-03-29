@@ -54,7 +54,7 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
     let annotate = args.annotate;
     if annotate && args.full_page {
         anyhow::bail!(
-            "--annotate and --fullpage cannot be combined. Annotations are viewport-only."
+            "--annotate and --full-page cannot be combined. Annotations are viewport-only."
         );
     }
     let dom = args.dom || annotate || (!args.screenshot && !args.text && !args.accessibility);

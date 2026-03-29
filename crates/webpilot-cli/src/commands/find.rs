@@ -7,6 +7,7 @@ use webpilot::types::InteractiveElement;
 use crate::output::OutputMode;
 
 #[derive(Args)]
+/// At least one filter is required
 pub struct FindArgs {
     /// Filter by ARIA role or tag name
     #[arg(long)]

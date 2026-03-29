@@ -26,7 +26,7 @@ pub enum DeviceAction {
         #[arg(long)]
         user_agent: Option<String>,
     },
-    /// Use a preset device profile
+    /// Use a preset device profile (iphone-15, pixel-8, ipad-pro, galaxy-s24)
     Preset {
         /// Device name (iphone-15, pixel-8, ipad-pro, galaxy-s24)
         name: String,
