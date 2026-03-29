@@ -2,6 +2,7 @@ pub mod action;
 pub mod capture;
 pub mod console;
 pub mod cookies;
+pub mod device;
 pub mod diff;
 pub mod dom;
 pub mod eval;
@@ -50,6 +51,8 @@ pub enum Command {
     Policy(policy::PolicyArgs),
     /// Manage cookies
     Cookies(cookies::CookiesArgs),
+    /// Emulate device viewport and user agent
+    Device(device::DeviceArgs),
     /// Check connection status
     Status,
     /// Install Native Messaging host manifest (for --browser mode)
