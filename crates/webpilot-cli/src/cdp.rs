@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, broadcast, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
@@ -17,6 +17,7 @@ pub struct CdpClient {
     writer: Arc<Mutex<futures_util::stream::SplitSink<WsStream, Message>>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
     next_id: Arc<Mutex<u64>>,
+    events: broadcast::Sender<Value>,
 }
 
 impl CdpClient {
@@ -31,18 +32,25 @@ impl CdpClient {
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(Mutex::new(1u64));
+        let (events_tx, _) = broadcast::channel::<Value>(64);
 
-        // Background reader: dispatch responses to pending requests
+        // Background reader: dispatch responses or broadcast events
         let pending_clone = pending.clone();
+        let events_tx_clone = events_tx.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = reader.next().await {
                 if let Message::Text(text) = msg
                     && let Ok(json) = serde_json::from_str::<Value>(text.as_ref())
-                    && let Some(id) = json.get("id").and_then(|v| v.as_u64())
                 {
-                    let mut map = pending_clone.lock().await;
-                    if let Some(sender) = map.remove(&id) {
-                        let _ = sender.send(json);
+                    if let Some(id) = json.get("id").and_then(|v| v.as_u64()) {
+                        // Response to a request
+                        let mut map = pending_clone.lock().await;
+                        if let Some(sender) = map.remove(&id) {
+                            let _ = sender.send(json);
+                        }
+                    } else {
+                        // CDP event (no id) — broadcast
+                        let _ = events_tx_clone.send(json);
                     }
                 }
             }
@@ -52,6 +60,7 @@ impl CdpClient {
             writer,
             pending,
             next_id,
+            events: events_tx,
         })
     }
 
@@ -130,12 +139,56 @@ impl CdpClient {
 
     /// Navigate to URL and wait for load.
     pub async fn navigate(&self, url: &str) -> Result<()> {
-        self.send("Page.enable", None).await?;
-        self.send("Page.navigate", Some(serde_json::json!({"url": url})))
+        let resp = self
+            .send("Page.navigate", Some(serde_json::json!({"url": url})))
             .await?;
-        // Wait for loadEventFired would require event subscription; use sleep as pragmatic approach
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        Ok(())
+        // Check for navigation error (e.g., DNS failure)
+        if let Some(err) = resp.get("errorText").and_then(|v| v.as_str()) {
+            anyhow::bail!("Navigation failed: {err}");
+        }
+        // Wait for page load (15s timeout), fall back gracefully
+        match self
+            .wait_for_event("Page.loadEventFired", std::time::Duration::from_secs(15))
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                // Timeout — page may still be loading, continue anyway
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                Ok(())
+            }
+        }
+    }
+
+    /// Wait for a CDP event by method name, with timeout.
+    pub async fn wait_for_event(
+        &self,
+        method: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
+        let mut rx = self.events.subscribe();
+        let method = method.to_string();
+        let method_for_err = method.clone();
+        match tokio::time::timeout(timeout, async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        if event.get("method").and_then(|v| v.as_str()) == Some(&method) {
+                            return Ok(event);
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        anyhow::bail!("CDP event channel closed");
+                    }
+                }
+            }
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => anyhow::bail!("Timeout waiting for {method_for_err}"),
+        }
     }
 
     /// Capture screenshot as base64 PNG.

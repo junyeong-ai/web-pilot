@@ -61,8 +61,15 @@ pub async fn run_cli() -> anyhow::Result<()> {
         commands::Command::Fetch(args) => commands::fetch::run(args, output_mode).await?,
         commands::Command::Cookies(args) => commands::cookies::run(args, output_mode).await?,
         commands::Command::Status => commands::status::run(output_mode).await?,
+        commands::Command::Device(_) => {
+            anyhow::bail!(
+                "Device emulation is only supported in headless mode (without --browser)"
+            );
+        }
         commands::Command::Install(args) => commands::install::run(args, output_mode).await?,
-        commands::Command::Quit => unreachable!(), // handled above
+        commands::Command::Quit => {
+            crate::session::quit_session()?;
+        }
     }
 
     Ok(())

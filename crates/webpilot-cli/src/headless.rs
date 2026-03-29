@@ -12,6 +12,18 @@ const BRIDGE_JS: &str = include_str!("../../../extension/content/bridge.js");
 
 /// Execute a command in headless mode via CDP.
 pub async fn run(command: commands::Command, output_mode: OutputMode) -> Result<()> {
+    // Status and Quit don't need to launch Chrome
+    match &command {
+        commands::Command::Status => {
+            return status_check(output_mode).await;
+        }
+        commands::Command::Quit => {
+            crate::session::quit_session()?;
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let ws_url = crate::session::ensure_session()?;
     let browser = CdpClient::connect(&ws_url).await?;
 
@@ -42,12 +54,9 @@ pub async fn run(command: commands::Command, output_mode: OutputMode) -> Result<
         commands::Command::Eval(args) => eval(&cdp, args, output_mode).await,
         commands::Command::Wait(args) => wait(&cdp, args, output_mode).await,
         commands::Command::Find(args) => find(&cdp, args, output_mode).await,
-        commands::Command::Status => status(&cdp, output_mode).await,
-        commands::Command::Quit => {
-            crate::session::quit_session()?;
-            Ok(())
-        }
-        commands::Command::Tabs(_args) => tabs(&cdp, _args, output_mode).await,
+        commands::Command::Status => unreachable!(), // handled above
+        commands::Command::Quit => unreachable!(),   // handled above
+        commands::Command::Tabs(args) => tabs(&cdp, args, output_mode).await,
         commands::Command::Dom(args) => dom(&cdp, args, output_mode).await,
         commands::Command::Frames(_) => frames(&cdp, output_mode).await,
         commands::Command::Cookies(args) => cookies(&cdp, args, output_mode).await,
@@ -57,10 +66,60 @@ pub async fn run(command: commands::Command, output_mode: OutputMode) -> Result<
         commands::Command::Session(args) => session(&cdp, args, output_mode).await,
         commands::Command::Policy(args) => policy(args, output_mode).await,
         commands::Command::Diff(args) => commands::diff::run(args, output_mode).await,
+        commands::Command::Device(args) => device(&cdp, args, output_mode).await,
         commands::Command::Install(_) => {
             eprintln!("Install is only needed for --browser mode. Headless works without setup.");
             Ok(())
         }
+    }
+}
+
+async fn status_check(output_mode: OutputMode) -> Result<()> {
+    let session = crate::session::get_existing_session();
+    if session.is_none() {
+        match output_mode {
+            OutputMode::Human => eprintln!("Mode: headless\nStatus: no active session"),
+            OutputMode::Json => println!(
+                "{}",
+                serde_json::json!({"connected": false, "mode": "headless"})
+            ),
+        }
+        return Ok(());
+    }
+    let ws_url = session.unwrap();
+
+    let Ok(browser) = CdpClient::connect(&ws_url).await else {
+        match output_mode {
+            OutputMode::Human => eprintln!("Mode: headless\nStatus: disconnected"),
+            OutputMode::Json => println!(
+                "{}",
+                serde_json::json!({"connected": false, "mode": "headless"})
+            ),
+        }
+        return Ok(());
+    };
+
+    let targets = browser.get_targets().await?;
+    let page_target = targets
+        .iter()
+        .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"));
+
+    if let Some(pt) = page_target {
+        let target_id = pt.get("targetId").and_then(|v| v.as_str()).unwrap_or("");
+        let authority = ws_url.split("/devtools/").next().unwrap_or(&ws_url);
+        let page_ws_url = format!("{authority}/devtools/page/{target_id}");
+        let cdp = CdpClient::connect(&page_ws_url).await?;
+        cdp.send("Runtime.enable", None).await?;
+        status(&cdp, output_mode).await
+    } else {
+        match output_mode {
+            OutputMode::Human => eprintln!("Mode: headless\nStatus: connected (no page tab)"),
+            OutputMode::Json => println!(
+                "{}",
+                serde_json::json!({"connected": true, "mode": "headless"})
+            ),
+        }
+        Ok(())
     }
 }
 
@@ -83,34 +142,10 @@ async fn ensure_bridge(cdp: &CdpClient) -> Result<()> {
 }
 
 /// Call a bridge.js function via CDP.
+/// Delegates to handleMessage() defined in bridge.js (shared with Extension mode).
 async fn call_bridge(cdp: &CdpClient, msg_json: &str) -> Result<serde_json::Value> {
     ensure_bridge(cdp).await?;
-    let js = format!(
-        r#"(function() {{
-            return new Promise((resolve) => {{
-                const msg = {msg_json};
-                switch(msg.type) {{
-                    case "extractDOM": resolve(extractDOM(msg.options || {{}})); break;
-                    case "extractText": resolve({{ text: document.body?.innerText || "", url: location.href, title: document.title }}); break;
-                    case "executeAction": resolve(executeAction(msg.action)); break;
-                    case "evaluate": try {{ const r = new Function(msg.code)(); resolve({{ success: true, result: r !== undefined ? JSON.stringify(r) : null }}); }} catch(e) {{ resolve({{ success: false, error: e.message }}); }} break;
-                    case "setHtml": {{ const el = document.querySelector(msg.selector); resolve(el ? (el.innerHTML = msg.value, {{ success: true }}) : {{ success: false, error: "Not found" }}); break; }}
-                    case "setText": {{ const el = document.querySelector(msg.selector); resolve(el ? (el.textContent = msg.value, {{ success: true }}) : {{ success: false, error: "Not found" }}); break; }}
-                    case "setAttr": {{ const el = document.querySelector(msg.selector); resolve(el ? (el.setAttribute(msg.attr, msg.value), {{ success: true }}) : {{ success: false, error: "Not found" }}); break; }}
-                    case "getHtml": {{ const el = document.querySelector(msg.selector); resolve(el ? {{ success: true, value: el.innerHTML }} : {{ success: false, error: "Not found" }}); break; }}
-                    case "getText": {{ const el = document.querySelector(msg.selector); resolve(el ? {{ success: true, value: el.textContent }} : {{ success: false, error: "Not found" }}); break; }}
-                    case "getAttr": {{ const el = document.querySelector(msg.selector); resolve(el ? {{ success: true, value: el.getAttribute(msg.attr) }} : {{ success: false, error: "Not found" }}); break; }}
-                    case "getPageDims": resolve({{ scrollHeight: document.documentElement.scrollHeight, viewportHeight: window.innerHeight, scrollX: window.scrollX, scrollY: window.scrollY }}); break;
-                    case "scrollTo": window.scrollTo(msg.x || 0, msg.y || 0); resolve({{ success: true }}); break;
-                    case "wait": handleWait(msg, resolve); break;
-                    case "addAnnotations": {{ document.getElementById("__webpilot_annotations")?.remove(); const c = document.createElement("div"); c.id = "__webpilot_annotations"; c.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;z-index:2147483647;pointer-events:none"; for (const el of (msg.elements || [])) {{ const b = document.createElement("div"); b.style.cssText = `position:fixed;left:${{el.x}}px;top:${{el.y}}px;width:${{el.w}}px;height:${{el.h}}px;border:2px solid rgba(255,0,0,0.8)`; const l = document.createElement("div"); l.textContent = String(el.index); l.style.cssText = "position:absolute;top:-16px;left:-2px;background:rgba(255,0,0,0.9);color:#fff;font:bold 11px/14px monospace;padding:0 3px;border-radius:2px"; b.appendChild(l); c.appendChild(b); }} document.documentElement.appendChild(c); resolve({{ success: true }}); break; }}
-                    case "removeAnnotations": document.getElementById("__webpilot_annotations")?.remove(); resolve({{ success: true }}); break;
-                    case "exportStorage": resolve({{ localStorage: (() => {{ const o = {{}}; for (let i = 0; i < localStorage.length; i++) {{ const k = localStorage.key(i); o[k] = localStorage.getItem(k); }} return o; }})(), sessionStorage: (() => {{ const o = {{}}; for (let i = 0; i < sessionStorage.length; i++) {{ const k = sessionStorage.key(i); o[k] = sessionStorage.getItem(k); }} return o; }})() }}); break;
-                    default: resolve({{ error: "Unknown: " + msg.type }}); break;
-                }}
-            }});
-        }})()"#,
-    );
+    let js = format!("(async function() {{ return await handleMessage({msg_json}); }})()");
     cdp.evaluate(&js).await
 }
 
@@ -200,7 +235,7 @@ async fn capture(
         }
 
         // Save screenshot
-        let output_dir = std::path::Path::new("/tmp/webpilot");
+        let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
         let _ = std::fs::create_dir_all(output_dir);
         let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)?;
         let ts = std::time::SystemTime::now()
@@ -215,6 +250,35 @@ async fn capture(
         );
     }
 
+    // PDF generation
+    if args.pdf {
+        let pdf_result = cdp
+            .send(
+                "Page.printToPDF",
+                Some(serde_json::json!({
+                    "landscape": false,
+                    "printBackground": true,
+                    "preferCSSPageSize": true,
+                })),
+            )
+            .await?;
+        if let Some(data) = pdf_result.get("data").and_then(|v| v.as_str()) {
+            let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)?;
+            let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
+            let _ = std::fs::create_dir_all(output_dir);
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let pdf_path = output_dir.join(format!("capture_{ts}.pdf"));
+            std::fs::write(&pdf_path, &bytes)?;
+            out.insert(
+                "pdf_path".into(),
+                serde_json::json!(pdf_path.to_string_lossy()),
+            );
+        }
+    }
+
     // Output
     match output_mode {
         OutputMode::Human => {
@@ -227,6 +291,9 @@ async fn capture(
             }
             if let Some(path) = out.get("screenshot_path").and_then(|v| v.as_str()) {
                 eprintln!("Screenshot: {path}");
+            }
+            if let Some(path) = out.get("pdf_path").and_then(|v| v.as_str()) {
+                eprintln!("PDF: {path}");
             }
         }
         OutputMode::Json => {
@@ -245,13 +312,49 @@ async fn action(
     let action_json = serde_json::to_value(&browser_action)?;
 
     // Handle navigation actions directly via CDP
-    if let webpilot::protocol::BrowserAction::Navigate { ref url } = browser_action {
-        cdp.navigate(url).await?;
-        match output_mode {
-            OutputMode::Human => eprintln!("OK"),
-            OutputMode::Json => println!("{{\"success\":true}}"),
+    match &browser_action {
+        webpilot::protocol::BrowserAction::Navigate { url } => {
+            cdp.navigate(url).await?;
+            match output_mode {
+                OutputMode::Human => eprintln!("OK"),
+                OutputMode::Json => println!("{{\"success\":true}}"),
+            }
+            return Ok(());
         }
-        return Ok(());
+        webpilot::protocol::BrowserAction::Back => {
+            cdp.evaluate("history.back()").await?;
+            cdp.wait_for_event("Page.frameNavigated", std::time::Duration::from_secs(5))
+                .await
+                .ok();
+            match output_mode {
+                OutputMode::Human => eprintln!("OK"),
+                OutputMode::Json => println!("{{\"success\":true}}"),
+            }
+            return Ok(());
+        }
+        webpilot::protocol::BrowserAction::Forward => {
+            cdp.evaluate("history.forward()").await?;
+            cdp.wait_for_event("Page.frameNavigated", std::time::Duration::from_secs(5))
+                .await
+                .ok();
+            match output_mode {
+                OutputMode::Human => eprintln!("OK"),
+                OutputMode::Json => println!("{{\"success\":true}}"),
+            }
+            return Ok(());
+        }
+        webpilot::protocol::BrowserAction::Reload => {
+            cdp.send("Page.reload", None).await?;
+            cdp.wait_for_event("Page.loadEventFired", std::time::Duration::from_secs(10))
+                .await
+                .ok();
+            match output_mode {
+                OutputMode::Human => eprintln!("OK"),
+                OutputMode::Json => println!("{{\"success\":true}}"),
+            }
+            return Ok(());
+        }
+        _ => {}
     }
 
     let result = call_bridge(
@@ -280,7 +383,16 @@ async fn action(
         OutputMode::Json => println!("{}", result),
     }
     if !success {
-        std::process::exit(1);
+        anyhow::bail!(
+            "{}",
+            crate::output::format_error(
+                result
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown"),
+                result.get("code").and_then(|v| v.as_str()),
+            )
+        );
     }
     Ok(())
 }
@@ -312,7 +424,7 @@ async fn eval(
                     serde_json::json!({"success": false, "error": e.to_string()})
                 ),
             }
-            std::process::exit(1);
+            anyhow::bail!("{}", crate::output::format_error(&e.to_string(), None));
         }
     }
     Ok(())
@@ -324,8 +436,18 @@ async fn wait(
     _output_mode: OutputMode,
 ) -> Result<()> {
     if args.navigation {
-        tokio::time::sleep(std::time::Duration::from_secs(args.timeout.min(30))).await;
-        println!("{{\"success\":true}}");
+        match cdp
+            .wait_for_event(
+                "Page.loadEventFired",
+                std::time::Duration::from_secs(args.timeout.min(30)),
+            )
+            .await
+        {
+            Ok(_) => println!("{{\"success\":true}}"),
+            Err(_) => println!(
+                "{{\"success\":false,\"error\":\"Navigation timeout\",\"code\":\"TIMEOUT\"}}"
+            ),
+        }
         return Ok(());
     }
     let msg = serde_json::json!({
@@ -437,7 +559,7 @@ async fn find(
     }
 
     if matches.is_empty() {
-        std::process::exit(1);
+        anyhow::bail!("No matching elements found");
     }
 
     let first_index = matches[0].index;
@@ -585,14 +707,11 @@ async fn cookies(
                 OutputMode::Human => {
                     if let Some(arr) = cookies.as_array() {
                         for c in arr {
+                            let val = c.get("value").and_then(|v| v.as_str()).unwrap_or("");
                             eprintln!(
                                 "{}={} ({})",
                                 c.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
-                                c.get("value")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .get(..20)
-                                    .unwrap_or(""),
+                                val.get(..20).unwrap_or(val),
                                 c.get("domain").and_then(|v| v.as_str()).unwrap_or("")
                             );
                         }
@@ -601,7 +720,69 @@ async fn cookies(
                 OutputMode::Json => println!("{}", cookies),
             }
         }
-        _ => anyhow::bail!("Cookie set/delete/get not yet supported in headless. Use --browser."),
+        commands::cookies::CookiesAction::Get { url, name } => {
+            let result = cdp
+                .send(
+                    "Network.getCookies",
+                    Some(serde_json::json!({"urls": [url]})),
+                )
+                .await?;
+            let cookie = result
+                .get("cookies")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|c| c.get("name").and_then(|v| v.as_str()) == Some(&name))
+                })
+                .cloned();
+            match output_mode {
+                OutputMode::Human => {
+                    if let Some(ref c) = cookie {
+                        println!("{}", c.get("value").and_then(|v| v.as_str()).unwrap_or(""));
+                    } else {
+                        anyhow::bail!("Cookie '{name}' not found");
+                    }
+                }
+                OutputMode::Json => println!("{}", serde_json::json!(cookie)),
+            }
+        }
+        commands::cookies::CookiesAction::Set {
+            url,
+            name,
+            value,
+            httponly,
+            secure,
+        } => {
+            cdp.send(
+                "Network.setCookie",
+                Some(serde_json::json!({
+                    "url": url,
+                    "name": name,
+                    "value": value,
+                    "httpOnly": httponly,
+                    "secure": secure,
+                })),
+            )
+            .await?;
+            match output_mode {
+                OutputMode::Human => eprintln!("OK"),
+                OutputMode::Json => println!("{{\"success\":true}}"),
+            }
+        }
+        commands::cookies::CookiesAction::Delete { url, name } => {
+            cdp.send(
+                "Network.deleteCookies",
+                Some(serde_json::json!({
+                    "url": url,
+                    "name": name,
+                })),
+            )
+            .await?;
+            match output_mode {
+                OutputMode::Human => eprintln!("OK"),
+                OutputMode::Json => println!("{{\"success\":true}}"),
+            }
+        }
     }
     Ok(())
 }
@@ -800,7 +981,7 @@ async fn session(
                 "version": 1, "exported_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
                 "cookies": cookies, "local_storage": storage.get("localStorage"), "session_storage": storage.get("sessionStorage"),
             });
-            let dir = std::path::Path::new("/tmp/webpilot");
+            let dir = std::path::Path::new(webpilot::OUTPUT_DIR);
             let _ = std::fs::create_dir_all(dir);
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -909,24 +1090,217 @@ async fn policy(args: commands::policy::PolicyArgs, output_mode: OutputMode) -> 
 
 async fn tabs(
     cdp: &CdpClient,
-    _args: commands::tabs::TabsArgs,
+    args: commands::tabs::TabsArgs,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let targets = cdp.get_targets().await?;
-    let pages: Vec<_> = targets
-        .iter()
-        .filter(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
-        .collect();
-
-    match output_mode {
-        OutputMode::Human => {
-            for t in &pages {
-                let title = t.get("title").and_then(|v| v.as_str()).unwrap_or("");
-                let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                eprintln!("  {title} ({url})");
+    match args.action {
+        None => {
+            // List tabs
+            let targets = cdp.get_targets().await?;
+            let pages: Vec<_> = targets
+                .iter()
+                .filter(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+                .collect();
+            match output_mode {
+                OutputMode::Human => {
+                    for t in &pages {
+                        let title = t.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                        let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                        let id = t.get("targetId").and_then(|v| v.as_str()).unwrap_or("");
+                        eprintln!("  [{id}] {title} — {url}");
+                    }
+                }
+                OutputMode::Json => println!("{}", serde_json::json!(pages)),
             }
         }
-        OutputMode::Json => println!("{}", serde_json::json!(pages)),
+        Some(commands::tabs::TabAction::New { url }) => {
+            let result = cdp
+                .send("Target.createTarget", Some(serde_json::json!({"url": url})))
+                .await?;
+            let target_id = result
+                .get("targetId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match output_mode {
+                OutputMode::Human => eprintln!("New tab: {target_id}"),
+                OutputMode::Json => println!(
+                    "{}",
+                    serde_json::json!({"success": true, "targetId": target_id})
+                ),
+            }
+        }
+        Some(commands::tabs::TabAction::Switch { tab_id }) => {
+            cdp.send(
+                "Target.activateTarget",
+                Some(serde_json::json!({"targetId": tab_id})),
+            )
+            .await?;
+            match output_mode {
+                OutputMode::Human => eprintln!("Switched to {tab_id}"),
+                OutputMode::Json => println!("{}", serde_json::json!({"success": true})),
+            }
+        }
+        Some(commands::tabs::TabAction::Close { tab_id }) => {
+            cdp.send(
+                "Target.closeTarget",
+                Some(serde_json::json!({"targetId": tab_id})),
+            )
+            .await?;
+            match output_mode {
+                OutputMode::Human => eprintln!("Closed {tab_id}"),
+                OutputMode::Json => println!("{}", serde_json::json!({"success": true})),
+            }
+        }
+        Some(commands::tabs::TabAction::Find { url: pattern }) => {
+            let targets = cdp.get_targets().await?;
+            let pattern_str = pattern.replace('*', "");
+            if let Some(t) = targets.iter().find(|t| {
+                t.get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .contains(&pattern_str)
+            }) {
+                let tid = t.get("targetId").and_then(|v| v.as_str()).unwrap_or("");
+                cdp.send(
+                    "Target.activateTarget",
+                    Some(serde_json::json!({"targetId": tid})),
+                )
+                .await?;
+                match output_mode {
+                    OutputMode::Human => eprintln!("Switched to {tid}"),
+                    OutputMode::Json => {
+                        println!("{}", serde_json::json!({"success": true, "targetId": tid}))
+                    }
+                }
+            } else {
+                anyhow::bail!("No tab matching '{pattern}'");
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn device(
+    cdp: &CdpClient,
+    args: commands::device::DeviceArgs,
+    output_mode: OutputMode,
+) -> Result<()> {
+    match args.action {
+        commands::device::DeviceAction::Set {
+            width,
+            height,
+            mobile,
+            scale,
+            user_agent,
+        } => {
+            cdp.send(
+                "Emulation.setDeviceMetricsOverride",
+                Some(serde_json::json!({
+                    "width": width,
+                    "height": height,
+                    "deviceScaleFactor": scale,
+                    "mobile": mobile,
+                })),
+            )
+            .await?;
+            if let Some(ua) = user_agent {
+                cdp.send(
+                    "Emulation.setUserAgentOverride",
+                    Some(serde_json::json!({
+                        "userAgent": ua,
+                    })),
+                )
+                .await?;
+            }
+            match output_mode {
+                OutputMode::Human => {
+                    eprintln!("Device: {width}x{height} (mobile={mobile}, scale={scale})")
+                }
+                OutputMode::Json => println!(
+                    "{}",
+                    serde_json::json!({"success": true, "width": width, "height": height, "mobile": mobile})
+                ),
+            }
+        }
+        commands::device::DeviceAction::Preset { name } => {
+            let (w, h, mobile, scale, ua) = match name.to_lowercase().as_str() {
+                "iphone-15" | "iphone15" => (
+                    393,
+                    852,
+                    true,
+                    3.0,
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                ),
+                "iphone-15-pro" | "iphone15pro" => (
+                    393,
+                    852,
+                    true,
+                    3.0,
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                ),
+                "pixel-8" | "pixel8" => (
+                    412,
+                    915,
+                    true,
+                    2.625,
+                    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                ),
+                "ipad-pro" | "ipadpro" => (
+                    1024,
+                    1366,
+                    true,
+                    2.0,
+                    "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/604.1",
+                ),
+                "galaxy-s24" | "galaxys24" => (
+                    360,
+                    780,
+                    true,
+                    3.0,
+                    "Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                ),
+                _ => anyhow::bail!(
+                    "Unknown preset '{name}'. Available: iphone-15, iphone-15-pro, pixel-8, ipad-pro, galaxy-s24"
+                ),
+            };
+            cdp.send(
+                "Emulation.setDeviceMetricsOverride",
+                Some(serde_json::json!({
+                    "width": w,
+                    "height": h,
+                    "deviceScaleFactor": scale,
+                    "mobile": mobile,
+                })),
+            )
+            .await?;
+            cdp.send(
+                "Emulation.setUserAgentOverride",
+                Some(serde_json::json!({
+                    "userAgent": ua,
+                })),
+            )
+            .await?;
+            match output_mode {
+                OutputMode::Human => eprintln!("Device: {name} ({w}x{h})"),
+                OutputMode::Json => println!(
+                    "{}",
+                    serde_json::json!({"success": true, "preset": name, "width": w, "height": h})
+                ),
+            }
+        }
+        commands::device::DeviceAction::Reset => {
+            cdp.send("Emulation.clearDeviceMetricsOverride", None)
+                .await?;
+            cdp.send(
+                "Emulation.setUserAgentOverride",
+                Some(serde_json::json!({"userAgent": ""})),
+            )
+            .await?;
+            match output_mode {
+                OutputMode::Human => eprintln!("Device emulation cleared"),
+                OutputMode::Json => println!("{{\"success\":true}}"),
+            }
+        }
     }
     Ok(())
 }
