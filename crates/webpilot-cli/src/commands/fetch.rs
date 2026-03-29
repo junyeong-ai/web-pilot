@@ -41,6 +41,7 @@ pub async fn run(args: FetchArgs, output_mode: OutputMode) -> Result<()> {
             body,
             error,
         } => {
+            let err_str = error.unwrap_or_default();
             match output_mode {
                 OutputMode::Human => {
                     if success {
@@ -49,21 +50,18 @@ pub async fn run(args: FetchArgs, output_mode: OutputMode) -> Result<()> {
                         }
                         eprintln!("HTTP {}", status.unwrap_or(0));
                     } else {
-                        eprintln!(
-                            "{}",
-                            crate::output::format_error(&error.unwrap_or_default(), None,)
-                        );
+                        eprintln!("{}", crate::output::format_error(&err_str, None));
                     }
                 }
                 OutputMode::Json => {
                     println!(
                         "{}",
-                        serde_json::json!({"success": success, "status": status, "body": body, "error": error})
+                        serde_json::json!({"success": success, "status": status, "body": body, "error": err_str})
                     );
                 }
             }
             if !success {
-                std::process::exit(1);
+                anyhow::bail!("{}", crate::output::format_error(&err_str, None));
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),

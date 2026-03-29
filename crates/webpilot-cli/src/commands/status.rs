@@ -56,7 +56,7 @@ pub async fn run(output_mode: OutputMode) -> Result<()> {
                     println!("{}", serde_json::json!({"connected": false}));
                 }
             }
-            std::process::exit(1);
+            anyhow::bail!("Not connected. Is the Chrome extension installed?");
         }
     }
 

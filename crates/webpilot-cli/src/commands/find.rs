@@ -62,6 +62,7 @@ pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
             accessibility: false,
             occlusion: false,
             annotate: false,
+            pdf: false,
         },
     })?;
 
@@ -176,7 +177,7 @@ pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
     }
 
     if matches.is_empty() {
-        std::process::exit(1);
+        anyhow::bail!("No matching elements found");
     }
 
     let first_index = matches[0].index;
@@ -228,7 +229,13 @@ async fn execute_action(action: BrowserAction, output_mode: OutputMode) -> Resul
                         code.as_deref(),
                     )
                 );
-                std::process::exit(1);
+                anyhow::bail!(
+                    "{}",
+                    crate::output::format_error(
+                        error.as_deref().unwrap_or("unknown"),
+                        code.as_deref(),
+                    )
+                );
             }
             if output_mode == OutputMode::Human {
                 eprintln!("OK");

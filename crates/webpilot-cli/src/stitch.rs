@@ -2,34 +2,31 @@
 pub fn stitch_tiles(
     tiles: &[serde_json::Value],
     output_dir: &std::path::Path,
-) -> Result<std::path::PathBuf, String> {
+) -> anyhow::Result<std::path::PathBuf> {
     use std::io::Cursor;
 
-    if tiles.is_empty() {
-        return Err("no tiles".into());
-    }
+    anyhow::ensure!(!tiles.is_empty(), "no tiles");
 
     let mut images: Vec<image::DynamicImage> = Vec::new();
     for (i, tile) in tiles.iter().enumerate() {
-        let b64 = tile.as_str().ok_or(format!("tile {i} not a string"))?;
+        let b64 = tile
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("tile {i} not a string"))?;
         let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
-            .map_err(|e| format!("tile {i} decode: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("tile {i} decode: {e}"))?;
         let img = image::ImageReader::new(Cursor::new(&bytes))
-            .with_guessed_format()
-            .map_err(|e| format!("tile {i} format: {e}"))?
-            .decode()
-            .map_err(|e| format!("tile {i} image: {e}"))?;
+            .with_guessed_format()?
+            .decode()?;
         images.push(img);
     }
 
-    if images.is_empty() {
-        return Err("no valid tiles".into());
-    }
+    anyhow::ensure!(!images.is_empty(), "no valid tiles");
 
     let width = images[0].width();
-    if images.iter().any(|i| i.width() != width) {
-        return Err("Tile width mismatch — all tiles must have the same width".into());
-    }
+    anyhow::ensure!(
+        images.iter().all(|i| i.width() == width),
+        "tile width mismatch"
+    );
     let total_height: u32 = images.iter().map(|i| i.height()).sum();
 
     let mut canvas = image::RgbaImage::new(width, total_height);
@@ -39,7 +36,7 @@ pub fn stitch_tiles(
         y_offset += img.height();
     }
 
-    std::fs::create_dir_all(output_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(output_dir)?;
 
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -47,9 +44,7 @@ pub fn stitch_tiles(
         .as_millis();
     let path = output_dir.join(format!("capture_full_{ts}.png"));
 
-    image::DynamicImage::ImageRgba8(canvas)
-        .save(&path)
-        .map_err(|e| format!("save: {e}"))?;
+    image::DynamicImage::ImageRgba8(canvas).save(&path)?;
 
     eprintln!(
         "Stitched {} tiles → {}x{} ({}KB)",

@@ -26,7 +26,7 @@ pub struct CaptureArgs {
 
     /// Full-page screenshot (captures entire scrollable area)
     #[arg(long)]
-    pub fullpage: bool,
+    pub full_page: bool,
 
     /// Accessibility tree via CDP (shows debugger banner)
     #[arg(long)]
@@ -40,6 +40,10 @@ pub struct CaptureArgs {
     #[arg(long)]
     pub annotate: bool,
 
+    /// Generate PDF of the page
+    #[arg(long)]
+    pub pdf: bool,
+
     /// Navigate to URL before capturing
     #[arg(long)]
     pub url: Option<String>,
@@ -48,7 +52,7 @@ pub struct CaptureArgs {
 pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
     // --annotate implies --dom --screenshot --bounds, conflicts with --fullpage
     let annotate = args.annotate;
-    if annotate && args.fullpage {
+    if annotate && args.full_page {
         anyhow::bail!(
             "--annotate and --fullpage cannot be combined. Annotations are viewport-only."
         );
@@ -65,10 +69,11 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
             text: args.text,
             url: args.url,
             bounds,
-            full_page: args.fullpage,
+            full_page: args.full_page,
             accessibility: args.accessibility,
             occlusion: args.occlusion,
             annotate,
+            pdf: args.pdf,
         },
     })?;
 
@@ -82,7 +87,7 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
         .and_then(|v| v.as_array())
         && !tiles.is_empty()
     {
-        let output_dir = std::path::Path::new("/tmp/webpilot");
+        let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
         match crate::stitch::stitch_tiles(tiles, output_dir) {
             Ok(path) => match output_mode {
                 OutputMode::Human => eprintln!("Full-page screenshot: {}", path.display()),
@@ -91,7 +96,7 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
                     serde_json::json!({"screenshot_path": path.to_string_lossy()})
                 ),
             },
-            Err(e) => eprintln!("Stitch error: {e}"),
+            Err(e) => eprintln!("Stitch error: {e:#}"),
         }
         return Ok(());
     }
@@ -111,7 +116,7 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
             if let Some(ref snapshot) = dom_snapshot
                 && let Some(ref ax_tree) = snapshot.accessibility_tree
             {
-                let output_dir = std::path::Path::new("/tmp/webpilot");
+                let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
                 let _ = std::fs::create_dir_all(output_dir);
                 let ts = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

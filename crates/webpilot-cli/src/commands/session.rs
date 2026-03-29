@@ -76,24 +76,22 @@ pub async fn run(args: SessionArgs, output_mode: OutputMode) -> Result<()> {
 
             match resp.result {
                 ResponseData::SessionResult { success, error } => {
+                    let err_str = error.unwrap_or_default();
                     match output_mode {
                         OutputMode::Human => {
                             if success {
                                 eprintln!("Session imported");
                             } else {
-                                eprintln!(
-                                    "{}",
-                                    crate::output::format_error(&error.unwrap_or_default(), None)
-                                );
+                                eprintln!("{}", crate::output::format_error(&err_str, None));
                             }
                         }
                         OutputMode::Json => println!(
                             "{}",
-                            serde_json::json!({"success": success, "error": error})
+                            serde_json::json!({"success": success, "error": err_str})
                         ),
                     }
                     if !success {
-                        std::process::exit(1);
+                        anyhow::bail!("{}", crate::output::format_error(&err_str, None));
                     }
                 }
                 ResponseData::Error { message, .. } => anyhow::bail!("{message}"),

@@ -81,7 +81,7 @@ pub async fn run_host() -> anyhow::Result<()> {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                     {
-                        let output_dir = std::path::Path::new("/tmp/webpilot");
+                        let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
                         match webpilot::screenshot::process_and_save(&b64, output_dir) {
                             Ok(info) => {
                                 tracing::info!(
@@ -110,7 +110,7 @@ pub async fn run_host() -> anyhow::Result<()> {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                     {
-                        let output_dir = std::path::Path::new("/tmp/webpilot");
+                        let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
                         let _ = std::fs::create_dir_all(output_dir);
                         let ts = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)

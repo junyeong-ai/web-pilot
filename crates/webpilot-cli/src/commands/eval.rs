@@ -29,26 +29,24 @@ pub async fn run(args: EvalArgs, output_mode: OutputMode) -> Result<()> {
             result,
             error,
         } => {
+            let err_str = error.unwrap_or_default();
             match output_mode {
                 OutputMode::Human => {
                     if success {
                         println!("{}", result.unwrap_or_else(|| "undefined".into()));
                     } else {
-                        eprintln!(
-                            "{}",
-                            crate::output::format_error(&error.unwrap_or_default(), None,)
-                        );
+                        eprintln!("{}", crate::output::format_error(&err_str, None));
                     }
                 }
                 OutputMode::Json => {
                     println!(
                         "{}",
-                        serde_json::json!({"success": success, "result": result, "error": error})
+                        serde_json::json!({"success": success, "result": result, "error": err_str})
                     );
                 }
             }
             if !success {
-                std::process::exit(1);
+                anyhow::bail!("{}", crate::output::format_error(&err_str, None));
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
