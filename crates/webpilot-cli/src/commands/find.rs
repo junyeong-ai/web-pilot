@@ -83,65 +83,18 @@ pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
         _ => anyhow::bail!("Unexpected response"),
     };
 
-    // Pre-compute lowercase filters (avoid repeated allocation in loop)
-    let role_lower = args.role.as_ref().map(|r| r.to_lowercase());
-    let text_lower = args.text.as_ref().map(|t| t.to_lowercase());
-    let label_lower = args.label.as_ref().map(|l| l.to_lowercase());
-    let ph_lower = args.placeholder.as_ref().map(|p| p.to_lowercase());
-    let tag_lower = args.tag.as_ref().map(|t| t.to_lowercase());
+    let filter = webpilot::types::ElementFilter {
+        role: args.role.clone(),
+        text: args.text.clone(),
+        label: args.label.clone(),
+        placeholder: args.placeholder.clone(),
+        tag: args.tag.clone(),
+    };
 
-    // Filter elements by all criteria (AND)
     let matches: Vec<&InteractiveElement> = snapshot
         .elements
         .iter()
-        .filter(|el| {
-            if let Some(ref role) = role_lower {
-                let ok = el
-                    .role
-                    .as_ref()
-                    .map(|r| r.to_lowercase() == *role)
-                    .unwrap_or(false)
-                    || el.tag.to_lowercase() == *role;
-                if !ok {
-                    return false;
-                }
-            }
-            if let Some(ref text) = text_lower {
-                let ok = el.text.to_lowercase().contains(text.as_str())
-                    || el
-                        .name
-                        .as_ref()
-                        .map(|n| n.to_lowercase().contains(text.as_str()))
-                        .unwrap_or(false);
-                if !ok {
-                    return false;
-                }
-            }
-            if let Some(ref label) = label_lower
-                && !el
-                    .label
-                    .as_ref()
-                    .map(|l| l.to_lowercase().contains(label.as_str()))
-                    .unwrap_or(false)
-            {
-                return false;
-            }
-            if let Some(ref ph) = ph_lower
-                && !el
-                    .placeholder
-                    .as_ref()
-                    .map(|p| p.to_lowercase().contains(ph.as_str()))
-                    .unwrap_or(false)
-            {
-                return false;
-            }
-            if let Some(ref tag) = tag_lower
-                && el.tag.to_lowercase() != *tag
-            {
-                return false;
-            }
-            true
-        })
+        .filter(|el| el.matches(&filter))
         .collect();
 
     // Output matches

@@ -262,21 +262,23 @@ async fn capture(
                 })),
             )
             .await?;
-        if let Some(data) = pdf_result.get("data").and_then(|v| v.as_str()) {
-            let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)?;
-            let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
-            let _ = std::fs::create_dir_all(output_dir);
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let pdf_path = output_dir.join(format!("capture_{ts}.pdf"));
-            std::fs::write(&pdf_path, &bytes)?;
-            out.insert(
-                "pdf_path".into(),
-                serde_json::json!(pdf_path.to_string_lossy()),
-            );
-        }
+        let data = pdf_result
+            .get("data")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("PDF generation failed: no data returned"))?;
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)?;
+        let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
+        std::fs::create_dir_all(output_dir)?;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let pdf_path = output_dir.join(format!("capture_{ts}.pdf"));
+        std::fs::write(&pdf_path, &bytes)?;
+        out.insert(
+            "pdf_path".into(),
+            serde_json::json!(pdf_path.to_string_lossy()),
+        );
     }
 
     // Output
@@ -489,61 +491,16 @@ async fn find(
             .unwrap_or(serde_json::Value::Array(vec![])),
     )?;
 
-    let role_lower = args.role.as_ref().map(|r| r.to_lowercase());
-    let text_lower = args.text.as_ref().map(|t| t.to_lowercase());
-    let label_lower = args.label.as_ref().map(|l| l.to_lowercase());
-    let ph_lower = args.placeholder.as_ref().map(|p| p.to_lowercase());
-    let tag_lower = args.tag.as_ref().map(|t| t.to_lowercase());
+    let filter = webpilot::types::ElementFilter {
+        role: args.role.clone(),
+        text: args.text.clone(),
+        label: args.label.clone(),
+        placeholder: args.placeholder.clone(),
+        tag: args.tag.clone(),
+    };
 
-    let matches: Vec<&webpilot::types::InteractiveElement> = elements
-        .iter()
-        .filter(|el| {
-            if let Some(ref role) = role_lower
-                && !(el
-                    .role
-                    .as_ref()
-                    .map(|r| r.to_lowercase() == *role)
-                    .unwrap_or(false)
-                    || el.tag.to_lowercase() == *role)
-            {
-                return false;
-            }
-            if let Some(ref text) = text_lower
-                && !(el.text.to_lowercase().contains(text.as_str())
-                    || el
-                        .name
-                        .as_ref()
-                        .map(|n| n.to_lowercase().contains(text.as_str()))
-                        .unwrap_or(false))
-            {
-                return false;
-            }
-            if let Some(ref label) = label_lower
-                && !el
-                    .label
-                    .as_ref()
-                    .map(|l| l.to_lowercase().contains(label.as_str()))
-                    .unwrap_or(false)
-            {
-                return false;
-            }
-            if let Some(ref ph) = ph_lower
-                && !el
-                    .placeholder
-                    .as_ref()
-                    .map(|p| p.to_lowercase().contains(ph.as_str()))
-                    .unwrap_or(false)
-            {
-                return false;
-            }
-            if let Some(ref tag) = tag_lower
-                && el.tag.to_lowercase() != *tag
-            {
-                return false;
-            }
-            true
-        })
-        .collect();
+    let matches: Vec<&webpilot::types::InteractiveElement> =
+        elements.iter().filter(|el| el.matches(&filter)).collect();
 
     match output_mode {
         OutputMode::Human => {
@@ -1033,7 +990,7 @@ async fn session(
 /// File-based policy store (persists across CLI invocations).
 fn policy_file() -> std::path::PathBuf {
     let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    std::path::PathBuf::from(format!("/tmp/webpilot-{user}-policies.json"))
+    std::path::Path::new(webpilot::OUTPUT_DIR).join(format!("{user}-policies.json"))
 }
 
 fn read_policies() -> std::collections::HashMap<String, String> {
