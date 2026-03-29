@@ -70,6 +70,27 @@ pub fn find_chrome() -> Result<PathBuf> {
     anyhow::bail!("Chrome not found. Install Chrome or set WEBPILOT_CHROME=/path/to/chrome")
 }
 
+/// Send a signal to a process. Returns Ok(true) if delivered, Ok(false) if process doesn't exist.
+fn send_signal(pid: i32, signal: i32) -> Result<bool> {
+    // SAFETY: kill() is a standard POSIX syscall with no memory safety implications.
+    // pid is validated from our PID file; signal is a well-known constant.
+    let ret = unsafe { libc::kill(pid, signal) };
+    if ret == 0 {
+        return Ok(true);
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::ESRCH) {
+        Ok(false) // No such process
+    } else {
+        Err(err.into())
+    }
+}
+
+/// Check if a process is alive (signal 0 probe).
+fn is_process_alive(pid: i32) -> bool {
+    send_signal(pid, 0).unwrap_or(false)
+}
+
 /// PID file path.
 pub fn pid_path() -> PathBuf {
     let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
@@ -144,7 +165,7 @@ pub fn launch_chrome() -> Result<(u32, String)> {
     }
 
     let ws_url = ws_url.ok_or_else(|| {
-        let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        let _ = send_signal(pid as i32, libc::SIGTERM);
         anyhow::anyhow!("Chrome started but no DevTools URL. Is this Chrome for Testing?")
     })?;
 
@@ -168,13 +189,11 @@ pub fn get_existing_session() -> Option<String> {
     // Check if Chrome is still alive
     if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
         && let Ok(pid) = pid_str.trim().parse::<i32>()
+        && is_process_alive(pid)
     {
-        let alive = unsafe { libc::kill(pid, 0) == 0 };
-        if alive {
-            return std::fs::read_to_string(&ws_file)
-                .ok()
-                .map(|s| s.trim().to_string());
-        }
+        return std::fs::read_to_string(&ws_file)
+            .ok()
+            .map(|s| s.trim().to_string());
     }
 
     // Stale files
@@ -192,13 +211,10 @@ pub fn ensure_session() -> Result<String> {
     // Clean up orphaned Chrome
     if let Ok(pid_str) = std::fs::read_to_string(pid_path())
         && let Ok(pid) = pid_str.trim().parse::<i32>()
+        && is_process_alive(pid)
     {
-        unsafe {
-            if libc::kill(pid, 0) == 0 {
-                libc::kill(pid, libc::SIGTERM);
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        }
+        let _ = send_signal(pid, libc::SIGTERM);
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
     let _ = std::fs::remove_file(pid_path());
     let _ = std::fs::remove_file(ws_url_path());
@@ -214,14 +230,10 @@ pub fn quit_session() -> Result<()> {
         if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
             && let Ok(pid) = pid_str.trim().parse::<i32>()
         {
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-            }
+            let _ = send_signal(pid, libc::SIGTERM);
             std::thread::sleep(std::time::Duration::from_secs(1));
-            unsafe {
-                if libc::kill(pid, 0) == 0 {
-                    libc::kill(pid, libc::SIGKILL);
-                }
+            if is_process_alive(pid) {
+                let _ = send_signal(pid, libc::SIGKILL);
             }
         }
         let _ = std::fs::remove_file(&pid_file);
