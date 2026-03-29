@@ -32,6 +32,8 @@ pub enum Command {
         occlusion: bool,
         #[serde(default)]
         annotate: bool,
+        #[serde(default)]
+        pdf: bool,
     },
     Action {
         action: BrowserAction,
@@ -54,13 +56,13 @@ pub enum Command {
     Status,
     ListTabs,
     SwitchTab {
-        tab_id: u32,
+        tab_id: String,
     },
     NewTab {
         url: String,
     },
     CloseTab {
-        tab_id: u32,
+        tab_id: String,
     },
     SetDom {
         selector: String,
@@ -156,8 +158,8 @@ pub enum BrowserAction {
     Navigate {
         url: String,
     },
-    GoBack,
-    GoForward,
+    Back,
+    Forward,
     Reload,
     ScrollDown {
         #[serde(default = "default_scroll")]
@@ -230,7 +232,7 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    WaitResult {
+    Wait {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,

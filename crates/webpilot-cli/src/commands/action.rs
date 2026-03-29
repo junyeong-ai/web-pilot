@@ -103,8 +103,8 @@ impl ActionCommand {
                 "down" => BrowserAction::ScrollDown { amount: *amount },
                 other => anyhow::bail!("Invalid direction '{other}'. Use 'up' or 'down'."),
             },
-            Self::Back => BrowserAction::GoBack,
-            Self::Forward => BrowserAction::GoForward,
+            Self::Back => BrowserAction::Back,
+            Self::Forward => BrowserAction::Forward,
             Self::Reload => BrowserAction::Reload,
             Self::Hover { index } => BrowserAction::Hover { index: *index },
             Self::Focus { index } => BrowserAction::Focus { index: *index },
@@ -192,7 +192,13 @@ pub async fn run(args: ActionArgs, output_mode: OutputMode) -> Result<()> {
                 }
             }
             if !success {
-                std::process::exit(1);
+                anyhow::bail!(
+                    "{}",
+                    crate::output::format_error(
+                        error.as_deref().unwrap_or("unknown"),
+                        code.as_deref(),
+                    )
+                );
             }
         }
         ResponseData::Error { message, .. } => {

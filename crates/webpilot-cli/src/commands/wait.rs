@@ -42,30 +42,25 @@ pub async fn run(args: WaitArgs, output_mode: OutputMode) -> Result<()> {
     let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
 
     match resp.result {
-        ResponseData::WaitResult { success, error, .. } => {
+        ResponseData::Wait { success, error, .. } => {
+            let err_str = error.unwrap_or_default();
             match output_mode {
                 OutputMode::Human => {
                     if success {
                         eprintln!("OK");
                     } else {
-                        eprintln!(
-                            "{}",
-                            crate::output::format_error(
-                                &error.unwrap_or_default(),
-                                Some("TIMEOUT"),
-                            )
-                        );
+                        eprintln!("{}", crate::output::format_error(&err_str, Some("TIMEOUT")));
                     }
                 }
                 OutputMode::Json => {
                     println!(
                         "{}",
-                        serde_json::json!({"success": success, "error": error})
+                        serde_json::json!({"success": success, "error": err_str})
                     );
                 }
             }
             if !success {
-                std::process::exit(1);
+                anyhow::bail!("{}", crate::output::format_error(&err_str, Some("TIMEOUT")));
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),

@@ -67,6 +67,7 @@ pub struct FrameInfo {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_frame_id: Option<i64>,
     pub is_main: bool,
 }
@@ -112,6 +113,7 @@ pub struct CookieInfo {
     pub secure: bool,
     #[serde(default)]
     pub http_only: bool,
+    #[serde(alias = "sameSite")]
     pub same_site: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiration: Option<f64>,
@@ -144,6 +146,7 @@ pub struct DomSnapshot {
 
 /// Scroll position information.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ScrollInfo {
     pub scroll_x: f64,
     pub scroll_y: f64,
@@ -175,10 +178,106 @@ impl ScrollInfo {
 /// Tab info for tab listing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TabInfo {
-    pub id: u32,
+    pub id: String,
     pub url: String,
     pub title: String,
+    #[serde(default)]
     pub active: bool,
+}
+
+/// Filter criteria for semantic element search.
+#[derive(Debug, Default)]
+pub struct ElementFilter {
+    pub role: Option<String>,
+    pub text: Option<String>,
+    pub label: Option<String>,
+    pub placeholder: Option<String>,
+    pub tag: Option<String>,
+}
+
+impl InteractiveElement {
+    /// Get the implicit ARIA role based on tag name and input type.
+    pub fn implicit_role(&self) -> Option<&'static str> {
+        match (self.tag.as_str(), self.input_type.as_deref()) {
+            ("a", _) if self.href.is_some() => Some("link"),
+            ("button", _) => Some("button"),
+            ("input", Some("text" | "search" | "email" | "url" | "tel")) => Some("textbox"),
+            ("input", Some("checkbox")) => Some("checkbox"),
+            ("input", Some("radio")) => Some("radio"),
+            ("input", Some("number")) => Some("spinbutton"),
+            ("input", Some("range")) => Some("slider"),
+            ("select", _) => Some("combobox"),
+            ("textarea", _) => Some("textbox"),
+            ("img", _) => Some("img"),
+            ("nav", _) => Some("navigation"),
+            ("main", _) => Some("main"),
+            ("header", _) => Some("banner"),
+            ("footer", _) => Some("contentinfo"),
+            ("aside", _) => Some("complementary"),
+            ("form", _) => Some("form"),
+            _ => None,
+        }
+    }
+
+    /// Check if this element matches the given filter criteria (AND logic).
+    pub fn matches(&self, filter: &ElementFilter) -> bool {
+        if let Some(ref role) = filter.role {
+            let role_lower = role.to_lowercase();
+            let explicit_match = self
+                .role
+                .as_ref()
+                .map(|r| r.to_lowercase() == role_lower)
+                .unwrap_or(false);
+            let implicit_match = self
+                .implicit_role()
+                .map(|r| r == role_lower)
+                .unwrap_or(false);
+            let tag_match = self.tag.to_lowercase() == role_lower;
+            if !explicit_match && !implicit_match && !tag_match {
+                return false;
+            }
+        }
+        if let Some(ref text) = filter.text {
+            let text_lower = text.to_lowercase();
+            let in_text = self.text.to_lowercase().contains(&text_lower);
+            let in_name = self
+                .name
+                .as_ref()
+                .map(|n| n.to_lowercase().contains(&text_lower))
+                .unwrap_or(false);
+            if !in_text && !in_name {
+                return false;
+            }
+        }
+        if let Some(ref label) = filter.label {
+            let label_lower = label.to_lowercase();
+            if !self
+                .label
+                .as_ref()
+                .map(|l| l.to_lowercase().contains(&label_lower))
+                .unwrap_or(false)
+            {
+                return false;
+            }
+        }
+        if let Some(ref ph) = filter.placeholder {
+            let ph_lower = ph.to_lowercase();
+            if !self
+                .placeholder
+                .as_ref()
+                .map(|p| p.to_lowercase().contains(&ph_lower))
+                .unwrap_or(false)
+            {
+                return false;
+            }
+        }
+        if let Some(ref tag) = filter.tag
+            && self.tag.to_lowercase() != tag.to_lowercase()
+        {
+            return false;
+        }
+        true
+    }
 }
 
 /// Serialize a DomSnapshot to LLM-friendly text format.

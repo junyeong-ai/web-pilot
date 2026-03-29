@@ -14,11 +14,11 @@ pub struct TabsArgs {
 #[derive(Subcommand)]
 pub enum TabAction {
     /// Switch to a tab by ID
-    Switch { tab_id: u32 },
+    Switch { tab_id: String },
     /// Open a new tab
     New { url: String },
     /// Close a tab
-    Close { tab_id: u32 },
+    Close { tab_id: String },
     /// Find and switch to a tab by URL pattern
     Find {
         #[arg(long)]
@@ -64,10 +64,12 @@ async fn list_tabs(output_mode: OutputMode) -> Result<()> {
     Ok(())
 }
 
-async fn switch_tab(tab_id: u32, output_mode: OutputMode) -> Result<()> {
+async fn switch_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
     let request = serde_json::to_value(webpilot::protocol::Request {
         id: 1,
-        command: Command::SwitchTab { tab_id },
+        command: Command::SwitchTab {
+            tab_id: tab_id.clone(),
+        },
     })?;
     let response = ipc::send_request(&request)
         .await
@@ -117,10 +119,12 @@ async fn new_tab(url: &str, output_mode: OutputMode) -> Result<()> {
     Ok(())
 }
 
-async fn close_tab(tab_id: u32, output_mode: OutputMode) -> Result<()> {
+async fn close_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
     let request = serde_json::to_value(webpilot::protocol::Request {
         id: 1,
-        command: Command::CloseTab { tab_id },
+        command: Command::CloseTab {
+            tab_id: tab_id.clone(),
+        },
     })?;
     let response = ipc::send_request(&request)
         .await
@@ -154,7 +158,7 @@ async fn find_tab(url_pattern: &str, output_mode: OutputMode) -> Result<()> {
         ResponseData::Tabs { tabs } => {
             let pattern = url_pattern.replace('*', "");
             if let Some(tab) = tabs.iter().find(|t| t.url.contains(&pattern)) {
-                switch_tab(tab.id, output_mode).await?;
+                switch_tab(tab.id.clone(), output_mode).await?;
             } else {
                 match output_mode {
                     OutputMode::Human => eprintln!("No tab matching '{url_pattern}'"),
@@ -163,7 +167,7 @@ async fn find_tab(url_pattern: &str, output_mode: OutputMode) -> Result<()> {
                         serde_json::json!({"success": false, "error": "No matching tab"})
                     ),
                 }
-                std::process::exit(1);
+                anyhow::bail!("No tab matching '{url_pattern}'");
             }
         }
         _ => anyhow::bail!("Unexpected response"),
