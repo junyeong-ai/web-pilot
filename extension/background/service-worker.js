@@ -970,8 +970,7 @@ async function handleCapture(command) {
           console.log("[WebPilot] Fullpage:", scrollHeight, "px,", Math.ceil(scrollHeight/viewportHeight), "tiles");
           const tiles = [];
           const tileCount = Math.ceil(scrollHeight / viewportHeight);
-          const rateLimit = 2;
-          const captureDelay = Math.ceil(1000 / rateLimit) + 100;
+          const captureDelay = 750; // Chrome allows ~2 captures/sec; 750ms provides safe margin
 
           // 2. Scroll to top
           await chrome.tabs.sendMessage(tabId, { type: "scrollTo", x: 0, y: 0 }, { frameId: 0 }).catch(() => {});
@@ -1016,11 +1015,23 @@ async function handleCapture(command) {
           result.tile_total_height = scrollHeight;
         }
       } else {
-        // Single viewport screenshot
-        const dataUrl = await chrome.tabs.captureVisibleTab(tabInfo.windowId, {
-          format: "jpeg", quality: 80,
-        });
-        result.screenshot_b64 = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+        // Single viewport screenshot (with rate limit retry)
+        try {
+          const dataUrl = await chrome.tabs.captureVisibleTab(tabInfo.windowId, {
+            format: "jpeg", quality: 80,
+          });
+          result.screenshot_b64 = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+        } catch (ssErr) {
+          if (ssErr.message.includes("quota") || ssErr.message.includes("CAPTURE")) {
+            await sleep(1000);
+            const retry = await chrome.tabs.captureVisibleTab(tabInfo.windowId, {
+              format: "jpeg", quality: 80,
+            });
+            result.screenshot_b64 = retry.replace(/^data:image\/\w+;base64,/, "");
+          } else {
+            throw ssErr;
+          }
+        }
       }
     } catch (e) {
       console.error("[WebPilot] Screenshot failed:", e.message);

@@ -65,7 +65,14 @@ pub async fn run(args: DomArgs, output_mode: OutputMode) -> Result<()> {
             if let Some(val) = value {
                 match output_mode {
                     OutputMode::Human => println!("{val}"),
-                    OutputMode::Json => println!("{}", serde_json::json!({"value": val})),
+                    OutputMode::Json => {
+                        println!("{}", serde_json::json!({"success": true, "value": val}))
+                    }
+                }
+            } else if success {
+                match output_mode {
+                    OutputMode::Human => eprintln!("OK"),
+                    OutputMode::Json => println!("{{\"success\":true}}"),
                 }
             }
             if !success {
