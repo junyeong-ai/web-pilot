@@ -49,8 +49,12 @@ webpilot capture --dom                                # 4. Verify
 | | `capture --annotate` | Screenshot with numbered labels |
 | | `capture --dom --text --screenshot` | All at once (single JSON) |
 | | `capture --dom --occlusion` | Mark occluded elements |
-| | `--browser capture --screenshot --fullpage` | Full-page screenshot (browser only) |
-| **Find** | `find --role button --text "Submit"` | Semantic search |
+| | `capture --pdf` | Generate PDF |
+| | `--browser capture --screenshot --full-page` | Full-page screenshot (browser only) |
+| **Device** | `device preset iphone-15` | Mobile device emulation |
+| | `device set --width 390 --height 844 --mobile` | Custom viewport |
+| | `device reset` | Clear emulation |
+| **Find** | `find --role button --text "Submit"` | Semantic search (implicit roles supported) |
 | | `find --placeholder "Search" --click` | Find + click |
 | | `find --label "Email" --fill "a@b.com"` | Find + type |
 | **Action** | `action click N` | Click element [N] |
@@ -107,6 +111,8 @@ webpilot capture --dom                                # 4. Verify
 | Debug failing action | `network start` → action → `network read` |
 | Verify action worked | Check `url_changed` in response, or `capture --dom` |
 | Complex DOM edit | `dom set-html "selector" "<html>"` |
+| Mobile viewport needed | `device preset iphone-15` → `capture --screenshot` |
+| Need PDF export | `capture --pdf` |
 | Track JS errors | `console start` → actions → `console read --level error` |
 
 ## Error Recovery

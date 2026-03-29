@@ -9,7 +9,7 @@
 ## 왜 WebPilot인가?
 
 - **제로 설정** — `webpilot capture --dom --url URL` 한 줄로 시작
-- **18개 커맨드** — DOM, 스크린샷, 액션, 네트워크, 콘솔, 쿠키, 세션, 정책
+- **20개 커맨드** — DOM, 스크린샷, 액션, 네트워크, 콘솔, 쿠키, 세션, 정책
 - **Headless + SSO** — 기본 headless, `--browser`로 사용자 Chrome SSO 세션 활용
 - **초고속** — 후속 명령 평균 10ms (경쟁사 대비 19배)
 - **AI 최적화** — 토큰 효율적 DOM 출력, 시맨틱 검색, 에러 안내
@@ -39,6 +39,7 @@ webpilot --browser capture --dom
 webpilot capture --dom --url "https://naver.com"   # DOM 요소 리스트
 webpilot capture --screenshot                       # 뷰포트 스크린샷
 webpilot capture --annotate                         # 번호 오버레이 스크린샷
+webpilot capture --pdf                              # PDF 생성
 webpilot capture --dom --text --screenshot           # 통합 JSON 출력
 ```
 
@@ -49,6 +50,13 @@ webpilot find --label "Email" --fill "user@test.com" # 레이블 검색 + 입력
 webpilot action click 5                              # 인덱스로 클릭
 webpilot action type 3 "hello" --clear               # 텍스트 입력
 webpilot action keypress Enter                       # 키 입력
+```
+
+### 디바이스 에뮬레이션
+```bash
+webpilot device preset iphone-15                     # 모바일 디바이스 에뮬레이션
+webpilot device set --width 390 --height 844 --mobile  # 커스텀 뷰포트
+webpilot device reset                                # 에뮬레이션 해제
 ```
 
 ### 모니터링
@@ -106,7 +114,7 @@ Browser (--browser):
 
 - **단일 바이너리** — `webpilot` 하나로 headless/browser/host 모드 자동 전환
 - **단일 코드베이스** — 동일한 `bridge.js`를 두 모드에서 공유
-- **18개 커맨드** — capture, action, eval, wait, find, dom, cookies, network, console, session, policy, fetch, tabs, frames, diff, status, quit, install
+- **20개 커맨드** — capture, action, eval, wait, find, dom, device, cookies, network, console, session, policy, fetch, tabs, frames, diff, status, quit, install, help
 
 ---
 
@@ -114,7 +122,7 @@ Browser (--browser):
 
 | 기능 | WebPilot | agent-browser | browser-use |
 |------|:--------:|:-------------:|:-----------:|
-| 커맨드 수 | **18** | 7 | N/A (Python) |
+| 커맨드 수 | **20** | 7 | N/A (Python) |
 | 후속 명령 속도 | **10ms** | 190ms | — |
 | SSO 지원 | **--browser** | ✗ | ✗ |
 | 네트워크 모니터링 | **내장** | ✗ | CDP |

@@ -143,6 +143,7 @@ Executes `fetch()` in the browser context with `credentials: "include"` — uses
 ### Find Elements by Semantic Properties
 ```bash
 webpilot find --role button --text "Submit"          # Find by ARIA role + text
+webpilot find --role link                            # Find by ARIA role (implicit roles supported)
 webpilot find --label "Email"                         # Find by form label
 webpilot find --placeholder "Search" --click          # Find + click first match
 webpilot find --tag input --text "Name" --fill "John" # Find + type text
@@ -198,9 +199,19 @@ webpilot cookies delete "https://example.com" "name"
 ```bash
 webpilot capture --annotate                          # Annotated screenshot: numbered labels on elements
 webpilot capture --dom --occlusion                   # Detect elements hidden behind overlays
-webpilot --browser capture --screenshot --fullpage   # Full-page screenshot (--browser mode only)
+webpilot capture --pdf                               # Generate PDF
+webpilot capture --pdf --url "https://..."           # Navigate + PDF
+webpilot --browser capture --screenshot --full-page  # Full-page screenshot (--browser mode only)
 webpilot --browser capture --accessibility           # Accessibility tree (--browser mode only)
 ```
+
+### Device Emulation
+```bash
+webpilot device set --width 390 --height 844 --mobile  # Custom viewport + mobile emulation
+webpilot device preset iphone-15                        # Use a built-in preset
+webpilot device reset                                   # Clear emulation
+```
+Available presets: iphone-15, iphone-15-pro, pixel-8, ipad-pro, galaxy-s24
 
 ### Check Status
 ```bash
@@ -301,7 +312,7 @@ web-pilot/
 │           ├── cli.rs          # CLI routing (headless default, --browser)
 │           ├── host.rs         # NM Host bridge (browser mode)
 │           ├── output.rs       # JSON/Human output + format_error()
-│           └── commands/       # 18 command modules
+│           └── commands/       # 20 command modules
 │
 ├── extension/              # Chrome Extension (browser mode)
 │   ├── manifest.json
