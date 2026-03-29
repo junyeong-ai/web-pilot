@@ -266,7 +266,18 @@ async function processCommand(id, command) {
         result = await handleListTabs();
         break;
       case "SwitchTab":
-        result = await handleSwitchTab(Number(command.tab_id));
+        try {
+          const stId = parseInt(command.tab_id, 10);
+          await chrome.tabs.update(stId, { active: true });
+          // Also focus the window containing the tab
+          const stTab = await chrome.tabs.get(stId);
+          if (stTab.windowId != null) {
+            await chrome.windows.update(stTab.windowId, { focused: true });
+          }
+          result = { type: "Action", success: true, code: null, dom: null, error: null };
+        } catch (stErr) {
+          result = { type: "Action", success: false, error: stErr.message, code: null, dom: null };
+        }
         break;
       case "NewTab": {
         const t = await chrome.tabs.create({ url: command.url, active: true });
@@ -274,8 +285,12 @@ async function processCommand(id, command) {
         break;
       }
       case "CloseTab":
-        await chrome.tabs.remove(Number(command.tab_id));
-        result = { type: "Action", success: true, code: null, dom: null, error: null };
+        try {
+          await chrome.tabs.remove(parseInt(command.tab_id, 10));
+          result = { type: "Action", success: true, code: null, dom: null, error: null };
+        } catch (ctErr) {
+          result = { type: "Action", success: false, error: ctErr.message, code: null, dom: null };
+        }
         break;
       case "Evaluate": {
         const tab = await findHttpTab();
@@ -1156,7 +1171,12 @@ async function handleListTabs() {
 }
 
 async function handleSwitchTab(tabId) {
-  await chrome.tabs.update(Number(tabId), { active: true });
+  const numId = parseInt(tabId, 10);
+  await chrome.tabs.update(numId, { active: true });
+  const tab = await chrome.tabs.get(numId);
+  if (tab.windowId != null) {
+    await chrome.windows.update(tab.windowId, { focused: true });
+  }
   return { type: "Action", success: true };
 }
 
