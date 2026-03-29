@@ -178,11 +178,41 @@ impl ScrollInfo {
 /// Tab info for tab listing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TabInfo {
+    #[serde(deserialize_with = "deserialize_id_as_string")]
     pub id: String,
     pub url: String,
     pub title: String,
     #[serde(default)]
     pub active: bool,
+}
+
+/// Accept both integer and string as tab ID (Chrome sends integer, CDP sends string).
+fn deserialize_id_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct IdVisitor;
+    impl<'de> de::Visitor<'de> for IdVisitor {
+        type Value = String;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string or integer")
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_string<E: de::Error>(self, v: String) -> Result<String, E> {
+            Ok(v)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+    }
+    deserializer.deserialize_any(IdVisitor)
 }
 
 /// Filter criteria for semantic element search.

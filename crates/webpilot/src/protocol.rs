@@ -232,6 +232,7 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    #[serde(alias = "WaitResult")]
     Wait {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
