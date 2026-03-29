@@ -227,4 +227,65 @@ impl CdpClient {
             .cloned()
             .unwrap_or_default())
     }
+
+    /// Get all browser context IDs.
+    pub async fn get_browser_contexts(&self) -> Result<Vec<String>> {
+        let result = self.send("Target.getBrowserContexts", None).await?;
+        Ok(result
+            .get("browserContextIds")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Create an isolated browser context (separate cookies, cache, storage).
+    pub async fn create_browser_context(&self) -> Result<String> {
+        let result = self
+            .send(
+                "Target.createBrowserContext",
+                Some(serde_json::json!({"disposeOnDetach": false})),
+            )
+            .await?;
+        result
+            .get("browserContextId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("No browserContextId in response"))
+    }
+
+    /// Dispose (destroy) a browser context and all its targets.
+    pub async fn dispose_browser_context(&self, browser_context_id: &str) -> Result<()> {
+        self.send(
+            "Target.disposeBrowserContext",
+            Some(serde_json::json!({"browserContextId": browser_context_id})),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Create a new page target within a specific browser context.
+    pub async fn create_target_in_context(
+        &self,
+        browser_context_id: &str,
+        url: &str,
+    ) -> Result<String> {
+        let result = self
+            .send(
+                "Target.createTarget",
+                Some(serde_json::json!({
+                    "url": url,
+                    "browserContextId": browser_context_id,
+                })),
+            )
+            .await?;
+        result
+            .get("targetId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("No targetId in response"))
+    }
 }

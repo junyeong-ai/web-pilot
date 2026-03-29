@@ -103,6 +103,14 @@ pub fn ws_url_path() -> PathBuf {
     PathBuf::from(format!("/tmp/webpilot-{user}-headless.ws"))
 }
 
+/// Read the Chrome PID from the PID file. Returns 0 if unavailable.
+pub fn read_pid() -> i32 {
+    std::fs::read_to_string(pid_path())
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .unwrap_or(0)
+}
+
 /// Launch headless Chrome and return CDP WebSocket URL.
 pub fn launch_chrome() -> Result<(u32, String)> {
     let chrome = find_chrome()?;
@@ -239,6 +247,17 @@ pub fn quit_session() -> Result<()> {
         let _ = std::fs::remove_file(&pid_file);
     }
     let _ = std::fs::remove_file(ws_url_path());
+
+    // Clean up context files
+    let dir = std::path::Path::new(webpilot::OUTPUT_DIR);
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            if entry.file_name().to_string_lossy().starts_with("ctx-") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
     eprintln!("Headless session stopped.");
     Ok(())
 }

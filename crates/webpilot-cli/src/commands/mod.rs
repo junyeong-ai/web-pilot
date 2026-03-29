@@ -1,6 +1,7 @@
 pub mod action;
 pub mod capture;
 pub mod console;
+pub mod context;
 pub mod cookies;
 pub mod device;
 pub mod diff;
@@ -61,6 +62,8 @@ pub enum Command {
     Record(record::RecordArgs),
     /// Check connection status
     Status,
+    /// Manage isolated browser contexts for multi-agent use
+    Context(context::ContextArgs),
     /// Install Native Messaging host manifest (for --browser mode)
     Install(install::InstallArgs),
     /// Shut down headless Chrome session

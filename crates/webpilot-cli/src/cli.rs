@@ -24,6 +24,10 @@ struct Cli {
     /// Enable verbose logging to stderr
     #[arg(long, short, global = true)]
     verbose: bool,
+
+    /// Isolated browser context for multi-agent use
+    #[arg(long, global = true)]
+    context: Option<String>,
 }
 
 pub async fn run_cli() -> anyhow::Result<()> {
@@ -40,7 +44,7 @@ pub async fn run_cli() -> anyhow::Result<()> {
 
     // Headless mode (default): use CDP directly, no Extension needed
     if !cli.browser {
-        return crate::headless::run(cli.command, output_mode).await;
+        return crate::headless::run(cli.command, output_mode, cli.context).await;
     }
 
     // Browser mode (--browser): use Extension + NM Host (for SSO)
@@ -71,6 +75,9 @@ pub async fn run_cli() -> anyhow::Result<()> {
         }
         commands::Command::Record(_) => {
             anyhow::bail!("Recording is only supported in headless mode (without --browser)");
+        }
+        commands::Command::Context(_) => {
+            anyhow::bail!("Context management is only supported in headless mode");
         }
         commands::Command::Install(args) => commands::install::run(args, output_mode).await?,
         commands::Command::Quit => {
