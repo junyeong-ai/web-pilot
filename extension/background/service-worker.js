@@ -341,9 +341,9 @@ async function processCommand(id, command) {
               }),
               new Promise((_, rej) => setTimeout(() => rej(new Error("Navigation wait timed out")), command.timeout_ms || 10000)),
             ]);
-            result = { type: "WaitResult", success: true, error: null, code: null };
+            result = { type: "Wait", success: true, error: null, code: null };
           } catch (e) {
-            result = { type: "WaitResult", success: false, error: e.message, code: "TIMEOUT" };
+            result = { type: "Wait", success: false, error: e.message, code: "TIMEOUT" };
           }
         } else {
           // Wait for selector/text/DOM idle via content script
@@ -353,9 +353,9 @@ async function processCommand(id, command) {
               chrome.tabs.sendMessage(tab.id, { type: "wait", selector: command.selector, text: command.text, timeout_ms: command.timeout_ms }, { frameId: activeFrameId }),
               new Promise((_, rej) => setTimeout(() => rej(new Error("Wait timed out")), (command.timeout_ms || 10000) + 2000)),
             ]);
-            result = { type: "WaitResult", success: r.success, error: r.error || null, code: r.code || null };
+            result = { type: "Wait", success: r.success, error: r.error || null, code: r.code || null };
           } catch (e) {
-            result = { type: "WaitResult", success: false, error: e.message, code: "TIMEOUT" };
+            result = { type: "Wait", success: false, error: e.message, code: "TIMEOUT" };
           }
         }
         break;
@@ -899,7 +899,7 @@ async function handleCapture(command) {
         result.dom = {
           elements: [], total_nodes: 0,
           page_url: result.page_url || "", page_title: result.page_title || "",
-          scroll: {}, scroll_percent: 0, extraction_ms: 0,
+          scroll: { scroll_x: 0, scroll_y: 0, scroll_width: 0, scroll_height: 0, viewport_width: 0, viewport_height: 0 }, scroll_percent: 0, extraction_ms: 0,
           accessibility_tree: JSON.stringify(axResult),
         };
       }
@@ -955,7 +955,7 @@ async function handleCapture(command) {
           console.log("[WebPilot] Fullpage:", scrollHeight, "px,", Math.ceil(scrollHeight/viewportHeight), "tiles");
           const tiles = [];
           const tileCount = Math.ceil(scrollHeight / viewportHeight);
-          const rateLimit = chrome.tabs.MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND || 2;
+          const rateLimit = 2;
           const captureDelay = Math.ceil(1000 / rateLimit) + 100;
 
           // 2. Scroll to top
@@ -1046,11 +1046,11 @@ async function handleAction(action) {
       await waitForTabReady(tab.id, 15000);
       await sleep(500);
       return { type: "Action", success: true };
-    case "GoBack":
+    case "Back":
       await chrome.tabs.goBack(tab.id);
       await sleep(500);
       return { type: "Action", success: true };
-    case "GoForward":
+    case "Forward":
       await chrome.tabs.goForward(tab.id);
       await sleep(500);
       return { type: "Action", success: true };

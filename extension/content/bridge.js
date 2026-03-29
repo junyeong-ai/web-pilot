@@ -15,103 +15,83 @@ var INTERACTIVE_SELECTOR =
   '[role="searchbox"], [role="textbox"], [role="slider"], ' +
   '[contenteditable="true"], details > summary';
 
-// Register message listener only once (Extension content script mode)
-if (typeof chrome !== "undefined" && chrome.runtime?.onMessage && !window.__webpilot_listener) {
-window.__webpilot_listener = true;
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+// Unified message handler — used by both Extension listener and CDP call_bridge().
+// Returns a value (sync) or a Promise (async, e.g. wait).
+function handleMessage(msg) {
   switch (msg.type) {
     case "extractDOM":
-      sendResponse(extractDOM(msg.options || {}));
-      return false;
+      return extractDOM(msg.options || {});
     case "extractText":
-      sendResponse({ text: document.body?.innerText || "", url: location.href, title: document.title });
-      return false;
+      return { text: document.body?.innerText || "", url: location.href, title: document.title };
     case "executeAction":
-      sendResponse(executeAction(msg.action));
-      return false;
+      return executeAction(msg.action);
     case "evaluate":
       try {
         const result = new Function(msg.code)();
-        sendResponse({ success: true, result: result !== undefined ? JSON.stringify(result) : null });
+        return { success: true, result: result !== undefined ? JSON.stringify(result) : null };
       } catch (e) {
-        sendResponse({ success: false, error: e.message });
+        return { success: false, error: e.message };
       }
-      return false;
     case "wait":
-      // Async — return true to keep channel open
-      handleWait(msg, sendResponse);
-      return true;
+      return new Promise((resolve) => handleWait(msg, resolve));
     case "tagElement": {
       const visible = getVisibleElements();
       const el = msg.index > 0 && msg.index <= visible.length ? visible[msg.index - 1] : null;
       if (el) el.setAttribute(msg.attr, "1");
-      sendResponse({ success: !!el });
-      return false;
+      return { success: !!el };
     }
     case "untagElement": {
       const tagged = document.querySelector(`[${msg.attr}]`);
       if (tagged) tagged.removeAttribute(msg.attr);
-      sendResponse({ success: true });
-      return false;
+      return { success: true };
     }
     case "getPageDims":
-      sendResponse({
+      return {
         scrollHeight: document.documentElement.scrollHeight,
         viewportHeight: window.innerHeight,
         scrollX: window.scrollX,
         scrollY: window.scrollY,
-      });
-      return false;
+      };
     case "scrollTo":
       window.scrollTo(msg.x || 0, msg.y || 0);
-      sendResponse({ success: true });
-      return false;
+      return { success: true };
     case "setHtml": {
       const el = document.querySelector(msg.selector);
-      if (el) { el.innerHTML = msg.value; sendResponse({ success: true }); }
-      else sendResponse({ success: false, error: `Selector not found: ${msg.selector}` });
-      return false;
+      if (el) { el.innerHTML = msg.value; return { success: true }; }
+      return { success: false, error: `Selector not found: ${msg.selector}` };
     }
     case "setText": {
       const el = document.querySelector(msg.selector);
-      if (el) { el.textContent = msg.value; sendResponse({ success: true }); }
-      else sendResponse({ success: false, error: `Selector not found: ${msg.selector}` });
-      return false;
+      if (el) { el.textContent = msg.value; return { success: true }; }
+      return { success: false, error: `Selector not found: ${msg.selector}` };
     }
     case "setAttr": {
       const el = document.querySelector(msg.selector);
-      if (el) { el.setAttribute(msg.attr, msg.value); sendResponse({ success: true }); }
-      else sendResponse({ success: false, error: `Selector not found: ${msg.selector}` });
-      return false;
+      if (el) { el.setAttribute(msg.attr, msg.value); return { success: true }; }
+      return { success: false, error: `Selector not found: ${msg.selector}` };
     }
     case "getHtml": {
       const el = document.querySelector(msg.selector);
-      sendResponse(el ? { success: true, value: el.innerHTML } : { success: false, error: `Not found: ${msg.selector}` });
-      return false;
+      return el ? { success: true, value: el.innerHTML } : { success: false, error: `Not found: ${msg.selector}` };
     }
     case "getText": {
       const el = document.querySelector(msg.selector);
-      sendResponse(el ? { success: true, value: el.textContent } : { success: false, error: `Not found: ${msg.selector}` });
-      return false;
+      return el ? { success: true, value: el.textContent } : { success: false, error: `Not found: ${msg.selector}` };
     }
     case "getAttr": {
       const el = document.querySelector(msg.selector);
-      sendResponse(el ? { success: true, value: el.getAttribute(msg.attr) } : { success: false, error: `Not found: ${msg.selector}` });
-      return false;
+      return el ? { success: true, value: el.getAttribute(msg.attr) } : { success: false, error: `Not found: ${msg.selector}` };
     }
     case "exportStorage":
-      sendResponse({
+      return {
         localStorage: (() => { const o = {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); o[k] = localStorage.getItem(k); } return o; })(),
         sessionStorage: (() => { const o = {}; for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); o[k] = sessionStorage.getItem(k); } return o; })(),
-      });
-      return false;
+      };
     case "importStorage":
       if (msg.localStorage) Object.entries(msg.localStorage).forEach(([k, v]) => localStorage.setItem(k, v));
       if (msg.sessionStorage) Object.entries(msg.sessionStorage).forEach(([k, v]) => sessionStorage.setItem(k, v));
-      sendResponse({ success: true });
-      return false;
+      return { success: true };
     case "addAnnotations": {
-      // Remove any existing annotations first
       document.getElementById("__webpilot_annotations")?.remove();
       const container = document.createElement("div");
       container.id = "__webpilot_annotations";
@@ -126,31 +106,43 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         container.appendChild(box);
       }
       document.documentElement.appendChild(container);
-      sendResponse({ success: true, count: (msg.elements || []).length });
-      return false;
+      return { success: true, count: (msg.elements || []).length };
     }
     case "removeAnnotations":
       document.getElementById("__webpilot_annotations")?.remove();
-      sendResponse({ success: true });
-      return false;
+      return { success: true };
     case "ping":
-      sendResponse({ ok: true, url: location.href, title: document.title });
-      return false;
+      return { ok: true, url: location.href, title: document.title };
     default:
-      return false;
+      return { error: "Unknown message type: " + msg.type };
   }
+}
+
+// Register message listener only once (Extension content script mode)
+if (typeof chrome !== "undefined" && chrome.runtime?.onMessage && !window.__webpilot_listener) {
+window.__webpilot_listener = true;
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const result = handleMessage(msg);
+  // If handleMessage returns a Promise (e.g. wait), keep the channel open
+  if (result && typeof result.then === "function") {
+    result.then(sendResponse);
+    return true;
+  }
+  sendResponse(result);
+  return false;
 });
 } // end of listener guard
 
 // ==================== DOM EXTRACTION ====================
 
-function queryAllDeep(selector, root = document) {
+function queryAllDeep(selector, root = document, depth = 0) {
+  if (depth > 10) return [];
   // Query selector across regular DOM + open shadow DOMs
   const results = [...root.querySelectorAll(selector)];
   // Recurse into shadow roots
   for (const el of root.querySelectorAll("*")) {
     if (el.shadowRoot) {
-      results.push(...queryAllDeep(selector, el.shadowRoot));
+      results.push(...queryAllDeep(selector, el.shadowRoot, depth + 1));
     }
   }
   return results;
@@ -371,7 +363,7 @@ function getVisibleElements() {
 
 function resolveTarget(action) {
   const index = action.index;
-  if (!index) return { target: null, error: "No index provided" };
+  if (index == null) return { target: null, error: "No index provided" };
   const visible = getVisibleElements();
   if (index < 1 || index > visible.length) {
     return { target: null, error: `Index ${index} out of range (1-${visible.length})`, code: "ELEMENT_NOT_FOUND" };
@@ -502,6 +494,10 @@ function executeAction(action) {
         target.focus();
         return { success: true };
       }
+
+      case "Back": history.back(); return { success: true };
+      case "Forward": history.forward(); return { success: true };
+      case "Reload": location.reload(); return { success: true };
 
       default:
         return { success: false, error: `Unknown action: ${action.action}` };
