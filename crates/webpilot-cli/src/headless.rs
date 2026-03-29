@@ -153,6 +153,13 @@ async fn capture(
     args: commands::capture::CaptureArgs,
     output_mode: OutputMode,
 ) -> Result<()> {
+    // Validate flag conflicts
+    if args.annotate && args.full_page {
+        anyhow::bail!(
+            "--annotate and --full-page cannot be combined. Annotations are viewport-only."
+        );
+    }
+
     // Navigate if URL provided
     if let Some(ref url) = args.url {
         cdp.navigate(url).await?;
@@ -444,12 +451,17 @@ async fn wait(
             )
             .await
         {
-            Ok(_) => println!("{{\"success\":true}}"),
-            Err(_) => println!(
-                "{{\"success\":false,\"error\":\"Navigation timeout\",\"code\":\"TIMEOUT\"}}"
-            ),
+            Ok(_) => {
+                println!("{{\"success\":true}}");
+                return Ok(());
+            }
+            Err(_) => {
+                println!(
+                    "{{\"success\":false,\"error\":\"Navigation timeout\",\"code\":\"TIMEOUT\"}}"
+                );
+                anyhow::bail!("Navigation timeout");
+            }
         }
-        return Ok(());
     }
     let msg = serde_json::json!({
         "type": "wait",
@@ -458,7 +470,23 @@ async fn wait(
         "timeout_ms": args.timeout * 1000,
     });
     let result = call_bridge(cdp, &msg.to_string()).await?;
+    let success = result
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     println!("{}", result);
+    if !success {
+        anyhow::bail!(
+            "{}",
+            crate::output::format_error(
+                result
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Wait failed"),
+                result.get("code").and_then(|v| v.as_str()),
+            )
+        );
+    }
     Ok(())
 }
 
@@ -696,15 +724,15 @@ async fn cookies(
                         .find(|c| c.get("name").and_then(|v| v.as_str()) == Some(&name))
                 })
                 .cloned();
-            match output_mode {
-                OutputMode::Human => {
-                    if let Some(ref c) = cookie {
+            if let Some(ref c) = cookie {
+                match output_mode {
+                    OutputMode::Human => {
                         println!("{}", c.get("value").and_then(|v| v.as_str()).unwrap_or(""));
-                    } else {
-                        anyhow::bail!("Cookie '{name}' not found");
                     }
+                    OutputMode::Json => println!("{c}"),
                 }
-                OutputMode::Json => println!("{}", serde_json::json!(cookie)),
+            } else {
+                anyhow::bail!("Cookie '{name}' not found");
             }
         }
         commands::cookies::CookiesAction::Set {
