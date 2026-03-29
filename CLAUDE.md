@@ -230,6 +230,17 @@ webpilot record --duration 5000 --interval 500          # Duration-based
 webpilot record --frames 3 --url "https://..."          # Navigate + record
 ```
 
+### Context Isolation (Multi-Agent)
+```bash
+webpilot --context agent-1 capture --dom --url "https://naver.com"
+webpilot --context agent-2 capture --dom --url "https://google.com"
+webpilot context list                                  # List active contexts
+webpilot context close agent-1                         # Close a context
+webpilot context close --all                           # Close all contexts
+```
+Each `--context` gets isolated cookies, localStorage, cache via CDP BrowserContext.
+Max 16 concurrent contexts, 1-hour TTL with automatic cleanup.
+
 ### Check Status
 ```bash
 webpilot status
@@ -329,7 +340,7 @@ web-pilot/
 │           ├── cli.rs          # CLI routing (headless default, --browser)
 │           ├── host.rs         # NM Host bridge (browser mode)
 │           ├── output.rs       # JSON/Human output + format_error()
-│           └── commands/       # 20 command modules
+│           └── commands/       # 23 command modules
 │
 ├── extension/              # Chrome Extension (browser mode)
 │   ├── manifest.json

@@ -91,6 +91,8 @@ webpilot capture --dom                                # 4. Verify
 | **Profile** | `profile --duration 5` | CPU profiling (.cpuprofile) |
 | **Record** | `record --frames 5 --interval 500` | Sequential frames for AI analysis |
 | | `record --frames 10 --dom` | Frames + DOM snapshots |
+| **Context** | `--context agent-1 capture --dom` | Isolated browser context |
+| | `context list` / `context close NAME` | Manage contexts |
 | **Status** | `status` | Connection check |
 
 ## Key Behaviors
