@@ -64,6 +64,7 @@ webpilot capture --dom                                # 4. Verify
 | | `action scroll down` / `up` | Scroll page |
 | | `action hover N` / `focus N` | Hover/focus |
 | | `action select N "value"` | Select dropdown option |
+| | `action drag 3 7` | Drag element to another |
 | | `--browser action upload N "/path"` | File upload (browser only) |
 | **Wait** | `wait --selector ".results"` | Wait for element |
 | | `wait --text "Success"` | Wait for text |
@@ -87,6 +88,9 @@ webpilot capture --dom                                # 4. Verify
 | | `policy list` / `clear` | Manage policies |
 | **Compare** | `diff --dom a.json b.json` | DOM diff |
 | | `diff --screenshot a.png b.png` | Pixel diff |
+| **Profile** | `profile --duration 5` | CPU profiling (.cpuprofile) |
+| **Record** | `record --frames 5 --interval 500` | Sequential frames for AI analysis |
+| | `record --frames 10 --dom` | Frames + DOM snapshots |
 | **Status** | `status` | Connection check |
 
 ## Key Behaviors

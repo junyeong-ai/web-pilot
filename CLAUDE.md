@@ -85,6 +85,8 @@ webpilot action forward                    # Browser forward
 webpilot action reload                     # Reload page
 webpilot action hover 7                    # Hover over element [7]
 webpilot action focus 4                    # Focus element [4]
+webpilot action drag 3 7                   # Drag element [3] to element [7]
+webpilot action drag 3 7 --steps 10        # Drag with more intermediate points
 webpilot action select 8 "option_value"    # Select dropdown option
 webpilot --browser action upload 5 "/path/to/file"   # Upload file (--browser mode only)
 ```
@@ -212,6 +214,21 @@ webpilot device preset iphone-15                        # Use a built-in preset
 webpilot device reset                                   # Clear emulation
 ```
 Available presets: iphone-15, iphone-15-pro, pixel-8, ipad-pro, galaxy-s24
+
+### CPU Profiling
+```bash
+webpilot profile --duration 5                          # Profile for 5 seconds
+webpilot profile --duration 10 --url "https://..."     # Navigate + profile
+```
+Saves `.cpuprofile` (importable in Chrome DevTools).
+
+### Record Sequential Frames (AI Analysis)
+```bash
+webpilot record --frames 5 --interval 500              # 5 frames, 500ms apart
+webpilot record --frames 10 --interval 1000 --dom      # Include DOM per frame
+webpilot record --duration 5000 --interval 500          # Duration-based
+webpilot record --frames 3 --url "https://..."          # Navigate + record
+```
 
 ### Check Status
 ```bash
