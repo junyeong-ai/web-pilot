@@ -186,10 +186,20 @@ pub enum BrowserAction {
         index: u32,
         path: String,
     },
+    Drag {
+        source: u32,
+        target: u32,
+        #[serde(default = "default_drag_steps")]
+        steps: u32,
+    },
 }
 
 fn default_scroll() -> u32 {
     600
+}
+
+fn default_drag_steps() -> u32 {
+    5
 }
 
 /// Response from Extension → Host → CLI.

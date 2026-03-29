@@ -111,6 +111,17 @@ function handleMessage(msg) {
     case "removeAnnotations":
       document.getElementById("__webpilot_annotations")?.remove();
       return { success: true };
+    case "getElementCoords": {
+        const visible = getVisibleElements();
+        const srcEl = msg.source > 0 && msg.source <= visible.length ? visible[msg.source - 1] : null;
+        const tgtEl = msg.target > 0 && msg.target <= visible.length ? visible[msg.target - 1] : null;
+        if (!srcEl) return { error: "Source element not found" };
+        if (!tgtEl) return { error: "Target element not found" };
+        srcEl.scrollIntoView({ block: "center", behavior: "instant" });
+        const sr = srcEl.getBoundingClientRect();
+        const tr = tgtEl.getBoundingClientRect();
+        return { sx: sr.left + sr.width/2, sy: sr.top + sr.height/2, tx: tr.left + tr.width/2, ty: tr.top + tr.height/2 };
+    }
     case "ping":
       return { ok: true, url: location.href, title: document.title };
     default:

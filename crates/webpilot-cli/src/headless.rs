@@ -68,6 +68,8 @@ pub async fn run(command: commands::Command, output_mode: OutputMode) -> Result<
         commands::Command::Policy(args) => policy(args, output_mode).await,
         commands::Command::Diff(args) => commands::diff::run(args, output_mode).await,
         commands::Command::Device(args) => device(&cdp, args, output_mode).await,
+        commands::Command::Profile(args) => profile(&cdp, args, output_mode).await,
+        commands::Command::Record(args) => record(&cdp, args, output_mode).await,
         commands::Command::Install(_) => {
             eprintln!("Install is only needed for --browser mode. Headless works without setup.");
             Ok(())
@@ -356,6 +358,63 @@ async fn action(
             cdp.wait_for_event("Page.loadEventFired", std::time::Duration::from_secs(10))
                 .await
                 .ok();
+            match output_mode {
+                OutputMode::Human => eprintln!("OK"),
+                OutputMode::Json => println!("{{\"success\":true}}"),
+            }
+            return Ok(());
+        }
+        webpilot::protocol::BrowserAction::Drag {
+            source,
+            target,
+            steps,
+        } => {
+            let coords = call_bridge(
+                cdp,
+                &serde_json::json!({"type": "getElementCoords", "source": source, "target": target})
+                    .to_string(),
+            )
+            .await?;
+            if let Some(err) = coords.get("error").and_then(|v| v.as_str()) {
+                anyhow::bail!("{err}");
+            }
+            let sx = coords["sx"].as_f64().unwrap_or(0.0);
+            let sy = coords["sy"].as_f64().unwrap_or(0.0);
+            let tx = coords["tx"].as_f64().unwrap_or(0.0);
+            let ty = coords["ty"].as_f64().unwrap_or(0.0);
+
+            cdp.send(
+                "Input.dispatchMouseEvent",
+                Some(serde_json::json!({
+                    "type": "mousePressed", "x": sx, "y": sy, "button": "left", "clickCount": 1
+                })),
+            )
+            .await?;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            for i in 1..=*steps {
+                let ratio = i as f64 / *steps as f64;
+                cdp.send(
+                    "Input.dispatchMouseEvent",
+                    Some(serde_json::json!({
+                        "type": "mouseMoved",
+                        "x": sx + (tx - sx) * ratio,
+                        "y": sy + (ty - sy) * ratio,
+                        "button": "left"
+                    })),
+                )
+                .await?;
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+
+            cdp.send(
+                "Input.dispatchMouseEvent",
+                Some(serde_json::json!({
+                    "type": "mouseReleased", "x": tx, "y": ty, "button": "left", "clickCount": 1
+                })),
+            )
+            .await?;
+
             match output_mode {
                 OutputMode::Human => eprintln!("OK"),
                 OutputMode::Json => println!("{{\"success\":true}}"),
@@ -1290,6 +1349,115 @@ async fn device(
                 OutputMode::Json => println!("{{\"success\":true}}"),
             }
         }
+    }
+    Ok(())
+}
+
+async fn profile(
+    cdp: &CdpClient,
+    args: commands::profile::ProfileArgs,
+    output_mode: OutputMode,
+) -> Result<()> {
+    if let Some(ref url) = args.url {
+        cdp.navigate(url).await?;
+    }
+
+    cdp.send("Profiler.enable", None).await?;
+    cdp.send("Profiler.start", None).await?;
+    eprintln!("Profiling for {} seconds...", args.duration);
+    tokio::time::sleep(std::time::Duration::from_secs(args.duration)).await;
+    let result = cdp.send("Profiler.stop", None).await?;
+    cdp.send("Profiler.disable", None).await?;
+
+    let profile_data = result.get("profile").cloned().unwrap_or_default();
+    let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
+    std::fs::create_dir_all(output_dir)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let path = output_dir.join(format!("profile_{ts}.cpuprofile"));
+    std::fs::write(&path, serde_json::to_string(&profile_data)?)?;
+
+    match output_mode {
+        OutputMode::Human => eprintln!("Profile saved: {}", path.display()),
+        OutputMode::Json => println!("{}", serde_json::json!({"path": path.to_string_lossy()})),
+    }
+    Ok(())
+}
+
+async fn record(
+    cdp: &CdpClient,
+    args: commands::record::RecordArgs,
+    output_mode: OutputMode,
+) -> Result<()> {
+    if let Some(ref url) = args.url {
+        cdp.navigate(url).await?;
+    }
+
+    let frame_count = if let Some(f) = args.frames {
+        f
+    } else if let Some(d) = args.duration {
+        ((d as f64 / args.interval as f64).ceil() as u32).max(1)
+    } else {
+        anyhow::bail!("Specify --frames or --duration");
+    };
+
+    let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
+    std::fs::create_dir_all(output_dir)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_millis(args.interval as u64));
+    let mut frames = Vec::new();
+
+    for i in 0..frame_count {
+        interval.tick().await;
+        let frame_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+
+        let b64 = cdp.screenshot().await?;
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)?;
+        let path = output_dir.join(format!("frame_{ts}_{i:03}.png"));
+        std::fs::write(&path, &bytes)?;
+
+        let mut frame = serde_json::json!({
+            "index": i,
+            "screenshot": path.to_string_lossy(),
+            "timestamp_ms": frame_ts as u64,
+        });
+
+        if args.dom {
+            let dom = call_bridge(
+                cdp,
+                &serde_json::json!({"type": "extractDOM", "options": {}}).to_string(),
+            )
+            .await?;
+            frame["dom"] = dom;
+        }
+
+        frames.push(frame);
+
+        if output_mode == OutputMode::Human {
+            eprint!("\rFrame {}/{}", i + 1, frame_count);
+        }
+    }
+
+    if output_mode == OutputMode::Human {
+        eprintln!("\n{} frames -> {}", frame_count, output_dir.display());
+    }
+
+    match output_mode {
+        OutputMode::Human => {}
+        OutputMode::Json => println!(
+            "{}",
+            serde_json::json!({"frames": frames, "count": frame_count, "interval_ms": args.interval})
+        ),
     }
     Ok(())
 }

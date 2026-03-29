@@ -61,6 +61,13 @@ pub enum ActionCommand {
     Select { index: u32, value: String },
     /// Upload a file to a file input (uses CDP)
     Upload { index: u32, path: String },
+    /// Drag element to another element position
+    Drag {
+        source: u32,
+        target: u32,
+        #[arg(long, default_value = "5")]
+        steps: u32,
+    },
 }
 
 impl ActionCommand {
@@ -115,6 +122,15 @@ impl ActionCommand {
             Self::Upload { index, path } => BrowserAction::Upload {
                 index: *index,
                 path: path.clone(),
+            },
+            Self::Drag {
+                source,
+                target,
+                steps,
+            } => BrowserAction::Drag {
+                source: *source,
+                target: *target,
+                steps: *steps,
             },
         })
     }

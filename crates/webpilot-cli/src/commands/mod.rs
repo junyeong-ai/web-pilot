@@ -12,6 +12,8 @@ pub mod frames;
 pub mod install;
 pub mod network;
 pub mod policy;
+pub mod profile;
+pub mod record;
 pub mod session;
 pub mod status;
 pub mod tabs;
@@ -53,6 +55,10 @@ pub enum Command {
     Cookies(cookies::CookiesArgs),
     /// Emulate device viewport and user agent
     Device(device::DeviceArgs),
+    /// CPU performance profiling
+    Profile(profile::ProfileArgs),
+    /// Record sequential frames for AI analysis
+    Record(record::RecordArgs),
     /// Check connection status
     Status,
     /// Install Native Messaging host manifest (for --browser mode)

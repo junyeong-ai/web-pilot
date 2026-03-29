@@ -66,6 +66,12 @@ pub async fn run_cli() -> anyhow::Result<()> {
                 "Device emulation is only supported in headless mode (without --browser)"
             );
         }
+        commands::Command::Profile(_) => {
+            anyhow::bail!("Profiling is only supported in headless mode (without --browser)");
+        }
+        commands::Command::Record(_) => {
+            anyhow::bail!("Recording is only supported in headless mode (without --browser)");
+        }
         commands::Command::Install(args) => commands::install::run(args, output_mode).await?,
         commands::Command::Quit => {
             crate::session::quit_session()?;
