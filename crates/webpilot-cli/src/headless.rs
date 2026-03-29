@@ -620,7 +620,12 @@ async fn dom(cdp: &CdpClient, args: commands::dom::DomArgs, output_mode: OutputM
     if let Some(val) = result.get("value").and_then(|v| v.as_str()) {
         match output_mode {
             OutputMode::Human => println!("{val}"),
-            OutputMode::Json => println!("{}", serde_json::json!({"value": val})),
+            OutputMode::Json => println!("{}", serde_json::json!({"success": true, "value": val})),
+        }
+    } else if success {
+        match output_mode {
+            OutputMode::Human => eprintln!("OK"),
+            OutputMode::Json => println!("{{\"success\":true}}"),
         }
     }
     if !success {

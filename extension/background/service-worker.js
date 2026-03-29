@@ -266,7 +266,7 @@ async function processCommand(id, command) {
         result = await handleListTabs();
         break;
       case "SwitchTab":
-        result = await handleSwitchTab(command.tab_id);
+        result = await handleSwitchTab(Number(command.tab_id));
         break;
       case "NewTab": {
         const t = await chrome.tabs.create({ url: command.url, active: true });
@@ -274,7 +274,7 @@ async function processCommand(id, command) {
         break;
       }
       case "CloseTab":
-        await chrome.tabs.remove(command.tab_id);
+        await chrome.tabs.remove(Number(command.tab_id));
         result = { type: "Action", success: true, code: null, dom: null, error: null };
         break;
       case "Evaluate": {
@@ -1147,7 +1147,7 @@ async function handleListTabs() {
   return {
     type: "Tabs",
     tabs: tabs.map((t) => ({
-      id: t.id,
+      id: String(t.id),
       url: t.url || "",
       title: t.title || "",
       active: t.active,
@@ -1156,7 +1156,7 @@ async function handleListTabs() {
 }
 
 async function handleSwitchTab(tabId) {
-  await chrome.tabs.update(tabId, { active: true });
+  await chrome.tabs.update(Number(tabId), { active: true });
   return { type: "Action", success: true };
 }
 
