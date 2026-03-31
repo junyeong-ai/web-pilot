@@ -53,6 +53,8 @@ webpilot capture --dom                                # 4. Verify
 | | `--browser capture --screenshot --full-page` | Full-page screenshot (browser only) |
 | **Device** | `device preset iphone-15` | Mobile device emulation |
 | | `device set --width 390 --height 844 --mobile` | Custom viewport |
+| | `device set --width W --height H --scale 2.0` | HiDPI viewport |
+| | `device set ... --user-agent "UA"` | Custom user agent |
 | | `device reset` | Clear emulation |
 | **Find** | `find --role button --text "Submit"` | Semantic search (implicit roles supported) |
 | | `find --placeholder "Search" --click` | Find + click |
@@ -80,6 +82,7 @@ webpilot capture --dom                                # 4. Verify
 | | `console start` / `read` / `clear` | Capture JS logs |
 | **Session** | `tabs` | List tabs |
 | | `tabs switch ID` / `new URL` / `close ID` | Manage tabs |
+| | `tabs find --url "*pattern*"` | Find tab by URL pattern |
 | | `cookies list "URL"` | List cookies |
 | | `session export --output f.json` | Save session |
 | | `session import f.json` | Restore session |

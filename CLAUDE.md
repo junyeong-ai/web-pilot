@@ -97,7 +97,7 @@ webpilot eval "document.title"                     # Get page title
 webpilot eval "document.querySelectorAll('a').length"  # Count links
 webpilot eval "location.href"                      # Get current URL
 ```
-Note: `eval` runs in the page's MAIN world (access to page variables). May fail on pages with strict CSP that blocks `unsafe-eval`.
+Note: In headless mode (default), `eval` runs in the page's MAIN world via CDP (access to page variables, bypasses CSP). In `--browser` mode, `eval` runs in an isolated context (DOM access only, no page JS variables, but CSP-safe).
 
 ### Wait for Conditions
 ```bash
@@ -113,6 +113,7 @@ webpilot tabs                                      # List all tabs
 webpilot tabs switch <TAB_ID>                      # Switch to tab
 webpilot tabs new "https://example.com"            # Open new tab
 webpilot tabs close <TAB_ID>                       # Close tab
+webpilot tabs find --url "*github*"                # Find and switch to tab by URL pattern
 ```
 
 ### Navigate Iframes
@@ -210,6 +211,8 @@ webpilot --browser capture --accessibility           # Accessibility tree (--bro
 ### Device Emulation
 ```bash
 webpilot device set --width 390 --height 844 --mobile  # Custom viewport + mobile emulation
+webpilot device set --width 1920 --height 1080 --scale 2.0  # HiDPI viewport
+webpilot device set --width 390 --height 844 --mobile --user-agent "Mozilla/5.0..."  # Custom user agent
 webpilot device preset iphone-15                        # Use a built-in preset
 webpilot device reset                                   # Clear emulation
 ```
@@ -340,7 +343,8 @@ web-pilot/
 │           ├── cli.rs          # CLI routing (headless default, --browser)
 │           ├── host.rs         # NM Host bridge (browser mode)
 │           ├── output.rs       # JSON/Human output + format_error()
-│           └── commands/       # 23 command modules
+│           ├── stitch.rs       # Full-page screenshot tile stitching
+│           └── commands/       # 21 command modules
 │
 ├── extension/              # Chrome Extension (browser mode)
 │   ├── manifest.json
