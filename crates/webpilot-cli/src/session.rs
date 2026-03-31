@@ -118,11 +118,10 @@ pub fn launch_chrome() -> Result<(u32, String)> {
     let _ = std::fs::create_dir_all(&profile_dir);
 
     // Clean stale DevToolsActivePort
-    let _ = std::fs::remove_file(profile_dir.join("DevToolsActivePort"));
+    let devtools_port_file = profile_dir.join("DevToolsActivePort");
+    let _ = std::fs::remove_file(&devtools_port_file);
 
     eprintln!("Launching headless Chrome...");
-
-    let devtools_port_file = profile_dir.join("DevToolsActivePort");
 
     let child = std::process::Command::new(&chrome)
         .args([

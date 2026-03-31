@@ -50,8 +50,8 @@ pub async fn run(
     let cdp = resolve_target(&browser, &ws_url, context.as_deref()).await?;
 
     match command {
-        commands::Command::Capture(args) => capture(&cdp, args, output_mode).await,
-        commands::Command::Action(args) => action(&cdp, args, output_mode).await,
+        commands::Command::Capture(args) => capture(&browser, &ws_url, cdp, args, output_mode).await,
+        commands::Command::Action(args) => action(&browser, &ws_url, cdp, args, output_mode).await,
         commands::Command::Eval(args) => eval(&cdp, args, output_mode).await,
         commands::Command::Wait(args) => wait(&cdp, args, output_mode).await,
         commands::Command::Find(args) => find(&cdp, args, output_mode).await,
@@ -114,12 +114,88 @@ async fn resolve_target(
             .ok_or_else(|| anyhow::anyhow!("No page target found"))?
     };
 
+    connect_to_page(ws_url, &target_id).await
+}
+
+/// Connect to a page target by ID and enable Page + Runtime domains.
+async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<CdpClient> {
     let authority = ws_url.split("/devtools/").next().unwrap_or(ws_url);
     let page_ws_url = format!("{authority}/devtools/page/{target_id}");
     let cdp = CdpClient::connect(&page_ws_url).await?;
     cdp.send("Page.enable", None).await?;
     cdp.send("Runtime.enable", None).await?;
     Ok(cdp)
+}
+
+/// Navigate to a URL via CDP, handling cross-origin renderer process swaps.
+/// Returns a new CdpClient connected to the page after navigation.
+///
+/// Cross-origin navigation from about:blank causes a renderer process swap,
+/// which kills the page-level WebSocket connection. This function detects that
+/// and reconnects via the browser-level connection.
+async fn navigate_reconnect(
+    browser: &CdpClient,
+    ws_url: &str,
+    cdp: &CdpClient,
+    url: &str,
+) -> Result<CdpClient> {
+    // Send Page.navigate — the page WS may break during cross-origin navigation
+    let navigate_result = cdp
+        .send("Page.navigate", Some(serde_json::json!({"url": url})))
+        .await;
+
+    match navigate_result {
+        Ok(resp) => {
+            if let Some(err) = resp.get("errorText").and_then(|v| v.as_str()) {
+                anyhow::bail!("Navigation failed: {err}");
+            }
+            // Navigation sent successfully, connection is alive (same-origin or fast load).
+            // Wait for the page to finish loading.
+            let _ = cdp
+                .wait_for_event(
+                    "Page.loadEventFired",
+                    std::time::Duration::from_secs(15),
+                )
+                .await;
+            // Short settle time
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        Err(_) => {
+            // Connection broke — cross-origin process swap.
+            // Poll for the page target to become available with the new URL.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                if let Ok(targets) = browser.get_targets().await {
+                    if let Some(page) = targets
+                        .iter()
+                        .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+                    {
+                        let page_url =
+                            page.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                        if page_url.starts_with("http") {
+                            // Page loaded, give it a moment to settle
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            break;
+                        }
+                    }
+                }
+                if std::time::Instant::now() > deadline {
+                    anyhow::bail!("Navigation timeout: page did not load within 15s");
+                }
+            }
+        }
+    }
+
+    // Reconnect to the (possibly new) page target
+    let targets = browser.get_targets().await?;
+    let target_id = targets
+        .iter()
+        .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+        .and_then(|t| t.get("targetId").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("No page target found after navigation"))?;
+    connect_to_page(ws_url, &target_id).await
 }
 
 const MAX_CONTEXTS: usize = 16;
@@ -425,7 +501,9 @@ async fn call_bridge(cdp: &CdpClient, msg_json: &str) -> Result<serde_json::Valu
 }
 
 async fn capture(
-    cdp: &CdpClient,
+    browser: &CdpClient,
+    ws_url: &str,
+    cdp: CdpClient,
     args: commands::capture::CaptureArgs,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -436,10 +514,13 @@ async fn capture(
         );
     }
 
-    // Navigate if URL provided
-    if let Some(ref url) = args.url {
-        cdp.navigate(url).await?;
-    }
+    // Navigate if URL provided (handles cross-origin renderer process swap)
+    let cdp = if let Some(ref url) = args.url {
+        navigate_reconnect(browser, ws_url, &cdp, url).await?
+    } else {
+        cdp
+    };
+    let cdp = &cdp;
 
     let mut out = serde_json::Map::new();
 
@@ -588,17 +669,20 @@ async fn capture(
 }
 
 async fn action(
-    cdp: &CdpClient,
+    browser: &CdpClient,
+    ws_url: &str,
+    cdp: CdpClient,
     args: commands::action::ActionArgs,
     output_mode: OutputMode,
 ) -> Result<()> {
     let browser_action = args.action.to_browser_action()?;
     let action_json = serde_json::to_value(&browser_action)?;
+    let cdp = &cdp;
 
     // Handle navigation actions directly via CDP
     match &browser_action {
         webpilot::protocol::BrowserAction::Navigate { url } => {
-            cdp.navigate(url).await?;
+            navigate_reconnect(browser, ws_url, cdp, url).await?;
             match output_mode {
                 OutputMode::Human => eprintln!("OK"),
                 OutputMode::Json => println!("{{\"success\":true}}"),

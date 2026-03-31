@@ -77,6 +77,8 @@ webpilot capture --dom                                # 4. Verify
 | | `dom set-attr "input" "value" "x"` | Set attribute |
 | **Frames** | `frames` | List iframes |
 | | `frames switch "name"` | Switch to iframe |
+| | `frames url "*pattern*"` | Switch by URL pattern |
+| | `frames find "js predicate"` | Switch by JS condition |
 | | `frames main` | Back to main |
 | **Monitor** | `network start` / `read` / `clear` | Track fetch/XHR |
 | | `console start` / `read` / `clear` | Capture JS logs |
@@ -132,6 +134,8 @@ webpilot capture --dom                                # 4. Verify
 | "No web page tab" | Run `capture --dom --url "URL"` to navigate first |
 | "Chrome not found" | Install Chrome or set `WEBPILOT_CHROME=/path/to/chrome` |
 | "CDP timeout" | Chrome may be busy. Try `webpilot quit` then retry |
+| "Navigation timeout" | Page didn't load in 15s. Check URL or network connectivity |
+| "Page is not responding" | Extension can't reach page (--browser). Reload page or extension |
 | "Timed out" | Increase timeout: `wait --timeout 15` |
 | Action didn't work | Check `network read` for API errors, or `console read` for JS errors |
 | Need SSO/login | Use `--browser` flag: `webpilot --browser capture --dom` |
