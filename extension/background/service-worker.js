@@ -247,12 +247,9 @@ async function processCommand(id, command) {
           await sleep(500);
           const tab = await findHttpTab();
           if (tab) {
-            await injectBridge(tab.id);
             try {
-              const dom = await Promise.race([
-                chrome.tabs.sendMessage(tab.id, { type: "extractDOM", options: {} }, { frameId: activeFrameId }),
-                new Promise((_, r) => setTimeout(() => r(), 5000)),
-              ]);
+              await ensureBridge(tab.id, activeFrameId);
+              const dom = await sendToContent(tab.id, { type: "extractDOM", options: {} }, activeFrameId, 5000);
               if (dom) result.dom = dom;
             } catch {}
           }
@@ -267,71 +264,44 @@ async function processCommand(id, command) {
         break;
       case "SwitchTab":
         try {
-          const stId = parseInt(command.tab_id, 10);
-          await chrome.tabs.update(stId, { active: true });
-          // Also focus the window containing the tab
-          const stTab = await chrome.tabs.get(stId);
-          if (stTab.windowId != null) {
-            await chrome.windows.update(stTab.windowId, { focused: true });
+          const targetTabId = parseInt(command.tab_id, 10);
+          await chrome.tabs.update(targetTabId, { active: true });
+          const targetTab = await chrome.tabs.get(targetTabId);
+          if (targetTab.windowId != null) {
+            await chrome.windows.update(targetTab.windowId, { focused: true });
           }
           result = { type: "Action", success: true, code: null, dom: null, error: null };
-        } catch (stErr) {
-          result = { type: "Action", success: false, error: stErr.message, code: null, dom: null };
+        } catch (e) {
+          result = { type: "Action", success: false, error: e.message, code: null, dom: null };
         }
         break;
-      case "NewTab": {
-        const t = await chrome.tabs.create({ url: command.url, active: true });
+      case "NewTab":
+        await chrome.tabs.create({ url: command.url, active: true });
         result = { type: "Action", success: true, code: null, dom: null, error: null };
         break;
-      }
       case "CloseTab":
         try {
           await chrome.tabs.remove(parseInt(command.tab_id, 10));
           result = { type: "Action", success: true, code: null, dom: null, error: null };
-        } catch (ctErr) {
-          result = { type: "Action", success: false, error: ctErr.message, code: null, dom: null };
+        } catch (e) {
+          result = { type: "Action", success: false, error: e.message, code: null, dom: null };
         }
         break;
       case "Evaluate": {
         const tab = await findHttpTab();
         if (!tab) { result = { type: "Error", message: "No web page tab" }; break; }
         try {
-          // Execute JS in MAIN world for access to page variables
-          // Note: Sites with strict CSP (unsafe-eval blocked) may reject eval().
-          // We use Function constructor as primary, eval as fallback.
-          const results = await Promise.race([
-            chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              world: "MAIN",
-              func: (code) => {
-                try {
-                  // Try Function constructor first (works on most sites)
-                  const fn = new Function("return (" + code + ")");
-                  return { success: true, result: JSON.stringify(fn()) };
-                } catch (e1) {
-                  if (e1.message.includes("Content Security Policy")) {
-                    // CSP blocks eval — try indirect approach via script element
-                    try {
-                      const s = document.createElement("script");
-                      s.textContent = `window.__webpilot_result = JSON.stringify(${code})`;
-                      document.documentElement.appendChild(s);
-                      s.remove();
-                      const r = window.__webpilot_result;
-                      delete window.__webpilot_result;
-                      return { success: true, result: r };
-                    } catch (e2) {
-                      return { success: false, error: "CSP blocks eval. Try a different page or simpler expression." };
-                    }
-                  }
-                  return { success: false, error: e1.message };
-                }
-              },
-              args: [command.code],
-            }),
-            new Promise((_, r) => setTimeout(() => r(new Error("eval timeout")), 10000)),
-          ]);
-          const r = results?.[0]?.result || { success: false, error: "No result" };
-          result = { type: "Evaluate", ...r };
+          // Execute JS via content script message passing (CSP-safe).
+          // The content script's handleMessage routes "evaluate" to a safe eval
+          // in the ISOLATED world, avoiding CSP violations entirely.
+          await ensureBridge(tab.id, activeFrameId);
+          const evalResult = await sendToContent(
+            tab.id,
+            { type: "evaluate", code: command.code },
+            activeFrameId,
+            10000
+          );
+          result = { type: "Evaluate", ...evalResult };
         } catch (e) {
           result = { type: "Evaluate", success: false, error: e.message };
         }
@@ -343,31 +313,33 @@ async function processCommand(id, command) {
 
         if (command.navigation) {
           // Wait for tab navigation (URL change + complete status)
+          let navListener;
           try {
             await Promise.race([
               new Promise((resolve) => {
-                function listener(tabId, changeInfo, updatedTab) {
-                  if (tabId === tab.id && changeInfo.status === "complete" && updatedTab.url?.startsWith("http")) {
-                    chrome.tabs.onUpdated.removeListener(listener);
+                navListener = (tid, changeInfo, updatedTab) => {
+                  if (tid === tab.id && changeInfo.status === "complete" && updatedTab.url?.startsWith("http")) {
+                    chrome.tabs.onUpdated.removeListener(navListener);
+                    navListener = null;
                     resolve();
                   }
-                }
-                chrome.tabs.onUpdated.addListener(listener);
+                };
+                chrome.tabs.onUpdated.addListener(navListener);
               }),
               new Promise((_, rej) => setTimeout(() => rej(new Error("Navigation wait timed out")), command.timeout_ms || 10000)),
             ]);
             result = { type: "Wait", success: true, error: null, code: null };
           } catch (e) {
             result = { type: "Wait", success: false, error: e.message, code: "TIMEOUT" };
+          } finally {
+            if (navListener) chrome.tabs.onUpdated.removeListener(navListener);
           }
         } else {
           // Wait for selector/text/DOM idle via content script
-          await injectBridge(tab.id);
           try {
-            const r = await Promise.race([
-              chrome.tabs.sendMessage(tab.id, { type: "wait", selector: command.selector, text: command.text, timeout_ms: command.timeout_ms }, { frameId: activeFrameId }),
-              new Promise((_, rej) => setTimeout(() => rej(new Error("Wait timed out")), (command.timeout_ms || 10000) + 2000)),
-            ]);
+            await ensureBridge(tab.id, activeFrameId);
+            const waitTimeout = (command.timeout_ms || 10000) + 2000;
+            const r = await sendToContent(tab.id, { type: "wait", selector: command.selector, text: command.text, timeout_ms: command.timeout_ms }, activeFrameId, waitTimeout);
             result = { type: "Wait", success: r.success, error: r.error || null, code: r.code || null };
           } catch (e) {
             result = { type: "Wait", success: false, error: e.message, code: "TIMEOUT" };
@@ -378,11 +350,11 @@ async function processCommand(id, command) {
       case "SetDom": {
         const tab = await findHttpTab();
         if (!tab) { result = { type: "Error", message: "No web page tab" }; break; }
-        await injectBridge(tab.id);
         const msgType = command.property === "html" ? "setHtml" : command.property === "text" ? "setText" : "setAttr";
         const msg = { type: msgType, selector: command.selector, value: command.value, attr: command.attr };
         try {
-          const r = await chrome.tabs.sendMessage(tab.id, msg, { frameId: activeFrameId });
+          await ensureBridge(tab.id, activeFrameId);
+          const r = await sendToContent(tab.id, msg, activeFrameId);
           result = { type: "CommandResult", success: r.success, value: null, error: r.error || null };
         } catch (e) {
           result = { type: "CommandResult", success: false, value: null, error: e.message };
@@ -392,11 +364,11 @@ async function processCommand(id, command) {
       case "GetDom": {
         const tab = await findHttpTab();
         if (!tab) { result = { type: "Error", message: "No web page tab" }; break; }
-        await injectBridge(tab.id);
         const msgType = command.property === "html" ? "getHtml" : command.property === "text" ? "getText" : "getAttr";
         const msg = { type: msgType, selector: command.selector, attr: command.attr };
         try {
-          const r = await chrome.tabs.sendMessage(tab.id, msg, { frameId: activeFrameId });
+          await ensureBridge(tab.id, activeFrameId);
+          const r = await sendToContent(tab.id, msg, activeFrameId);
           result = { type: "CommandResult", success: r.success, value: r.value || null, error: r.error || null };
         } catch (e) {
           result = { type: "CommandResult", success: false, value: null, error: e.message };
@@ -440,24 +412,20 @@ async function processCommand(id, command) {
           frames: allFrames.map(f => ({
             frame_id: f.frameId,
             url: f.url || "",
-            name: null, // Chrome doesn't expose frame name in webNavigation
+            name: null, // enriched with window.name via content script below
             parent_frame_id: f.parentFrameId >= 0 ? f.parentFrameId : null,
             is_main: f.frameId === 0,
           })),
           active_frame_id: activeFrameId,
         };
         // Enrich with frame names via content script
-        for (const frame of result.frames) {
-          if (frame.frame_id !== 0 && frame.url?.startsWith("http")) {
-            try {
-              const info = await Promise.race([
-                chrome.tabs.sendMessage(tab.id, { type: "ping" }, { frameId: frame.frame_id }),
-                new Promise((_, r) => setTimeout(() => r(), 1000)),
-              ]);
-              // Try to get frame name from parent
-            } catch {}
-          }
-        }
+        await Promise.allSettled(result.frames.map(async (frame) => {
+          if (frame.frame_id === 0 || !frame.url?.startsWith("http")) return;
+          try {
+            const r = await sendToContent(tab.id, { type: "evaluate", code: "window.name" }, frame.frame_id, 2000);
+            if (r?.success && r.result) frame.name = JSON.parse(r.result) || null;
+          } catch {}
+        }));
         break;
       }
       case "SwitchFrame": {
@@ -476,10 +444,7 @@ async function processCommand(id, command) {
           for (const f of frames) {
             if (f.frameId === 0 || !f.url?.startsWith("http")) continue;
             try {
-              const r = await Promise.race([
-                chrome.tabs.sendMessage(tab.id, { type: "evaluate", code: "window.name" }, { frameId: f.frameId }),
-                new Promise((_, rej) => setTimeout(() => rej(), 2000)),
-              ]);
+              const r = await sendToContent(tab.id, { type: "evaluate", code: "window.name" }, f.frameId, 2000);
               if (r?.success && r.result && JSON.parse(r.result) === command.name) {
                 matched = f;
                 break;
@@ -498,10 +463,7 @@ async function processCommand(id, command) {
           for (const f of frames) {
             if (f.frameId === 0 || !f.url?.startsWith("http")) continue;
             try {
-              const r = await Promise.race([
-                chrome.tabs.sendMessage(tab.id, { type: "evaluate", code: command.predicate }, { frameId: f.frameId }),
-                new Promise((_, rej) => setTimeout(() => rej(), 2000)),
-              ]);
+              const r = await sendToContent(tab.id, { type: "evaluate", code: command.predicate }, f.frameId, 2000);
               if (r?.success && r.result && JSON.parse(r.result) === true) {
                 matched = f;
                 break;
@@ -650,9 +612,9 @@ async function processCommand(id, command) {
           const tab = await findHttpTab();
           let storage = { localStorage: {}, sessionStorage: {} };
           if (tab) {
-            await injectBridge(tab.id);
             try {
-              storage = await chrome.tabs.sendMessage(tab.id, { type: "exportStorage" }, { frameId: activeFrameId });
+              await ensureBridge(tab.id, activeFrameId);
+              storage = await sendToContent(tab.id, { type: "exportStorage" }, activeFrameId);
             } catch {}
           }
           const sessionData = {
@@ -694,13 +656,13 @@ async function processCommand(id, command) {
           // Restore storage
           const tab = await findHttpTab();
           if (tab && (data.local_storage || data.session_storage)) {
-            await injectBridge(tab.id);
             try {
-              await chrome.tabs.sendMessage(tab.id, {
+              await ensureBridge(tab.id, activeFrameId);
+              await sendToContent(tab.id, {
                 type: "importStorage",
                 localStorage: data.local_storage || {},
                 sessionStorage: data.session_storage || {},
-              }, { frameId: activeFrameId });
+              }, activeFrameId);
             } catch {}
           }
           result = { type: "SessionResult", success: true, error: null };
@@ -761,11 +723,7 @@ async function handleCapture(command) {
 
   try {
     if (command.url) {
-      // Find any tab to navigate, preferring existing http tabs
-      const allTabs = await chrome.tabs.query({});
-      let existingTab = allTabs.find(t => t.active && t.url?.startsWith("http"));
-      if (!existingTab) existingTab = allTabs.find(t => t.url?.startsWith("http"));
-
+      const existingTab = await findHttpTab();
       if (existingTab) {
         tabId = existingTab.id;
         await chrome.tabs.update(tabId, { url: command.url, active: true });
@@ -778,9 +736,7 @@ async function handleCapture(command) {
       await waitForTabReady(tabId, 20000);
       await sleep(500);
     } else {
-      const allTabs = await chrome.tabs.query({});
-      const httpTab = allTabs.find(t => t.active && t.url?.startsWith("http"))
-        || allTabs.find(t => t.url?.startsWith("http"));
+      const httpTab = await findHttpTab();
       if (!httpTab) {
         return { type: "Error", message: "No web page tab found. Open a web page or use --url." };
       }
@@ -801,37 +757,19 @@ async function handleCapture(command) {
 
   // DOM extraction via content script message passing
   if (command.dom) {
-    // Force-inject the content script first (manifest auto-injection can be unreliable)
-    try {
-      // Inject content script
-      await Promise.race([
-        chrome.scripting.executeScript({
-          target: { tabId },
-          files: ["content/bridge.js"],
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("inject timeout")), 5000)),
-      ]);
-      // injected
-    } catch (e) {
-      // bridge.js may already be loaded — continue
-    }
-
-    // Small delay for listener registration
-    await sleep(100);
-
-    // Extract DOM from ALL frames (main + iframes)
     try {
       const opts = { bounds: command.bounds || false, occlusion: command.occlusion || false };
       const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => [{ frameId: 0 }]);
       const httpFrames = frames.filter(f => f.url?.startsWith("http"));
 
-      // Collect DOM from each frame in parallel
+      // Ensure bridge is ready in main frame
+      await ensureBridge(tabId, 0);
+
+      // Collect DOM from each frame in parallel (sendToContent auto-recovers per frame)
       const frameResults = await Promise.allSettled(
         httpFrames.map(f =>
-          Promise.race([
-            chrome.tabs.sendMessage(tabId, { type: "extractDOM", options: opts }, { frameId: f.frameId }),
-            new Promise((_, r) => setTimeout(() => r(new Error("timeout")), 5000)),
-          ]).then(dom => ({ frameId: f.frameId, url: f.url, dom }))
+          sendToContent(tabId, { type: "extractDOM", options: opts }, f.frameId, 5000)
+            .then(dom => ({ frameId: f.frameId, url: f.url, dom }))
         )
       );
 
@@ -876,19 +814,8 @@ async function handleCapture(command) {
   // Text extraction
   if (command.text) {
     try {
-      // Ensure bridge is injected for text extraction
-      try {
-        await Promise.race([
-          chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["content/bridge.js"] }),
-          new Promise((_, r) => setTimeout(() => r(), 3000)),
-        ]);
-      } catch {}
-      await sleep(50);
-
-      const textResult = await Promise.race([
-        chrome.tabs.sendMessage(tabId, { type: "extractText" }, { frameId: activeFrameId }),
-        new Promise((_, r) => setTimeout(() => r(new Error("timeout")), 5000)),
-      ]);
+      await ensureBridge(tabId, activeFrameId);
+      const textResult = await sendToContent(tabId, { type: "extractText" }, activeFrameId, 5000);
       if (textResult?.text) {
         result.dom = result.dom || { elements: [], total_nodes: 0, page_url: "", page_title: "", scroll: {}, scroll_percent: 0, extraction_ms: 0 };
         result.dom.text_content = textResult.text.slice(0, 50000); // 50KB max
@@ -926,15 +853,13 @@ async function handleCapture(command) {
   // Annotated screenshot: inject numbered overlays before capture
   if (command.annotate && result.dom?.elements) {
     try {
-      await injectBridge(tabId);
       // Only annotate main-frame elements (iframe bounds are relative to iframe viewport, not main)
       const annotations = result.dom.elements
         .filter(el => el.in_viewport && el.bounds && el.bounds.w > 0 && el.bounds.h > 0 && !el.frame)
         .map(el => ({ index: el.index, x: el.bounds.x, y: el.bounds.y, w: el.bounds.w, h: el.bounds.h }));
       if (annotations.length > 0) {
-        await chrome.tabs.sendMessage(tabId, {
-          type: "addAnnotations", elements: annotations
-        }, { frameId: 0 });
+        await ensureBridge(tabId, 0);
+        await sendToContent(tabId, { type: "addAnnotations", elements: annotations }, 0);
         await sleep(300); // Render annotations + rate limit buffer
       }
     } catch (e) {
@@ -952,13 +877,11 @@ async function handleCapture(command) {
 
       console.log("[WebPilot] Screenshot mode:", command.full_page ? "fullpage" : "viewport");
       if (command.full_page) {
-        // Tile-and-stitch via bridge.js messaging (not executeScript — avoids hang issues)
+        // Tile-and-stitch via bridge.js messaging
         // 1. Get page dimensions
-        // Inject bridge
-        await injectBridge(tabId);
+        await ensureBridge(tabId, 0);
 
-        // Get page dimensions via bridge message (no eval — CSP safe)
-        const dims = await chrome.tabs.sendMessage(tabId, { type: "getPageDims" }, { frameId: 0 })
+        const dims = await sendToContent(tabId, { type: "getPageDims" }, 0, 5000)
           .catch((e) => { console.error("[WebPilot] dims error:", e.message); return null; });
 
         const scrollHeight = dims?.scrollHeight || 0;
@@ -973,41 +896,27 @@ async function handleCapture(command) {
           const captureDelay = 750; // Chrome allows ~2 captures/sec; 750ms provides safe margin
 
           // 2. Scroll to top
-          await chrome.tabs.sendMessage(tabId, { type: "scrollTo", x: 0, y: 0 }, { frameId: 0 }).catch(() => {});
+          await sendToContent(tabId, { type: "scrollTo", x: 0, y: 0 }, 0, 3000).catch(() => {});
           await sleep(300);
 
           // 3. Capture tiles (with per-tile timeout and rate limit handling)
           for (let i = 0; i < tileCount && i < 20; i++) {
             if (i > 0) {
-              await chrome.tabs.sendMessage(tabId, { type: "scrollTo", x: 0, y: i * viewportHeight }, { frameId: 0 }).catch(() => {});
+              await sendToContent(tabId, { type: "scrollTo", x: 0, y: i * viewportHeight }, 0, 3000).catch(() => {});
             }
             // Always wait captureDelay before capture (rate limit)
             await sleep(captureDelay);
             try {
-              const dataUrl = await Promise.race([
-                chrome.tabs.captureVisibleTab(tabInfo.windowId, { format: "jpeg", quality: 60 }),
-                new Promise((_, r) => setTimeout(() => r(new Error("capture timeout")), 5000)),
-              ]);
-              tiles.push(dataUrl.replace(/^data:image\/\w+;base64,/, ""));
+              const tileB64 = await captureWithRetry(tabInfo.windowId, 60);
+              tiles.push(tileB64);
               console.log("[WebPilot] Tile", i + 1, "/", tileCount, "captured");
             } catch (e) {
-              console.error("[WebPilot] Tile", i + 1, "failed:", e.message);
-              // On rate limit, wait longer and retry once
-              if (e.message.includes("quota") || e.message.includes("CAPTURE")) {
-                await sleep(1500);
-                try {
-                  const retry = await chrome.tabs.captureVisibleTab(tabInfo.windowId, { format: "jpeg", quality: 60 });
-                  tiles.push(retry.replace(/^data:image\/\w+;base64,/, ""));
-                  console.log("[WebPilot] Tile", i + 1, "retry OK");
-                } catch (e2) {
-                  console.error("[WebPilot] Tile", i + 1, "retry failed:", e2.message);
-                }
-              }
+              console.error("[WebPilot] Tile", i + 1, "failed after retries:", e.message);
             }
           }
 
           // 4. Restore scroll
-          await chrome.tabs.sendMessage(tabId, { type: "scrollTo", x: origSX, y: origSY }, { frameId: 0 }).catch(() => {});
+          await sendToContent(tabId, { type: "scrollTo", x: origSX, y: origSY }, 0, 3000).catch(() => {});
 
           // Send tiles array (host will stitch)
           result.screenshot_tiles = tiles;
@@ -1015,23 +924,8 @@ async function handleCapture(command) {
           result.tile_total_height = scrollHeight;
         }
       } else {
-        // Single viewport screenshot (with rate limit retry)
-        try {
-          const dataUrl = await chrome.tabs.captureVisibleTab(tabInfo.windowId, {
-            format: "jpeg", quality: 80,
-          });
-          result.screenshot_b64 = dataUrl.replace(/^data:image\/\w+;base64,/, "");
-        } catch (ssErr) {
-          if (ssErr.message.includes("quota") || ssErr.message.includes("CAPTURE")) {
-            await sleep(1000);
-            const retry = await chrome.tabs.captureVisibleTab(tabInfo.windowId, {
-              format: "jpeg", quality: 80,
-            });
-            result.screenshot_b64 = retry.replace(/^data:image\/\w+;base64,/, "");
-          } else {
-            throw ssErr;
-          }
-        }
+        // Single viewport screenshot with exponential backoff retry
+        result.screenshot_b64 = await captureWithRetry(tabInfo.windowId, 80);
       }
     } catch (e) {
       console.error("[WebPilot] Screenshot failed:", e.message);
@@ -1042,7 +936,7 @@ async function handleCapture(command) {
   // Clean up annotations (try/finally guarantees removal even on screenshot failure)
   if (command.annotate) {
     try {
-      await chrome.tabs.sendMessage(tabId, { type: "removeAnnotations" }, { frameId: 0 });
+      await sendToContent(tabId, { type: "removeAnnotations" }, 0, 3000);
     } catch {}
   }
 
@@ -1060,9 +954,7 @@ async function handleAction(action) {
     }
   } catch {}
 
-  const allTabs = await chrome.tabs.query({});
-  const tab = allTabs.find(t => t.active && t.url?.startsWith("http"))
-    || allTabs.find(t => t.url?.startsWith("http"));
+  const tab = await findHttpTab();
   if (!tab) return { type: "Action", success: false, error: "No web page tab found" };
 
   // Navigation actions handled directly by service worker
@@ -1087,10 +979,10 @@ async function handleAction(action) {
     case "Upload":
       // File upload via CDP DOM.setFileInputFiles
       try {
-        // Tag the target element with a temporary attribute
-        await chrome.tabs.sendMessage(tab.id, {
+        await ensureBridge(tab.id, activeFrameId);
+        await sendToContent(tab.id, {
           type: "tagElement", index: action.index, attr: "data-wp-upload"
-        }, { frameId: activeFrameId });
+        }, activeFrameId);
 
         await withCdp(tab.id, async (tid) => {
           const { root } = await cdpSend(tid, "DOM.getDocument");
@@ -1105,9 +997,9 @@ async function handleAction(action) {
         });
 
         // Clean up temporary attribute
-        await chrome.tabs.sendMessage(tab.id, {
+        await sendToContent(tab.id, {
           type: "untagElement", attr: "data-wp-upload"
-        }, { frameId: activeFrameId }).catch(() => {});
+        }, activeFrameId, 3000).catch(() => {});
 
         return { type: "Action", success: true };
       } catch (e) {
@@ -1119,17 +1011,10 @@ async function handleAction(action) {
   const tabsBefore = new Set((await chrome.tabs.query({})).map(t => t.id));
   const urlBefore = tab.url;
 
-  // Ensure content script is injected, then send action
+  // Ensure content script is injected and listener is alive
   try {
-    await Promise.race([
-      chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content/bridge.js"] }),
-      new Promise((_, r) => setTimeout(() => r(new Error("inject timeout")), 3000)),
-    ]);
-  } catch (e) { /* ignore injection issues */ }
-  await sleep(100);
-
-  try {
-    const actionResult = await chrome.tabs.sendMessage(tab.id, { type: "executeAction", action }, { frameId: activeFrameId });
+    await ensureBridge(tab.id, activeFrameId);
+    const actionResult = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
     const result = { type: "Action", ...actionResult };
 
     // Post-action: detect new tabs and URL changes
@@ -1153,7 +1038,7 @@ async function handleAction(action) {
 
     return result;
   } catch (e) {
-    return { type: "Action", success: false, error: e.message };
+    return { type: "Action", success: false, error: e.message, code: e.code || null };
   }
 }
 
@@ -1179,16 +1064,6 @@ async function handleListTabs() {
       active: t.active,
     })),
   };
-}
-
-async function handleSwitchTab(tabId) {
-  const numId = parseInt(tabId, 10);
-  await chrome.tabs.update(numId, { active: true });
-  const tab = await chrome.tabs.get(numId);
-  if (tab.windowId != null) {
-    await chrome.windows.update(tab.windowId, { focused: true });
-  }
-  return { type: "Action", success: true };
 }
 
 // --- Utilities ---
@@ -1225,14 +1100,93 @@ async function findHttpTab() {
     || allTabs.find(t => t.url?.startsWith("http"));
 }
 
-async function injectBridge(tabId) {
+/**
+ * Inject bridge.js and verify the content script listener is alive.
+ * Re-injects and re-verifies on failure. Throws if communication cannot be established.
+ */
+async function ensureBridge(tabId, frameId = 0) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await Promise.race([
+        chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["content/bridge.js"] }),
+        new Promise((_, r) => setTimeout(() => r(new Error("inject timeout")), 3000)),
+      ]);
+    } catch {}
+
+    await sleep(50 + attempt * 100);
+    try {
+      const pong = await Promise.race([
+        chrome.tabs.sendMessage(tabId, { type: "ping" }, { frameId }),
+        new Promise((_, r) => setTimeout(() => r(new Error("ping timeout")), 2000)),
+      ]);
+      if (pong?.ok) return;
+    } catch {}
+    console.warn(`[WebPilot] Bridge verify failed (attempt ${attempt + 1}/3, tab=${tabId}, frame=${frameId})`);
+  }
+  const err = new Error("Page is not responding — try reloading the page");
+  err.code = "BRIDGE_UNAVAILABLE";
+  throw err;
+}
+
+/**
+ * Lightweight bridge injection without ping verification.
+ * Used for proactive injection (e.g., after navigation) where verification overhead is unnecessary.
+ */
+async function injectBridgeOnly(tabId, frameId = 0) {
   try {
     await Promise.race([
-      chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["content/bridge.js"] }),
+      chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["content/bridge.js"] }),
       new Promise((_, r) => setTimeout(() => r(new Error("inject timeout")), 3000)),
     ]);
-  } catch (e) { /* bridge may already be loaded */ }
-  await sleep(50);
+  } catch {}
+}
+
+const SEND_TIMEOUT_MSG = "Page did not respond in time";
+
+/**
+ * Send a message to the content script with timeout and automatic recovery.
+ * On "Receiving end" errors or timeout, re-injects bridge.js and retries once.
+ */
+async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
+  const sendWithTimeout = () => Promise.race([
+    chrome.tabs.sendMessage(tabId, message, { frameId }),
+    new Promise((_, r) => setTimeout(() => r(new Error(SEND_TIMEOUT_MSG)), timeoutMs)),
+  ]);
+
+  try {
+    return await sendWithTimeout();
+  } catch (firstError) {
+    const isRecoverable = firstError.message.includes("Receiving end") || firstError.message === SEND_TIMEOUT_MSG;
+    if (isRecoverable) {
+      console.warn(`[WebPilot] Content script disconnected (${firstError.message}), recovering...`);
+      await ensureBridge(tabId, frameId);
+      return await sendWithTimeout();
+    }
+    throw firstError;
+  }
+}
+
+/**
+ * Capture a screenshot with exponential backoff retry.
+ * Handles rate limiting, GPU readback failures, and transient capture errors.
+ * Returns base64-encoded image data (without data URL prefix).
+ */
+async function captureWithRetry(windowId, quality = 80, maxAttempts = 3) {
+  let delay = 500;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      if (attempt > 0) await sleep(delay);
+      const dataUrl = await Promise.race([
+        chrome.tabs.captureVisibleTab(windowId, { format: "jpeg", quality }),
+        new Promise((_, r) => setTimeout(() => r(new Error("capture timeout")), 10000)),
+      ]);
+      return dataUrl.replace(/^data:image\/\w+;base64,/, "");
+    } catch (e) {
+      console.warn(`[WebPilot] Capture attempt ${attempt + 1} failed: ${e.message}`);
+      delay *= 2; // 500ms → 1s → 2s
+      if (attempt === maxAttempts - 1) throw e;
+    }
+  }
 }
 
 // --- Internal message handler (from popup/sidepanel) ---
@@ -1259,6 +1213,8 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
   if (details.frameId !== 0) return;
   if (!details.url?.startsWith("http")) return;
   const tabId = details.tabId;
+  // Re-inject bridge.js on navigation to ensure listener is fresh (inject only, no ping)
+  await injectBridgeOnly(tabId, 0);
   if (monitoringState.console.has(tabId)) {
     try { await injectConsoleMonitoring(tabId); } catch {}
   }

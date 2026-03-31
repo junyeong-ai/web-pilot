@@ -27,7 +27,13 @@ function handleMessage(msg) {
       return executeAction(msg.action);
     case "evaluate":
       try {
-        const result = new Function(msg.code)();
+        let result;
+        try {
+          result = new Function("return (" + msg.code + ")")();
+        } catch (syntaxErr) {
+          if (syntaxErr instanceof SyntaxError) result = new Function(msg.code)();
+          else throw syntaxErr;
+        }
         return { success: true, result: result !== undefined ? JSON.stringify(result) : null };
       } catch (e) {
         return { success: false, error: e.message };
@@ -53,7 +59,7 @@ function handleMessage(msg) {
         scrollY: window.scrollY,
       };
     case "scrollTo":
-      window.scrollTo(msg.x || 0, msg.y || 0);
+      window.scrollTo(msg.x ?? 0, msg.y ?? 0);
       return { success: true };
     case "setHtml": {
       const el = document.querySelector(msg.selector);
@@ -115,8 +121,8 @@ function handleMessage(msg) {
         const visible = getVisibleElements();
         const srcEl = msg.source > 0 && msg.source <= visible.length ? visible[msg.source - 1] : null;
         const tgtEl = msg.target > 0 && msg.target <= visible.length ? visible[msg.target - 1] : null;
-        if (!srcEl) return { error: "Source element not found" };
-        if (!tgtEl) return { error: "Target element not found" };
+        if (!srcEl) return { success: false, error: "Source element not found" };
+        if (!tgtEl) return { success: false, error: "Target element not found" };
         srcEl.scrollIntoView({ block: "center", behavior: "instant" });
         const sr = srcEl.getBoundingClientRect();
         const tr = tgtEl.getBoundingClientRect();
@@ -125,32 +131,34 @@ function handleMessage(msg) {
     case "ping":
       return { ok: true, url: location.href, title: document.title };
     default:
-      return { error: "Unknown message type: " + msg.type };
+      return { success: false, error: "Unknown message type: " + msg.type };
   }
 }
 
-// Register message listener only once (Extension content script mode)
-if (typeof chrome !== "undefined" && chrome.runtime?.onMessage && !window.__webpilot_listener) {
-window.__webpilot_listener = true;
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  const result = handleMessage(msg);
-  // If handleMessage returns a Promise (e.g. wait), keep the channel open
-  if (result && typeof result.then === "function") {
-    result.then(sendResponse);
-    return true;
+// Register message listener (Extension content script mode)
+// Always re-register on each injection to recover from SPA-induced listener disconnects.
+// Previous listener is removed first to avoid duplicates.
+if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+  if (window.__webpilot_listener_fn) {
+    try { chrome.runtime.onMessage.removeListener(window.__webpilot_listener_fn); } catch {}
   }
-  sendResponse(result);
-  return false;
-});
-} // end of listener guard
+  window.__webpilot_listener_fn = (msg, sender, sendResponse) => {
+    const result = handleMessage(msg);
+    if (result && typeof result.then === "function") {
+      result.then(sendResponse);
+      return true;
+    }
+    sendResponse(result);
+    return false;
+  };
+  chrome.runtime.onMessage.addListener(window.__webpilot_listener_fn);
+}
 
 // ==================== DOM EXTRACTION ====================
 
 function queryAllDeep(selector, root = document, depth = 0) {
   if (depth > 10) return [];
-  // Query selector across regular DOM + open shadow DOMs
   const results = [...root.querySelectorAll(selector)];
-  // Recurse into shadow roots
   for (const el of root.querySelectorAll("*")) {
     if (el.shadowRoot) {
       results.push(...queryAllDeep(selector, el.shadowRoot, depth + 1));
@@ -159,26 +167,29 @@ function queryAllDeep(selector, root = document, depth = 0) {
   return results;
 }
 
+// Shared element collection — used by both extractDOM and getVisibleElements
+// to ensure element indices stay consistent between capture and action.
+var STANDARD_TAGS = new Set(["a","button","input","select","textarea","summary"]);
+
+function collectInteractiveElements() {
+  const allEls = queryAllDeep(INTERACTIVE_SELECTOR);
+  for (const el of document.querySelectorAll("*")) {
+    if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
+    if (el.getAttribute("role")) continue;
+    try {
+      if (getComputedStyle(el).cursor === "pointer" && !el.closest("a,button")) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 10 && rect.height > 10) allEls.push(el);
+      }
+    } catch {}
+  }
+  return allEls;
+}
+
 function extractDOM(options) {
   try {
     const start = performance.now();
-
-    // Standard interactive elements
-    const allEls = queryAllDeep(INTERACTIVE_SELECTOR);
-
-    // Cursor-interactive detection: find divs/spans with cursor:pointer not in standard set
-    const standardTags = new Set(["a","button","input","select","textarea","summary"]);
-    for (const el of document.querySelectorAll("*")) {
-      if (standardTags.has(el.tagName.toLowerCase())) continue;
-      if (el.getAttribute("role")) continue; // already matched by INTERACTIVE_SELECTOR
-      try {
-        if (getComputedStyle(el).cursor === "pointer" && !el.closest("a,button")) {
-          const rect = el.getBoundingClientRect();
-          if (rect.width > 10 && rect.height > 10) allEls.push(el);
-        }
-      } catch {}
-    }
-
+    const allEls = collectInteractiveElements();
     const totalNodes = document.querySelectorAll("*").length;
     const elements = [];
     let idx = 1;
@@ -342,23 +353,7 @@ function findLandmark(el) {
 // ==================== ACTION EXECUTION ====================
 
 function getVisibleElements() {
-  // Must match extractDOM's element collection logic exactly,
-  // otherwise element indices from capture won't match action targets.
-  const allEls = queryAllDeep(INTERACTIVE_SELECTOR);
-
-  // Include cursor-pointer elements (same logic as extractDOM)
-  const standardTags = new Set(["a","button","input","select","textarea","summary"]);
-  for (const el of document.querySelectorAll("*")) {
-    if (standardTags.has(el.tagName.toLowerCase())) continue;
-    if (el.getAttribute("role")) continue;
-    try {
-      if (getComputedStyle(el).cursor === "pointer" && !el.closest("a,button")) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 10 && rect.height > 10) allEls.push(el);
-      }
-    } catch {}
-  }
-
+  const allEls = collectInteractiveElements();
   const visible = [];
   for (const el of allEls) {
     const rect = el.getBoundingClientRect();
