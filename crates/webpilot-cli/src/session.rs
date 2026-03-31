@@ -2,7 +2,6 @@
 //! No Extension or Native Messaging needed — uses Chrome DevTools Protocol directly.
 
 use anyhow::{Context, Result};
-use std::io::BufRead;
 use std::path::PathBuf;
 
 /// Chrome for Testing paths (installed by agent-browser or manually).
@@ -123,7 +122,9 @@ pub fn launch_chrome() -> Result<(u32, String)> {
 
     eprintln!("Launching headless Chrome...");
 
-    let mut child = std::process::Command::new(&chrome)
+    let devtools_port_file = profile_dir.join("DevToolsActivePort");
+
+    let child = std::process::Command::new(&chrome)
         .args([
             "--headless=new",
             "--remote-debugging-port=0",
@@ -144,38 +145,34 @@ pub fn launch_chrome() -> Result<(u32, String)> {
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .context("Failed to launch Chrome")?;
 
     let pid = child.id();
 
-    // Parse WebSocket URL from stderr: "DevTools listening on ws://..."
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("No stderr from Chrome"))?;
-    let reader = std::io::BufReader::new(stderr);
+    // Detach: Chrome runs independently, managed via PID file + signals.
+    // No piped handles → no SIGPIPE risk when CLI exits.
+    std::mem::forget(child);
 
-    let mut ws_url = None;
+    // Read WebSocket URL from DevToolsActivePort file (Puppeteer/Playwright standard).
+    // Chrome writes this file asynchronously after startup.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-
-    for line in reader.lines() {
+    let ws_url = loop {
         if std::time::Instant::now() > deadline {
-            break;
+            let _ = send_signal(pid as i32, libc::SIGTERM);
+            anyhow::bail!("Chrome started but no DevTools URL. Is this Chrome for Testing?");
         }
-        if let Ok(line) = line
-            && let Some(url) = line.strip_prefix("DevTools listening on ")
-        {
-            ws_url = Some(url.trim().to_string());
-            break;
+        if let Ok(content) = std::fs::read_to_string(&devtools_port_file) {
+            let lines: Vec<&str> = content.lines().collect();
+            if lines.len() >= 2 {
+                let port = lines[0].trim();
+                let path = lines[1].trim();
+                break format!("ws://127.0.0.1:{port}{path}");
+            }
         }
-    }
-
-    let ws_url = ws_url.ok_or_else(|| {
-        let _ = send_signal(pid as i32, libc::SIGTERM);
-        anyhow::anyhow!("Chrome started but no DevTools URL. Is this Chrome for Testing?")
-    })?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
 
     // Save PID and WS URL
     std::fs::write(pid_path(), pid.to_string())?;
