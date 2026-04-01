@@ -50,7 +50,9 @@ pub async fn run(
     let cdp = resolve_target(&browser, &ws_url, context.as_deref()).await?;
 
     match command {
-        commands::Command::Capture(args) => capture(&browser, &ws_url, cdp, args, output_mode).await,
+        commands::Command::Capture(args) => {
+            capture(&browser, &ws_url, cdp, args, output_mode).await
+        }
         commands::Command::Action(args) => action(&browser, &ws_url, cdp, args, output_mode).await,
         commands::Command::Eval(args) => eval(&cdp, args, output_mode).await,
         commands::Command::Wait(args) => wait(&cdp, args, output_mode).await,
@@ -152,10 +154,7 @@ async fn navigate_reconnect(
             // Navigation sent successfully, connection is alive (same-origin or fast load).
             // Wait for the page to finish loading.
             let _ = cdp
-                .wait_for_event(
-                    "Page.loadEventFired",
-                    std::time::Duration::from_secs(15),
-                )
+                .wait_for_event("Page.loadEventFired", std::time::Duration::from_secs(15))
                 .await;
             // Short settle time
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -171,8 +170,7 @@ async fn navigate_reconnect(
                         .iter()
                         .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
                     {
-                        let page_url =
-                            page.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                        let page_url = page.get("url").and_then(|v| v.as_str()).unwrap_or("");
                         if page_url.starts_with("http") {
                             // Page loaded, give it a moment to settle
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
