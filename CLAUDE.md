@@ -97,7 +97,7 @@ webpilot eval "document.title"                     # Get page title
 webpilot eval "document.querySelectorAll('a').length"  # Count links
 webpilot eval "location.href"                      # Get current URL
 ```
-Note: In headless mode (default), `eval` runs in the page's MAIN world via CDP (access to page variables, bypasses CSP). In `--browser` mode, `eval` runs in an isolated context (DOM access only, no page JS variables, but CSP-safe).
+Note: `eval` runs in the page's MAIN world via CDP (both headless and `--browser` mode). Access to page variables, bypasses CSP. In `--browser` mode, a brief debugger banner may appear.
 
 ### Wait for Conditions
 ```bash

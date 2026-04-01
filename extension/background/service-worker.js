@@ -291,17 +291,19 @@ async function processCommand(id, command) {
         const tab = await findHttpTab();
         if (!tab) { result = { type: "Error", message: "No web page tab" }; break; }
         try {
-          // Execute JS via content script message passing (CSP-safe).
-          // The content script's handleMessage routes "evaluate" to a safe eval
-          // in the ISOLATED world, avoiding CSP violations entirely.
-          await ensureBridge(tab.id, activeFrameId);
-          const evalResult = await sendToContent(
-            tab.id,
-            { type: "evaluate", code: command.code },
-            activeFrameId,
-            10000
-          );
-          result = { type: "Evaluate", ...evalResult };
+          // CDP Runtime.evaluate: runs in MAIN world, bypasses all CSP.
+          // Consistent with headless mode — same execution context, same behavior.
+          const cdpResult = await withCdp(tab.id, async (tid) => {
+            const r = await cdpSend(tid, "Runtime.evaluate", {
+              expression: command.code, returnByValue: true, awaitPromise: true,
+            });
+            if (r.exceptionDetails) {
+              return { success: false, error: r.exceptionDetails.exception?.description || r.exceptionDetails.text || "JS exception" };
+            }
+            const val = r.result?.value;
+            return { success: true, result: val !== undefined ? JSON.stringify(val) : null };
+          });
+          result = { type: "Evaluate", ...cdpResult };
         } catch (e) {
           result = { type: "Evaluate", success: false, error: e.message };
         }
