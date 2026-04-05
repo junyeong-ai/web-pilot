@@ -8,11 +8,11 @@ use crate::output::OutputMode;
 #[derive(Args)]
 pub struct TabsArgs {
     #[command(subcommand)]
-    pub action: Option<TabAction>,
+    pub command: Option<TabsCommand>,
 }
 
 #[derive(Subcommand)]
-pub enum TabAction {
+pub enum TabsCommand {
     /// Switch to a tab by ID
     Switch { tab_id: String },
     /// Open a new tab
@@ -27,20 +27,17 @@ pub enum TabAction {
 }
 
 pub async fn run(args: TabsArgs, output_mode: OutputMode) -> Result<()> {
-    match args.action {
+    match args.command {
         None => list_tabs(output_mode).await,
-        Some(TabAction::Switch { tab_id }) => switch_tab(tab_id, output_mode).await,
-        Some(TabAction::New { url }) => new_tab(&url, output_mode).await,
-        Some(TabAction::Close { tab_id }) => close_tab(tab_id, output_mode).await,
-        Some(TabAction::Find { url }) => find_tab(&url, output_mode).await,
+        Some(TabsCommand::Switch { tab_id }) => switch_tab(tab_id, output_mode).await,
+        Some(TabsCommand::New { url }) => new_tab(&url, output_mode).await,
+        Some(TabsCommand::Close { tab_id }) => close_tab(tab_id, output_mode).await,
+        Some(TabsCommand::Find { url }) => find_tab(&url, output_mode).await,
     }
 }
 
 async fn list_tabs(output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::ListTabs,
-    })?;
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::ListTabs))?;
 
     let response = ipc::send_request(&request)
         .await
@@ -65,12 +62,12 @@ async fn list_tabs(output_mode: OutputMode) -> Result<()> {
 }
 
 async fn switch_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::SwitchTab {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::SwitchTab {
             tab_id: tab_id.clone(),
         },
-    })?;
+    ))?;
     let response = ipc::send_request(&request)
         .await
         .context("Failed to connect")?;
@@ -80,11 +77,10 @@ async fn switch_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
             OutputMode::Human => {
                 if success {
                     eprintln!("Switched to tab {tab_id}");
+                } else if let Some(ref err) = error {
+                    eprintln!("{}", crate::output::format_error(err));
                 } else {
-                    eprintln!(
-                        "{}",
-                        crate::output::format_error(&error.unwrap_or_default(), None)
-                    );
+                    eprintln!("Unknown error");
                 }
             }
             OutputMode::Json => println!("{}", serde_json::json!({"success": success})),
@@ -95,12 +91,12 @@ async fn switch_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
 }
 
 async fn new_tab(url: &str, output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::NewTab {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::NewTab {
             url: url.to_string(),
         },
-    })?;
+    ))?;
     let response = ipc::send_request(&request)
         .await
         .context("Failed to connect")?;
@@ -120,12 +116,12 @@ async fn new_tab(url: &str, output_mode: OutputMode) -> Result<()> {
 }
 
 async fn close_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::CloseTab {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::CloseTab {
             tab_id: tab_id.clone(),
         },
-    })?;
+    ))?;
     let response = ipc::send_request(&request)
         .await
         .context("Failed to connect")?;
@@ -145,10 +141,7 @@ async fn close_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
 }
 
 async fn find_tab(url_pattern: &str, output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::ListTabs,
-    })?;
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::ListTabs))?;
     let response = ipc::send_request(&request)
         .await
         .context("Failed to connect")?;

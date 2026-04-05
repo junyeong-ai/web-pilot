@@ -8,11 +8,11 @@ use crate::output::OutputMode;
 #[derive(Args)]
 pub struct DomArgs {
     #[command(subcommand)]
-    pub action: DomAction,
+    pub command: DomCommand,
 }
 
 #[derive(Subcommand)]
-pub enum DomAction {
+pub enum DomCommand {
     /// Set element innerHTML
     #[command(name = "set-html")]
     SetHtml { selector: String, value: String },
@@ -38,17 +38,17 @@ pub enum DomAction {
 }
 
 pub async fn run(args: DomArgs, output_mode: OutputMode) -> Result<()> {
-    let request = match &args.action {
-        DomAction::SetHtml { selector, value } => make_set(selector, "html", value, None),
-        DomAction::SetText { selector, value } => make_set(selector, "text", value, None),
-        DomAction::SetAttr {
+    let request = match &args.command {
+        DomCommand::SetHtml { selector, value } => make_set(selector, "html", value, None),
+        DomCommand::SetText { selector, value } => make_set(selector, "text", value, None),
+        DomCommand::SetAttr {
             selector,
             attr,
             value,
         } => make_set(selector, "attr", value, Some(attr.clone())),
-        DomAction::GetHtml { selector } => make_get(selector, "html", None),
-        DomAction::GetText { selector } => make_get(selector, "text", None),
-        DomAction::GetAttr { selector, attr } => make_get(selector, "attr", Some(attr.clone())),
+        DomCommand::GetHtml { selector } => make_get(selector, "html", None),
+        DomCommand::GetText { selector } => make_get(selector, "text", None),
+        DomCommand::GetAttr { selector, attr } => make_get(selector, "attr", Some(attr.clone())),
     }?;
 
     let response = ipc::send_request(&request)
@@ -76,7 +76,11 @@ pub async fn run(args: DomArgs, output_mode: OutputMode) -> Result<()> {
                 }
             }
             if !success {
-                anyhow::bail!("{}", error.unwrap_or_default());
+                if let Some(ref err) = error {
+                    anyhow::bail!("{}", crate::output::format_error(err));
+                } else {
+                    anyhow::bail!("Unknown error");
+                }
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
@@ -91,24 +95,24 @@ fn make_set(
     value: &str,
     attr: Option<String>,
 ) -> Result<serde_json::Value> {
-    Ok(serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::SetDom {
+    Ok(serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::SetDom {
             selector: selector.to_string(),
             property: property.to_string(),
             value: value.to_string(),
             attr,
         },
-    })?)
+    ))?)
 }
 
 fn make_get(selector: &str, property: &str, attr: Option<String>) -> Result<serde_json::Value> {
-    Ok(serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::GetDom {
+    Ok(serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::GetDom {
             selector: selector.to_string(),
             property: property.to_string(),
             attr,
         },
-    })?)
+    ))?)
 }

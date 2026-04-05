@@ -51,9 +51,9 @@ pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
     }
 
     // Capture DOM to get current elements
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::Capture {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::Capture {
             dom: true,
             screenshot: false,
             text: false,
@@ -65,7 +65,7 @@ pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
             annotate: false,
             pdf: false,
         },
-    })?;
+    ))?;
 
     let response = ipc::send_request(&request)
         .await
@@ -155,13 +155,13 @@ pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
 }
 
 async fn execute_action(action: BrowserAction, output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 2,
-        command: Command::Action {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(
+        2,
+        Command::Action {
             action,
             capture: false,
         },
-    })?;
+    ))?;
 
     let response = ipc::send_request(&request)
         .await
@@ -169,27 +169,15 @@ async fn execute_action(action: BrowserAction, output_mode: OutputMode) -> Resul
     let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
 
     match resp.result {
-        ResponseData::Action {
-            success,
-            error,
-            code,
-            ..
-        } => {
+        ResponseData::Action { success, error, .. } => {
             if !success {
-                eprintln!(
-                    "{}",
-                    crate::output::format_error(
-                        error.as_deref().unwrap_or("unknown"),
-                        code.as_deref(),
-                    )
-                );
-                anyhow::bail!(
-                    "{}",
-                    crate::output::format_error(
-                        error.as_deref().unwrap_or("unknown"),
-                        code.as_deref(),
-                    )
-                );
+                if let Some(ref err) = error {
+                    eprintln!("{}", crate::output::format_error(err));
+                    anyhow::bail!("{}", crate::output::format_error(err));
+                } else {
+                    eprintln!("Unknown error");
+                    anyhow::bail!("Unknown error");
+                }
             }
             if output_mode == OutputMode::Human {
                 eprintln!("OK");

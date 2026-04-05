@@ -8,11 +8,11 @@ use crate::output::OutputMode;
 #[derive(Args)]
 pub struct SessionArgs {
     #[command(subcommand)]
-    pub action: SessionAction,
+    pub command: SessionCommand,
 }
 
 #[derive(Subcommand)]
-pub enum SessionAction {
+pub enum SessionCommand {
     /// Export cookies + localStorage to file
     Export {
         /// Output file path
@@ -27,12 +27,10 @@ pub enum SessionAction {
 }
 
 pub async fn run(args: SessionArgs, output_mode: OutputMode) -> Result<()> {
-    match args.action {
-        SessionAction::Export { output } => {
-            let request = serde_json::to_value(webpilot::protocol::Request {
-                id: 1,
-                command: Command::ExportSession,
-            })?;
+    match args.command {
+        SessionCommand::Export { output } => {
+            let request =
+                serde_json::to_value(webpilot::protocol::Request::new(1, Command::ExportSession))?;
             let response = ipc::send_request(&request)
                 .await
                 .context("Host not running")?;
@@ -63,12 +61,12 @@ pub async fn run(args: SessionArgs, output_mode: OutputMode) -> Result<()> {
                 _ => anyhow::bail!("Unexpected response"),
             }
         }
-        SessionAction::Import { path } => {
+        SessionCommand::Import { path } => {
             let data = std::fs::read_to_string(&path).context("Cannot read session file")?;
-            let request = serde_json::to_value(webpilot::protocol::Request {
-                id: 1,
-                command: Command::ImportSession { data },
-            })?;
+            let request = serde_json::to_value(webpilot::protocol::Request::new(
+                1,
+                Command::ImportSession { data },
+            ))?;
             let response = ipc::send_request(&request)
                 .await
                 .context("Host not running")?;
@@ -76,22 +74,27 @@ pub async fn run(args: SessionArgs, output_mode: OutputMode) -> Result<()> {
 
             match resp.result {
                 ResponseData::SessionResult { success, error } => {
-                    let err_str = error.unwrap_or_default();
                     match output_mode {
                         OutputMode::Human => {
                             if success {
                                 eprintln!("Session imported");
+                            } else if let Some(ref err) = error {
+                                eprintln!("{}", crate::output::format_error(err));
                             } else {
-                                eprintln!("{}", crate::output::format_error(&err_str, None));
+                                eprintln!("Unknown error");
                             }
                         }
                         OutputMode::Json => println!(
                             "{}",
-                            serde_json::json!({"success": success, "error": err_str})
+                            serde_json::json!({"success": success, "error": error})
                         ),
                     }
                     if !success {
-                        anyhow::bail!("{}", crate::output::format_error(&err_str, None));
+                        if let Some(ref err) = error {
+                            anyhow::bail!("{}", crate::output::format_error(err));
+                        } else {
+                            anyhow::bail!("Unknown error");
+                        }
                     }
                 }
                 ResponseData::Error { message, .. } => anyhow::bail!("{message}"),

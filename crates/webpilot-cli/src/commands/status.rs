@@ -5,10 +5,7 @@ use webpilot::protocol::{Command, ResponseData};
 use crate::output::OutputMode;
 
 pub async fn run(output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::Status,
-    })?;
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::Status))?;
 
     match ipc::send_request(&request).await {
         Ok(response) => {

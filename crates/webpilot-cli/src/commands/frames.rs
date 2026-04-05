@@ -8,11 +8,11 @@ use crate::output::OutputMode;
 #[derive(Args)]
 pub struct FramesArgs {
     #[command(subcommand)]
-    pub action: Option<FrameAction>,
+    pub command: Option<FramesCommand>,
 }
 
 #[derive(Subcommand)]
-pub enum FrameAction {
+pub enum FramesCommand {
     /// Switch to a frame by name
     Switch { name: String },
     /// Switch to a frame by URL pattern
@@ -24,26 +24,23 @@ pub enum FrameAction {
 }
 
 pub async fn run(args: FramesArgs, output_mode: OutputMode) -> Result<()> {
-    match args.action {
+    match args.command {
         None => list_frames(output_mode).await,
-        Some(FrameAction::Switch { name }) => {
+        Some(FramesCommand::Switch { name }) => {
             switch_frame(Some(name), None, None, false, output_mode).await
         }
-        Some(FrameAction::Url { pattern }) => {
+        Some(FramesCommand::Url { pattern }) => {
             switch_frame(None, Some(pattern), None, false, output_mode).await
         }
-        Some(FrameAction::Find { predicate }) => {
+        Some(FramesCommand::Find { predicate }) => {
             switch_frame(None, None, Some(predicate), false, output_mode).await
         }
-        Some(FrameAction::Main) => switch_frame(None, None, None, true, output_mode).await,
+        Some(FramesCommand::Main) => switch_frame(None, None, None, true, output_mode).await,
     }
 }
 
 async fn list_frames(output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::ListFrames,
-    })?;
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::ListFrames))?;
 
     let response = ipc::send_request(&request)
         .await
@@ -94,15 +91,15 @@ async fn switch_frame(
     main: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::SwitchFrame {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::SwitchFrame {
             name,
             url_pattern,
             predicate,
             main,
         },
-    })?;
+    ))?;
 
     let response = ipc::send_request(&request)
         .await
@@ -117,7 +114,6 @@ async fn switch_frame(
             error,
             ..
         } => {
-            let err_str = error.unwrap_or_default();
             match output_mode {
                 OutputMode::Human => {
                     if success {
@@ -126,19 +122,25 @@ async fn switch_frame(
                             frame_id,
                             url.unwrap_or_default()
                         );
+                    } else if let Some(ref err) = error {
+                        eprintln!("{}", crate::output::format_error(err));
                     } else {
-                        eprintln!("{}", crate::output::format_error(&err_str, None));
+                        eprintln!("Unknown error");
                     }
                 }
                 OutputMode::Json => {
                     println!(
                         "{}",
-                        serde_json::json!({"success": success, "frame_id": frame_id, "url": url, "error": err_str})
+                        serde_json::json!({"success": success, "frame_id": frame_id, "url": url, "error": error})
                     );
                 }
             }
             if !success {
-                anyhow::bail!("{}", crate::output::format_error(&err_str, None));
+                if let Some(ref err) = error {
+                    anyhow::bail!("{}", crate::output::format_error(err));
+                } else {
+                    anyhow::bail!("Unknown error");
+                }
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),

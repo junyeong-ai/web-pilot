@@ -25,15 +25,15 @@ pub struct WaitArgs {
 }
 
 pub async fn run(args: WaitArgs, output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::Wait {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::Wait {
             selector: args.selector,
             text: args.text,
             navigation: args.navigation,
             timeout_ms: args.timeout * 1000,
         },
-    })?;
+    ))?;
 
     let response = ipc::send_request(&request)
         .await
@@ -42,25 +42,30 @@ pub async fn run(args: WaitArgs, output_mode: OutputMode) -> Result<()> {
     let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
 
     match resp.result {
-        ResponseData::Wait { success, error, .. } => {
-            let err_str = error.unwrap_or_default();
+        ResponseData::Wait { success, error } => {
             match output_mode {
                 OutputMode::Human => {
                     if success {
                         eprintln!("OK");
+                    } else if let Some(ref err) = error {
+                        eprintln!("{}", crate::output::format_error(err));
                     } else {
-                        eprintln!("{}", crate::output::format_error(&err_str, Some("TIMEOUT")));
+                        eprintln!("Unknown error");
                     }
                 }
                 OutputMode::Json => {
                     println!(
                         "{}",
-                        serde_json::json!({"success": success, "error": err_str})
+                        serde_json::json!({"success": success, "error": error})
                     );
                 }
             }
             if !success {
-                anyhow::bail!("{}", crate::output::format_error(&err_str, Some("TIMEOUT")));
+                if let Some(ref err) = error {
+                    anyhow::bail!("{}", crate::output::format_error(err));
+                } else {
+                    anyhow::bail!("Unknown error");
+                }
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),

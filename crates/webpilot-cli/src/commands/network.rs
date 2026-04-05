@@ -8,11 +8,11 @@ use crate::output::OutputMode;
 #[derive(Args)]
 pub struct NetworkArgs {
     #[command(subcommand)]
-    pub action: NetworkAction,
+    pub command: NetworkCommand,
 }
 
 #[derive(Subcommand)]
-pub enum NetworkAction {
+pub enum NetworkCommand {
     /// Start monitoring fetch/XHR requests
     Start,
     /// Read captured network requests
@@ -26,16 +26,13 @@ pub enum NetworkAction {
 }
 
 pub async fn run(args: NetworkArgs, output_mode: OutputMode) -> Result<()> {
-    let cmd = match &args.action {
-        NetworkAction::Start => Command::NetworkStart,
-        NetworkAction::Read { since } => Command::NetworkRead { since: *since },
-        NetworkAction::Clear => Command::NetworkClear,
+    let cmd = match &args.command {
+        NetworkCommand::Start => Command::NetworkStart,
+        NetworkCommand::Read { since } => Command::NetworkRead { since: *since },
+        NetworkCommand::Clear => Command::NetworkClear,
     };
 
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: cmd,
-    })?;
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, cmd))?;
     let response = ipc::send_request(&request)
         .await
         .context("Host not running")?;
@@ -64,11 +61,10 @@ pub async fn run(args: NetworkArgs, output_mode: OutputMode) -> Result<()> {
                     OutputMode::Human => eprintln!("OK"),
                     OutputMode::Json => println!("{{\"success\":true}}"),
                 }
+            } else if let Some(ref err) = error {
+                eprintln!("{}", crate::output::format_error(err));
             } else {
-                eprintln!(
-                    "{}",
-                    crate::output::format_error(&error.unwrap_or_default(), None)
-                );
+                eprintln!("Unknown error");
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),

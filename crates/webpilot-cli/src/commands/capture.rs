@@ -61,9 +61,9 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
     let screenshot = args.screenshot || annotate;
     let bounds = args.bounds || annotate;
 
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::Capture {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::Capture {
             dom,
             screenshot,
             text: args.text,
@@ -75,7 +75,7 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
             annotate,
             pdf: args.pdf,
         },
-    })?;
+    ))?;
 
     let response = ipc::send_request(&request).await.context(
         "WebPilot host not running. Run `webpilot install` and reload the Chrome extension.",
@@ -144,7 +144,7 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
                         eprintln!("Screenshot: {path}");
                     }
                     if let Some(ref err) = screenshot_error {
-                        eprintln!("{}", crate::output::format_error(err, None));
+                        eprintln!("{}", crate::output::format_error_str(err));
                     }
                 }
                 OutputMode::Json => {

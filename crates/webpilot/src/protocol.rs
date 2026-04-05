@@ -1,12 +1,28 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{DomSnapshot, TabInfo};
+use crate::types::{DomSnapshot, ErrorCode, ProtocolError, TabInfo};
 
 /// Request from CLI → Host → Extension.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub id: u32,
+    #[serde(default = "default_version")]
+    pub version: u8,
     pub command: Command,
+}
+
+fn default_version() -> u8 {
+    2
+}
+
+impl Request {
+    pub fn new(id: u32, command: Command) -> Self {
+        Self {
+            id,
+            version: default_version(),
+            command,
+        }
+    }
 }
 
 /// All commands the CLI can send.
@@ -125,8 +141,8 @@ pub enum Command {
         data: String,
     },
     SetPolicy {
-        action_type: String,
-        verdict: String,
+        action_type: crate::types::ActionType,
+        verdict: crate::types::PolicyVerdict,
     },
     GetPolicies,
     ClearPolicies,
@@ -225,30 +241,25 @@ pub enum ResponseData {
     Action {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        code: Option<String>,
+        error: Option<ProtocolError>,
         #[serde(skip_serializing_if = "Option::is_none")]
         dom: Option<DomSnapshot>,
         #[serde(skip_serializing_if = "Option::is_none")]
         url_changed: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        new_tab: Option<serde_json::Value>,
+        new_tab: Option<TabInfo>,
     },
     Evaluate {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        error: Option<ProtocolError>,
     },
-    #[serde(alias = "WaitResult")]
     Wait {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        code: Option<String>,
+        error: Option<ProtocolError>,
     },
     Status {
         connected: bool,
@@ -266,7 +277,7 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         value: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        error: Option<ProtocolError>,
     },
     FetchResult {
         success: bool,
@@ -275,7 +286,7 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         body: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        error: Option<ProtocolError>,
     },
     Frames {
         frames: Vec<crate::types::FrameInfo>,
@@ -289,7 +300,7 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         url: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        error: Option<ProtocolError>,
     },
     Cookies {
         cookies: Vec<crate::types::CookieInfo>,
@@ -297,7 +308,7 @@ pub enum ResponseData {
     CookieResult {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        error: Option<ProtocolError>,
     },
     ConsoleEntries {
         entries: Vec<crate::types::ConsoleEntry>,
@@ -311,7 +322,7 @@ pub enum ResponseData {
     SessionResult {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        error: Option<ProtocolError>,
     },
     Policies {
         policies: Vec<crate::types::PolicyEntry>,
@@ -319,12 +330,12 @@ pub enum ResponseData {
     PolicyResult {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        error: Option<ProtocolError>,
     },
     Pong,
     Error {
         message: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        code: Option<String>,
+        #[serde(default)]
+        code: ErrorCode,
     },
 }

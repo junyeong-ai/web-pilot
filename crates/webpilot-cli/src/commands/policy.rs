@@ -8,11 +8,11 @@ use crate::output::OutputMode;
 #[derive(Args)]
 pub struct PolicyArgs {
     #[command(subcommand)]
-    pub action: PolicyAction,
+    pub command: PolicyCommand,
 }
 
 #[derive(Subcommand)]
-pub enum PolicyAction {
+pub enum PolicyCommand {
     /// Set policy for an action type
     Set {
         /// Action type (click, type, navigate, etc.)
@@ -29,19 +29,25 @@ pub enum PolicyAction {
 }
 
 pub async fn run(args: PolicyArgs, output_mode: OutputMode) -> Result<()> {
-    let cmd = match &args.action {
-        PolicyAction::Set { action, verdict } => Command::SetPolicy {
-            action_type: action.clone(),
-            verdict: verdict.clone(),
-        },
-        PolicyAction::List => Command::GetPolicies,
-        PolicyAction::Clear => Command::ClearPolicies,
+    let cmd = match &args.command {
+        PolicyCommand::Set { action, verdict } => {
+            let action_type: webpilot::types::ActionType =
+                serde_json::from_value(serde_json::Value::String(action.clone()))
+                    .with_context(|| format!("Unknown action type: {action}"))?;
+            let verdict: webpilot::types::PolicyVerdict = serde_json::from_value(
+                serde_json::Value::String(verdict.clone()),
+            )
+            .with_context(|| format!("Unknown verdict: {verdict}. Use 'allow' or 'deny'"))?;
+            Command::SetPolicy {
+                action_type,
+                verdict,
+            }
+        }
+        PolicyCommand::List => Command::GetPolicies,
+        PolicyCommand::Clear => Command::ClearPolicies,
     };
 
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: cmd,
-    })?;
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, cmd))?;
     let response = ipc::send_request(&request)
         .await
         .context("Host not running")?;
@@ -63,11 +69,10 @@ pub async fn run(args: PolicyArgs, output_mode: OutputMode) -> Result<()> {
             OutputMode::Human => {
                 if success {
                     eprintln!("OK");
+                } else if let Some(ref err) = error {
+                    eprintln!("{}", crate::output::format_error(err));
                 } else {
-                    eprintln!(
-                        "{}",
-                        crate::output::format_error(&error.unwrap_or_default(), None)
-                    );
+                    eprintln!("Unknown error");
                 }
             }
             OutputMode::Json => println!(

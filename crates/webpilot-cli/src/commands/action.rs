@@ -8,7 +8,7 @@ use crate::output::OutputMode;
 #[derive(Args)]
 pub struct ActionArgs {
     #[command(subcommand)]
-    pub action: ActionCommand,
+    pub command: ActionCommand,
 
     /// Auto-capture DOM after action (returns DOM in response)
     #[arg(long, global = true)]
@@ -61,6 +61,8 @@ pub enum ActionCommand {
     Select { index: u32, value: String },
     /// Upload a file to a file input (uses CDP)
     Upload { index: u32, path: String },
+    /// Scroll to bring an element into view
+    ScrollTo { index: u32 },
     /// Drag element to another element position
     Drag {
         source: u32,
@@ -119,6 +121,7 @@ impl ActionCommand {
                 index: *index,
                 value: value.clone(),
             },
+            Self::ScrollTo { index } => BrowserAction::ScrollToElement { index: *index },
             Self::Upload { index, path } => BrowserAction::Upload {
                 index: *index,
                 path: path.clone(),
@@ -137,13 +140,13 @@ impl ActionCommand {
 }
 
 pub async fn run(args: ActionArgs, output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: Command::Action {
-            action: args.action.to_browser_action()?,
+    let request = serde_json::to_value(webpilot::protocol::Request::new(
+        1,
+        Command::Action {
+            action: args.command.to_browser_action()?,
             capture: args.capture,
         },
-    })?;
+    ))?;
 
     let response = ipc::send_request(&request)
         .await
@@ -156,7 +159,6 @@ pub async fn run(args: ActionArgs, output_mode: OutputMode) -> Result<()> {
         ResponseData::Action {
             success,
             error,
-            code,
             dom,
             url_changed,
             new_tab,
@@ -179,19 +181,12 @@ pub async fn run(args: ActionArgs, output_mode: OutputMode) -> Result<()> {
                             eprintln!("URL changed: {url}");
                         }
                         if let Some(ref tab) = new_tab {
-                            eprintln!(
-                                "New tab opened: {} (switched automatically)",
-                                tab.get("url").and_then(|u| u.as_str()).unwrap_or("")
-                            );
+                            eprintln!("New tab opened: {} (switched automatically)", tab.url);
                         }
+                    } else if let Some(ref err) = error {
+                        eprintln!("{}", crate::output::format_error(err));
                     } else {
-                        eprintln!(
-                            "{}",
-                            crate::output::format_error(
-                                error.as_deref().unwrap_or("unknown"),
-                                code.as_deref(),
-                            )
-                        );
+                        eprintln!("Unknown error");
                     }
                 }
                 OutputMode::Json => {
@@ -201,20 +196,18 @@ pub async fn run(args: ActionArgs, output_mode: OutputMode) -> Result<()> {
                             out["url_changed"] = serde_json::json!(url);
                         }
                         if let Some(ref tab) = new_tab {
-                            out["new_tab"] = tab.clone();
+                            out["new_tab"] = serde_json::to_value(tab).unwrap_or_default();
                         }
                         println!("{}", out);
                     }
                 }
             }
             if !success {
-                anyhow::bail!(
-                    "{}",
-                    crate::output::format_error(
-                        error.as_deref().unwrap_or("unknown"),
-                        code.as_deref(),
-                    )
-                );
+                if let Some(ref err) = error {
+                    anyhow::bail!("{}", crate::output::format_error(err));
+                } else {
+                    anyhow::bail!("Unknown error");
+                }
             }
         }
         ResponseData::Error { message, .. } => {

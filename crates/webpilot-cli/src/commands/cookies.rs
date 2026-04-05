@@ -8,11 +8,11 @@ use crate::output::OutputMode;
 #[derive(Args)]
 pub struct CookiesArgs {
     #[command(subcommand)]
-    pub action: CookiesAction,
+    pub command: CookiesCommand,
 }
 
 #[derive(Subcommand)]
-pub enum CookiesAction {
+pub enum CookiesCommand {
     /// List all cookies for a URL
     List { url: String },
     /// Get a specific cookie
@@ -34,18 +34,18 @@ pub enum CookiesAction {
 }
 
 pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
-    match args.action {
-        CookiesAction::List { ref url } | CookiesAction::Get { ref url, .. } => {
-            let name_filter = match &args.action {
-                CookiesAction::Get { name, .. } => Some(name.clone()),
+    match args.command {
+        CookiesCommand::List { ref url } | CookiesCommand::Get { ref url, .. } => {
+            let name_filter = match &args.command {
+                CookiesCommand::Get { name, .. } => Some(name.clone()),
                 _ => None,
             };
             let url = url.clone();
 
-            let request = serde_json::to_value(webpilot::protocol::Request {
-                id: 1,
-                command: Command::GetCookies { url },
-            })?;
+            let request = serde_json::to_value(webpilot::protocol::Request::new(
+                1,
+                Command::GetCookies { url },
+            ))?;
 
             let response = ipc::send_request(&request)
                 .await
@@ -92,23 +92,23 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
             }
         }
 
-        CookiesAction::Set {
+        CookiesCommand::Set {
             url,
             name,
             value,
             httponly,
             secure,
         } => {
-            let request = serde_json::to_value(webpilot::protocol::Request {
-                id: 1,
-                command: Command::SetCookie {
+            let request = serde_json::to_value(webpilot::protocol::Request::new(
+                1,
+                Command::SetCookie {
                     url,
                     name,
                     value,
                     http_only: httponly,
                     secure,
                 },
-            })?;
+            ))?;
 
             let response = ipc::send_request(&request)
                 .await
@@ -117,22 +117,27 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
 
             match resp.result {
                 ResponseData::CookieResult { success, error } => {
-                    let err_str = error.unwrap_or_default();
                     match output_mode {
                         OutputMode::Human => {
                             if success {
                                 eprintln!("Cookie set");
+                            } else if let Some(ref err) = error {
+                                eprintln!("{}", crate::output::format_error(err));
                             } else {
-                                eprintln!("{}", crate::output::format_error(&err_str, None));
+                                eprintln!("Unknown error");
                             }
                         }
                         OutputMode::Json => println!(
                             "{}",
-                            serde_json::json!({"success": success, "error": err_str})
+                            serde_json::json!({"success": success, "error": error})
                         ),
                     }
                     if !success {
-                        anyhow::bail!("{}", crate::output::format_error(&err_str, None));
+                        if let Some(ref err) = error {
+                            anyhow::bail!("{}", crate::output::format_error(err));
+                        } else {
+                            anyhow::bail!("Unknown error");
+                        }
                     }
                 }
                 ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
@@ -140,11 +145,11 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
             }
         }
 
-        CookiesAction::Delete { url, name } => {
-            let request = serde_json::to_value(webpilot::protocol::Request {
-                id: 1,
-                command: Command::DeleteCookie { url, name },
-            })?;
+        CookiesCommand::Delete { url, name } => {
+            let request = serde_json::to_value(webpilot::protocol::Request::new(
+                1,
+                Command::DeleteCookie { url, name },
+            ))?;
 
             let response = ipc::send_request(&request)
                 .await
@@ -153,22 +158,27 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
 
             match resp.result {
                 ResponseData::CookieResult { success, error } => {
-                    let err_str = error.unwrap_or_default();
                     match output_mode {
                         OutputMode::Human => {
                             if success {
                                 eprintln!("Cookie deleted");
+                            } else if let Some(ref err) = error {
+                                eprintln!("{}", crate::output::format_error(err));
                             } else {
-                                eprintln!("{}", crate::output::format_error(&err_str, None));
+                                eprintln!("Unknown error");
                             }
                         }
                         OutputMode::Json => println!(
                             "{}",
-                            serde_json::json!({"success": success, "error": err_str})
+                            serde_json::json!({"success": success, "error": error})
                         ),
                     }
                     if !success {
-                        anyhow::bail!("{}", crate::output::format_error(&err_str, None));
+                        if let Some(ref err) = error {
+                            anyhow::bail!("{}", crate::output::format_error(err));
+                        } else {
+                            anyhow::bail!("Unknown error");
+                        }
                     }
                 }
                 ResponseData::Error { message, .. } => anyhow::bail!("{message}"),

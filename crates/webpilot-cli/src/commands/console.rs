@@ -8,11 +8,11 @@ use crate::output::OutputMode;
 #[derive(Args)]
 pub struct ConsoleArgs {
     #[command(subcommand)]
-    pub action: ConsoleAction,
+    pub command: ConsoleCommand,
 }
 
 #[derive(Subcommand)]
-pub enum ConsoleAction {
+pub enum ConsoleCommand {
     /// Start capturing console output
     Start,
     /// Read captured console entries
@@ -26,16 +26,13 @@ pub enum ConsoleAction {
 }
 
 pub async fn run(args: ConsoleArgs, output_mode: OutputMode) -> Result<()> {
-    let cmd = match &args.action {
-        ConsoleAction::Start => Command::ConsoleStart,
-        ConsoleAction::Read { .. } => Command::ConsoleRead,
-        ConsoleAction::Clear => Command::ConsoleClear,
+    let cmd = match &args.command {
+        ConsoleCommand::Start => Command::ConsoleStart,
+        ConsoleCommand::Read { .. } => Command::ConsoleRead,
+        ConsoleCommand::Clear => Command::ConsoleClear,
     };
 
-    let request = serde_json::to_value(webpilot::protocol::Request {
-        id: 1,
-        command: cmd,
-    })?;
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, cmd))?;
     let response = ipc::send_request(&request)
         .await
         .context("Host not running")?;
@@ -43,11 +40,15 @@ pub async fn run(args: ConsoleArgs, output_mode: OutputMode) -> Result<()> {
 
     match resp.result {
         ResponseData::ConsoleEntries { entries } => {
-            let filtered = if let ConsoleAction::Read {
+            let filtered = if let ConsoleCommand::Read {
                 level: Some(ref lvl),
-            } = args.action
+            } = args.command
             {
-                entries.into_iter().filter(|e| &e.level == lvl).collect()
+                if let Some(level) = webpilot::types::ConsoleLevel::parse(lvl) {
+                    entries.into_iter().filter(|e| e.level == level).collect()
+                } else {
+                    entries
+                }
             } else {
                 entries
             };
@@ -68,11 +69,10 @@ pub async fn run(args: ConsoleArgs, output_mode: OutputMode) -> Result<()> {
                     OutputMode::Human => eprintln!("OK"),
                     OutputMode::Json => println!("{{\"success\":true}}"),
                 }
+            } else if let Some(ref err) = error {
+                eprintln!("{}", crate::output::format_error(err));
             } else {
-                eprintln!(
-                    "{}",
-                    crate::output::format_error(&error.unwrap_or_default(), None)
-                );
+                eprintln!("Unknown error");
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
