@@ -1,5 +1,191 @@
 use serde::{Deserialize, Serialize};
 
+// ── Error types ──────────────────────────────────────────────────────────────
+
+/// Machine-readable error codes for structured error handling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ErrorCode {
+    ElementNotFound,
+    Timeout,
+    PolicyDenied,
+    NoPage,
+    NavigationFailed,
+    FrameNotFound,
+    SelectorNotFound,
+    #[default]
+    Unknown,
+}
+
+impl std::fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ElementNotFound => write!(f, "ElementNotFound"),
+            Self::Timeout => write!(f, "Timeout"),
+            Self::PolicyDenied => write!(f, "PolicyDenied"),
+            Self::NoPage => write!(f, "NoPage"),
+            Self::NavigationFailed => write!(f, "NavigationFailed"),
+            Self::FrameNotFound => write!(f, "FrameNotFound"),
+            Self::SelectorNotFound => write!(f, "SelectorNotFound"),
+            Self::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
+/// Unified protocol error with human-readable message and machine-readable code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtocolError {
+    pub message: String,
+    pub code: ErrorCode,
+}
+
+// ── Policy types ─────────────────────────────────────────────────────────────
+
+/// Browser action type for policy rules.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ActionType {
+    Click,
+    Type,
+    KeyPress,
+    Navigate,
+    Back,
+    Forward,
+    Reload,
+    ScrollDown,
+    ScrollUp,
+    ScrollToElement,
+    Select,
+    Hover,
+    Focus,
+    Upload,
+    Drag,
+}
+
+/// Policy verdict: allow or deny an action.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PolicyVerdict {
+    Allow,
+    Deny,
+}
+
+impl std::fmt::Display for ActionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Click => write!(f, "click"),
+            Self::Type => write!(f, "type"),
+            Self::KeyPress => write!(f, "keypress"),
+            Self::Navigate => write!(f, "navigate"),
+            Self::Back => write!(f, "back"),
+            Self::Forward => write!(f, "forward"),
+            Self::Reload => write!(f, "reload"),
+            Self::ScrollDown => write!(f, "scrolldown"),
+            Self::ScrollUp => write!(f, "scrollup"),
+            Self::ScrollToElement => write!(f, "scrolltoelement"),
+            Self::Select => write!(f, "select"),
+            Self::Hover => write!(f, "hover"),
+            Self::Focus => write!(f, "focus"),
+            Self::Upload => write!(f, "upload"),
+            Self::Drag => write!(f, "drag"),
+        }
+    }
+}
+
+impl std::fmt::Display for PolicyVerdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Allow => write!(f, "allow"),
+            Self::Deny => write!(f, "deny"),
+        }
+    }
+}
+
+/// Action policy entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyEntry {
+    pub action_type: ActionType,
+    pub verdict: PolicyVerdict,
+}
+
+// ── Console types ────────────────────────────────────────────────────────────
+
+/// Console log level.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConsoleLevel {
+    Log,
+    Error,
+    Warn,
+    Info,
+    Debug,
+}
+
+impl std::fmt::Display for ConsoleLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Log => write!(f, "log"),
+            Self::Error => write!(f, "error"),
+            Self::Warn => write!(f, "warn"),
+            Self::Info => write!(f, "info"),
+            Self::Debug => write!(f, "debug"),
+        }
+    }
+}
+
+impl ConsoleLevel {
+    /// Parse a string into a ConsoleLevel, case-insensitive.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "log" => Some(Self::Log),
+            "error" => Some(Self::Error),
+            "warn" => Some(Self::Warn),
+            "info" => Some(Self::Info),
+            "debug" => Some(Self::Debug),
+            _ => None,
+        }
+    }
+}
+
+/// Console log entry captured from the page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsoleEntry {
+    pub level: ConsoleLevel,
+    pub message: String,
+    pub timestamp: u64,
+}
+
+// ── Cookie types ─────────────────────────────────────────────────────────────
+
+/// SameSite cookie attribute.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SameSite {
+    Strict,
+    Lax,
+    /// Chrome's cookies API uses "no_restriction" for SameSite=None.
+    #[serde(alias = "no_restriction")]
+    None,
+    Unspecified,
+}
+
+/// Cookie information returned by chrome.cookies API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CookieInfo {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+    #[serde(default)]
+    pub secure: bool,
+    #[serde(default)]
+    pub http_only: bool,
+    pub same_site: SameSite,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expiration: Option<f64>,
+}
+
+// ── DOM types ────────────────────────────────────────────────────────────────
+
 /// An interactive element extracted from the page DOM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InteractiveElement {
@@ -26,10 +212,18 @@ pub struct InteractiveElement {
     pub focused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expanded: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_string_or_bool"
+    )]
+    pub expanded: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_string_or_bool"
+    )]
+    pub selected: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,6 +244,13 @@ pub struct InteractiveElement {
     pub occluded: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame: Option<String>,
+    // New fields for AI agent effectiveness
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autocomplete: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +259,14 @@ pub struct SelectOption {
     pub text: String,
     #[serde(default)]
     pub selected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bounds {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
 }
 
 /// Frame information for iframe navigation.
@@ -70,14 +279,6 @@ pub struct FrameInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_frame_id: Option<i64>,
     pub is_main: bool,
-}
-
-/// Console log entry captured from the page.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConsoleEntry {
-    pub level: String,
-    pub message: String,
-    pub timestamp: u64,
 }
 
 /// Network request entry captured by fetch/XHR interception.
@@ -95,37 +296,7 @@ pub struct NetworkEntry {
     pub timestamp: u64,
 }
 
-/// Action policy entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyEntry {
-    pub action_type: String,
-    pub verdict: String,
-}
-
-/// Cookie information returned by chrome.cookies API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CookieInfo {
-    pub name: String,
-    pub value: String,
-    pub domain: String,
-    pub path: String,
-    #[serde(default)]
-    pub secure: bool,
-    #[serde(default)]
-    pub http_only: bool,
-    #[serde(alias = "sameSite")]
-    pub same_site: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expiration: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Bounds {
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-    pub h: i32,
-}
+// ── Snapshot types ───────────────────────────────────────────────────────────
 
 /// Snapshot of a page's interactive state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +346,8 @@ impl ScrollInfo {
     }
 }
 
+// ── Tab types ────────────────────────────────────────────────────────────────
+
 /// Tab info for tab listing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TabInfo {
@@ -214,6 +387,42 @@ where
     }
     deserializer.deserialize_any(IdVisitor)
 }
+
+/// Deserialize a value that may be a boolean or a string "true"/"false" into Option<bool>.
+/// Handles: true, false, "true", "false", null/missing → None.
+fn deserialize_string_or_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct StringOrBoolVisitor;
+    impl<'de> de::Visitor<'de> for StringOrBoolVisitor {
+        type Value = Option<bool>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a boolean, \"true\"/\"false\" string, or null")
+        }
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Option<bool>, E> {
+            Ok(Some(v))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<bool>, E> {
+            match v {
+                "true" => Ok(Some(true)),
+                "false" => Ok(Some(false)),
+                _ => Ok(None),
+            }
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<bool>, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Option<bool>, E> {
+            Ok(None)
+        }
+    }
+    deserializer.deserialize_any(StringOrBoolVisitor)
+}
+
+// ── Filter types ─────────────────────────────────────────────────────────────
 
 /// Filter criteria for semantic element search.
 #[derive(Debug, Default)]
@@ -310,6 +519,8 @@ impl InteractiveElement {
     }
 }
 
+// ── DOM serialization ────────────────────────────────────────────────────────
+
 /// Serialize a DomSnapshot to LLM-friendly text format.
 pub fn serialize_dom(snapshot: &DomSnapshot) -> String {
     let mut out = String::with_capacity(snapshot.elements.len() * 80);
@@ -362,11 +573,17 @@ pub fn serialize_dom(snapshot: &DomSnapshot) -> String {
         if let Some(ref it) = el.input_type {
             out.push_str(&format!("type={it} "));
         }
+        if let Some(ref ac) = el.autocomplete {
+            out.push_str(&format!("autocomplete={ac} "));
+        }
         if let Some(true) = el.checked {
             out.push_str("[checked] ");
         }
-        if el.expanded.as_deref() == Some("true") {
+        if el.expanded == Some(true) {
             out.push_str("[expanded] ");
+        }
+        if el.selected == Some(true) {
+            out.push_str("[selected] ");
         }
         if let Some(true) = el.required {
             out.push_str("[required] ");
@@ -394,6 +611,12 @@ pub fn serialize_dom(snapshot: &DomSnapshot) -> String {
         }
         if let Some(false) = el.in_viewport {
             out.push_str("[offscreen] ");
+        }
+        if let Some(ref desc) = el.description {
+            out.push_str(&format!("description=\"{desc}\" "));
+        }
+        if let Some(ref form) = el.form_id {
+            out.push_str(&format!("form={form} "));
         }
         if let Some(ref frame) = el.frame {
             out.push_str(&format!("frame={frame} "));
