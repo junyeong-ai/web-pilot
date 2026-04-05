@@ -92,11 +92,7 @@ async fn switch_frame(
         .get("frame_id")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    let url = resp
-        .data
-        .get("url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let url = resp.data.get("url").and_then(|v| v.as_str()).unwrap_or("");
     Ok(CommandOutput::Ok(format!(
         "Switched to frame {frame_id} ({url})"
     )))

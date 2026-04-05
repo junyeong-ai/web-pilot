@@ -26,12 +26,8 @@ pub enum FrameCommand {
 pub async fn run(args: FramesArgs) -> Result<CommandOutput> {
     match args.command {
         None => list_frames().await,
-        Some(FrameCommand::Switch { name }) => {
-            switch_frame(Some(name), None, None, false).await
-        }
-        Some(FrameCommand::Url { pattern }) => {
-            switch_frame(None, Some(pattern), None, false).await
-        }
+        Some(FrameCommand::Switch { name }) => switch_frame(Some(name), None, None, false).await,
+        Some(FrameCommand::Url { pattern }) => switch_frame(None, Some(pattern), None, false).await,
         Some(FrameCommand::Find { predicate }) => {
             switch_frame(None, None, Some(predicate), false).await
         }

@@ -5,10 +5,7 @@ use anyhow::Result;
 
 use super::{invoke_bridge, parse_bridge_response};
 
-pub(crate) async fn run(
-    cdp: &CdpClient,
-    args: commands::dom::DomArgs,
-) -> Result<CommandOutput> {
+pub(crate) async fn run(cdp: &CdpClient, args: commands::dom::DomArgs) -> Result<CommandOutput> {
     let msg = match &args.command {
         commands::dom::DomCommand::SetHtml { selector, value } => {
             serde_json::json!({"type": "setHtml", "selector": selector, "value": value})

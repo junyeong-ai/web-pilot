@@ -21,13 +21,12 @@ pub(crate) async fn check(context: Option<&str>) -> Result<CommandOutput> {
     let page_target = if let Some(ctx_name) = context {
         let file_path = super::context::context_file_path(ctx_name);
         if let Ok(data) = std::fs::read_to_string(&file_path)
-            && let Ok(entry) =
-                serde_json::from_str::<super::context::ContextEntry>(&data)
+            && let Ok(entry) = serde_json::from_str::<super::context::ContextEntry>(&data)
         {
             let targets = browser.get_targets().await?;
-            targets.into_iter().find(|t| {
-                t.get("targetId").and_then(|v| v.as_str()) == Some(&entry.target_id)
-            })
+            targets
+                .into_iter()
+                .find(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(&entry.target_id))
         } else {
             return Ok(CommandOutput::Data {
                 json: serde_json::json!({"connected": true, "mode": "headless", "context_error": format!("Context '{}' not found", ctx_name)}),

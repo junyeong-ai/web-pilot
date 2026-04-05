@@ -235,7 +235,10 @@ pub async fn ensure_session() -> Result<String> {
     // SAFETY: flock() is a standard POSIX advisory lock with no memory safety implications.
     let ret = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
     if ret != 0 {
-        anyhow::bail!("Failed to acquire launch lock: {}", std::io::Error::last_os_error());
+        anyhow::bail!(
+            "Failed to acquire launch lock: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     // Re-check after acquiring lock — another process may have launched Chrome
@@ -261,8 +264,7 @@ pub async fn ensure_session() -> Result<String> {
 
 /// Dispose a single context: close its browser context via CDP, then remove the file.
 pub async fn quit_context(context_name: &str) -> Result<()> {
-    let file_path =
-        crate::headless::context::context_file_path(context_name);
+    let file_path = crate::headless::context::context_file_path(context_name);
     let data = std::fs::read_to_string(&file_path)
         .map_err(|_| anyhow::anyhow!("Context '{context_name}' not found"))?;
     let entry = serde_json::from_str::<crate::headless::context::ContextEntry>(&data)?;
@@ -271,7 +273,9 @@ pub async fn quit_context(context_name: &str) -> Result<()> {
     if let Some(ws_url) = get_existing_session()
         && let Ok(browser) = crate::cdp::CdpClient::connect(&ws_url).await
     {
-        let _ = browser.dispose_browser_context(&entry.browser_context_id).await;
+        let _ = browser
+            .dispose_browser_context(&entry.browser_context_id)
+            .await;
     }
 
     let _ = std::fs::remove_file(&file_path);

@@ -86,10 +86,7 @@ pub async fn run(args: CookiesArgs) -> Result<CommandOutput> {
                     // For single cookie Get, use Content pattern
                     if name_filter.is_some() && filtered.len() == 1 {
                         return Ok(CommandOutput::Content {
-                            stdout: format!(
-                                "{} = {}",
-                                filtered[0].name, filtered[0].value
-                            ),
+                            stdout: format!("{} = {}", filtered[0].name, filtered[0].value),
                             json: serde_json::to_value(&filtered[0])?,
                         });
                     }

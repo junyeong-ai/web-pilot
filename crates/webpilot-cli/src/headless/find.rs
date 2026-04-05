@@ -5,10 +5,7 @@ use anyhow::Result;
 
 use super::invoke_bridge;
 
-pub(crate) async fn run(
-    cdp: &CdpClient,
-    args: commands::find::FindArgs,
-) -> Result<CommandOutput> {
+pub(crate) async fn run(cdp: &CdpClient, args: commands::find::FindArgs) -> Result<CommandOutput> {
     if args.role.is_none()
         && args.text.is_none()
         && args.label.is_none()

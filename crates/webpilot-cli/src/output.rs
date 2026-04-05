@@ -62,7 +62,10 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
 
         (CommandOutput::Data { human, .. }, OutputMode::Human) => eprintln!("{human}"),
         (CommandOutput::Data { json, .. }, OutputMode::Json) => {
-            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default())
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).unwrap_or_default()
+            )
         }
 
         (CommandOutput::Dom { snapshot, extra }, OutputMode::Human) => {
@@ -90,7 +93,14 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
         (CommandOutput::Content { stdout, .. }, OutputMode::Human) => println!("{stdout}"),
         (CommandOutput::Content { json, .. }, OutputMode::Json) => println!("{json}"),
 
-        (CommandOutput::List { human_lines, summary, .. }, OutputMode::Human) => {
+        (
+            CommandOutput::List {
+                human_lines,
+                summary,
+                ..
+            },
+            OutputMode::Human,
+        ) => {
             for line in &human_lines {
                 eprintln!("{line}");
             }
@@ -99,7 +109,10 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
             }
         }
         (CommandOutput::List { items, .. }, OutputMode::Json) => {
-            println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default())
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&items).unwrap_or_default()
+            )
         }
 
         (CommandOutput::Silent, _) => {}
@@ -142,22 +155,21 @@ pub fn format_error(err: &ProtocolError) -> String {
             format!("{}. Re-capture: webpilot capture --dom", err.message)
         }
         ErrorCode::SelectorNotFound => {
-            format!("Selector not found: {}. Verify CSS selector syntax.", err.message)
+            format!(
+                "Selector not found: {}. Verify CSS selector syntax.",
+                err.message
+            )
         }
         ErrorCode::Timeout => "Timed out. Try: webpilot wait --timeout 15".into(),
         ErrorCode::PolicyDenied => "Blocked by policy. Check: webpilot policy list".into(),
         ErrorCode::CSPViolation => {
             "CSP blocks script injection. Use: webpilot dom get-text SELECTOR".into()
         }
-        ErrorCode::NoPage => {
-            "No web page open. Navigate: webpilot action navigate URL".into()
-        }
+        ErrorCode::NoPage => "No web page open. Navigate: webpilot action navigate URL".into(),
         ErrorCode::NavigationFailed => {
             format!("Navigation failed: {}. Check URL and retry.", err.message)
         }
-        ErrorCode::FrameNotFound => {
-            "Frame not found. List frames: webpilot frames list".into()
-        }
+        ErrorCode::FrameNotFound => "Frame not found. List frames: webpilot frames list".into(),
         ErrorCode::InvalidArgument => format!("Invalid argument: {}", err.message),
         ErrorCode::BridgeUnavailable => {
             "Bridge not loaded. Try: webpilot capture --dom (re-injects bridge)".into()

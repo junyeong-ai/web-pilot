@@ -113,9 +113,9 @@ pub async fn run(
         commands::Command::Context(_) => {
             anyhow::bail!("internal error: Context should have been handled above")
         }
-        commands::Command::Install(_) => {
-            Ok(CommandOutput::Ok("Install is only needed for --browser mode. Headless works without setup.".into()))
-        }
+        commands::Command::Install(_) => Ok(CommandOutput::Ok(
+            "Install is only needed for --browser mode. Headless works without setup.".into(),
+        )),
     };
 
     match result {
@@ -179,32 +179,33 @@ fn find_page_target<'a>(
     browser_context_id: Option<&str>,
     original_target_id: &str,
 ) -> Option<&'a serde_json::Value> {
-    targets.iter().find(|t| {
-        let is_page = t.get("type").and_then(|v| v.as_str()) == Some("page");
-        if !is_page {
-            return false;
-        }
-        if let Some(ctx_id) = browser_context_id {
-            t.get("browserContextId")
-                .and_then(|v| v.as_str())
-                == Some(ctx_id)
-        } else {
-            // No context: match by targetId, fall back to first page
-            t.get("targetId").and_then(|v| v.as_str()) == Some(original_target_id)
-        }
-    }).or_else(|| {
-        // Fallback: if no exact match, find any page in the context (or first page)
-        if browser_context_id.is_some() {
-            targets.iter().find(|t| {
-                t.get("type").and_then(|v| v.as_str()) == Some("page")
-                    && t.get("browserContextId").and_then(|v| v.as_str()) == browser_context_id
-            })
-        } else {
-            targets
-                .iter()
-                .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
-        }
-    })
+    targets
+        .iter()
+        .find(|t| {
+            let is_page = t.get("type").and_then(|v| v.as_str()) == Some("page");
+            if !is_page {
+                return false;
+            }
+            if let Some(ctx_id) = browser_context_id {
+                t.get("browserContextId").and_then(|v| v.as_str()) == Some(ctx_id)
+            } else {
+                // No context: match by targetId, fall back to first page
+                t.get("targetId").and_then(|v| v.as_str()) == Some(original_target_id)
+            }
+        })
+        .or_else(|| {
+            // Fallback: if no exact match, find any page in the context (or first page)
+            if browser_context_id.is_some() {
+                targets.iter().find(|t| {
+                    t.get("type").and_then(|v| v.as_str()) == Some("page")
+                        && t.get("browserContextId").and_then(|v| v.as_str()) == browser_context_id
+                })
+            } else {
+                targets
+                    .iter()
+                    .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+            }
+        })
 }
 
 /// Navigate to a URL via CDP, handling cross-origin renderer process swaps.
@@ -256,8 +257,7 @@ pub(crate) async fn navigate_reconnect(
         tokio::time::sleep(crate::timeouts::poll_interval()).await;
 
         if let Ok(targets) = browser.get_targets().await
-            && let Some(page) =
-                find_page_target(&targets, browser_context_id, original_target_id)
+            && let Some(page) = find_page_target(&targets, browser_context_id, original_target_id)
         {
             let page_url = page.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let url_changed = page_url != current_url && page_url != "about:blank";
@@ -282,10 +282,12 @@ pub(crate) async fn navigate_reconnect(
 
     // Reconnect to the (possibly new) page target
     let targets = browser.get_targets().await?;
-    let target = find_page_target(&targets, browser_context_id, original_target_id)
-        .ok_or_else(|| webpilot::types::WebPilotError {
-            code: webpilot::types::ErrorCode::NoPage,
-            message: "No page target found after navigation".into(),
+    let target =
+        find_page_target(&targets, browser_context_id, original_target_id).ok_or_else(|| {
+            webpilot::types::WebPilotError {
+                code: webpilot::types::ErrorCode::NoPage,
+                message: "No page target found after navigation".into(),
+            }
         })?;
     let new_target_id = target
         .get("targetId")

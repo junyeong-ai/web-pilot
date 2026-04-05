@@ -5,10 +5,7 @@ use anyhow::Result;
 
 use super::{invoke_bridge, parse_bridge_response};
 
-pub(crate) async fn run(
-    cdp: &CdpClient,
-    args: commands::wait::WaitArgs,
-) -> Result<CommandOutput> {
+pub(crate) async fn run(cdp: &CdpClient, args: commands::wait::WaitArgs) -> Result<CommandOutput> {
     if args.navigation {
         match cdp
             .wait_for_event(

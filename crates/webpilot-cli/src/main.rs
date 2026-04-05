@@ -29,9 +29,7 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        let output_mode = output::detect_output_mode(
-            std::env::args().any(|a| a == "--json"),
-        );
+        let output_mode = output::detect_output_mode(std::env::args().any(|a| a == "--json"));
 
         if let Some(we) = e.downcast_ref::<webpilot::types::WebPilotError>() {
             // Structured error: deterministic exit code + formatted output

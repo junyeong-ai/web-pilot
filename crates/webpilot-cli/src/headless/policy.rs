@@ -36,10 +36,8 @@ pub(crate) async fn run(args: commands::policy::PolicyArgs) -> Result<CommandOut
                 .iter()
                 .map(|(k, v)| serde_json::json!({"action_type": k, "verdict": v}))
                 .collect();
-            let human_lines: Vec<String> = policies
-                .iter()
-                .map(|(k, v)| format!("{k}: {v}"))
-                .collect();
+            let human_lines: Vec<String> =
+                policies.iter().map(|(k, v)| format!("{k}: {v}")).collect();
             let summary = format!("({} rules)", list.len());
             Ok(CommandOutput::List {
                 items: serde_json::json!(list),

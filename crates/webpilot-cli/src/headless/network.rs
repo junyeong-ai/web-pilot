@@ -56,9 +56,7 @@ pub(crate) async fn run(
                             .and_then(|v| v.as_str())
                             .unwrap_or("?")
                             .get(..60)
-                            .unwrap_or(
-                                r.get("url").and_then(|v| v.as_str()).unwrap_or("?")
-                            ),
+                            .unwrap_or(r.get("url").and_then(|v| v.as_str()).unwrap_or("?")),
                         r.get("status").and_then(|v| v.as_u64()).unwrap_or(0)
                     )
                 })

@@ -167,10 +167,9 @@ pub(crate) async fn run(
 
     // If DOM was extracted, return Dom variant; otherwise Data with paths only
     if out.contains_key("elements") {
-        let snapshot: webpilot::types::DomSnapshot = serde_json::from_value(
-            serde_json::Value::Object(out),
-        )
-        .context("Failed to parse DOM snapshot")?;
+        let snapshot: webpilot::types::DomSnapshot =
+            serde_json::from_value(serde_json::Value::Object(out))
+                .context("Failed to parse DOM snapshot")?;
         Ok(CommandOutput::Dom { snapshot, extra })
     } else {
         let json = serde_json::Value::Object(extra.clone());

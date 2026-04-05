@@ -49,8 +49,12 @@ impl ErrorCode {
     /// Classify this error for retry decisions.
     pub fn category(&self) -> ErrorCategory {
         match self {
-            Self::ElementNotFound | Self::SelectorNotFound | Self::Timeout
-            | Self::NavigationFailed | Self::NoPage | Self::FrameNotFound => ErrorCategory::Retryable,
+            Self::ElementNotFound
+            | Self::SelectorNotFound
+            | Self::Timeout
+            | Self::NavigationFailed
+            | Self::NoPage
+            | Self::FrameNotFound => ErrorCategory::Retryable,
             Self::InvalidArgument | Self::TabNotFound | Self::ContextNotFound => {
                 ErrorCategory::UserError
             }
@@ -73,8 +77,11 @@ impl ErrorCode {
     /// Map to CLI exit code.
     pub fn exit_code(&self) -> i32 {
         match self {
-            Self::ElementNotFound | Self::SelectorNotFound | Self::TabNotFound
-            | Self::ContextNotFound | Self::FrameNotFound => 4,
+            Self::ElementNotFound
+            | Self::SelectorNotFound
+            | Self::TabNotFound
+            | Self::ContextNotFound
+            | Self::FrameNotFound => 4,
             Self::Timeout => 5,
             Self::PolicyDenied | Self::CSPViolation => 6,
             Self::ConnectionLost | Self::BridgeUnavailable => 3,
@@ -702,7 +709,11 @@ impl DomSnapshot {
         let mut out = String::with_capacity(self.elements.len() * 80);
 
         for el in &self.elements {
-            let new_marker = if el.spatial.is_new == Some(true) { "*" } else { "" };
+            let new_marker = if el.spatial.is_new == Some(true) {
+                "*"
+            } else {
+                ""
+            };
 
             let tag_id = if let Some(ref id) = el.id {
                 format!("{}#{id}", el.tag)
@@ -829,4 +840,3 @@ impl DomSnapshot {
         out
     }
 }
-
