@@ -173,13 +173,34 @@ var STANDARD_TAGS = new Set(["a","button","input","select","textarea","summary"]
 
 function collectInteractiveElements() {
   const allEls = queryAllDeep(INTERACTIVE_SELECTOR);
-  for (const el of document.querySelectorAll("*")) {
+  const seen = new Set(allEls);
+
+  // Targeted selectors for clickable elements not covered by INTERACTIVE_SELECTOR
+  const clickableSelectors = "[onclick],[tabindex],[data-action],[ng-click]," +
+    "[v-on\\:click],[\\@click],[data-click],[jsaction]";
+  for (const el of document.querySelectorAll(clickableSelectors)) {
+    if (seen.has(el)) continue;
     if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
     if (el.getAttribute("role")) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 10 && rect.height > 10) {
+      allEls.push(el);
+      seen.add(el);
+    }
+  }
+
+  // cursor:pointer scan limited to viewport-visible elements only
+  const vh = window.innerHeight;
+  for (const el of document.querySelectorAll("*")) {
+    if (seen.has(el) || STANDARD_TAGS.has(el.tagName.toLowerCase()) || el.getAttribute("role")) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 10 || rect.height <= 10) continue;
+    // Skip elements outside viewport
+    if (rect.bottom < 0 || rect.top > vh) continue;
     try {
       if (getComputedStyle(el).cursor === "pointer" && !el.closest("a,button")) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 10 && rect.height > 10) allEls.push(el);
+        allEls.push(el);
+        seen.add(el);
       }
     } catch {}
   }
@@ -438,6 +459,25 @@ function reliableType(el, text, clear) {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function keyToCode(key) {
+  const map = {
+    Enter: "Enter", Tab: "Tab", Escape: "Escape",
+    Backspace: "Backspace", Delete: "Delete",
+    ArrowUp: "ArrowUp", ArrowDown: "ArrowDown",
+    ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
+    Home: "Home", End: "End",
+    PageUp: "PageUp", PageDown: "PageDown",
+    " ": "Space", Space: "Space",
+    Insert: "Insert", CapsLock: "CapsLock",
+    F1: "F1", F2: "F2", F3: "F3", F4: "F4", F5: "F5", F6: "F6",
+    F7: "F7", F8: "F8", F9: "F9", F10: "F10", F11: "F11", F12: "F12",
+  };
+  if (map[key]) return map[key];
+  if (key.length === 1 && /[a-zA-Z]/.test(key)) return `Key${key.toUpperCase()}`;
+  if (key.length === 1 && /[0-9]/.test(key)) return `Digit${key}`;
+  return key;
+}
+
 function executeAction(action) {
   try {
     switch (action.action) {
@@ -456,7 +496,7 @@ function executeAction(action) {
       }
 
       case "KeyPress": {
-        const opts = { key: action.key, code: `Key${action.key.toUpperCase()}`, bubbles: true, cancelable: true };
+        const opts = { key: action.key, code: keyToCode(action.key), bubbles: true, cancelable: true };
         if (action.modifiers?.includes("ctrl")) opts.ctrlKey = true;
         if (action.modifiers?.includes("shift")) opts.shiftKey = true;
         if (action.modifiers?.includes("alt")) opts.altKey = true;

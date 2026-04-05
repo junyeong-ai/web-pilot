@@ -259,10 +259,10 @@ async function processCommand(id, command) {
       case "Status":
         result = await handleStatus();
         break;
-      case "ListTabs":
+      case "TabList":
         result = await handleListTabs();
         break;
-      case "SwitchTab":
+      case "TabSwitch":
         try {
           const targetTabId = parseInt(command.tab_id, 10);
           await chrome.tabs.update(targetTabId, { active: true });
@@ -275,11 +275,11 @@ async function processCommand(id, command) {
           result = { type: "Action", success: false, error: { message: e.message, code: "Unknown" }, dom: null };
         }
         break;
-      case "NewTab":
+      case "TabNew":
         await chrome.tabs.create({ url: command.url, active: true });
         result = { type: "Action", success: true, error: null, dom: null };
         break;
-      case "CloseTab":
+      case "TabClose":
         try {
           await chrome.tabs.remove(parseInt(command.tab_id, 10));
           result = { type: "Action", success: true, error: null, dom: null };
@@ -349,7 +349,7 @@ async function processCommand(id, command) {
         }
         break;
       }
-      case "SetDom": {
+      case "DomSet": {
         const tab = await findHttpTab();
         if (!tab) { result = { type: "Error", message: "No web page tab" }; break; }
         const msgType = command.property === "html" ? "setHtml" : command.property === "text" ? "setText" : "setAttr";
@@ -363,7 +363,7 @@ async function processCommand(id, command) {
         }
         break;
       }
-      case "GetDom": {
+      case "DomGet": {
         const tab = await findHttpTab();
         if (!tab) { result = { type: "Error", message: "No web page tab" }; break; }
         const msgType = command.property === "html" ? "getHtml" : command.property === "text" ? "getText" : "getAttr";
@@ -405,7 +405,7 @@ async function processCommand(id, command) {
         }
         break;
       }
-      case "ListFrames": {
+      case "FrameList": {
         const tab = await findHttpTab();
         if (!tab) { result = { type: "Error", message: "No web page tab" }; break; }
         const allFrames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => []);
@@ -430,7 +430,7 @@ async function processCommand(id, command) {
         }));
         break;
       }
-      case "SwitchFrame": {
+      case "FrameSwitch": {
         if (command.main) {
           setActiveFrameId(0);
           result = { type: "FrameSwitched", success: true, frame_id: 0, name: "main", url: null, error: null };
@@ -482,7 +482,7 @@ async function processCommand(id, command) {
         }
         break;
       }
-      case "GetCookies": {
+      case "CookieList": {
         const cookies = await chrome.cookies.getAll({ url: command.url });
         result = {
           type: "Cookies",
@@ -495,7 +495,7 @@ async function processCommand(id, command) {
         };
         break;
       }
-      case "SetCookie": {
+      case "CookieSet": {
         try {
           await chrome.cookies.set({
             url: command.url, name: command.name, value: command.value,
@@ -508,7 +508,7 @@ async function processCommand(id, command) {
         }
         break;
       }
-      case "DeleteCookie": {
+      case "CookieDelete": {
         try {
           await chrome.cookies.remove({ url: command.url, name: command.name });
           result = { type: "CookieResult", success: true };
@@ -608,7 +608,7 @@ async function processCommand(id, command) {
         result = { type: "CommandResult", success: true, value: null, error: null };
         break;
       }
-      case "ExportSession": {
+      case "SessionExport": {
         try {
           const allCookies = await chrome.cookies.getAll({});
           const tab = await findHttpTab();
@@ -637,7 +637,7 @@ async function processCommand(id, command) {
         }
         break;
       }
-      case "ImportSession": {
+      case "SessionImport": {
         try {
           const data = JSON.parse(command.data);
           // Restore cookies
@@ -673,7 +673,7 @@ async function processCommand(id, command) {
         }
         break;
       }
-      case "SetPolicy": {
+      case "PolicySet": {
         try {
           const policies = (await chrome.storage.local.get("policies"))?.policies || {};
           policies[command.action_type] = command.verdict;
@@ -684,7 +684,7 @@ async function processCommand(id, command) {
         }
         break;
       }
-      case "GetPolicies": {
+      case "PolicyList": {
         try {
           const policies = (await chrome.storage.local.get("policies"))?.policies || {};
           result = {
@@ -696,7 +696,7 @@ async function processCommand(id, command) {
         }
         break;
       }
-      case "ClearPolicies": {
+      case "PolicyClear": {
         try {
           await chrome.storage.local.remove("policies");
           result = { type: "PolicyResult", success: true, error: null };
