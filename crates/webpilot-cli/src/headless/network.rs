@@ -1,18 +1,17 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
-use super::call_bridge;
+use super::invoke_bridge;
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::network::NetworkArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     match args.command {
         commands::network::NetworkCommand::Start => {
-            call_bridge(
+            invoke_bridge(
                 cdp,
                 &serde_json::json!({"type": "executeAction", "action": {"action": "noop"}})
                     .to_string(),
@@ -37,10 +36,7 @@ pub(crate) async fn run(
                 }
                 true
             "#).await?;
-            match output_mode {
-                OutputMode::Human => eprintln!("OK"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
+            Ok(CommandOutput::Ok("OK".into()))
         }
         commands::network::NetworkCommand::Read { since } => {
             let js = format!(
@@ -48,35 +44,35 @@ pub(crate) async fn run(
                 since.unwrap_or(0)
             );
             let result = cdp.evaluate(&js).await?;
-            match output_mode {
-                OutputMode::Human => {
-                    if let Some(arr) = result.as_array() {
-                        for r in arr {
-                            eprintln!(
-                                "{} {} {} → {}",
-                                r.get("type").and_then(|v| v.as_str()).unwrap_or("?"),
-                                r.get("method").and_then(|v| v.as_str()).unwrap_or("?"),
-                                r.get("url")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("?")
-                                    .get(..60)
-                                    .unwrap_or(""),
-                                r.get("status").and_then(|v| v.as_u64()).unwrap_or(0)
-                            );
-                        }
-                        eprintln!("({} requests)", arr.len());
-                    }
-                }
-                OutputMode::Json => println!("{}", result),
-            }
+            let entries = result.as_array().cloned().unwrap_or_default();
+            let human_lines: Vec<String> = entries
+                .iter()
+                .map(|r| {
+                    format!(
+                        "{} {} {} → {}",
+                        r.get("type").and_then(|v| v.as_str()).unwrap_or("?"),
+                        r.get("method").and_then(|v| v.as_str()).unwrap_or("?"),
+                        r.get("url")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?")
+                            .get(..60)
+                            .unwrap_or(
+                                r.get("url").and_then(|v| v.as_str()).unwrap_or("?")
+                            ),
+                        r.get("status").and_then(|v| v.as_u64()).unwrap_or(0)
+                    )
+                })
+                .collect();
+            let summary = format!("({} requests)", entries.len());
+            Ok(CommandOutput::List {
+                items: result,
+                human_lines,
+                summary,
+            })
         }
         commands::network::NetworkCommand::Clear => {
             cdp.evaluate("window.__webpilot_network = []").await?;
-            match output_mode {
-                OutputMode::Human => eprintln!("OK"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
+            Ok(CommandOutput::Ok("OK".into()))
         }
     }
-    Ok(())
 }

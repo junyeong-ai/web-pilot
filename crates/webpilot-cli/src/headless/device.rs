@@ -1,13 +1,12 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::device::DeviceArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     match args.command {
         commands::device::DeviceCommand::Set {
             width,
@@ -35,15 +34,10 @@ pub(crate) async fn run(
                 )
                 .await?;
             }
-            match output_mode {
-                OutputMode::Human => {
-                    eprintln!("Device: {width}x{height} (mobile={mobile}, scale={scale})")
-                }
-                OutputMode::Json => println!(
-                    "{}",
-                    serde_json::json!({"success": true, "width": width, "height": height, "mobile": mobile})
-                ),
-            }
+            Ok(CommandOutput::Data {
+                json: serde_json::json!({"success": true, "width": width, "height": height, "mobile": mobile}),
+                human: format!("Device: {width}x{height} (mobile={mobile}, scale={scale})"),
+            })
         }
         commands::device::DeviceCommand::Preset { name } => {
             let (w, h, mobile, scale, ua) = match name.to_lowercase().as_str() {
@@ -103,13 +97,10 @@ pub(crate) async fn run(
                 })),
             )
             .await?;
-            match output_mode {
-                OutputMode::Human => eprintln!("Device: {name} ({w}x{h})"),
-                OutputMode::Json => println!(
-                    "{}",
-                    serde_json::json!({"success": true, "preset": name, "width": w, "height": h})
-                ),
-            }
+            Ok(CommandOutput::Data {
+                json: serde_json::json!({"success": true, "preset": name, "width": w, "height": h}),
+                human: format!("Device: {name} ({w}x{h})"),
+            })
         }
         commands::device::DeviceCommand::Reset => {
             cdp.send("Emulation.clearDeviceMetricsOverride", None)
@@ -119,11 +110,7 @@ pub(crate) async fn run(
                 Some(serde_json::json!({"userAgent": ""})),
             )
             .await?;
-            match output_mode {
-                OutputMode::Human => eprintln!("Device emulation cleared"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
+            Ok(CommandOutput::Ok("Device emulation cleared".into()))
         }
     }
-    Ok(())
 }

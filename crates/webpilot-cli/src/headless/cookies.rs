@@ -1,15 +1,14 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::cookies::CookiesArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     match args.command {
-        commands::cookies::CookiesCommand::List { url } => {
+        commands::cookies::CookieCommand::List { url } => {
             let result = cdp
                 .send(
                     "Network.getCookies",
@@ -20,24 +19,29 @@ pub(crate) async fn run(
                 .get("cookies")
                 .cloned()
                 .unwrap_or(serde_json::Value::Array(vec![]));
-            match output_mode {
-                OutputMode::Human => {
-                    if let Some(arr) = cookies.as_array() {
-                        for c in arr {
+            let human_lines: Vec<String> = cookies
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .map(|c| {
                             let val = c.get("value").and_then(|v| v.as_str()).unwrap_or("");
-                            eprintln!(
+                            format!(
                                 "{}={} ({})",
                                 c.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
                                 val.get(..20).unwrap_or(val),
                                 c.get("domain").and_then(|v| v.as_str()).unwrap_or("")
-                            );
-                        }
-                    }
-                }
-                OutputMode::Json => println!("{}", cookies),
-            }
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(CommandOutput::List {
+                items: cookies,
+                human_lines,
+                summary: String::new(),
+            })
         }
-        commands::cookies::CookiesCommand::Get { url, name } => {
+        commands::cookies::CookieCommand::Get { url, name } => {
             let result = cdp
                 .send(
                     "Network.getCookies",
@@ -53,17 +57,19 @@ pub(crate) async fn run(
                 })
                 .cloned();
             if let Some(ref c) = cookie {
-                match output_mode {
-                    OutputMode::Human => {
-                        println!("{}", c.get("value").and_then(|v| v.as_str()).unwrap_or(""));
-                    }
-                    OutputMode::Json => println!("{c}"),
-                }
+                Ok(CommandOutput::Content {
+                    stdout: c
+                        .get("value")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    json: c.clone(),
+                })
             } else {
                 anyhow::bail!("Cookie '{name}' not found");
             }
         }
-        commands::cookies::CookiesCommand::Set {
+        commands::cookies::CookieCommand::Set {
             url,
             name,
             value,
@@ -81,12 +87,9 @@ pub(crate) async fn run(
                 })),
             )
             .await?;
-            match output_mode {
-                OutputMode::Human => eprintln!("OK"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
+            Ok(CommandOutput::Ok("OK".into()))
         }
-        commands::cookies::CookiesCommand::Delete { url, name } => {
+        commands::cookies::CookieCommand::Delete { url, name } => {
             cdp.send(
                 "Network.deleteCookies",
                 Some(serde_json::json!({
@@ -95,11 +98,7 @@ pub(crate) async fn run(
                 })),
             )
             .await?;
-            match output_mode {
-                OutputMode::Human => eprintln!("OK"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
+            Ok(CommandOutput::Ok("OK".into()))
         }
     }
-    Ok(())
 }

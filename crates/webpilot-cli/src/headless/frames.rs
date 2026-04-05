@@ -1,33 +1,32 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
-use super::call_bridge;
+use super::{invoke_bridge, parse_bridge_response};
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::frames::FramesArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     match args.command {
-        None => list_frames(cdp, output_mode).await,
-        Some(commands::frames::FramesCommand::Switch { name }) => {
-            switch_frame(cdp, Some(&name), None, None, false, output_mode).await
+        None => list_frames(cdp).await,
+        Some(commands::frames::FrameCommand::Switch { name }) => {
+            switch_frame(cdp, Some(&name), None, None, false).await
         }
-        Some(commands::frames::FramesCommand::Url { pattern }) => {
-            switch_frame(cdp, None, Some(&pattern), None, false, output_mode).await
+        Some(commands::frames::FrameCommand::Url { pattern }) => {
+            switch_frame(cdp, None, Some(&pattern), None, false).await
         }
-        Some(commands::frames::FramesCommand::Find { predicate }) => {
-            switch_frame(cdp, None, None, Some(&predicate), false, output_mode).await
+        Some(commands::frames::FrameCommand::Find { predicate }) => {
+            switch_frame(cdp, None, None, Some(&predicate), false).await
         }
-        Some(commands::frames::FramesCommand::Main) => {
-            switch_frame(cdp, None, None, None, true, output_mode).await
+        Some(commands::frames::FrameCommand::Main) => {
+            switch_frame(cdp, None, None, None, true).await
         }
     }
 }
 
-async fn list_frames(cdp: &CdpClient, output_mode: OutputMode) -> Result<()> {
+async fn list_frames(cdp: &CdpClient) -> Result<CommandOutput> {
     let result = cdp.send("Page.getFrameTree", None).await?;
 
     // Flatten frame tree into a list
@@ -47,24 +46,27 @@ async fn list_frames(cdp: &CdpClient, output_mode: OutputMode) -> Result<()> {
         collect_frames(tree, &mut frames);
     }
 
-    match output_mode {
-        OutputMode::Human => {
-            for f in &frames {
-                let id = f.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-                let url = f.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let url_short = if url.len() > 60 { &url[..60] } else { url };
-                if name.is_empty() {
-                    println!("  [{id}] {url_short}");
-                } else {
-                    println!("  [{id}] \"{name}\" {url_short}");
-                }
+    let human_lines: Vec<String> = frames
+        .iter()
+        .map(|f| {
+            let id = f.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            let url = f.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let url_short = if url.len() > 60 { &url[..60] } else { url };
+            if name.is_empty() {
+                format!("  [{id}] {url_short}")
+            } else {
+                format!("  [{id}] \"{name}\" {url_short}")
             }
-            eprintln!("({} frames)", frames.len());
-        }
-        OutputMode::Json => println!("{}", serde_json::json!({"frames": frames})),
-    }
-    Ok(())
+        })
+        .collect();
+    let summary = format!("({} frames)", frames.len());
+
+    Ok(CommandOutput::List {
+        items: serde_json::json!({"frames": frames}),
+        human_lines,
+        summary,
+    })
 }
 
 async fn switch_frame(
@@ -73,8 +75,7 @@ async fn switch_frame(
     url_pattern: Option<&str>,
     predicate: Option<&str>,
     main: bool,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     let msg = serde_json::json!({
         "type": "switchFrame",
         "name": name,
@@ -83,32 +84,20 @@ async fn switch_frame(
         "main": main,
     });
 
-    let result = call_bridge(cdp, &msg.to_string()).await?;
-    let success = result
-        .get("success")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let raw = invoke_bridge(cdp, &msg.to_string()).await?;
+    let resp = parse_bridge_response(raw)?;
 
-    match output_mode {
-        OutputMode::Human => {
-            if success {
-                let frame_id = result.get("frame_id").and_then(|v| v.as_i64()).unwrap_or(0);
-                let url = result.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                eprintln!("Switched to frame {frame_id} ({url})");
-            } else {
-                let err = result
-                    .pointer("/error/message")
-                    .or(result.get("error"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Frame switch failed");
-                eprintln!("{err}");
-            }
-        }
-        OutputMode::Json => println!("{}", result),
-    }
-
-    if !success {
-        anyhow::bail!("Frame switch failed");
-    }
-    Ok(())
+    let frame_id = resp
+        .data
+        .get("frame_id")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let url = resp
+        .data
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    Ok(CommandOutput::Ok(format!(
+        "Switched to frame {frame_id} ({url})"
+    )))
 }

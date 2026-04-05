@@ -1,34 +1,45 @@
 use crate::cdp::CdpClient;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
-pub(crate) async fn check(output_mode: OutputMode) -> Result<()> {
+pub(crate) async fn check(context: Option<&str>) -> Result<CommandOutput> {
     let Some(ws_url) = crate::session::get_existing_session() else {
-        match output_mode {
-            OutputMode::Human => eprintln!("Mode: headless\nStatus: no active session"),
-            OutputMode::Json => println!(
-                "{}",
-                serde_json::json!({"connected": false, "mode": "headless"})
-            ),
-        }
-        return Ok(());
+        return Ok(CommandOutput::Data {
+            json: serde_json::json!({"connected": false, "mode": "headless"}),
+            human: "Mode: headless\nStatus: no active session".into(),
+        });
     };
 
     let Ok(browser) = CdpClient::connect(&ws_url).await else {
-        match output_mode {
-            OutputMode::Human => eprintln!("Mode: headless\nStatus: disconnected"),
-            OutputMode::Json => println!(
-                "{}",
-                serde_json::json!({"connected": false, "mode": "headless"})
-            ),
-        }
-        return Ok(());
+        return Ok(CommandOutput::Data {
+            json: serde_json::json!({"connected": false, "mode": "headless"}),
+            human: "Mode: headless\nStatus: disconnected".into(),
+        });
     };
 
-    let targets = browser.get_targets().await?;
-    let page_target = targets
-        .iter()
-        .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"));
+    // If --context is specified, resolve that context's page target
+    let page_target = if let Some(ctx_name) = context {
+        let file_path = super::context::context_file_path(ctx_name);
+        if let Ok(data) = std::fs::read_to_string(&file_path)
+            && let Ok(entry) =
+                serde_json::from_str::<super::context::ContextEntry>(&data)
+        {
+            let targets = browser.get_targets().await?;
+            targets.into_iter().find(|t| {
+                t.get("targetId").and_then(|v| v.as_str()) == Some(&entry.target_id)
+            })
+        } else {
+            return Ok(CommandOutput::Data {
+                json: serde_json::json!({"connected": true, "mode": "headless", "context_error": format!("Context '{}' not found", ctx_name)}),
+                human: format!("Mode: headless\nContext '{ctx_name}' not found"),
+            });
+        }
+    } else {
+        let targets = browser.get_targets().await?;
+        targets
+            .into_iter()
+            .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+    };
 
     if let Some(pt) = page_target {
         let target_id = pt.get("targetId").and_then(|v| v.as_str()).unwrap_or("");
@@ -36,20 +47,16 @@ pub(crate) async fn check(output_mode: OutputMode) -> Result<()> {
         let page_ws_url = format!("{authority}/devtools/page/{target_id}");
         let cdp = CdpClient::connect(&page_ws_url).await?;
         cdp.send("Runtime.enable", None).await?;
-        run(&cdp, output_mode).await
+        run(&cdp, context).await
     } else {
-        match output_mode {
-            OutputMode::Human => eprintln!("Mode: headless\nStatus: connected (no page tab)"),
-            OutputMode::Json => println!(
-                "{}",
-                serde_json::json!({"connected": true, "mode": "headless"})
-            ),
-        }
-        Ok(())
+        Ok(CommandOutput::Data {
+            json: serde_json::json!({"connected": true, "mode": "headless"}),
+            human: "Mode: headless\nStatus: connected (no page tab)".into(),
+        })
     }
 }
 
-pub(crate) async fn run(cdp: &CdpClient, output_mode: OutputMode) -> Result<()> {
+pub(crate) async fn run(cdp: &CdpClient, context: Option<&str>) -> Result<CommandOutput> {
     let version = cdp.send("Browser.getVersion", None).await?;
     let title = cdp
         .evaluate("document.title")
@@ -60,35 +67,34 @@ pub(crate) async fn run(cdp: &CdpClient, output_mode: OutputMode) -> Result<()> 
         .await
         .unwrap_or(serde_json::Value::Null);
 
-    match output_mode {
-        OutputMode::Human => {
-            eprintln!("Mode: headless");
-            eprintln!(
-                "Chrome: {}",
-                version
-                    .get("product")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?")
-            );
-            if let Some(t) = title.as_str() {
-                eprintln!("Tab: {t}");
-            }
-            if let Some(u) = url.as_str() {
-                eprintln!("URL: {u}");
-            }
-        }
-        OutputMode::Json => {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "connected": true,
-                    "mode": "headless",
-                    "chrome_version": version.get("product"),
-                    "tab_title": title,
-                    "tab_url": url,
-                })
-            );
-        }
+    let mut human = String::from("Mode: headless");
+    if let Some(ctx) = context {
+        human.push_str(&format!("\nContext: {ctx}"));
     }
-    Ok(())
+    human.push_str(&format!(
+        "\nChrome: {}",
+        version
+            .get("product")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+    ));
+    if let Some(t) = title.as_str() {
+        human.push_str(&format!("\nTab: {t}"));
+    }
+    if let Some(u) = url.as_str() {
+        human.push_str(&format!("\nURL: {u}"));
+    }
+
+    let mut json = serde_json::json!({
+        "connected": true,
+        "mode": "headless",
+        "chrome_version": version.get("product"),
+        "tab_title": title,
+        "tab_url": url,
+    });
+    if let Some(ctx) = context {
+        json["context"] = serde_json::json!(ctx);
+    }
+
+    Ok(CommandOutput::Data { json, human })
 }

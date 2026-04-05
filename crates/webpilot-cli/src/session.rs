@@ -139,7 +139,7 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
     let devtools_port_file = profile_dir.join("DevToolsActivePort");
     let _ = std::fs::remove_file(&devtools_port_file);
 
-    eprintln!("Launching headless Chrome...");
+    tracing::info!("Launching headless Chrome...");
 
     let child = std::process::Command::new(&chrome)
         .args([
@@ -193,7 +193,7 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
     atomic_write(&pid_path(), &pid.to_string())?;
     atomic_write(&ws_url_path(), &ws_url)?;
 
-    eprintln!("Headless Chrome ready (pid {pid})");
+    tracing::info!("Headless Chrome ready (pid {pid})");
     Ok((pid, ws_url))
 }
 
@@ -216,7 +216,29 @@ pub fn get_existing_session() -> Option<String> {
 }
 
 /// Ensure a headless session is running. Returns CDP WebSocket URL.
+/// Uses file locking to prevent concurrent Chrome launches from multiple agents.
 pub async fn ensure_session() -> Result<String> {
+    if let Some(url) = get_existing_session() {
+        return Ok(url);
+    }
+
+    // Acquire advisory file lock to serialize Chrome launches
+    let lock_path = runtime_dir().join("webpilot-launch.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .context("Failed to create launch lock file")?;
+
+    use std::os::unix::io::AsRawFd;
+    // SAFETY: flock() is a standard POSIX advisory lock with no memory safety implications.
+    let ret = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
+    if ret != 0 {
+        anyhow::bail!("Failed to acquire launch lock: {}", std::io::Error::last_os_error());
+    }
+
+    // Re-check after acquiring lock — another process may have launched Chrome
     if let Some(url) = get_existing_session() {
         return Ok(url);
     }
@@ -234,10 +256,37 @@ pub async fn ensure_session() -> Result<String> {
 
     let (_, ws_url) = launch_chrome().await?;
     Ok(ws_url)
+    // lock_file dropped here, releasing flock
 }
 
-/// Shut down headless Chrome session.
+/// Dispose a single context: close its browser context via CDP, then remove the file.
+pub async fn quit_context(context_name: &str) -> Result<()> {
+    let file_path =
+        crate::headless::context::context_file_path(context_name);
+    let data = std::fs::read_to_string(&file_path)
+        .map_err(|_| anyhow::anyhow!("Context '{context_name}' not found"))?;
+    let entry = serde_json::from_str::<crate::headless::context::ContextEntry>(&data)?;
+
+    // Dispose the browser context via CDP (closes all targets in that context)
+    if let Some(ws_url) = get_existing_session()
+        && let Ok(browser) = crate::cdp::CdpClient::connect(&ws_url).await
+    {
+        let _ = browser.dispose_browser_context(&entry.browser_context_id).await;
+    }
+
+    let _ = std::fs::remove_file(&file_path);
+    Ok(())
+}
+
+/// Shut down the entire headless Chrome session (process + all files).
+/// Context files are cleaned by quit_session_force(), Chrome process is killed via SIGTERM.
+/// No need to dispose_browser_context — Chrome dying handles that.
 pub async fn quit_session() -> Result<()> {
+    quit_session_force().await
+}
+
+/// Unconditional Chrome shutdown — kills process and cleans all files.
+async fn quit_session_force() -> Result<()> {
     let pid_file = pid_path();
     if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
         && let Ok(pid) = pid_str.trim().parse::<i32>()
@@ -251,7 +300,7 @@ pub async fn quit_session() -> Result<()> {
     }
     let _ = std::fs::remove_file(ws_url_path());
 
-    // Clean up context files
+    // Clean up any remaining context files
     let dir = std::path::Path::new(webpilot::OUTPUT_DIR);
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.filter_map(|e| e.ok()) {
@@ -261,6 +310,17 @@ pub async fn quit_session() -> Result<()> {
         }
     }
 
-    eprintln!("Headless session stopped.");
+    // Clean up Chrome profile directory
+    let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
+    let profile_dir = PathBuf::from(format!("/tmp/webpilot-{user}-headless-profile"));
+    if profile_dir.exists() {
+        let _ = std::fs::remove_dir_all(&profile_dir);
+    }
+
+    // Clean up launch lock file
+    let lock_path = runtime_dir().join("webpilot-launch.lock");
+    let _ = std::fs::remove_file(lock_path);
+
+    tracing::info!("Headless session stopped.");
     Ok(())
 }

@@ -1,13 +1,12 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::profile::ProfileArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     if let Some(ref url) = args.url {
         cdp.navigate(url).await?;
     }
@@ -29,9 +28,8 @@ pub(crate) async fn run(
     let path = output_dir.join(format!("profile_{ts}.cpuprofile"));
     std::fs::write(&path, serde_json::to_string(&profile_data)?)?;
 
-    match output_mode {
-        OutputMode::Human => eprintln!("Profile saved: {}", path.display()),
-        OutputMode::Json => println!("{}", serde_json::json!({"path": path.to_string_lossy()})),
-    }
-    Ok(())
+    Ok(CommandOutput::Data {
+        json: serde_json::json!({"path": path.to_string_lossy()}),
+        human: format!("Profile saved: {}", path.display()),
+    })
 }

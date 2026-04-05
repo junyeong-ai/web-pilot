@@ -1,19 +1,18 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
-use super::call_bridge;
+use super::invoke_bridge;
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::session::SessionArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     match args.command {
         commands::session::SessionCommand::Export { output } => {
             let cookies = cdp.get_cookies().await?;
-            let storage = call_bridge(
+            let storage = invoke_bridge(
                 cdp,
                 &serde_json::json!({"type": "exportStorage"}).to_string(),
             )
@@ -38,36 +37,32 @@ pub(crate) async fn run(
                 let _ = std::fs::create_dir_all(parent);
             }
             std::fs::write(&path, serde_json::to_string_pretty(&data)?)?;
-            match output_mode {
-                OutputMode::Human => eprintln!("Session exported: {}", path.display()),
-                OutputMode::Json => {
-                    println!("{}", serde_json::json!({"path": path.to_string_lossy()}))
-                }
-            }
+            Ok(CommandOutput::Data {
+                json: serde_json::json!({"path": path.to_string_lossy()}),
+                human: format!("Session exported: {}", path.display()),
+            })
         }
         commands::session::SessionCommand::Import { path } => {
             let content = std::fs::read_to_string(&path)
                 .map_err(|e| anyhow::anyhow!("Cannot read session file: {e}"))?;
             let data: serde_json::Value = serde_json::from_str(&content)?;
             // Import cookies via CDP
+            let mut cookies_imported = 0;
             if let Some(cookies) = data.get("cookies").and_then(|v| v.as_array()) {
                 for c in cookies {
                     let _ = cdp.send("Network.setCookie", Some(c.clone())).await;
                 }
-                match output_mode {
-                    OutputMode::Human => eprintln!("Imported {} cookies", cookies.len()),
-                    OutputMode::Json => println!(
-                        "{}",
-                        serde_json::json!({"success": true, "cookies_imported": cookies.len()})
-                    ),
-                }
+                cookies_imported = cookies.len();
             }
             // Import localStorage via bridge
             if let Some(ls) = data.get("local_storage") {
                 let msg = serde_json::json!({"type": "importStorage", "localStorage": ls});
-                call_bridge(cdp, &msg.to_string()).await?;
+                invoke_bridge(cdp, &msg.to_string()).await?;
             }
+            Ok(CommandOutput::Data {
+                json: serde_json::json!({"success": true, "cookies_imported": cookies_imported}),
+                human: format!("Imported {cookies_imported} cookies"),
+            })
         }
     }
-    Ok(())
 }

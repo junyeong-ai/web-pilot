@@ -1,14 +1,13 @@
 use crate::commands;
-use crate::output::OutputMode;
-use anyhow::Result;
+use crate::output::CommandOutput;
+use anyhow::{Context, Result};
 
-use super::{HeadlessContext, call_bridge, navigate_reconnect};
+use super::{HeadlessContext, invoke_bridge, navigate_reconnect};
 
 pub(crate) async fn run(
     ctx: &mut HeadlessContext,
     args: commands::capture::CaptureArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     // Validate flag conflicts
     if args.annotate && args.full_page {
         anyhow::bail!(
@@ -18,8 +17,17 @@ pub(crate) async fn run(
 
     // Navigate if URL provided (handles cross-origin renderer process swap)
     if let Some(ref url) = args.url {
-        let new_cdp = navigate_reconnect(&ctx.browser, &ctx.ws_url, &ctx.page, url).await?;
+        let (new_cdp, new_target_id) = navigate_reconnect(
+            &ctx.browser,
+            &ctx.ws_url,
+            &ctx.page,
+            url,
+            &ctx.target_id,
+            ctx.browser_context_id.as_deref(),
+        )
+        .await?;
         ctx.page = new_cdp;
+        ctx.target_id = new_target_id;
     }
     let cdp = &ctx.page;
 
@@ -31,7 +39,7 @@ pub(crate) async fn run(
 
     if dom {
         let opts = serde_json::json!({"bounds": bounds, "occlusion": args.occlusion});
-        let result = call_bridge(
+        let result = invoke_bridge(
             cdp,
             &serde_json::json!({"type": "extractDOM", "options": opts}).to_string(),
         )
@@ -46,7 +54,7 @@ pub(crate) async fn run(
     // Text
     if args.text {
         let result =
-            call_bridge(cdp, &serde_json::json!({"type": "extractText"}).to_string()).await?;
+            invoke_bridge(cdp, &serde_json::json!({"type": "extractText"}).to_string()).await?;
         if let Some(text) = result.get("text").and_then(|v| v.as_str()) {
             out.insert("text_content".into(), serde_json::json!(text));
         }
@@ -77,7 +85,7 @@ pub(crate) async fn run(
                 })
                 .collect();
             if !annotations.is_empty() {
-                call_bridge(
+                invoke_bridge(
                     cdp,
                     &serde_json::json!({"type": "addAnnotations", "elements": annotations})
                         .to_string(),
@@ -91,7 +99,7 @@ pub(crate) async fn run(
 
         // Remove annotations
         if args.annotate {
-            let _ = call_bridge(
+            let _ = invoke_bridge(
                 cdp,
                 &serde_json::json!({"type": "removeAnnotations"}).to_string(),
             )
@@ -145,26 +153,44 @@ pub(crate) async fn run(
         );
     }
 
-    // Output
-    match output_mode {
-        OutputMode::Human => {
-            if let Some(elements) = out.get("elements").and_then(|v| v.as_array())
-                && !elements.is_empty()
-            {
-                let snapshot: webpilot::types::DomSnapshot =
-                    serde_json::from_value(serde_json::Value::Object(out.clone()))?;
-                print!("{}", webpilot::types::serialize_dom(&snapshot));
-            }
-            if let Some(path) = out.get("screenshot_path").and_then(|v| v.as_str()) {
-                eprintln!("Screenshot: {path}");
-            }
-            if let Some(path) = out.get("pdf_path").and_then(|v| v.as_str()) {
-                eprintln!("PDF: {path}");
-            }
+    // Extract non-DOM fields into extra map
+    let mut extra = serde_json::Map::new();
+    if let Some(v) = out.get("screenshot_path") {
+        extra.insert("screenshot_path".into(), v.clone());
+    }
+    if let Some(v) = out.get("pdf_path") {
+        extra.insert("pdf_path".into(), v.clone());
+    }
+    if let Some(v) = out.get("text_content") {
+        extra.insert("text_content".into(), v.clone());
+    }
+
+    // If DOM was extracted, return Dom variant; otherwise Data with paths only
+    if out.contains_key("elements") {
+        let snapshot: webpilot::types::DomSnapshot = serde_json::from_value(
+            serde_json::Value::Object(out),
+        )
+        .context("Failed to parse DOM snapshot")?;
+        Ok(CommandOutput::Dom { snapshot, extra })
+    } else {
+        let json = serde_json::Value::Object(extra.clone());
+        let mut human_parts = Vec::new();
+        if let Some(path) = extra.get("screenshot_path").and_then(|v| v.as_str()) {
+            human_parts.push(format!("Screenshot: {path}"));
         }
-        OutputMode::Json => {
-            println!("{}", serde_json::Value::Object(out));
+        if let Some(path) = extra.get("pdf_path").and_then(|v| v.as_str()) {
+            human_parts.push(format!("PDF: {path}"));
+        }
+        if let Some(text) = out.get("text_content").and_then(|v| v.as_str()) {
+            human_parts.push(text.to_string());
+        }
+        if human_parts.is_empty() {
+            Ok(CommandOutput::Ok("OK".into()))
+        } else {
+            Ok(CommandOutput::Data {
+                json,
+                human: human_parts.join("\n"),
+            })
         }
     }
-    Ok(())
 }

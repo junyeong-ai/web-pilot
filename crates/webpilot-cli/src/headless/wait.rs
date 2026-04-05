@@ -1,15 +1,14 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
-use super::call_bridge;
+use super::{invoke_bridge, parse_bridge_response};
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::wait::WaitArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     if args.navigation {
         match cdp
             .wait_for_event(
@@ -19,21 +18,14 @@ pub(crate) async fn run(
             .await
         {
             Ok(_) => {
-                match output_mode {
-                    OutputMode::Human => eprintln!("Navigation complete"),
-                    OutputMode::Json => println!("{{\"success\":true}}"),
-                }
-                return Ok(());
+                return Ok(CommandOutput::Ok("Navigation complete".into()));
             }
             Err(_) => {
-                match output_mode {
-                    OutputMode::Human => eprintln!("Navigation timeout ({}s)", args.timeout),
-                    OutputMode::Json => println!(
-                        "{}",
-                        serde_json::json!({"success": false, "error": {"message": "Navigation timeout", "code": "Timeout"}})
-                    ),
+                return Err(webpilot::types::WebPilotError {
+                    code: webpilot::types::ErrorCode::Timeout,
+                    message: "Navigation timeout".into(),
                 }
-                anyhow::bail!("Navigation timeout");
+                .into());
             }
         }
     }
@@ -44,29 +36,8 @@ pub(crate) async fn run(
         "text": args.text,
         "timeout_ms": args.timeout * 1000,
     });
-    let result = call_bridge(cdp, &msg.to_string()).await?;
-    let success = result
-        .get("success")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let raw = invoke_bridge(cdp, &msg.to_string()).await?;
+    parse_bridge_response(raw)?;
 
-    if success {
-        match output_mode {
-            OutputMode::Human => eprintln!("OK"),
-            OutputMode::Json => println!("{}", serde_json::json!({"success": true})),
-        }
-    } else {
-        let err_msg = result
-            .pointer("/error/message")
-            .or(result.get("error"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("Wait failed");
-        match output_mode {
-            OutputMode::Human => eprintln!("Wait failed: {err_msg}"),
-            OutputMode::Json => println!("{}", result),
-        }
-        anyhow::bail!("{err_msg}");
-    }
-
-    Ok(())
+    Ok(CommandOutput::Ok("OK".into()))
 }

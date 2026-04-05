@@ -1,15 +1,14 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
-use super::call_bridge;
+use super::invoke_bridge;
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::record::RecordArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     if let Some(ref url) = args.url {
         cdp.navigate(url).await?;
     }
@@ -52,7 +51,7 @@ pub(crate) async fn run(
         });
 
         if args.dom {
-            let dom = call_bridge(
+            let dom = invoke_bridge(
                 cdp,
                 &serde_json::json!({"type": "extractDOM", "options": {}}).to_string(),
             )
@@ -62,21 +61,10 @@ pub(crate) async fn run(
 
         frames.push(frame);
 
-        if output_mode == OutputMode::Human {
-            eprint!("\rFrame {}/{}", i + 1, frame_count);
-        }
+        eprint!("\rFrame {}/{}", i + 1, frame_count);
     }
 
-    if output_mode == OutputMode::Human {
-        eprintln!("\n{} frames -> {}", frame_count, output_dir.display());
-    }
+    eprintln!("\n{} frames -> {}", frame_count, output_dir.display());
 
-    match output_mode {
-        OutputMode::Human => {}
-        OutputMode::Json => println!(
-            "{}",
-            serde_json::json!({"frames": frames, "count": frame_count, "interval_ms": args.interval})
-        ),
-    }
-    Ok(())
+    Ok(CommandOutput::Silent)
 }

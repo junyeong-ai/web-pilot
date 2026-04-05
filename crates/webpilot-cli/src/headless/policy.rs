@@ -1,5 +1,5 @@
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
 /// File-based policy store (persists across CLI invocations).
@@ -22,16 +22,13 @@ fn write_policies(policies: &std::collections::HashMap<String, String>) {
     );
 }
 
-pub(crate) async fn run(args: commands::policy::PolicyArgs, output_mode: OutputMode) -> Result<()> {
+pub(crate) async fn run(args: commands::policy::PolicyArgs) -> Result<CommandOutput> {
     match args.command {
         commands::policy::PolicyCommand::Set { action, verdict } => {
             let mut policies = read_policies();
             policies.insert(action, verdict);
             write_policies(&policies);
-            match output_mode {
-                OutputMode::Human => eprintln!("OK"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
+            Ok(CommandOutput::Ok("OK".into()))
         }
         commands::policy::PolicyCommand::List => {
             let policies = read_policies();
@@ -39,23 +36,20 @@ pub(crate) async fn run(args: commands::policy::PolicyArgs, output_mode: OutputM
                 .iter()
                 .map(|(k, v)| serde_json::json!({"action_type": k, "verdict": v}))
                 .collect();
-            match output_mode {
-                OutputMode::Human => {
-                    for p in &list {
-                        eprintln!("{}: {}", p["action_type"], p["verdict"]);
-                    }
-                    eprintln!("({} rules)", list.len());
-                }
-                OutputMode::Json => println!("{}", serde_json::json!(list)),
-            }
+            let human_lines: Vec<String> = policies
+                .iter()
+                .map(|(k, v)| format!("{k}: {v}"))
+                .collect();
+            let summary = format!("({} rules)", list.len());
+            Ok(CommandOutput::List {
+                items: serde_json::json!(list),
+                human_lines,
+                summary,
+            })
         }
         commands::policy::PolicyCommand::Clear => {
             write_policies(&std::collections::HashMap::new());
-            match output_mode {
-                OutputMode::Human => eprintln!("OK"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
+            Ok(CommandOutput::Ok("OK".into()))
         }
     }
-    Ok(())
 }

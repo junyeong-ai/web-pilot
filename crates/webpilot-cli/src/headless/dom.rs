@@ -1,15 +1,14 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
-use super::call_bridge;
+use super::{invoke_bridge, parse_bridge_response};
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::dom::DomArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     let msg = match &args.command {
         commands::dom::DomCommand::SetHtml { selector, value } => {
             serde_json::json!({"type": "setHtml", "selector": selector, "value": value})
@@ -34,28 +33,14 @@ pub(crate) async fn run(
             serde_json::json!({"type": "getAttr", "selector": selector, "attr": attr})
         }
     };
-    let result = call_bridge(cdp, &msg.to_string()).await?;
-    let success = result
-        .get("success")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if let Some(val) = result.get("value").and_then(|v| v.as_str()) {
-        match output_mode {
-            OutputMode::Human => println!("{val}"),
-            OutputMode::Json => println!("{}", serde_json::json!({"success": true, "value": val})),
-        }
-    } else if success {
-        match output_mode {
-            OutputMode::Human => eprintln!("OK"),
-            OutputMode::Json => println!("{{\"success\":true}}"),
-        }
+    let raw = invoke_bridge(cdp, &msg.to_string()).await?;
+    let resp = parse_bridge_response(raw)?;
+    if let Some(val) = resp.data.get("value").and_then(|v| v.as_str()) {
+        Ok(CommandOutput::Content {
+            stdout: val.to_string(),
+            json: serde_json::json!({"success": true, "value": val}),
+        })
+    } else {
+        Ok(CommandOutput::Ok("OK".into()))
     }
-    if !success {
-        let err = result
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        anyhow::bail!("{err}");
-    }
-    Ok(())
 }

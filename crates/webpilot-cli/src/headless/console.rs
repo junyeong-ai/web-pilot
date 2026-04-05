@@ -1,13 +1,12 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::console::ConsoleArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     match args.command {
         commands::console::ConsoleCommand::Start => {
             cdp.evaluate(r#"
@@ -24,10 +23,7 @@ pub(crate) async fn run(
                 }
                 true
             "#).await?;
-            match output_mode {
-                OutputMode::Human => eprintln!("OK"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
+            Ok(CommandOutput::Ok("OK".into()))
         }
         commands::console::ConsoleCommand::Read { level } => {
             let result = cdp.evaluate("window.__webpilot_console || []").await?;
@@ -43,27 +39,26 @@ pub(crate) async fn run(
             } else {
                 vec![]
             };
-            match output_mode {
-                OutputMode::Human => {
-                    for e in &entries {
-                        eprintln!(
-                            "[{}] {}",
-                            e.get("level").and_then(|v| v.as_str()).unwrap_or("?"),
-                            e.get("message").and_then(|v| v.as_str()).unwrap_or("")
-                        );
-                    }
-                    eprintln!("({} entries)", entries.len());
-                }
-                OutputMode::Json => println!("{}", serde_json::json!(entries)),
-            }
+            let human_lines: Vec<String> = entries
+                .iter()
+                .map(|e| {
+                    format!(
+                        "[{}] {}",
+                        e.get("level").and_then(|v| v.as_str()).unwrap_or("?"),
+                        e.get("message").and_then(|v| v.as_str()).unwrap_or("")
+                    )
+                })
+                .collect();
+            let summary = format!("({} entries)", entries.len());
+            Ok(CommandOutput::List {
+                items: serde_json::json!(entries),
+                human_lines,
+                summary,
+            })
         }
         commands::console::ConsoleCommand::Clear => {
             cdp.evaluate("window.__webpilot_console = []").await?;
-            match output_mode {
-                OutputMode::Human => eprintln!("OK"),
-                OutputMode::Json => println!("{{\"success\":true}}"),
-            }
+            Ok(CommandOutput::Ok("OK".into()))
         }
     }
-    Ok(())
 }

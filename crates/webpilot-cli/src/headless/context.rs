@@ -1,6 +1,6 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -20,11 +20,8 @@ pub(crate) const DEFAULT_TTL_SECS: u64 = 3600; // 1 hour
 pub(crate) fn context_hash(name: &str) -> String {
     use std::hash::{Hash, Hasher};
     let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format!("{user}:{cwd}:{name}").hash(&mut hasher);
+    format!("{user}:{name}").hash(&mut hasher);
     format!("{:012x}", hasher.finish())
 }
 
@@ -134,8 +131,6 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let live = browser.get_browser_contexts().await.unwrap_or_default();
-
     for entry in entries.filter_map(|e| e.ok()) {
         let fname = entry.file_name().to_string_lossy().to_string();
         if !fname.starts_with("ctx-") || !fname.ends_with(".json") {
@@ -153,13 +148,11 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
             let _ = std::fs::remove_file(entry.path());
             continue;
         }
-        // TTL expired
+        // TTL expired — dispose browser context via CDP, then remove file
         if now - ctx.last_used > ttl {
-            if live.contains(&ctx.browser_context_id) {
-                let _ = browser
-                    .dispose_browser_context(&ctx.browser_context_id)
-                    .await;
-            }
+            let _ = browser
+                .dispose_browser_context(&ctx.browser_context_id)
+                .await;
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -168,8 +161,7 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
 pub(crate) async fn run(
     browser: &CdpClient,
     args: commands::context::ContextArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     match args.command {
         commands::context::ContextCommand::List => {
             let dir = std::path::Path::new(webpilot::OUTPUT_DIR);
@@ -186,31 +178,35 @@ pub(crate) async fn run(
                     }
                 }
             }
-            match output_mode {
-                OutputMode::Human => {
-                    if contexts.is_empty() {
-                        eprintln!("No active contexts");
-                    } else {
-                        for ctx in &contexts {
-                            let age = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs()
-                                - ctx.created_at;
-                            eprintln!("  {} ({}s old) — {}", ctx.name, age, ctx.cwd);
-                        }
-                        eprintln!("{} context(s)", contexts.len());
-                    }
-                }
-                OutputMode::Json => {
-                    println!("{}", serde_json::json!(contexts));
-                }
-            }
+            let human_lines: Vec<String> = if contexts.is_empty() {
+                vec!["No active contexts".into()]
+            } else {
+                contexts
+                    .iter()
+                    .map(|ctx| {
+                        let age = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            - ctx.created_at;
+                        format!("  {} ({}s old) — {}", ctx.name, age, ctx.cwd)
+                    })
+                    .collect()
+            };
+            let summary = if contexts.is_empty() {
+                String::new()
+            } else {
+                format!("{} context(s)", contexts.len())
+            };
+            Ok(CommandOutput::List {
+                items: serde_json::json!(contexts),
+                human_lines,
+                summary,
+            })
         }
         commands::context::ContextCommand::Close { name, all } => {
             if all {
-                // Close all contexts
-                let live = browser.get_browser_contexts().await.unwrap_or_default();
+                // Dispose all browser contexts and remove files
                 let dir = std::path::Path::new(webpilot::OUTPUT_DIR);
                 let mut count = 0;
                 if let Ok(entries) = std::fs::read_dir(dir) {
@@ -219,7 +215,6 @@ pub(crate) async fn run(
                         if fname.starts_with("ctx-") && fname.ends_with(".json") {
                             if let Ok(data) = std::fs::read_to_string(entry.path())
                                 && let Ok(ctx) = serde_json::from_str::<ContextEntry>(&data)
-                                && live.contains(&ctx.browser_context_id)
                             {
                                 let _ = browser
                                     .dispose_browser_context(&ctx.browser_context_id)
@@ -230,10 +225,7 @@ pub(crate) async fn run(
                         }
                     }
                 }
-                match output_mode {
-                    OutputMode::Human => eprintln!("Closed {count} context(s)"),
-                    OutputMode::Json => println!("{}", serde_json::json!({"closed": count})),
-                }
+                Ok(CommandOutput::Ok(format!("Closed {count} context(s)")))
             } else if let Some(name) = name {
                 let file_path = context_file_path(&name);
                 if let Ok(data) = std::fs::read_to_string(&file_path) {
@@ -243,10 +235,7 @@ pub(crate) async fn run(
                             .await;
                     }
                     let _ = std::fs::remove_file(&file_path);
-                    match output_mode {
-                        OutputMode::Human => eprintln!("Closed context '{name}'"),
-                        OutputMode::Json => println!("{}", serde_json::json!({"success": true})),
-                    }
+                    Ok(CommandOutput::Ok(format!("Closed context '{name}'")))
                 } else {
                     anyhow::bail!("Context '{name}' not found");
                 }
@@ -255,5 +244,4 @@ pub(crate) async fn run(
             }
         }
     }
-    Ok(())
 }

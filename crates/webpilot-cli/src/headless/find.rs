@@ -1,15 +1,14 @@
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 use anyhow::Result;
 
-use super::call_bridge;
+use super::invoke_bridge;
 
 pub(crate) async fn run(
     cdp: &CdpClient,
     args: commands::find::FindArgs,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     if args.role.is_none()
         && args.text.is_none()
         && args.label.is_none()
@@ -21,7 +20,7 @@ pub(crate) async fn run(
         );
     }
 
-    let dom_result = call_bridge(
+    let dom_result = invoke_bridge(
         cdp,
         &serde_json::json!({"type": "extractDOM", "options": {}}).to_string(),
     )
@@ -44,44 +43,37 @@ pub(crate) async fn run(
     let matches: Vec<&webpilot::types::InteractiveElement> =
         elements.iter().filter(|el| el.matches(&filter)).collect();
 
-    match output_mode {
-        OutputMode::Human => {
-            for el in &matches {
-                eprintln!("[{}] {} \"{}\"", el.index, el.tag, el.text);
-            }
-            eprintln!("({} matches)", matches.len());
-        }
-        OutputMode::Json => println!(
-            "{}",
-            serde_json::json!({"matches": matches, "count": matches.len()})
-        ),
-    }
-
     if matches.is_empty() {
         anyhow::bail!("No matching elements found");
     }
 
+    let human_lines: Vec<String> = matches
+        .iter()
+        .map(|el| format!("[{}] {} \"{}\"", el.index, el.tag, el.text))
+        .collect();
+    let summary = format!("({} matches)", matches.len());
+    let items = serde_json::json!({"matches": matches, "count": matches.len()});
+
     let first_index = matches[0].index;
     if args.click {
         let action_json = serde_json::json!({"action": "Click", "index": first_index});
-        call_bridge(
+        invoke_bridge(
             cdp,
             &serde_json::json!({"type": "executeAction", "action": action_json}).to_string(),
         )
         .await?;
-        if output_mode == OutputMode::Human {
-            eprintln!("OK");
-        }
     } else if let Some(ref fill_text) = args.fill {
         let action_json = serde_json::json!({"action": "Type", "index": first_index, "text": fill_text, "clear": true});
-        call_bridge(
+        invoke_bridge(
             cdp,
             &serde_json::json!({"type": "executeAction", "action": action_json}).to_string(),
         )
         .await?;
-        if output_mode == OutputMode::Human {
-            eprintln!("OK");
-        }
     }
-    Ok(())
+
+    Ok(CommandOutput::List {
+        items,
+        human_lines,
+        summary,
+    })
 }
