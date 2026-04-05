@@ -6,8 +6,10 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
@@ -16,8 +18,11 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub struct CdpClient {
     writer: Arc<Mutex<futures_util::stream::SplitSink<WsStream, Message>>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
-    next_id: Arc<Mutex<u64>>,
+    next_id: Arc<AtomicU64>,
     events: broadcast::Sender<Value>,
+    alive: Arc<AtomicBool>,
+    reader_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    heartbeat_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl CdpClient {
@@ -31,47 +36,145 @@ impl CdpClient {
         let writer = Arc::new(Mutex::new(writer));
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let next_id = Arc::new(Mutex::new(1u64));
-        let (events_tx, _) = broadcast::channel::<Value>(64);
+        let next_id = Arc::new(AtomicU64::new(1));
+        let alive = Arc::new(AtomicBool::new(true));
+
+        let buffer_size: usize = std::env::var("WEBPILOT_CDP_EVENT_BUFFER")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(256);
+        let (events_tx, _) = broadcast::channel::<Value>(buffer_size);
 
         // Background reader: dispatch responses or broadcast events
         let pending_clone = pending.clone();
         let events_tx_clone = events_tx.clone();
-        tokio::spawn(async move {
-            while let Some(Ok(msg)) = reader.next().await {
-                if let Message::Text(text) = msg
-                    && let Ok(json) = serde_json::from_str::<Value>(text.as_ref())
-                {
-                    if let Some(id) = json.get("id").and_then(|v| v.as_u64()) {
-                        // Response to a request
-                        let mut map = pending_clone.lock().await;
-                        if let Some(sender) = map.remove(&id) {
-                            let _ = sender.send(json);
+        let alive_clone = alive.clone();
+        let reader_handle = tokio::spawn(async move {
+            while let Some(msg_result) = reader.next().await {
+                match msg_result {
+                    Ok(Message::Text(text)) => match serde_json::from_str::<Value>(text.as_ref()) {
+                        Ok(json) => {
+                            if let Some(id) = json.get("id").and_then(|v| v.as_u64()) {
+                                let mut map = pending_clone.lock().await;
+                                if let Some(sender) = map.remove(&id) {
+                                    let _ = sender.send(json);
+                                }
+                            } else {
+                                let _ = events_tx_clone.send(json);
+                            }
                         }
-                    } else {
-                        // CDP event (no id) — broadcast
-                        let _ = events_tx_clone.send(json);
+                        Err(e) => {
+                            tracing::warn!(
+                                "CDP: malformed JSON: {e} (first 200 chars: {})",
+                                &text[..text.len().min(200)]
+                            );
+                        }
+                    },
+                    Ok(Message::Close(frame)) => {
+                        tracing::debug!("CDP WebSocket closed: {frame:?}");
+                        break;
+                    }
+                    Ok(_) => {} // Ping/Pong/Binary — handled by tungstenite
+                    Err(e) => {
+                        tracing::debug!("CDP WebSocket read error: {e}");
+                        break;
                     }
                 }
             }
+            // Reader exiting — mark connection as dead and drain all pending
+            alive_clone.store(false, Ordering::Release);
+            let mut map = pending_clone.lock().await;
+            map.drain(); // Drop all senders → callers get RecvError
         });
+
+        let reader_handle = Arc::new(Mutex::new(Some(reader_handle)));
+
+        // Heartbeat: periodic health check to detect TCP half-open
+        let heartbeat_handle = {
+            let writer = writer.clone();
+            let pending = pending.clone();
+            let next_id = next_id.clone();
+            let alive = alive.clone();
+            let interval = crate::timeouts::heartbeat();
+            Arc::new(Mutex::new(Some(tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(interval).await;
+                    if !alive.load(Ordering::Acquire) {
+                        break;
+                    }
+
+                    let id = next_id.fetch_add(1, Ordering::Relaxed);
+                    let msg = serde_json::json!({
+                        "id": id,
+                        "method": "Browser.getVersion",
+                        "params": {},
+                    });
+
+                    let (tx, rx) = oneshot::channel();
+                    pending.lock().await.insert(id, tx);
+
+                    let send_result = writer
+                        .lock()
+                        .await
+                        .send(Message::Text(
+                            serde_json::to_string(&msg).unwrap_or_default().into(),
+                        ))
+                        .await;
+
+                    if send_result.is_err() {
+                        alive.store(false, Ordering::Release);
+                        pending.lock().await.remove(&id);
+                        break;
+                    }
+
+                    match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+                        Ok(Ok(_)) => {} // Healthy
+                        _ => {
+                            tracing::warn!("CDP heartbeat failed — marking connection dead");
+                            alive.store(false, Ordering::Release);
+                            pending.lock().await.remove(&id);
+                            break;
+                        }
+                    }
+                }
+            }))))
+        };
 
         Ok(Self {
             writer,
             pending,
             next_id,
             events: events_tx,
+            alive,
+            reader_handle,
+            heartbeat_handle,
         })
     }
 
-    /// Send a CDP command and wait for response.
+    /// Check if the CDP connection is still alive.
+    #[allow(dead_code)]
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
+    }
+
+    /// Send a CDP command and wait for response (default timeout).
     pub async fn send(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        let id = {
-            let mut n = self.next_id.lock().await;
-            let id = *n;
-            *n += 1;
-            id
-        };
+        self.send_with_timeout(method, params, crate::timeouts::cdp_send())
+            .await
+    }
+
+    /// Send a CDP command with a custom timeout.
+    pub async fn send_with_timeout(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
+        if !self.alive.load(Ordering::Acquire) {
+            anyhow::bail!("CDP connection is dead (reader exited)");
+        }
+
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         let msg = serde_json::json!({
             "id": id,
@@ -89,7 +192,7 @@ impl CdpClient {
             .await
             .context("CDP send failed")?;
 
-        let response = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+        let response = match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(v)) => v,
             Ok(Err(_)) => {
                 self.pending.lock().await.remove(&id);
@@ -97,7 +200,7 @@ impl CdpClient {
             }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                anyhow::bail!("CDP timeout (30s)");
+                anyhow::bail!("CDP timeout ({}s)", timeout.as_secs());
             }
         };
 
@@ -106,6 +209,34 @@ impl CdpClient {
         }
 
         Ok(response.get("result").cloned().unwrap_or(Value::Null))
+    }
+
+    /// Fire a CDP command without waiting for response.
+    /// Used for Page.navigate where cross-origin navigation may kill the connection
+    /// before Chrome sends a response.
+    #[allow(dead_code)]
+    pub async fn fire(&self, method: &str, params: Option<Value>) -> Result<()> {
+        if !self.alive.load(Ordering::Acquire) {
+            anyhow::bail!("CDP connection is dead (reader exited)");
+        }
+
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+        let msg = serde_json::json!({
+            "id": id,
+            "method": method,
+            "params": params.unwrap_or(Value::Object(Default::default())),
+        });
+
+        // Don't register in pending — we don't care about the response
+        self.writer
+            .lock()
+            .await
+            .send(Message::Text(serde_json::to_string(&msg)?.into()))
+            .await
+            .context("CDP fire failed")?;
+
+        Ok(())
     }
 
     /// Evaluate JavaScript in the page context.
@@ -142,19 +273,16 @@ impl CdpClient {
         let resp = self
             .send("Page.navigate", Some(serde_json::json!({"url": url})))
             .await?;
-        // Check for navigation error (e.g., DNS failure)
         if let Some(err) = resp.get("errorText").and_then(|v| v.as_str()) {
             anyhow::bail!("Navigation failed: {err}");
         }
-        // Wait for page load (15s timeout), fall back gracefully
         match self
-            .wait_for_event("Page.loadEventFired", std::time::Duration::from_secs(15))
+            .wait_for_event("Page.loadEventFired", crate::timeouts::navigation())
             .await
         {
             Ok(_) => Ok(()),
             Err(_) => {
-                // Timeout — page may still be loading, continue anyway
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(crate::timeouts::post_reconnect()).await;
                 Ok(())
             }
         }
@@ -287,5 +415,21 @@ impl CdpClient {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .ok_or_else(|| anyhow::anyhow!("No targetId in response"))
+    }
+}
+
+impl Drop for CdpClient {
+    fn drop(&mut self) {
+        // Abort background tasks to prevent resource leaks
+        if let Ok(mut handle) = self.reader_handle.try_lock()
+            && let Some(h) = handle.take()
+        {
+            h.abort();
+        }
+        if let Ok(mut handle) = self.heartbeat_handle.try_lock()
+            && let Some(h) = handle.take()
+        {
+            h.abort();
+        }
     }
 }
