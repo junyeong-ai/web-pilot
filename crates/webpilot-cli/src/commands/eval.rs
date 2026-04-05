@@ -3,7 +3,7 @@ use clap::Args;
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct EvalArgs {
@@ -11,7 +11,7 @@ pub struct EvalArgs {
     pub code: String,
 }
 
-pub async fn run(args: EvalArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: EvalArgs) -> Result<CommandOutput> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(
         1,
         Command::Evaluate { code: args.code },
@@ -29,23 +29,6 @@ pub async fn run(args: EvalArgs, output_mode: OutputMode) -> Result<()> {
             result,
             error,
         } => {
-            match output_mode {
-                OutputMode::Human => {
-                    if success {
-                        println!("{}", result.unwrap_or_else(|| "undefined".into()));
-                    } else if let Some(ref err) = error {
-                        eprintln!("{}", crate::output::format_error(err));
-                    } else {
-                        eprintln!("Unknown error");
-                    }
-                }
-                OutputMode::Json => {
-                    println!(
-                        "{}",
-                        serde_json::json!({"success": success, "result": result, "error": error})
-                    );
-                }
-            }
             if !success {
                 if let Some(ref err) = error {
                     anyhow::bail!("{}", crate::output::format_error(err));
@@ -53,10 +36,13 @@ pub async fn run(args: EvalArgs, output_mode: OutputMode) -> Result<()> {
                     anyhow::bail!("Unknown error");
                 }
             }
+            let stdout = result.unwrap_or_else(|| "undefined".into());
+            Ok(CommandOutput::Content {
+                stdout: stdout.clone(),
+                json: serde_json::json!({"success": true, "result": stdout}),
+            })
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
         _ => anyhow::bail!("Unexpected response"),
     }
-
-    Ok(())
 }

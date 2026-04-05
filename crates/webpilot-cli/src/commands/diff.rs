@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct DiffArgs {
@@ -21,11 +21,11 @@ pub struct DiffArgs {
     pub file_b: PathBuf,
 }
 
-pub async fn run(args: DiffArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: DiffArgs) -> Result<CommandOutput> {
     if args.dom {
-        diff_dom(&args.file_a, &args.file_b, output_mode)
+        diff_dom(&args.file_a, &args.file_b)
     } else if args.screenshot {
-        diff_screenshot(&args.file_a, &args.file_b, output_mode)
+        diff_screenshot(&args.file_a, &args.file_b)
     } else {
         // Default: detect by extension
         let ext = args
@@ -34,14 +34,14 @@ pub async fn run(args: DiffArgs, output_mode: OutputMode) -> Result<()> {
             .and_then(|e| e.to_str())
             .unwrap_or("");
         match ext {
-            "json" => diff_dom(&args.file_a, &args.file_b, output_mode),
-            "png" | "jpg" | "jpeg" => diff_screenshot(&args.file_a, &args.file_b, output_mode),
+            "json" => diff_dom(&args.file_a, &args.file_b),
+            "png" | "jpg" | "jpeg" => diff_screenshot(&args.file_a, &args.file_b),
             _ => anyhow::bail!("Cannot detect file type. Use --dom or --screenshot."),
         }
     }
 }
 
-fn diff_dom(a: &PathBuf, b: &PathBuf, output_mode: OutputMode) -> Result<()> {
+fn diff_dom(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
     let text_a = std::fs::read_to_string(a).context("Cannot read file A")?;
     let text_b = std::fs::read_to_string(b).context("Cannot read file B")?;
 
@@ -51,51 +51,37 @@ fn diff_dom(a: &PathBuf, b: &PathBuf, output_mode: OutputMode) -> Result<()> {
     let mut removed = 0u32;
     let mut unchanged = 0u32;
 
-    match output_mode {
-        OutputMode::Human => {
-            for change in diff.iter_all_changes() {
-                let sign = match change.tag() {
-                    similar::ChangeTag::Delete => {
-                        removed += 1;
-                        "-"
-                    }
-                    similar::ChangeTag::Insert => {
-                        added += 1;
-                        "+"
-                    }
-                    similar::ChangeTag::Equal => {
-                        unchanged += 1;
-                        " "
-                    }
-                };
-                print!("{sign}{change}");
+    let mut stdout_lines = Vec::new();
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            similar::ChangeTag::Delete => {
+                removed += 1;
+                "-"
             }
-            eprintln!("\n+{added} -{removed} ={unchanged}");
-        }
-        OutputMode::Json => {
-            for change in diff.iter_all_changes() {
-                match change.tag() {
-                    similar::ChangeTag::Delete => removed += 1,
-                    similar::ChangeTag::Insert => added += 1,
-                    similar::ChangeTag::Equal => unchanged += 1,
-                }
+            similar::ChangeTag::Insert => {
+                added += 1;
+                "+"
             }
-            println!(
-                "{}",
-                serde_json::json!({
-                    "added": added,
-                    "removed": removed,
-                    "unchanged": unchanged,
-                    "diff": diff.unified_diff().header("before", "after").to_string(),
-                })
-            );
-        }
+            similar::ChangeTag::Equal => {
+                unchanged += 1;
+                " "
+            }
+        };
+        stdout_lines.push(format!("{sign}{change}"));
     }
 
-    Ok(())
+    let stdout = stdout_lines.join("");
+    let json = serde_json::json!({
+        "added": added,
+        "removed": removed,
+        "unchanged": unchanged,
+        "diff": diff.unified_diff().header("before", "after").to_string(),
+    });
+
+    Ok(CommandOutput::Content { stdout, json })
 }
 
-fn diff_screenshot(a: &PathBuf, b: &PathBuf, output_mode: OutputMode) -> Result<()> {
+fn diff_screenshot(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
     let img_a = image::open(a).context("Cannot open image A")?;
     let img_b = image::open(b).context("Cannot open image B")?;
 
@@ -141,23 +127,17 @@ fn diff_screenshot(a: &PathBuf, b: &PathBuf, output_mode: OutputMode) -> Result<
         .save(&diff_path)
         .context("Cannot save diff image")?;
 
-    match output_mode {
-        OutputMode::Human => {
-            eprintln!("Changed: {:.1}% ({diff_count}/{total} pixels)", pct);
-            eprintln!("Diff image: {}", diff_path.display());
-        }
-        OutputMode::Json => {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "changed_percent": format!("{:.1}", pct),
-                    "changed_pixels": diff_count,
-                    "total_pixels": total,
-                    "diff_image": diff_path.to_string_lossy(),
-                })
-            );
-        }
-    }
-
-    Ok(())
+    Ok(CommandOutput::Data {
+        json: serde_json::json!({
+            "changed_percent": format!("{:.1}", pct),
+            "changed_pixels": diff_count,
+            "total_pixels": total,
+            "diff_image": diff_path.to_string_lossy(),
+        }),
+        human: format!(
+            "Changed: {:.1}% ({diff_count}/{total} pixels)\nDiff image: {}",
+            pct,
+            diff_path.display()
+        ),
+    })
 }

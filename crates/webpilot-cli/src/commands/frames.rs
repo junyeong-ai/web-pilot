@@ -3,16 +3,16 @@ use clap::{Args, Subcommand};
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct FramesArgs {
     #[command(subcommand)]
-    pub command: Option<FramesCommand>,
+    pub command: Option<FrameCommand>,
 }
 
 #[derive(Subcommand)]
-pub enum FramesCommand {
+pub enum FrameCommand {
     /// Switch to a frame by name
     Switch { name: String },
     /// Switch to a frame by URL pattern
@@ -23,24 +23,24 @@ pub enum FramesCommand {
     Main,
 }
 
-pub async fn run(args: FramesArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: FramesArgs) -> Result<CommandOutput> {
     match args.command {
-        None => list_frames(output_mode).await,
-        Some(FramesCommand::Switch { name }) => {
-            switch_frame(Some(name), None, None, false, output_mode).await
+        None => list_frames().await,
+        Some(FrameCommand::Switch { name }) => {
+            switch_frame(Some(name), None, None, false).await
         }
-        Some(FramesCommand::Url { pattern }) => {
-            switch_frame(None, Some(pattern), None, false, output_mode).await
+        Some(FrameCommand::Url { pattern }) => {
+            switch_frame(None, Some(pattern), None, false).await
         }
-        Some(FramesCommand::Find { predicate }) => {
-            switch_frame(None, None, Some(predicate), false, output_mode).await
+        Some(FrameCommand::Find { predicate }) => {
+            switch_frame(None, None, Some(predicate), false).await
         }
-        Some(FramesCommand::Main) => switch_frame(None, None, None, true, output_mode).await,
+        Some(FrameCommand::Main) => switch_frame(None, None, None, true).await,
     }
 }
 
-async fn list_frames(output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::ListFrames))?;
+async fn list_frames() -> Result<CommandOutput> {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::FrameList))?;
 
     let response = ipc::send_request(&request)
         .await
@@ -51,9 +51,10 @@ async fn list_frames(output_mode: OutputMode) -> Result<()> {
         ResponseData::Frames {
             frames,
             active_frame_id,
-        } => match output_mode {
-            OutputMode::Human => {
-                for f in &frames {
+        } => {
+            let human_lines: Vec<String> = frames
+                .iter()
+                .map(|f| {
                     let marker = if f.frame_id == active_frame_id {
                         "*"
                     } else {
@@ -65,23 +66,21 @@ async fn list_frames(output_mode: OutputMode) -> Result<()> {
                     } else {
                         &f.url
                     };
-                    println!("{marker} [{:>3}] {}{}", f.frame_id, url_short, main);
-                }
-                eprintln!("({} frames, active={})", frames.len(), active_frame_id);
-            }
-            OutputMode::Json => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "frames": frames,
-                        "active_frame_id": active_frame_id,
-                    }))?
-                );
-            }
-        },
+                    format!("{marker} [{:>3}] {}{}", f.frame_id, url_short, main)
+                })
+                .collect();
+            let summary = format!("({} frames, active={})", frames.len(), active_frame_id);
+            Ok(CommandOutput::List {
+                items: serde_json::json!({
+                    "frames": frames,
+                    "active_frame_id": active_frame_id,
+                }),
+                human_lines,
+                summary,
+            })
+        }
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }
 
 async fn switch_frame(
@@ -89,11 +88,10 @@ async fn switch_frame(
     url_pattern: Option<String>,
     predicate: Option<String>,
     main: bool,
-    output_mode: OutputMode,
-) -> Result<()> {
+) -> Result<CommandOutput> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(
         1,
-        Command::SwitchFrame {
+        Command::FrameSwitch {
             name,
             url_pattern,
             predicate,
@@ -114,27 +112,6 @@ async fn switch_frame(
             error,
             ..
         } => {
-            match output_mode {
-                OutputMode::Human => {
-                    if success {
-                        eprintln!(
-                            "Switched to frame {} ({})",
-                            frame_id,
-                            url.unwrap_or_default()
-                        );
-                    } else if let Some(ref err) = error {
-                        eprintln!("{}", crate::output::format_error(err));
-                    } else {
-                        eprintln!("Unknown error");
-                    }
-                }
-                OutputMode::Json => {
-                    println!(
-                        "{}",
-                        serde_json::json!({"success": success, "frame_id": frame_id, "url": url, "error": error})
-                    );
-                }
-            }
             if !success {
                 if let Some(ref err) = error {
                     anyhow::bail!("{}", crate::output::format_error(err));
@@ -142,9 +119,16 @@ async fn switch_frame(
                     anyhow::bail!("Unknown error");
                 }
             }
+            Ok(CommandOutput::Data {
+                json: serde_json::json!({"success": true, "frame_id": frame_id, "url": url}),
+                human: format!(
+                    "Switched to frame {} ({})",
+                    frame_id,
+                    url.unwrap_or_default()
+                ),
+            })
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }

@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use webpilot::ipc;
 use webpilot::protocol::{BrowserAction, Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct ActionArgs {
@@ -139,7 +139,7 @@ impl ActionCommand {
     }
 }
 
-pub async fn run(args: ActionArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: ActionArgs) -> Result<CommandOutput> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(
         1,
         Command::Action {
@@ -164,44 +164,6 @@ pub async fn run(args: ActionArgs, output_mode: OutputMode) -> Result<()> {
             new_tab,
             ..
         } => {
-            if let Some(ref snapshot) = dom {
-                match output_mode {
-                    OutputMode::Human => print!("{}", webpilot::types::serialize_dom(snapshot)),
-                    OutputMode::Json => println!(
-                        "{}",
-                        serde_json::to_string_pretty(snapshot).unwrap_or_default()
-                    ),
-                }
-            }
-            match output_mode {
-                OutputMode::Human => {
-                    if success {
-                        eprintln!("OK");
-                        if let Some(ref url) = url_changed {
-                            eprintln!("URL changed: {url}");
-                        }
-                        if let Some(ref tab) = new_tab {
-                            eprintln!("New tab opened: {} (switched automatically)", tab.url);
-                        }
-                    } else if let Some(ref err) = error {
-                        eprintln!("{}", crate::output::format_error(err));
-                    } else {
-                        eprintln!("Unknown error");
-                    }
-                }
-                OutputMode::Json => {
-                    if dom.is_none() {
-                        let mut out = serde_json::json!({"success": success, "error": error});
-                        if let Some(ref url) = url_changed {
-                            out["url_changed"] = serde_json::json!(url);
-                        }
-                        if let Some(ref tab) = new_tab {
-                            out["new_tab"] = serde_json::to_value(tab).unwrap_or_default();
-                        }
-                        println!("{}", out);
-                    }
-                }
-            }
             if !success {
                 if let Some(ref err) = error {
                     anyhow::bail!("{}", crate::output::format_error(err));
@@ -209,12 +171,50 @@ pub async fn run(args: ActionArgs, output_mode: OutputMode) -> Result<()> {
                     anyhow::bail!("Unknown error");
                 }
             }
+
+            // If DOM was captured (--capture flag), return Dom variant
+            if let Some(snapshot) = dom {
+                let mut extra = serde_json::Map::new();
+                if let Some(ref url) = url_changed {
+                    extra.insert("url_changed".into(), serde_json::json!(url));
+                }
+                if let Some(ref tab) = new_tab {
+                    extra.insert(
+                        "new_tab".into(),
+                        serde_json::to_value(tab).unwrap_or_default(),
+                    );
+                }
+                return Ok(CommandOutput::Dom { snapshot, extra });
+            }
+
+            // Simple OK with optional extra info
+            let mut msg = "OK".to_string();
+            if let Some(ref url) = url_changed {
+                msg.push_str(&format!("\nURL changed: {url}"));
+            }
+            if let Some(ref tab) = new_tab {
+                msg.push_str(&format!(
+                    "\nNew tab opened: {} (switched automatically)",
+                    tab.url
+                ));
+            }
+
+            if url_changed.is_some() || new_tab.is_some() {
+                let mut json = serde_json::json!({"success": true});
+                if let Some(ref url) = url_changed {
+                    json["url_changed"] = serde_json::json!(url);
+                }
+                if let Some(ref tab) = new_tab {
+                    json["new_tab"] = serde_json::to_value(tab).unwrap_or_default();
+                }
+                Ok(CommandOutput::Data { json, human: msg })
+            } else {
+                Ok(CommandOutput::Ok(msg))
+            }
         }
         ResponseData::Error { message, .. } => {
             anyhow::bail!("Extension error: {message}");
         }
         _ => anyhow::bail!("Unexpected response type"),
     }
-
-    Ok(())
 }

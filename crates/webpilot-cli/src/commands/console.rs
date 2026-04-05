@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct ConsoleArgs {
@@ -25,7 +25,7 @@ pub enum ConsoleCommand {
     Clear,
 }
 
-pub async fn run(args: ConsoleArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: ConsoleArgs) -> Result<CommandOutput> {
     let cmd = match &args.command {
         ConsoleCommand::Start => Command::ConsoleStart,
         ConsoleCommand::Read { .. } => Command::ConsoleRead,
@@ -53,30 +53,27 @@ pub async fn run(args: ConsoleArgs, output_mode: OutputMode) -> Result<()> {
                 entries
             };
 
-            match output_mode {
-                OutputMode::Human => {
-                    for e in &filtered {
-                        eprintln!("[{}] {}", e.level, e.message);
-                    }
-                    eprintln!("({} entries)", filtered.len());
-                }
-                OutputMode::Json => println!("{}", serde_json::to_string_pretty(&filtered)?),
-            }
+            let human_lines: Vec<String> = filtered
+                .iter()
+                .map(|e| format!("[{}] {}", e.level, e.message))
+                .collect();
+            let summary = format!("({} entries)", filtered.len());
+            Ok(CommandOutput::List {
+                items: serde_json::to_value(&filtered)?,
+                human_lines,
+                summary,
+            })
         }
         ResponseData::CommandResult { success, error, .. } => {
             if success {
-                match output_mode {
-                    OutputMode::Human => eprintln!("OK"),
-                    OutputMode::Json => println!("{{\"success\":true}}"),
-                }
+                Ok(CommandOutput::Ok("OK".into()))
             } else if let Some(ref err) = error {
-                eprintln!("{}", crate::output::format_error(err));
+                anyhow::bail!("{}", crate::output::format_error(err));
             } else {
-                eprintln!("Unknown error");
+                anyhow::bail!("Unknown error");
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }

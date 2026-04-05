@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct PolicyArgs {
@@ -28,7 +28,7 @@ pub enum PolicyCommand {
     Clear,
 }
 
-pub async fn run(args: PolicyArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: PolicyArgs) -> Result<CommandOutput> {
     let cmd = match &args.command {
         PolicyCommand::Set { action, verdict } => {
             let action_type: webpilot::types::ActionType =
@@ -38,13 +38,13 @@ pub async fn run(args: PolicyArgs, output_mode: OutputMode) -> Result<()> {
                 serde_json::Value::String(verdict.clone()),
             )
             .with_context(|| format!("Unknown verdict: {verdict}. Use 'allow' or 'deny'"))?;
-            Command::SetPolicy {
+            Command::PolicySet {
                 action_type,
                 verdict,
             }
         }
-        PolicyCommand::List => Command::GetPolicies,
-        PolicyCommand::Clear => Command::ClearPolicies,
+        PolicyCommand::List => Command::PolicyList,
+        PolicyCommand::Clear => Command::PolicyClear,
     };
 
     let request = serde_json::to_value(webpilot::protocol::Request::new(1, cmd))?;
@@ -54,34 +54,32 @@ pub async fn run(args: PolicyArgs, output_mode: OutputMode) -> Result<()> {
     let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
 
     match resp.result {
-        ResponseData::Policies { policies } => match output_mode {
-            OutputMode::Human => {
-                for p in &policies {
-                    println!("{}: {}", p.action_type, p.verdict);
-                }
-                if policies.is_empty() {
-                    eprintln!("No policies set");
-                }
+        ResponseData::Policies { policies } => {
+            let human_lines: Vec<String> = policies
+                .iter()
+                .map(|p| format!("{}: {}", p.action_type, p.verdict))
+                .collect();
+            let summary = if policies.is_empty() {
+                "No policies set".into()
+            } else {
+                String::new()
+            };
+            Ok(CommandOutput::List {
+                items: serde_json::to_value(&policies)?,
+                human_lines,
+                summary,
+            })
+        }
+        ResponseData::PolicyResult { success, error } => {
+            if success {
+                Ok(CommandOutput::Ok("OK".into()))
+            } else if let Some(ref err) = error {
+                anyhow::bail!("{}", crate::output::format_error(err));
+            } else {
+                anyhow::bail!("Unknown error");
             }
-            OutputMode::Json => println!("{}", serde_json::to_string_pretty(&policies)?),
-        },
-        ResponseData::PolicyResult { success, error } => match output_mode {
-            OutputMode::Human => {
-                if success {
-                    eprintln!("OK");
-                } else if let Some(ref err) = error {
-                    eprintln!("{}", crate::output::format_error(err));
-                } else {
-                    eprintln!("Unknown error");
-                }
-            }
-            OutputMode::Json => println!(
-                "{}",
-                serde_json::json!({"success": success, "error": error})
-            ),
-        },
+        }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
-        _ => {}
+        _ => Ok(CommandOutput::Silent),
     }
-    Ok(())
 }

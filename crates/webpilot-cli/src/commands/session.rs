@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct SessionArgs {
@@ -26,11 +26,11 @@ pub enum SessionCommand {
     },
 }
 
-pub async fn run(args: SessionArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: SessionArgs) -> Result<CommandOutput> {
     match args.command {
         SessionCommand::Export { output } => {
             let request =
-                serde_json::to_value(webpilot::protocol::Request::new(1, Command::ExportSession))?;
+                serde_json::to_value(webpilot::protocol::Request::new(1, Command::SessionExport))?;
             let response = ipc::send_request(&request)
                 .await
                 .context("Host not running")?;
@@ -52,10 +52,10 @@ pub async fn run(args: SessionArgs, output_mode: OutputMode) -> Result<()> {
                     } else {
                         path
                     };
-                    match output_mode {
-                        OutputMode::Human => eprintln!("Session exported: {final_path}"),
-                        OutputMode::Json => println!("{}", serde_json::json!({"path": final_path})),
-                    }
+                    Ok(CommandOutput::Data {
+                        json: serde_json::json!({"path": final_path}),
+                        human: format!("Session exported: {final_path}"),
+                    })
                 }
                 ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
                 _ => anyhow::bail!("Unexpected response"),
@@ -65,7 +65,7 @@ pub async fn run(args: SessionArgs, output_mode: OutputMode) -> Result<()> {
             let data = std::fs::read_to_string(&path).context("Cannot read session file")?;
             let request = serde_json::to_value(webpilot::protocol::Request::new(
                 1,
-                Command::ImportSession { data },
+                Command::SessionImport { data },
             ))?;
             let response = ipc::send_request(&request)
                 .await
@@ -74,21 +74,6 @@ pub async fn run(args: SessionArgs, output_mode: OutputMode) -> Result<()> {
 
             match resp.result {
                 ResponseData::SessionResult { success, error } => {
-                    match output_mode {
-                        OutputMode::Human => {
-                            if success {
-                                eprintln!("Session imported");
-                            } else if let Some(ref err) = error {
-                                eprintln!("{}", crate::output::format_error(err));
-                            } else {
-                                eprintln!("Unknown error");
-                            }
-                        }
-                        OutputMode::Json => println!(
-                            "{}",
-                            serde_json::json!({"success": success, "error": error})
-                        ),
-                    }
                     if !success {
                         if let Some(ref err) = error {
                             anyhow::bail!("{}", crate::output::format_error(err));
@@ -96,11 +81,11 @@ pub async fn run(args: SessionArgs, output_mode: OutputMode) -> Result<()> {
                             anyhow::bail!("Unknown error");
                         }
                     }
+                    Ok(CommandOutput::Ok("Session imported".into()))
                 }
                 ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
                 _ => anyhow::bail!("Unexpected response"),
             }
         }
     }
-    Ok(())
 }

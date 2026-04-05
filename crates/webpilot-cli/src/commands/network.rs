@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct NetworkArgs {
@@ -25,7 +25,7 @@ pub enum NetworkCommand {
     Clear,
 }
 
-pub async fn run(args: NetworkArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: NetworkArgs) -> Result<CommandOutput> {
     let cmd = match &args.command {
         NetworkCommand::Start => Command::NetworkStart,
         NetworkCommand::Read { since } => Command::NetworkRead { since: *since },
@@ -39,36 +39,37 @@ pub async fn run(args: NetworkArgs, output_mode: OutputMode) -> Result<()> {
     let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
 
     match resp.result {
-        ResponseData::NetworkLog { requests } => match output_mode {
-            OutputMode::Human => {
-                for r in &requests {
+        ResponseData::NetworkLog { requests } => {
+            let human_lines: Vec<String> = requests
+                .iter()
+                .map(|r| {
                     let status = r
                         .status
                         .map(|s| format!("{s}"))
                         .unwrap_or_else(|| r.error.clone().unwrap_or("?".into()));
-                    eprintln!(
+                    format!(
                         "{} {} {} → {} ({}ms)",
                         r.req_type, r.method, r.url, status, r.duration_ms as u64
-                    );
-                }
-                eprintln!("({} requests)", requests.len());
-            }
-            OutputMode::Json => println!("{}", serde_json::to_string_pretty(&requests)?),
-        },
+                    )
+                })
+                .collect();
+            let summary = format!("({} requests)", requests.len());
+            Ok(CommandOutput::List {
+                items: serde_json::to_value(&requests)?,
+                human_lines,
+                summary,
+            })
+        }
         ResponseData::CommandResult { success, error, .. } => {
             if success {
-                match output_mode {
-                    OutputMode::Human => eprintln!("OK"),
-                    OutputMode::Json => println!("{{\"success\":true}}"),
-                }
+                Ok(CommandOutput::Ok("OK".into()))
             } else if let Some(ref err) = error {
-                eprintln!("{}", crate::output::format_error(err));
+                anyhow::bail!("{}", crate::output::format_error(err));
             } else {
-                eprintln!("Unknown error");
+                anyhow::bail!("Unknown error");
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }

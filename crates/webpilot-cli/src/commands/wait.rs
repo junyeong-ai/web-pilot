@@ -3,7 +3,7 @@ use clap::Args;
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct WaitArgs {
@@ -24,7 +24,7 @@ pub struct WaitArgs {
     pub timeout: u64,
 }
 
-pub async fn run(args: WaitArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: WaitArgs) -> Result<CommandOutput> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(
         1,
         Command::Wait {
@@ -43,23 +43,6 @@ pub async fn run(args: WaitArgs, output_mode: OutputMode) -> Result<()> {
 
     match resp.result {
         ResponseData::Wait { success, error } => {
-            match output_mode {
-                OutputMode::Human => {
-                    if success {
-                        eprintln!("OK");
-                    } else if let Some(ref err) = error {
-                        eprintln!("{}", crate::output::format_error(err));
-                    } else {
-                        eprintln!("Unknown error");
-                    }
-                }
-                OutputMode::Json => {
-                    println!(
-                        "{}",
-                        serde_json::json!({"success": success, "error": error})
-                    );
-                }
-            }
             if !success {
                 if let Some(ref err) = error {
                     anyhow::bail!("{}", crate::output::format_error(err));
@@ -67,10 +50,9 @@ pub async fn run(args: WaitArgs, output_mode: OutputMode) -> Result<()> {
                     anyhow::bail!("Unknown error");
                 }
             }
+            Ok(CommandOutput::Ok("OK".into()))
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
         _ => anyhow::bail!("Unexpected response"),
     }
-
-    Ok(())
 }

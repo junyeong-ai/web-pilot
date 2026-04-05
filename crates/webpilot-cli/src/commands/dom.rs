@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct DomArgs {
@@ -37,7 +37,7 @@ pub enum DomCommand {
     GetAttr { selector: String, attr: String },
 }
 
-pub async fn run(args: DomArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: DomArgs) -> Result<CommandOutput> {
     let request = match &args.command {
         DomCommand::SetHtml { selector, value } => make_set(selector, "html", value, None),
         DomCommand::SetText { selector, value } => make_set(selector, "text", value, None),
@@ -63,30 +63,21 @@ pub async fn run(args: DomArgs, output_mode: OutputMode) -> Result<()> {
             error,
         } => {
             if let Some(val) = value {
-                match output_mode {
-                    OutputMode::Human => println!("{val}"),
-                    OutputMode::Json => {
-                        println!("{}", serde_json::json!({"success": true, "value": val}))
-                    }
-                }
+                Ok(CommandOutput::Content {
+                    stdout: val.clone(),
+                    json: serde_json::json!({"success": true, "value": val}),
+                })
             } else if success {
-                match output_mode {
-                    OutputMode::Human => eprintln!("OK"),
-                    OutputMode::Json => println!("{{\"success\":true}}"),
-                }
-            }
-            if !success {
-                if let Some(ref err) = error {
-                    anyhow::bail!("{}", crate::output::format_error(err));
-                } else {
-                    anyhow::bail!("Unknown error");
-                }
+                Ok(CommandOutput::Ok("OK".into()))
+            } else if let Some(ref err) = error {
+                anyhow::bail!("{}", crate::output::format_error(err));
+            } else {
+                anyhow::bail!("Unknown error");
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }
 
 fn make_set(
@@ -97,7 +88,7 @@ fn make_set(
 ) -> Result<serde_json::Value> {
     Ok(serde_json::to_value(webpilot::protocol::Request::new(
         1,
-        Command::SetDom {
+        Command::DomSet {
             selector: selector.to_string(),
             property: property.to_string(),
             value: value.to_string(),
@@ -109,7 +100,7 @@ fn make_set(
 fn make_get(selector: &str, property: &str, attr: Option<String>) -> Result<serde_json::Value> {
     Ok(serde_json::to_value(webpilot::protocol::Request::new(
         1,
-        Command::GetDom {
+        Command::DomGet {
             selector: selector.to_string(),
             property: property.to_string(),
             attr,

@@ -48,23 +48,23 @@ pub async fn run_cli() -> anyhow::Result<()> {
     }
 
     // Browser mode (--browser): use Extension + NM Host (for SSO)
-    match cli.command {
-        commands::Command::Capture(args) => commands::capture::run(args, output_mode).await?,
-        commands::Command::Action(args) => commands::action::run(args, output_mode).await?,
-        commands::Command::Eval(args) => commands::eval::run(args, output_mode).await?,
-        commands::Command::Wait(args) => commands::wait::run(args, output_mode).await?,
-        commands::Command::Tabs(args) => commands::tabs::run(args, output_mode).await?,
-        commands::Command::Frames(args) => commands::frames::run(args, output_mode).await?,
-        commands::Command::Dom(args) => commands::dom::run(args, output_mode).await?,
-        commands::Command::Diff(args) => commands::diff::run(args, output_mode).await?,
-        commands::Command::Find(args) => commands::find::run(args, output_mode).await?,
-        commands::Command::Network(args) => commands::network::run(args, output_mode).await?,
-        commands::Command::Console(args) => commands::console::run(args, output_mode).await?,
-        commands::Command::Session(args) => commands::session::run(args, output_mode).await?,
-        commands::Command::Policy(args) => commands::policy::run(args, output_mode).await?,
-        commands::Command::Fetch(args) => commands::fetch::run(args, output_mode).await?,
-        commands::Command::Cookies(args) => commands::cookies::run(args, output_mode).await?,
-        commands::Command::Status => commands::status::run(output_mode).await?,
+    let result = match cli.command {
+        commands::Command::Capture(args) => commands::capture::run(args).await,
+        commands::Command::Action(args) => commands::action::run(args).await,
+        commands::Command::Eval(args) => commands::eval::run(args).await,
+        commands::Command::Wait(args) => commands::wait::run(args).await,
+        commands::Command::Tabs(args) => commands::tabs::run(args).await,
+        commands::Command::Frames(args) => commands::frames::run(args).await,
+        commands::Command::Dom(args) => commands::dom::run(args).await,
+        commands::Command::Diff(args) => commands::diff::run(args).await,
+        commands::Command::Find(args) => commands::find::run(args).await,
+        commands::Command::Network(args) => commands::network::run(args).await,
+        commands::Command::Console(args) => commands::console::run(args).await,
+        commands::Command::Session(args) => commands::session::run(args).await,
+        commands::Command::Policy(args) => commands::policy::run(args).await,
+        commands::Command::Fetch(args) => commands::fetch::run(args).await,
+        commands::Command::Cookies(args) => commands::cookies::run(args).await,
+        commands::Command::Status => commands::status::run().await,
         commands::Command::Device(_) => {
             anyhow::bail!(
                 "Device emulation is only supported in headless mode (without --browser)"
@@ -79,11 +79,18 @@ pub async fn run_cli() -> anyhow::Result<()> {
         commands::Command::Context(_) => {
             anyhow::bail!("Context management is only supported in headless mode");
         }
-        commands::Command::Install(args) => commands::install::run(args, output_mode).await?,
+        commands::Command::Install(args) => commands::install::run(args).await,
         commands::Command::Quit => {
             crate::session::quit_session().await?;
+            return Ok(());
         }
-    }
+    };
 
-    Ok(())
+    match result {
+        Ok(cmd_output) => {
+            output::render(cmd_output, output_mode);
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }

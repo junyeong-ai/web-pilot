@@ -3,16 +3,16 @@ use clap::{Args, Subcommand};
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct TabsArgs {
     #[command(subcommand)]
-    pub command: Option<TabsCommand>,
+    pub command: Option<TabCommand>,
 }
 
 #[derive(Subcommand)]
-pub enum TabsCommand {
+pub enum TabCommand {
     /// Switch to a tab by ID
     Switch { tab_id: String },
     /// Open a new tab
@@ -26,18 +26,18 @@ pub enum TabsCommand {
     },
 }
 
-pub async fn run(args: TabsArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: TabsArgs) -> Result<CommandOutput> {
     match args.command {
-        None => list_tabs(output_mode).await,
-        Some(TabsCommand::Switch { tab_id }) => switch_tab(tab_id, output_mode).await,
-        Some(TabsCommand::New { url }) => new_tab(&url, output_mode).await,
-        Some(TabsCommand::Close { tab_id }) => close_tab(tab_id, output_mode).await,
-        Some(TabsCommand::Find { url }) => find_tab(&url, output_mode).await,
+        None => list_tabs().await,
+        Some(TabCommand::Switch { tab_id }) => switch_tab(tab_id).await,
+        Some(TabCommand::New { url }) => new_tab(&url).await,
+        Some(TabCommand::Close { tab_id }) => close_tab(tab_id).await,
+        Some(TabCommand::Find { url }) => find_tab(&url).await,
     }
 }
 
-async fn list_tabs(output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::ListTabs))?;
+async fn list_tabs() -> Result<CommandOutput> {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::TabList))?;
 
     let response = ipc::send_request(&request)
         .await
@@ -45,26 +45,28 @@ async fn list_tabs(output_mode: OutputMode) -> Result<()> {
     let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
 
     match resp.result {
-        ResponseData::Tabs { tabs } => match output_mode {
-            OutputMode::Human => {
-                for t in &tabs {
+        ResponseData::Tabs { tabs } => {
+            let human_lines: Vec<String> = tabs
+                .iter()
+                .map(|t| {
                     let marker = if t.active { "*" } else { " " };
-                    println!("{marker} [{}] {} — {}", t.id, t.title, t.url);
-                }
-            }
-            OutputMode::Json => {
-                println!("{}", serde_json::to_string_pretty(&tabs)?);
-            }
-        },
+                    format!("{marker} [{}] {} — {}", t.id, t.title, t.url)
+                })
+                .collect();
+            Ok(CommandOutput::List {
+                items: serde_json::to_value(&tabs)?,
+                human_lines,
+                summary: String::new(),
+            })
+        }
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }
 
-async fn switch_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
+async fn switch_tab(tab_id: String) -> Result<CommandOutput> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(
         1,
-        Command::SwitchTab {
+        Command::TabSwitch {
             tab_id: tab_id.clone(),
         },
     ))?;
@@ -73,27 +75,24 @@ async fn switch_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
         .context("Failed to connect")?;
     let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
     match resp.result {
-        ResponseData::Action { success, error, .. } => match output_mode {
-            OutputMode::Human => {
-                if success {
-                    eprintln!("Switched to tab {tab_id}");
-                } else if let Some(ref err) = error {
-                    eprintln!("{}", crate::output::format_error(err));
+        ResponseData::Action { success, error, .. } => {
+            if !success {
+                if let Some(ref err) = error {
+                    anyhow::bail!("{}", crate::output::format_error(err));
                 } else {
-                    eprintln!("Unknown error");
+                    anyhow::bail!("Unknown error");
                 }
             }
-            OutputMode::Json => println!("{}", serde_json::json!({"success": success})),
-        },
+            Ok(CommandOutput::Ok(format!("Switched to tab {tab_id}")))
+        }
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }
 
-async fn new_tab(url: &str, output_mode: OutputMode) -> Result<()> {
+async fn new_tab(url: &str) -> Result<CommandOutput> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(
         1,
-        Command::NewTab {
+        Command::TabNew {
             url: url.to_string(),
         },
     ))?;
@@ -102,23 +101,23 @@ async fn new_tab(url: &str, output_mode: OutputMode) -> Result<()> {
         .context("Failed to connect")?;
     let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
     match resp.result {
-        ResponseData::Action { success, .. } => match output_mode {
-            OutputMode::Human => {
-                if success {
-                    eprintln!("New tab opened: {url}");
-                }
+        ResponseData::Action { success, .. } => {
+            if !success {
+                anyhow::bail!("Failed to open new tab");
             }
-            OutputMode::Json => println!("{}", serde_json::json!({"success": success, "url": url})),
-        },
+            Ok(CommandOutput::Data {
+                json: serde_json::json!({"success": true, "url": url}),
+                human: format!("New tab opened: {url}"),
+            })
+        }
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }
 
-async fn close_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
+async fn close_tab(tab_id: String) -> Result<CommandOutput> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(
         1,
-        Command::CloseTab {
+        Command::TabClose {
             tab_id: tab_id.clone(),
         },
     ))?;
@@ -127,21 +126,18 @@ async fn close_tab(tab_id: String, output_mode: OutputMode) -> Result<()> {
         .context("Failed to connect")?;
     let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
     match resp.result {
-        ResponseData::Action { success, .. } => match output_mode {
-            OutputMode::Human => {
-                if success {
-                    eprintln!("Tab {tab_id} closed");
-                }
+        ResponseData::Action { success, .. } => {
+            if !success {
+                anyhow::bail!("Failed to close tab");
             }
-            OutputMode::Json => println!("{}", serde_json::json!({"success": success})),
-        },
+            Ok(CommandOutput::Ok(format!("Tab {tab_id} closed")))
+        }
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }
 
-async fn find_tab(url_pattern: &str, output_mode: OutputMode) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::ListTabs))?;
+async fn find_tab(url_pattern: &str) -> Result<CommandOutput> {
+    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::TabList))?;
     let response = ipc::send_request(&request)
         .await
         .context("Failed to connect")?;
@@ -151,19 +147,11 @@ async fn find_tab(url_pattern: &str, output_mode: OutputMode) -> Result<()> {
         ResponseData::Tabs { tabs } => {
             let pattern = url_pattern.replace('*', "");
             if let Some(tab) = tabs.iter().find(|t| t.url.contains(&pattern)) {
-                switch_tab(tab.id.clone(), output_mode).await?;
+                switch_tab(tab.id.clone()).await
             } else {
-                match output_mode {
-                    OutputMode::Human => eprintln!("No tab matching '{url_pattern}'"),
-                    OutputMode::Json => println!(
-                        "{}",
-                        serde_json::json!({"success": false, "error": "No matching tab"})
-                    ),
-                }
                 anyhow::bail!("No tab matching '{url_pattern}'");
             }
         }
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }

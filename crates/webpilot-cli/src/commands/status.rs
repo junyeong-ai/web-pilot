@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
-pub async fn run(output_mode: OutputMode) -> Result<()> {
+pub async fn run() -> Result<CommandOutput> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::Status))?;
 
     match ipc::send_request(&request).await {
@@ -18,44 +18,34 @@ pub async fn run(output_mode: OutputMode) -> Result<()> {
                     tab_url,
                     tab_title,
                     extension_version,
-                } => match output_mode {
-                    OutputMode::Human => {
-                        println!("Connected: {connected}");
-                        println!("Extension: v{extension_version}");
-                        if let Some(url) = tab_url {
-                            println!("Active tab: {}", tab_title.unwrap_or_default());
-                            println!("URL: {url}");
-                        }
+                } => {
+                    let mut human_parts = vec![
+                        format!("Connected: {connected}"),
+                        format!("Extension: v{extension_version}"),
+                    ];
+                    if let Some(ref url) = tab_url {
+                        human_parts.push(format!(
+                            "Active tab: {}",
+                            tab_title.as_deref().unwrap_or_default()
+                        ));
+                        human_parts.push(format!("URL: {url}"));
                     }
-                    OutputMode::Json => {
-                        println!(
-                            "{}",
-                            serde_json::json!({
-                                "connected": connected,
-                                "extension_version": extension_version,
-                                "tab_url": tab_url,
-                                "tab_title": tab_title,
-                            })
-                        );
-                    }
-                },
+                    Ok(CommandOutput::Data {
+                        json: serde_json::json!({
+                            "connected": connected,
+                            "extension_version": extension_version,
+                            "tab_url": tab_url,
+                            "tab_title": tab_title,
+                        }),
+                        human: human_parts.join("\n"),
+                    })
+                }
                 _ => anyhow::bail!("Unexpected response type"),
             }
         }
-        Err(_) => {
-            match output_mode {
-                OutputMode::Human => {
-                    eprintln!("Not connected. Is the Chrome extension installed?");
-                    eprintln!("  1. Run: webpilot install");
-                    eprintln!("  2. Load the extension in Chrome (chrome://extensions)");
-                }
-                OutputMode::Json => {
-                    println!("{}", serde_json::json!({"connected": false}));
-                }
-            }
-            anyhow::bail!("Not connected. Is the Chrome extension installed?");
-        }
+        Err(_) => Ok(CommandOutput::Data {
+            json: serde_json::json!({"connected": false}),
+            human: "Not connected. Is the Chrome extension installed?\n  1. Run: webpilot install\n  2. Load the extension in Chrome (chrome://extensions)".into(),
+        }),
     }
-
-    Ok(())
 }

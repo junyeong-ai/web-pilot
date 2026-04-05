@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use std::path::PathBuf;
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct InstallArgs {
@@ -11,7 +11,7 @@ pub struct InstallArgs {
     pub extension_id: Option<String>,
 }
 
-pub async fn run(args: InstallArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: InstallArgs) -> Result<CommandOutput> {
     let binary_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("webpilot"));
 
     let ext_id = args
@@ -35,40 +35,29 @@ pub async fn run(args: InstallArgs, output_mode: OutputMode) -> Result<()> {
     let json = serde_json::to_string_pretty(&host_manifest)?;
     std::fs::write(&manifest_path, &json)?;
 
-    match output_mode {
-        OutputMode::Human => {
-            println!("Native Messaging host installed!");
-            println!("  Manifest: {}", manifest_path.display());
-            println!("  Binary:   {}", binary_path.display());
-            println!();
-            if ext_id == "EXTENSION_ID_HERE" {
-                println!("Next steps:");
-                println!("  1. Load extension in Chrome:");
-                println!("     chrome://extensions -> Developer mode -> Load unpacked");
-                println!("     Select: extension/");
-                println!("  2. Copy the Extension ID and re-run:");
-                println!("     webpilot install --extension-id <ID>");
-                println!("  3. Reload the extension in Chrome");
-                println!("  4. Test: webpilot status");
-            } else {
-                println!("Extension ID: {ext_id}");
-                println!("Reload the extension in Chrome, then test: webpilot status");
-            }
-        }
-        OutputMode::Json => {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "installed": true,
-                    "manifest_path": manifest_path.display().to_string(),
-                    "binary_path": binary_path.display().to_string(),
-                    "extension_id": ext_id,
-                })
-            );
-        }
-    }
+    let human = if ext_id == "EXTENSION_ID_HERE" {
+        format!(
+            "Native Messaging host installed!\n  Manifest: {}\n  Binary:   {}\n\nNext steps:\n  1. Load extension in Chrome:\n     chrome://extensions -> Developer mode -> Load unpacked\n     Select: extension/\n  2. Copy the Extension ID and re-run:\n     webpilot install --extension-id <ID>\n  3. Reload the extension in Chrome\n  4. Test: webpilot status",
+            manifest_path.display(),
+            binary_path.display()
+        )
+    } else {
+        format!(
+            "Native Messaging host installed!\n  Manifest: {}\n  Binary:   {}\n\nExtension ID: {ext_id}\nReload the extension in Chrome, then test: webpilot status",
+            manifest_path.display(),
+            binary_path.display()
+        )
+    };
 
-    Ok(())
+    Ok(CommandOutput::Data {
+        json: serde_json::json!({
+            "installed": true,
+            "manifest_path": manifest_path.display().to_string(),
+            "binary_path": binary_path.display().to_string(),
+            "extension_id": ext_id,
+        }),
+        human,
+    })
 }
 
 fn dirs_nm() -> PathBuf {

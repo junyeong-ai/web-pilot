@@ -11,7 +11,6 @@ pub mod fetch;
 pub mod find;
 pub mod frames;
 pub mod install;
-pub mod ipc_helper;
 pub mod network;
 pub mod policy;
 pub mod profile;

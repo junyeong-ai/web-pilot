@@ -4,7 +4,7 @@ use webpilot::ipc;
 use webpilot::protocol::{BrowserAction, Command, ResponseData};
 use webpilot::types::InteractiveElement;
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 /// At least one filter is required
@@ -38,7 +38,7 @@ pub struct FindArgs {
     pub fill: Option<String>,
 }
 
-pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: FindArgs) -> Result<CommandOutput> {
     if args.role.is_none()
         && args.text.is_none()
         && args.label.is_none()
@@ -98,37 +98,37 @@ pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
         .filter(|el| el.matches(&filter))
         .collect();
 
-    // Output matches
-    match output_mode {
-        OutputMode::Human => {
-            for el in &matches {
-                let id_suffix = el
-                    .id
-                    .as_ref()
-                    .map(|id| format!("#{id}"))
-                    .unwrap_or_default();
-                let landmark = el
-                    .landmark
-                    .as_ref()
-                    .map(|l| format!(" @{l}"))
-                    .unwrap_or_default();
-                eprintln!(
-                    "[{}] {}{id_suffix} \"{}\"{landmark}",
-                    el.index, el.tag, el.text
-                );
-            }
-            eprintln!("({} matches)", matches.len());
-        }
-        OutputMode::Json => {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "matches": matches,
-                    "count": matches.len(),
-                })
-            );
-        }
-    }
+    // Build output
+    let human_lines: Vec<String> = matches
+        .iter()
+        .map(|el| {
+            let id_suffix = el
+                .id
+                .as_ref()
+                .map(|id| format!("#{id}"))
+                .unwrap_or_default();
+            let landmark = el
+                .spatial
+                .landmark
+                .as_ref()
+                .map(|l| format!(" @{l}"))
+                .unwrap_or_default();
+            format!(
+                "[{}] {}{id_suffix} \"{}\"{landmark}",
+                el.index, el.tag, el.text
+            )
+        })
+        .collect();
+    let summary = format!("({} matches)", matches.len());
+
+    let output = CommandOutput::List {
+        items: serde_json::json!({
+            "matches": matches,
+            "count": matches.len(),
+        }),
+        human_lines,
+        summary,
+    };
 
     if matches.is_empty() {
         anyhow::bail!("No matching elements found");
@@ -138,23 +138,20 @@ pub async fn run(args: FindArgs, output_mode: OutputMode) -> Result<()> {
 
     // Chain action if requested
     if args.click {
-        execute_action(BrowserAction::Click { index: first_index }, output_mode).await?;
+        execute_action(BrowserAction::Click { index: first_index }).await?;
     } else if let Some(ref text) = args.fill {
-        execute_action(
-            BrowserAction::Type {
-                index: first_index,
-                text: text.clone(),
-                clear: true,
-            },
-            output_mode,
-        )
+        execute_action(BrowserAction::Type {
+            index: first_index,
+            text: text.clone(),
+            clear: true,
+        })
         .await?;
     }
 
-    Ok(())
+    Ok(output)
 }
 
-async fn execute_action(action: BrowserAction, output_mode: OutputMode) -> Result<()> {
+async fn execute_action(action: BrowserAction) -> Result<()> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(
         2,
         Command::Action {
@@ -172,15 +169,10 @@ async fn execute_action(action: BrowserAction, output_mode: OutputMode) -> Resul
         ResponseData::Action { success, error, .. } => {
             if !success {
                 if let Some(ref err) = error {
-                    eprintln!("{}", crate::output::format_error(err));
                     anyhow::bail!("{}", crate::output::format_error(err));
                 } else {
-                    eprintln!("Unknown error");
                     anyhow::bail!("Unknown error");
                 }
-            }
-            if output_mode == OutputMode::Human {
-                eprintln!("OK");
             }
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),

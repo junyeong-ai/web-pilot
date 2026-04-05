@@ -3,7 +3,7 @@ use clap::Args;
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct FetchArgs {
@@ -19,7 +19,7 @@ pub struct FetchArgs {
     pub body: Option<String>,
 }
 
-pub async fn run(args: FetchArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: FetchArgs) -> Result<CommandOutput> {
     let request = serde_json::to_value(webpilot::protocol::Request::new(
         1,
         Command::Fetch {
@@ -41,26 +41,6 @@ pub async fn run(args: FetchArgs, output_mode: OutputMode) -> Result<()> {
             body,
             error,
         } => {
-            match output_mode {
-                OutputMode::Human => {
-                    if success {
-                        if let Some(ref b) = body {
-                            println!("{b}");
-                        }
-                        eprintln!("HTTP {}", status.unwrap_or(0));
-                    } else if let Some(ref err) = error {
-                        eprintln!("{}", crate::output::format_error(err));
-                    } else {
-                        eprintln!("Unknown error");
-                    }
-                }
-                OutputMode::Json => {
-                    println!(
-                        "{}",
-                        serde_json::json!({"success": success, "status": status, "body": body, "error": error})
-                    );
-                }
-            }
             if !success {
                 if let Some(ref err) = error {
                     anyhow::bail!("{}", crate::output::format_error(err));
@@ -68,9 +48,17 @@ pub async fn run(args: FetchArgs, output_mode: OutputMode) -> Result<()> {
                     anyhow::bail!("Unknown error");
                 }
             }
+            let stdout = body.clone().unwrap_or_default();
+            Ok(CommandOutput::Content {
+                stdout: if stdout.is_empty() {
+                    format!("HTTP {}", status.unwrap_or(0))
+                } else {
+                    stdout
+                },
+                json: serde_json::json!({"success": success, "status": status, "body": body}),
+            })
         }
         ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
         _ => anyhow::bail!("Unexpected response"),
     }
-    Ok(())
 }

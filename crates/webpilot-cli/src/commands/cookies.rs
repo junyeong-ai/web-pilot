@@ -3,16 +3,16 @@ use clap::{Args, Subcommand};
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct CookiesArgs {
     #[command(subcommand)]
-    pub command: CookiesCommand,
+    pub command: CookieCommand,
 }
 
 #[derive(Subcommand)]
-pub enum CookiesCommand {
+pub enum CookieCommand {
     /// List all cookies for a URL
     List { url: String },
     /// Get a specific cookie
@@ -33,18 +33,18 @@ pub enum CookiesCommand {
     Delete { url: String, name: String },
 }
 
-pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: CookiesArgs) -> Result<CommandOutput> {
     match args.command {
-        CookiesCommand::List { ref url } | CookiesCommand::Get { ref url, .. } => {
+        CookieCommand::List { ref url } | CookieCommand::Get { ref url, .. } => {
             let name_filter = match &args.command {
-                CookiesCommand::Get { name, .. } => Some(name.clone()),
+                CookieCommand::Get { name, .. } => Some(name.clone()),
                 _ => None,
             };
             let url = url.clone();
 
             let request = serde_json::to_value(webpilot::protocol::Request::new(
                 1,
-                Command::GetCookies { url },
+                Command::CookieList { url },
             ))?;
 
             let response = ipc::send_request(&request)
@@ -61,38 +61,51 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
                         cookies
                     };
 
-                    match output_mode {
-                        OutputMode::Human => {
-                            for c in &filtered {
-                                let flags = [
-                                    if c.secure { "secure" } else { "" },
-                                    if c.http_only { "httpOnly" } else { "" },
-                                ]
-                                .iter()
-                                .filter(|s| !s.is_empty())
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .join(",");
-                                let val_preview = if c.value.len() > 40 {
-                                    &c.value[..40]
-                                } else {
-                                    &c.value
-                                };
-                                println!("{} = {} [{}] {}", c.name, val_preview, c.domain, flags);
-                            }
-                            eprintln!("({} cookies)", filtered.len());
-                        }
-                        OutputMode::Json => {
-                            println!("{}", serde_json::to_string_pretty(&filtered)?);
-                        }
+                    let human_lines: Vec<String> = filtered
+                        .iter()
+                        .map(|c| {
+                            let flags = [
+                                if c.secure { "secure" } else { "" },
+                                if c.http_only { "httpOnly" } else { "" },
+                            ]
+                            .iter()
+                            .filter(|s| !s.is_empty())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(",");
+                            let val_preview = if c.value.len() > 40 {
+                                &c.value[..40]
+                            } else {
+                                &c.value
+                            };
+                            format!("{} = {} [{}] {}", c.name, val_preview, c.domain, flags)
+                        })
+                        .collect();
+                    let summary = format!("({} cookies)", filtered.len());
+
+                    // For single cookie Get, use Content pattern
+                    if name_filter.is_some() && filtered.len() == 1 {
+                        return Ok(CommandOutput::Content {
+                            stdout: format!(
+                                "{} = {}",
+                                filtered[0].name, filtered[0].value
+                            ),
+                            json: serde_json::to_value(&filtered[0])?,
+                        });
                     }
+
+                    Ok(CommandOutput::List {
+                        items: serde_json::to_value(&filtered)?,
+                        human_lines,
+                        summary,
+                    })
                 }
                 ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
                 _ => anyhow::bail!("Unexpected response"),
             }
         }
 
-        CookiesCommand::Set {
+        CookieCommand::Set {
             url,
             name,
             value,
@@ -101,7 +114,7 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
         } => {
             let request = serde_json::to_value(webpilot::protocol::Request::new(
                 1,
-                Command::SetCookie {
+                Command::CookieSet {
                     url,
                     name,
                     value,
@@ -117,21 +130,6 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
 
             match resp.result {
                 ResponseData::CookieResult { success, error } => {
-                    match output_mode {
-                        OutputMode::Human => {
-                            if success {
-                                eprintln!("Cookie set");
-                            } else if let Some(ref err) = error {
-                                eprintln!("{}", crate::output::format_error(err));
-                            } else {
-                                eprintln!("Unknown error");
-                            }
-                        }
-                        OutputMode::Json => println!(
-                            "{}",
-                            serde_json::json!({"success": success, "error": error})
-                        ),
-                    }
                     if !success {
                         if let Some(ref err) = error {
                             anyhow::bail!("{}", crate::output::format_error(err));
@@ -139,16 +137,17 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
                             anyhow::bail!("Unknown error");
                         }
                     }
+                    Ok(CommandOutput::Ok("Cookie set".into()))
                 }
                 ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
                 _ => anyhow::bail!("Unexpected response"),
             }
         }
 
-        CookiesCommand::Delete { url, name } => {
+        CookieCommand::Delete { url, name } => {
             let request = serde_json::to_value(webpilot::protocol::Request::new(
                 1,
-                Command::DeleteCookie { url, name },
+                Command::CookieDelete { url, name },
             ))?;
 
             let response = ipc::send_request(&request)
@@ -158,21 +157,6 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
 
             match resp.result {
                 ResponseData::CookieResult { success, error } => {
-                    match output_mode {
-                        OutputMode::Human => {
-                            if success {
-                                eprintln!("Cookie deleted");
-                            } else if let Some(ref err) = error {
-                                eprintln!("{}", crate::output::format_error(err));
-                            } else {
-                                eprintln!("Unknown error");
-                            }
-                        }
-                        OutputMode::Json => println!(
-                            "{}",
-                            serde_json::json!({"success": success, "error": error})
-                        ),
-                    }
                     if !success {
                         if let Some(ref err) = error {
                             anyhow::bail!("{}", crate::output::format_error(err));
@@ -180,12 +164,11 @@ pub async fn run(args: CookiesArgs, output_mode: OutputMode) -> Result<()> {
                             anyhow::bail!("Unknown error");
                         }
                     }
+                    Ok(CommandOutput::Ok("Cookie deleted".into()))
                 }
                 ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
                 _ => anyhow::bail!("Unexpected response"),
             }
         }
     }
-
-    Ok(())
 }

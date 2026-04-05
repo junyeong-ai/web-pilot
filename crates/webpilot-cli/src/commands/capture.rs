@@ -2,9 +2,8 @@ use anyhow::{Context, Result};
 use clap::Args;
 use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
-use webpilot::types::serialize_dom;
 
-use crate::output::OutputMode;
+use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct CaptureArgs {
@@ -49,7 +48,7 @@ pub struct CaptureArgs {
     pub url: Option<String>,
 }
 
-pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
+pub async fn run(args: CaptureArgs) -> Result<CommandOutput> {
     // --annotate implies --dom --screenshot --bounds, conflicts with --fullpage
     let annotate = args.annotate;
     if annotate && args.full_page {
@@ -89,16 +88,15 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
     {
         let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
         match crate::stitch::stitch_tiles(tiles, output_dir) {
-            Ok(path) => match output_mode {
-                OutputMode::Human => eprintln!("Full-page screenshot: {}", path.display()),
-                OutputMode::Json => println!(
-                    "{}",
-                    serde_json::json!({"screenshot_path": path.to_string_lossy()})
-                ),
-            },
-            Err(e) => eprintln!("Stitch error: {e:#}"),
+            Ok(path) => {
+                let path_str = path.to_string_lossy().to_string();
+                return Ok(CommandOutput::Data {
+                    json: serde_json::json!({"screenshot_path": path_str}),
+                    human: format!("Full-page screenshot: {}", path.display()),
+                });
+            }
+            Err(e) => anyhow::bail!("Stitch error: {e:#}"),
         }
-        return Ok(());
     }
 
     let resp: webpilot::protocol::Response =
@@ -127,50 +125,42 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
                 ax_path = Some(path.to_string_lossy().to_string());
             }
 
-            match output_mode {
-                OutputMode::Human => {
-                    if let Some(ref snapshot) = dom_snapshot {
-                        if let Some(ref text) = snapshot.text_content {
-                            println!("{text}");
-                        }
-                        if !snapshot.elements.is_empty() {
-                            print!("{}", serialize_dom(snapshot));
-                        }
+            // Build the Dom output with extra fields
+            let mut extra = serde_json::Map::new();
+            if let Some(ref path) = ax_path {
+                extra.insert("accessibility_path".into(), serde_json::json!(path));
+            }
+            if let Some(ref path) = screenshot_path {
+                extra.insert("screenshot_path".into(), serde_json::json!(path));
+            }
+            if let Some(ref err) = screenshot_error {
+                extra.insert("screenshot_error".into(), serde_json::json!(err));
+            }
+
+            if let Some(mut snapshot) = dom_snapshot {
+                // Strip accessibility_tree from snapshot (saved to file separately)
+                snapshot.accessibility_tree = None;
+                Ok(CommandOutput::Dom { snapshot, extra })
+            } else {
+                // No DOM data — return Data with just screenshot/error info
+                if extra.is_empty() {
+                    Ok(CommandOutput::Ok("OK".into()))
+                } else {
+                    let json = serde_json::Value::Object(extra.clone());
+                    let mut human_parts = Vec::new();
+                    if let Some(path) = extra.get("accessibility_path").and_then(|v| v.as_str()) {
+                        human_parts.push(format!("Accessibility tree: {path}"));
                     }
-                    if let Some(ref path) = ax_path {
-                        eprintln!("Accessibility tree: {path}");
+                    if let Some(path) = extra.get("screenshot_path").and_then(|v| v.as_str()) {
+                        human_parts.push(format!("Screenshot: {path}"));
                     }
-                    if let Some(ref path) = screenshot_path {
-                        eprintln!("Screenshot: {path}");
+                    if let Some(err) = extra.get("screenshot_error").and_then(|v| v.as_str()) {
+                        human_parts.push(crate::output::format_error_str(err));
                     }
-                    if let Some(ref err) = screenshot_error {
-                        eprintln!("{}", crate::output::format_error_str(err));
-                    }
-                }
-                OutputMode::Json => {
-                    // Single unified JSON object — never output multiple objects
-                    let mut out = serde_json::Map::new();
-                    if let Some(ref snapshot) = dom_snapshot
-                        && (!snapshot.elements.is_empty() || snapshot.text_content.is_some())
-                    {
-                        // Exclude accessibility_tree from JSON (saved to file separately)
-                        let mut snap = snapshot.clone();
-                        snap.accessibility_tree = None;
-                        out = serde_json::to_value(&snap)?
-                            .as_object()
-                            .cloned()
-                            .unwrap_or_default();
-                    }
-                    if let Some(ref path) = ax_path {
-                        out.insert("accessibility_path".into(), serde_json::json!(path));
-                    }
-                    if let Some(ref path) = screenshot_path {
-                        out.insert("screenshot_path".into(), serde_json::json!(path));
-                    }
-                    if let Some(ref err) = screenshot_error {
-                        out.insert("screenshot_error".into(), serde_json::json!(err));
-                    }
-                    println!("{}", serde_json::Value::Object(out));
+                    Ok(CommandOutput::Data {
+                        json,
+                        human: human_parts.join("\n"),
+                    })
                 }
             }
         }
@@ -181,6 +171,4 @@ pub async fn run(args: CaptureArgs, output_mode: OutputMode) -> Result<()> {
             anyhow::bail!("Unexpected response type");
         }
     }
-
-    Ok(())
 }
