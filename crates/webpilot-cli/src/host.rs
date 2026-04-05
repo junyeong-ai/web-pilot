@@ -12,7 +12,13 @@ use webpilot::ipc;
 use webpilot::native_messaging;
 
 struct HostState {
-    pending: std::collections::HashMap<u32, tokio::sync::oneshot::Sender<serde_json::Value>>,
+    pending: std::collections::HashMap<
+        u32,
+        (
+            tokio::sync::oneshot::Sender<serde_json::Value>,
+            tokio::time::Instant,
+        ),
+    >,
 }
 
 pub async fn run_host() -> anyhow::Result<()> {
@@ -60,7 +66,7 @@ pub async fn run_host() -> anyhow::Result<()> {
         loop {
             match native_messaging::read_message(&mut stdin) {
                 Ok(mut msg) => {
-                    // Handle Ping → respond with Pong (keeps NM bidirectional)
+                    // Handle Ping → respond with Pong (echo the request ID)
                     let is_pong =
                         msg.pointer("/result/type").and_then(|v| v.as_str()) == Some("Pong");
                     let is_ping =
@@ -70,7 +76,8 @@ pub async fn run_host() -> anyhow::Result<()> {
                         continue;
                     }
                     if is_ping {
-                        let pong = serde_json::json!({"id": 0, "result": {"type": "Pong"}});
+                        let ping_id = msg.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let pong = serde_json::json!({"id": ping_id, "result": {"type": "Pong"}});
                         let _ = nm_tx_reader.blocking_send(pong);
                         continue;
                     }
@@ -102,8 +109,6 @@ pub async fn run_host() -> anyhow::Result<()> {
                         }
                     }
 
-                    // Full-page tiles: pass through to CLI (CLI does the stitching)
-
                     // Session export: save session_data to file
                     if let Some(data) = msg
                         .pointer("/result/session_data")
@@ -119,18 +124,16 @@ pub async fn run_host() -> anyhow::Result<()> {
                         let path = output_dir.join(format!("session_{ts}.json"));
                         if let Err(e) = std::fs::write(&path, &data) {
                             tracing::error!("Session save error: {e}");
-                        } else {
-                            if let Some(result) = msg.get_mut("result") {
-                                result["path"] = serde_json::json!(path.to_string_lossy());
-                                result.as_object_mut().map(|o| o.remove("session_data"));
-                            }
+                        } else if let Some(result) = msg.get_mut("result") {
+                            result["path"] = serde_json::json!(path.to_string_lossy());
+                            result.as_object_mut().map(|o| o.remove("session_data"));
                         }
                     }
 
                     // Dispatch to pending CLI request
                     if let Some(id) = msg.get("id").and_then(|v| v.as_u64()) {
                         let mut st = state_reader.blocking_lock();
-                        if let Some(sender) = st.pending.remove(&(id as u32)) {
+                        if let Some((sender, _)) = st.pending.remove(&(id as u32)) {
                             let _ = sender.send(msg);
                         }
                     }
@@ -144,6 +147,19 @@ pub async fn run_host() -> anyhow::Result<()> {
                     break;
                 }
             }
+        }
+    });
+
+    // Orphan reaper: clean up stale pending entries every 30s
+    let state_reaper = state.clone();
+    let reaper_handle = tokio::spawn(async move {
+        let max_age = std::time::Duration::from_secs(120);
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let mut st = state_reaper.lock().await;
+            let now = tokio::time::Instant::now();
+            st.pending
+                .retain(|_id, (_sender, created)| now.duration_since(*created) < max_age);
         }
     });
 
@@ -163,6 +179,7 @@ pub async fn run_host() -> anyhow::Result<()> {
     drop(nm_tx);
     let _ = nm_writer_handle.await;
     ipc_handle.abort();
+    reaper_handle.abort();
 
     Ok(())
 }
@@ -206,16 +223,35 @@ async fn handle_one_cli_request(
     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
     {
         let mut st = state.lock().await;
-        st.pending.insert(id, resp_tx);
+        // Duplicate ID guard: if a request with this ID is already pending, reject
+        if st.pending.contains_key(&id) {
+            let err_response = serde_json::json!({
+                "id": id,
+                "result": {"type": "Error", "message": "Duplicate request ID", "code": "Unknown"}
+            });
+            let mut payload = serde_json::to_vec(&err_response)?;
+            payload.push(b'\n');
+            writer.write_all(&payload).await?;
+            return Ok(());
+        }
+        st.pending
+            .insert(id, (resp_tx, tokio::time::Instant::now()));
     }
 
     nm_tx.send(request).await?;
 
-    // 60 second timeout for CDP operations (full-page screenshot, etc.)
-    let response = tokio::time::timeout(std::time::Duration::from_secs(60), resp_rx)
-        .await
-        .map_err(|_| anyhow::anyhow!("timeout"))?
-        .map_err(|_| anyhow::anyhow!("channel closed"))?;
+    let timeout = crate::timeouts::ipc_response();
+    let response = match tokio::time::timeout(timeout, resp_rx).await {
+        Ok(Ok(v)) => v,
+        Ok(Err(_)) => {
+            state.lock().await.pending.remove(&id);
+            anyhow::bail!("channel closed");
+        }
+        Err(_) => {
+            state.lock().await.pending.remove(&id);
+            anyhow::bail!("timeout ({}s)", timeout.as_secs());
+        }
+    };
 
     let mut payload = serde_json::to_vec(&response)?;
     payload.push(b'\n');
@@ -223,5 +259,3 @@ async fn handle_one_cli_request(
 
     Ok(())
 }
-
-// stitch_tiles moved to stitch.rs (called from CLI, not host)
