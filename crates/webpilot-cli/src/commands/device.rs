@@ -3,11 +3,11 @@ use clap::{Args, Subcommand};
 #[derive(Args)]
 pub struct DeviceArgs {
     #[command(subcommand)]
-    pub action: DeviceAction,
+    pub command: DeviceCommand,
 }
 
 #[derive(Subcommand)]
-pub enum DeviceAction {
+pub enum DeviceCommand {
     /// Set custom device metrics
     Set {
         /// Viewport width

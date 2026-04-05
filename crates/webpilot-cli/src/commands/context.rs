@@ -3,11 +3,11 @@ use clap::{Args, Subcommand};
 #[derive(Args)]
 pub struct ContextArgs {
     #[command(subcommand)]
-    pub action: ContextAction,
+    pub command: ContextCommand,
 }
 
 #[derive(Subcommand)]
-pub enum ContextAction {
+pub enum ContextCommand {
     /// List active contexts
     List,
     /// Close a context or all contexts
