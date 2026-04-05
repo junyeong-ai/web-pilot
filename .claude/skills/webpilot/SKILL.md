@@ -114,7 +114,7 @@ webpilot capture --dom                                # 4. Verify
 - `network start` / `console start` persist across page navigations (auto-reinjected)
 - `--annotate` automatically enables `--dom --screenshot --bounds`
 - `find` with `--click` or `--fill` executes the action on the first match
-- Exit codes: 0=success, 3=connection error, 4=element not found, 5=timeout, 6=policy denied
+- Exit codes: 0=success, 3=connection, 4=not found, 5=timeout, 6=security, 7=invalid arg, 8=navigation
 
 ## Decision Guide
 

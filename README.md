@@ -9,7 +9,7 @@
 ## 왜 WebPilot인가?
 
 - **제로 설정** — `webpilot capture --dom --url URL` 한 줄로 시작
-- **23개 커맨드** — DOM, 스크린샷, 액션, 네트워크, 콘솔, 쿠키, 세션, 정책
+- **풀스택 커맨드** — DOM, 스크린샷, 액션, 네트워크, 콘솔, 쿠키, 세션, 정책
 - **Headless + SSO** — 기본 headless, `--browser`로 사용자 Chrome SSO 세션 활용
 - **초고속** — 후속 명령 평균 10ms (경쟁사 대비 19배)
 - **AI 최적화** — 토큰 효율적 DOM 출력, 시맨틱 검색, 에러 안내
@@ -114,7 +114,7 @@ Browser (--browser):
 
 - **단일 바이너리** — `webpilot` 하나로 headless/browser/host 모드 자동 전환
 - **단일 코드베이스** — 동일한 `bridge.js`를 두 모드에서 공유
-- **23개 커맨드** — capture, action, eval, wait, find, dom, device, cookies, network, console, session, policy, fetch, tabs, frames, diff, profile, record, context, status, quit, install, help
+- **풀스택 커맨드** — `webpilot --help`로 전체 목록 확인
 
 ---
 
@@ -122,7 +122,7 @@ Browser (--browser):
 
 | 기능 | WebPilot | agent-browser | browser-use |
 |------|:--------:|:-------------:|:-----------:|
-| 커맨드 수 | **23** | 7 | N/A (Python) |
+| 커맨드 수 | **22** | 7 | N/A (Python) |
 | 후속 명령 속도 | **10ms** | 190ms | — |
 | SSO 지원 | **--browser** | ✗ | ✗ |
 | 네트워크 모니터링 | **내장** | ✗ | CDP |
