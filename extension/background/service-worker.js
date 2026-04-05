@@ -270,21 +270,21 @@ async function processCommand(id, command) {
           if (targetTab.windowId != null) {
             await chrome.windows.update(targetTab.windowId, { focused: true });
           }
-          result = { type: "Action", success: true, code: null, dom: null, error: null };
+          result = { type: "Action", success: true, error: null, dom: null };
         } catch (e) {
-          result = { type: "Action", success: false, error: e.message, code: null, dom: null };
+          result = { type: "Action", success: false, error: { message: e.message, code: "Unknown" }, dom: null };
         }
         break;
       case "NewTab":
         await chrome.tabs.create({ url: command.url, active: true });
-        result = { type: "Action", success: true, code: null, dom: null, error: null };
+        result = { type: "Action", success: true, error: null, dom: null };
         break;
       case "CloseTab":
         try {
           await chrome.tabs.remove(parseInt(command.tab_id, 10));
-          result = { type: "Action", success: true, code: null, dom: null, error: null };
+          result = { type: "Action", success: true, error: null, dom: null };
         } catch (e) {
-          result = { type: "Action", success: false, error: e.message, code: null, dom: null };
+          result = { type: "Action", success: false, error: { message: e.message, code: "Unknown" }, dom: null };
         }
         break;
       case "Evaluate": {
@@ -298,14 +298,14 @@ async function processCommand(id, command) {
               expression: command.code, returnByValue: true, awaitPromise: true,
             });
             if (r.exceptionDetails) {
-              return { success: false, error: r.exceptionDetails.exception?.description || r.exceptionDetails.text || "JS exception" };
+              return { success: false, error: { message: r.exceptionDetails.exception?.description || r.exceptionDetails.text || "JS exception", code: "Unknown" } };
             }
             const val = r.result?.value;
             return { success: true, result: val !== undefined ? JSON.stringify(val) : null };
           });
           result = { type: "Evaluate", ...cdpResult };
         } catch (e) {
-          result = { type: "Evaluate", success: false, error: e.message };
+          result = { type: "Evaluate", success: false, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -330,9 +330,9 @@ async function processCommand(id, command) {
               }),
               new Promise((_, rej) => setTimeout(() => rej(new Error("Navigation wait timed out")), command.timeout_ms || 10000)),
             ]);
-            result = { type: "Wait", success: true, error: null, code: null };
+            result = { type: "Wait", success: true, error: null };
           } catch (e) {
-            result = { type: "Wait", success: false, error: e.message, code: "TIMEOUT" };
+            result = { type: "Wait", success: false, error: { message: e.message, code: "Timeout" } };
           } finally {
             if (navListener) chrome.tabs.onUpdated.removeListener(navListener);
           }
@@ -342,9 +342,9 @@ async function processCommand(id, command) {
             await ensureBridge(tab.id, activeFrameId);
             const waitTimeout = (command.timeout_ms || 10000) + 2000;
             const r = await sendToContent(tab.id, { type: "wait", selector: command.selector, text: command.text, timeout_ms: command.timeout_ms }, activeFrameId, waitTimeout);
-            result = { type: "Wait", success: r.success, error: r.error || null, code: r.code || null };
+            result = { type: "Wait", success: r.success, error: r.error || null };
           } catch (e) {
-            result = { type: "Wait", success: false, error: e.message, code: "TIMEOUT" };
+            result = { type: "Wait", success: false, error: { message: e.message, code: "Timeout" } };
           }
         }
         break;
@@ -359,7 +359,7 @@ async function processCommand(id, command) {
           const r = await sendToContent(tab.id, msg, activeFrameId);
           result = { type: "CommandResult", success: r.success, value: null, error: r.error || null };
         } catch (e) {
-          result = { type: "CommandResult", success: false, value: null, error: e.message };
+          result = { type: "CommandResult", success: false, value: null, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -373,7 +373,7 @@ async function processCommand(id, command) {
           const r = await sendToContent(tab.id, msg, activeFrameId);
           result = { type: "CommandResult", success: r.success, value: r.value || null, error: r.error || null };
         } catch (e) {
-          result = { type: "CommandResult", success: false, value: null, error: e.message };
+          result = { type: "CommandResult", success: false, value: null, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -398,10 +398,10 @@ async function processCommand(id, command) {
           if (fetchResult) {
             result = { type: "FetchResult", success: true, status: fetchResult.status, body: fetchResult.body, error: null };
           } else {
-            result = { type: "FetchResult", success: false, status: null, body: null, error: "No result" };
+            result = { type: "FetchResult", success: false, status: null, body: null, error: { message: "No result", code: "Unknown" } };
           }
         } catch (e) {
-          result = { type: "FetchResult", success: false, status: null, body: null, error: e.message };
+          result = { type: "FetchResult", success: false, status: null, body: null, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -478,7 +478,7 @@ async function processCommand(id, command) {
           setActiveFrameId(matched.frameId);
           result = { type: "FrameSwitched", success: true, frame_id: matched.frameId, name: null, url: matched.url, error: null };
         } else {
-          result = { type: "FrameSwitched", success: false, frame_id: activeFrameId, name: null, url: null, error: "No matching frame found" };
+          result = { type: "FrameSwitched", success: false, frame_id: activeFrameId, name: null, url: null, error: { message: "No matching frame found", code: "ElementNotFound" } };
         }
         break;
       }
@@ -489,7 +489,7 @@ async function processCommand(id, command) {
           cookies: cookies.map(c => ({
             name: c.name, value: c.value, domain: c.domain,
             path: c.path, secure: c.secure, http_only: c.httpOnly,
-            same_site: c.sameSite || "unspecified",
+            same_site: c.sameSite === "no_restriction" ? "none" : (c.sameSite || "unspecified").toLowerCase(),
             expiration: c.expirationDate || null,
           })),
         };
@@ -504,7 +504,7 @@ async function processCommand(id, command) {
           });
           result = { type: "CookieResult", success: true };
         } catch (e) {
-          result = { type: "CookieResult", success: false, error: e.message };
+          result = { type: "CookieResult", success: false, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -513,7 +513,7 @@ async function processCommand(id, command) {
           await chrome.cookies.remove({ url: command.url, name: command.name });
           result = { type: "CookieResult", success: true };
         } catch (e) {
-          result = { type: "CookieResult", success: false, error: e.message };
+          result = { type: "CookieResult", success: false, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -526,7 +526,7 @@ async function processCommand(id, command) {
           saveMonitoringState();
           result = { type: "CommandResult", success: true, value: null, error: null };
         } catch (e) {
-          result = { type: "CommandResult", success: false, value: null, error: e.message };
+          result = { type: "CommandResult", success: false, value: null, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -571,7 +571,7 @@ async function processCommand(id, command) {
           saveMonitoringState();
           result = { type: "CommandResult", success: true, value: null, error: null };
         } catch (e) {
-          result = { type: "CommandResult", success: false, value: null, error: e.message };
+          result = { type: "CommandResult", success: false, value: null, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -624,7 +624,7 @@ async function processCommand(id, command) {
             exported_at: Date.now(),
             cookies: allCookies.map(c => ({
               name: c.name, value: c.value, domain: c.domain, path: c.path,
-              secure: c.secure, http_only: c.httpOnly, same_site: c.sameSite,
+              secure: c.secure, http_only: c.httpOnly, same_site: c.sameSite === "no_restriction" ? "none" : (c.sameSite || "unspecified").toLowerCase(),
               expiration: c.expirationDate || null,
             })),
             local_storage: storage.localStorage || {},
@@ -669,7 +669,7 @@ async function processCommand(id, command) {
           }
           result = { type: "SessionResult", success: true, error: null };
         } catch (e) {
-          result = { type: "SessionResult", success: false, error: e.message };
+          result = { type: "SessionResult", success: false, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -680,7 +680,7 @@ async function processCommand(id, command) {
           await chrome.storage.local.set({ policies });
           result = { type: "PolicyResult", success: true, error: null };
         } catch (e) {
-          result = { type: "PolicyResult", success: false, error: e.message };
+          result = { type: "PolicyResult", success: false, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -701,7 +701,7 @@ async function processCommand(id, command) {
           await chrome.storage.local.remove("policies");
           result = { type: "PolicyResult", success: true, error: null };
         } catch (e) {
-          result = { type: "PolicyResult", success: false, error: e.message };
+          result = { type: "PolicyResult", success: false, error: { message: e.message, code: "Unknown" } };
         }
         break;
       }
@@ -952,12 +952,12 @@ async function handleAction(action) {
     const policies = stored?.policies || {};
     const verdict = policies[action.action];
     if (verdict === "deny") {
-      return { type: "Action", success: false, error: `Action '${action.action}' denied by policy`, code: "POLICY_DENIED" };
+      return { type: "Action", success: false, error: { message: `Action '${action.action}' denied by policy`, code: "PolicyDenied" } };
     }
   } catch {}
 
   const tab = await findHttpTab();
-  if (!tab) return { type: "Action", success: false, error: "No web page tab found" };
+  if (!tab) return { type: "Action", success: false, error: { message: "No web page tab found", code: "Unknown" } };
 
   // Navigation actions handled directly by service worker
   switch (action.action) {
@@ -1005,7 +1005,7 @@ async function handleAction(action) {
 
         return { type: "Action", success: true };
       } catch (e) {
-        return { type: "Action", success: false, error: e.message };
+        return { type: "Action", success: false, error: { message: e.message, code: "Unknown" } };
       }
   }
 
@@ -1027,7 +1027,7 @@ async function handleAction(action) {
       // Auto-switch to new tab
       const newTab = newTabs[0];
       await chrome.tabs.update(newTab.id, { active: true });
-      result.new_tab = { id: newTab.id, url: newTab.url || "", title: newTab.title || "" };
+      result.new_tab = { id: String(newTab.id), url: newTab.url || "", title: newTab.title || "", active: true };
     }
 
     // Detect URL change (navigation triggered by action)
@@ -1040,7 +1040,7 @@ async function handleAction(action) {
 
     return result;
   } catch (e) {
-    return { type: "Action", success: false, error: e.message, code: e.code || null };
+    return { type: "Action", success: false, error: { message: e.message, code: e.code || "Unknown" } };
   }
 }
 

@@ -36,7 +36,7 @@ function handleMessage(msg) {
         }
         return { success: true, result: result !== undefined ? JSON.stringify(result) : null };
       } catch (e) {
-        return { success: false, error: e.message };
+        return { success: false, error: { message: e.message, code: "Unknown" } };
       }
     case "wait":
       return new Promise((resolve) => handleWait(msg, resolve));
@@ -64,29 +64,29 @@ function handleMessage(msg) {
     case "setHtml": {
       const el = document.querySelector(msg.selector);
       if (el) { el.innerHTML = msg.value; return { success: true }; }
-      return { success: false, error: `Selector not found: ${msg.selector}` };
+      return { success: false, error: { message: `Selector not found: ${msg.selector}`, code: "ElementNotFound" } };
     }
     case "setText": {
       const el = document.querySelector(msg.selector);
       if (el) { el.textContent = msg.value; return { success: true }; }
-      return { success: false, error: `Selector not found: ${msg.selector}` };
+      return { success: false, error: { message: `Selector not found: ${msg.selector}`, code: "ElementNotFound" } };
     }
     case "setAttr": {
       const el = document.querySelector(msg.selector);
       if (el) { el.setAttribute(msg.attr, msg.value); return { success: true }; }
-      return { success: false, error: `Selector not found: ${msg.selector}` };
+      return { success: false, error: { message: `Selector not found: ${msg.selector}`, code: "ElementNotFound" } };
     }
     case "getHtml": {
       const el = document.querySelector(msg.selector);
-      return el ? { success: true, value: el.innerHTML } : { success: false, error: `Not found: ${msg.selector}` };
+      return el ? { success: true, value: el.innerHTML } : { success: false, error: { message: `Not found: ${msg.selector}`, code: "ElementNotFound" } };
     }
     case "getText": {
       const el = document.querySelector(msg.selector);
-      return el ? { success: true, value: el.textContent } : { success: false, error: `Not found: ${msg.selector}` };
+      return el ? { success: true, value: el.textContent } : { success: false, error: { message: `Not found: ${msg.selector}`, code: "ElementNotFound" } };
     }
     case "getAttr": {
       const el = document.querySelector(msg.selector);
-      return el ? { success: true, value: el.getAttribute(msg.attr) } : { success: false, error: `Not found: ${msg.selector}` };
+      return el ? { success: true, value: el.getAttribute(msg.attr) } : { success: false, error: { message: `Not found: ${msg.selector}`, code: "ElementNotFound" } };
     }
     case "exportStorage":
       return {
@@ -121,8 +121,8 @@ function handleMessage(msg) {
         const visible = getVisibleElements();
         const srcEl = msg.source > 0 && msg.source <= visible.length ? visible[msg.source - 1] : null;
         const tgtEl = msg.target > 0 && msg.target <= visible.length ? visible[msg.target - 1] : null;
-        if (!srcEl) return { success: false, error: "Source element not found" };
-        if (!tgtEl) return { success: false, error: "Target element not found" };
+        if (!srcEl) return { success: false, error: { message: "Source element not found", code: "ElementNotFound" } };
+        if (!tgtEl) return { success: false, error: { message: "Target element not found", code: "ElementNotFound" } };
         srcEl.scrollIntoView({ block: "center", behavior: "instant" });
         const sr = srcEl.getBoundingClientRect();
         const tr = tgtEl.getBoundingClientRect();
@@ -131,7 +131,7 @@ function handleMessage(msg) {
     case "ping":
       return { ok: true, url: location.href, title: document.title };
     default:
-      return { success: false, error: "Unknown message type: " + msg.type };
+      return { success: false, error: { message: "Unknown message type: " + msg.type, code: "Unknown" } };
   }
 }
 
@@ -209,7 +209,7 @@ function extractDOM(options) {
       const innerText = (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ");
       const text = (tag === "input" || tag === "textarea")
         ? (el.placeholder || el.getAttribute("aria-label") || "")
-        : innerText.slice(0, 100);
+        : innerText.slice(0, 300);
 
       const elemId = el.id && el.id.length <= 50 && /^[a-zA-Z0-9_-]+$/.test(el.id) ? el.id : undefined;
 
@@ -227,8 +227,8 @@ function extractDOM(options) {
         disabled: el.disabled || el.getAttribute("aria-disabled") === "true" || false,
         focused: document.activeElement === el,
         checked: (el.type === "checkbox" || el.type === "radio") ? el.checked : undefined,
-        expanded: el.getAttribute("aria-expanded") ?? undefined,
-        selected: el.getAttribute("aria-selected") || (el.selected ? "true" : undefined),
+        expanded: el.getAttribute("aria-expanded") === "true" ? true : el.getAttribute("aria-expanded") === "false" ? false : undefined,
+        selected: el.getAttribute("aria-selected") === "true" ? true : el.selected === true ? true : undefined,
         required: el.required || undefined,
         readonly: el.readOnly || undefined,
         label: resolveLabel(el),
@@ -236,6 +236,19 @@ function extractDOM(options) {
         landmark: findLandmark(el),
         in_viewport: rect.top < innerHeight && rect.bottom > 0 && rect.left < innerWidth && rect.right > 0,
       };
+
+      const form = el.closest("form");
+      entry.form_id = form?.id || undefined;
+
+      const describedBy = el.getAttribute("aria-describedby");
+      if (describedBy) {
+        const parts = describedBy.split(/\s+/)
+          .map(id => document.getElementById(id)?.textContent?.trim())
+          .filter(Boolean);
+        entry.description = parts.join(" ").slice(0, 120) || undefined;
+      }
+
+      entry.autocomplete = el.getAttribute("autocomplete") || undefined;
 
       // Occlusion detection: is the element's center covered by another element?
       if (options.occlusion) {
@@ -369,10 +382,10 @@ function getVisibleElements() {
 
 function resolveTarget(action) {
   const index = action.index;
-  if (index == null) return { target: null, error: "No index provided" };
+  if (index == null) return { target: null, error: { message: "No index provided", code: "ElementNotFound" } };
   const visible = getVisibleElements();
   if (index < 1 || index > visible.length) {
-    return { target: null, error: `Index ${index} out of range (1-${visible.length})`, code: "ELEMENT_NOT_FOUND" };
+    return { target: null, error: { message: `Index ${index} out of range (1-${visible.length})`, code: "ElementNotFound" } };
   }
   return { target: visible[index - 1] };
 }
@@ -429,15 +442,15 @@ function executeAction(action) {
   try {
     switch (action.action) {
       case "Click": {
-        const { target, error, code } = resolveTarget(action);
-        if (!target) return { success: false, error, code };
+        const { target, error } = resolveTarget(action);
+        if (!target) return { success: false, error };
         reliableClick(target);
         return { success: true };
       }
 
       case "Type": {
-        const { target, error, code } = resolveTarget(action);
-        if (!target) return { success: false, error, code };
+        const { target, error } = resolveTarget(action);
+        if (!target) return { success: false, error };
         reliableType(target, action.text, action.clear);
         return { success: true };
       }
@@ -467,23 +480,23 @@ function executeAction(action) {
         return { success: true };
 
       case "ScrollToElement": {
-        const { target, error, code } = resolveTarget(action);
-        if (!target) return { success: false, error, code };
+        const { target, error } = resolveTarget(action);
+        if (!target) return { success: false, error };
         target.scrollIntoView({ block: "center", behavior: "instant" });
         return { success: true };
       }
 
       case "Select": {
-        const { target, error, code } = resolveTarget(action);
-        if (!target) return { success: false, error, code };
+        const { target, error } = resolveTarget(action);
+        if (!target) return { success: false, error };
         target.value = action.value;
         target.dispatchEvent(new Event("change", { bubbles: true }));
         return { success: true };
       }
 
       case "Hover": {
-        const { target, error, code } = resolveTarget(action);
-        if (!target) return { success: false, error, code };
+        const { target, error } = resolveTarget(action);
+        if (!target) return { success: false, error };
         target.scrollIntoView({ block: "center", behavior: "instant" });
         const rect = target.getBoundingClientRect();
         const opts = { bubbles: true, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
@@ -495,8 +508,8 @@ function executeAction(action) {
       }
 
       case "Focus": {
-        const { target, error, code } = resolveTarget(action);
-        if (!target) return { success: false, error, code };
+        const { target, error } = resolveTarget(action);
+        if (!target) return { success: false, error };
         target.focus();
         return { success: true };
       }
@@ -506,10 +519,10 @@ function executeAction(action) {
       case "Reload": location.reload(); return { success: true };
 
       default:
-        return { success: false, error: `Unknown action: ${action.action}` };
+        return { success: false, error: { message: `Unknown action: ${action.action}`, code: "Unknown" } };
     }
   } catch (e) {
-    return { success: false, error: e.message };
+    return { success: false, error: { message: e.message, code: "Unknown" } };
   }
 }
 
@@ -530,7 +543,7 @@ function handleWait(msg, sendResponse) {
   }
 
   const timer = setTimeout(() => {
-    finish({ success: false, error: "Wait timed out", code: "TIMEOUT" });
+    finish({ success: false, error: { message: "Wait timed out", code: "Timeout" } });
   }, timeout);
 
   if (msg.selector) {

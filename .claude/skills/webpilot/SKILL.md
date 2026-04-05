@@ -28,17 +28,22 @@ webpilot capture --dom                                # 4. Verify
 ## Element Output Format
 
 ```
-*[1] input#query "Search" type=text @search
-[2] button "Go" @search
+*[1] input#query "Search" type=text autocomplete=search form=searchform @search
+[2] button "Go" description="Submit search query" @search
 [3] a "Home" href="/" @nav
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
+--- 3 elements (from 120 nodes, 5ms) ---
 ```
 
 - `[N]` = element index (use with `action click N`, `action type N "text"`)
 - `*` prefix = element is NEW since last capture (appeared after your action)
 - `#id` = HTML element id
 - `@ctx` = landmark context (nav, main, form, search, header, footer)
+- `autocomplete=X` = semantic input hint (email, username, tel, etc.)
+- `form=X` = parent form id (groups related inputs)
+- `description="X"` = aria-describedby text (validation messages, hints)
+- Text is truncated at 300 characters
 
 ## Commands
 
@@ -51,6 +56,7 @@ webpilot capture --dom                                # 4. Verify
 | | `capture --dom --occlusion` | Mark occluded elements |
 | | `capture --pdf` | Generate PDF |
 | | `--browser capture --screenshot --full-page` | Full-page screenshot (browser only) |
+| | `--browser capture --accessibility` | Accessibility tree (browser only) |
 | **Device** | `device preset iphone-15` | Mobile device emulation |
 | | `device set --width 390 --height 844 --mobile` | Custom viewport |
 | | `device set --width W --height H --scale 2.0` | HiDPI viewport |
@@ -64,6 +70,7 @@ webpilot capture --dom                                # 4. Verify
 | | `action keypress Enter` | Press key |
 | | `action navigate "URL"` | Go to URL |
 | | `action scroll down` / `up` | Scroll page |
+| | `action scroll-to N` | Scroll element [N] into view |
 | | `action hover N` / `focus N` | Hover/focus |
 | | `action select N "value"` | Select dropdown option |
 | | `action drag 3 7` | Drag element to another |
@@ -107,6 +114,7 @@ webpilot capture --dom                                # 4. Verify
 - `network start` / `console start` persist across page navigations (auto-reinjected)
 - `--annotate` automatically enables `--dom --screenshot --bounds`
 - `find` with `--click` or `--fill` executes the action on the first match
+- Exit codes: 0=success, 3=connection error, 4=element not found, 5=timeout, 6=policy denied
 
 ## Decision Guide
 
@@ -117,6 +125,7 @@ webpilot capture --dom                                # 4. Verify
 | Know the button text | `find --role button --text "Submit" --click` |
 | Form field by label | `find --label "Email" --fill "value"` |
 | Page still loading | `wait --selector ".content"` or `wait --navigation` |
+| Element below fold | `action scroll-to N` then `action click N` |
 | Working with iframes | `frames` → `frames switch "name"` → commands → `frames main` |
 | API call with auth | `fetch "URL" --method POST --body '{}'` |
 | Debug failing action | `network start` → action → `network read` |
@@ -130,12 +139,11 @@ webpilot capture --dom                                # 4. Verify
 
 | Error | Action |
 |-------|--------|
-| "Element [N] not found" | Re-run `capture --dom` — indices changed after page update |
+| "Element [N] not found" (exit 4) | Re-run `capture --dom` — indices changed after page update |
 | "No web page tab" | Run `capture --dom --url "URL"` to navigate first |
-| "Chrome not found" | Install Chrome or set `WEBPILOT_CHROME=/path/to/chrome` |
-| "CDP timeout" | Chrome may be busy. Try `webpilot quit` then retry |
-| "Navigation timeout" | Page didn't load in 15s. Check URL or network connectivity |
-| "Page is not responding" | Extension can't reach page (--browser). Reload page or extension |
-| "Timed out" | Increase timeout: `wait --timeout 15` |
+| "Chrome not found" (exit 3) | Install Chrome or set `WEBPILOT_CHROME=/path/to/chrome` |
+| "CDP timeout" (exit 5) | Chrome may be busy. Try `webpilot quit` then retry |
+| "Navigation timeout" (exit 5) | Page didn't load in 15s. Check URL or network connectivity |
+| "Timed out" (exit 5) | Increase timeout: `wait --timeout 15` |
 | Action didn't work | Check `network read` for API errors, or `console read` for JS errors |
 | Need SSO/login | Use `--browser` flag: `webpilot --browser capture --dom` |
