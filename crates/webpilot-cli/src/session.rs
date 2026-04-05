@@ -6,11 +6,30 @@ use std::path::PathBuf;
 
 /// Chrome for Testing paths (installed by agent-browser or manually).
 const CHROME_FOR_TESTING_PATHS: &[&str] = &[
-    // agent-browser installed (latest version dirs checked at runtime)
     // macOS standard Chrome
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
 ];
+
+/// Get the runtime directory for PID/WS files.
+/// Prefers XDG_RUNTIME_DIR (Linux, mode 0700) for security, falls back to /tmp.
+fn runtime_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
+        let p = PathBuf::from(&dir);
+        if p.exists() {
+            return p;
+        }
+    }
+    PathBuf::from("/tmp")
+}
+
+/// Write data atomically: write to a temp file, then rename.
+fn atomic_write(path: &std::path::Path, data: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
 
 /// Find a Chrome binary. Prefers Chrome for Testing (no single-instance lock).
 pub fn find_chrome() -> Result<PathBuf> {
@@ -37,7 +56,6 @@ pub fn find_chrome() -> Result<PathBuf> {
             if app.exists() {
                 return Ok(app);
             }
-            // Alternative layout
             let app2 = entry.path()
                     .join("chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
             if app2.exists() {
@@ -93,13 +111,13 @@ fn is_process_alive(pid: i32) -> bool {
 /// PID file path.
 pub fn pid_path() -> PathBuf {
     let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    PathBuf::from(format!("/tmp/webpilot-{user}-headless.pid"))
+    runtime_dir().join(format!("webpilot-{user}-headless.pid"))
 }
 
 /// WebSocket URL file path.
 pub fn ws_url_path() -> PathBuf {
     let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    PathBuf::from(format!("/tmp/webpilot-{user}-headless.ws"))
+    runtime_dir().join(format!("webpilot-{user}-headless.ws"))
 }
 
 /// Read the Chrome PID from the PID file. Returns 0 if unavailable.
@@ -111,7 +129,7 @@ pub fn read_pid() -> i32 {
 }
 
 /// Launch headless Chrome and return CDP WebSocket URL.
-pub fn launch_chrome() -> Result<(u32, String)> {
+pub async fn launch_chrome() -> Result<(u32, String)> {
     let chrome = find_chrome()?;
     let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
     let profile_dir = PathBuf::from(format!("/tmp/webpilot-{user}-headless-profile"));
@@ -151,14 +169,12 @@ pub fn launch_chrome() -> Result<(u32, String)> {
     let pid = child.id();
 
     // Detach: Chrome runs independently, managed via PID file + signals.
-    // No piped handles → no SIGPIPE risk when CLI exits.
     std::mem::forget(child);
 
-    // Read WebSocket URL from DevToolsActivePort file (Puppeteer/Playwright standard).
-    // Chrome writes this file asynchronously after startup.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    // Poll DevToolsActivePort (Puppeteer/Playwright standard)
+    let deadline = tokio::time::Instant::now() + crate::timeouts::chrome_launch();
     let ws_url = loop {
-        if std::time::Instant::now() > deadline {
+        if tokio::time::Instant::now() > deadline {
             let _ = send_signal(pid as i32, libc::SIGTERM);
             anyhow::bail!("Chrome started but no DevTools URL. Is this Chrome for Testing?");
         }
@@ -170,44 +186,37 @@ pub fn launch_chrome() -> Result<(u32, String)> {
                 break format!("ws://127.0.0.1:{port}{path}");
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
 
-    // Save PID and WS URL
-    std::fs::write(pid_path(), pid.to_string())?;
-    std::fs::write(ws_url_path(), &ws_url)?;
+    // Save PID and WS URL atomically
+    atomic_write(&pid_path(), &pid.to_string())?;
+    atomic_write(&ws_url_path(), &ws_url)?;
 
     eprintln!("Headless Chrome ready (pid {pid})");
     Ok((pid, ws_url))
 }
 
-/// Get WebSocket URL for an already-running headless session.
+/// Get WebSocket URL for an already-running headless session (TOCTOU mitigated).
 pub fn get_existing_session() -> Option<String> {
-    let ws_file = ws_url_path();
-    let pid_file = pid_path();
+    // Read both files directly — no exists() check (eliminates TOCTOU window)
+    let pid_str = std::fs::read_to_string(pid_path()).ok()?;
+    let pid: i32 = pid_str.trim().parse().ok()?;
 
-    if !ws_file.exists() || !pid_file.exists() {
+    if !is_process_alive(pid) {
+        let _ = std::fs::remove_file(ws_url_path());
+        let _ = std::fs::remove_file(pid_path());
         return None;
     }
 
-    // Check if Chrome is still alive
-    if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
-        && let Ok(pid) = pid_str.trim().parse::<i32>()
-        && is_process_alive(pid)
-    {
-        return std::fs::read_to_string(&ws_file)
-            .ok()
-            .map(|s| s.trim().to_string());
-    }
-
-    // Stale files
-    let _ = std::fs::remove_file(&ws_file);
-    let _ = std::fs::remove_file(&pid_file);
-    None
+    std::fs::read_to_string(ws_url_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Ensure a headless session is running. Returns CDP WebSocket URL.
-pub fn ensure_session() -> Result<String> {
+pub async fn ensure_session() -> Result<String> {
     if let Some(url) = get_existing_session() {
         return Ok(url);
     }
@@ -218,27 +227,25 @@ pub fn ensure_session() -> Result<String> {
         && is_process_alive(pid)
     {
         let _ = send_signal(pid, libc::SIGTERM);
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     let _ = std::fs::remove_file(pid_path());
     let _ = std::fs::remove_file(ws_url_path());
 
-    let (_, ws_url) = launch_chrome()?;
+    let (_, ws_url) = launch_chrome().await?;
     Ok(ws_url)
 }
 
 /// Shut down headless Chrome session.
-pub fn quit_session() -> Result<()> {
+pub async fn quit_session() -> Result<()> {
     let pid_file = pid_path();
-    if pid_file.exists() {
-        if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
-            && let Ok(pid) = pid_str.trim().parse::<i32>()
-        {
-            let _ = send_signal(pid, libc::SIGTERM);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            if is_process_alive(pid) {
-                let _ = send_signal(pid, libc::SIGKILL);
-            }
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
+        && let Ok(pid) = pid_str.trim().parse::<i32>()
+    {
+        let _ = send_signal(pid, libc::SIGTERM);
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if is_process_alive(pid) {
+            let _ = send_signal(pid, libc::SIGKILL);
         }
         let _ = std::fs::remove_file(&pid_file);
     }

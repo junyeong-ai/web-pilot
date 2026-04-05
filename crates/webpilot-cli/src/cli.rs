@@ -81,7 +81,7 @@ pub async fn run_cli() -> anyhow::Result<()> {
         }
         commands::Command::Install(args) => commands::install::run(args, output_mode).await?,
         commands::Command::Quit => {
-            crate::session::quit_session()?;
+            crate::session::quit_session().await?;
         }
     }
 

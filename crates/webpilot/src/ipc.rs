@@ -17,13 +17,19 @@ pub enum IpcError {
     ConnectionClosed,
 }
 
-/// Get the socket path. WEBPILOT_SOCKET env var overrides the default.
+/// Get the socket path.
+/// Prefers WEBPILOT_SOCKET env var, then XDG_RUNTIME_DIR (mode 0700), then /tmp.
 pub fn socket_path() -> PathBuf {
     if let Ok(path) = std::env::var("WEBPILOT_SOCKET") {
         return PathBuf::from(path);
     }
     let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    PathBuf::from(format!("/tmp/webpilot-{user}.sock"))
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    dir.join(format!("webpilot-{user}.sock"))
 }
 
 /// Send a request to the host and receive a response (CLI side).
@@ -92,6 +98,14 @@ pub async fn start_server() -> Result<UnixListener, IpcError> {
     }
 
     let listener = UnixListener::bind(&path)?;
+
+    // Set socket permissions to owner-only (0600) for security
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+
     tracing::info!(path = %path.display(), "IPC server listening");
     Ok(listener)
 }
