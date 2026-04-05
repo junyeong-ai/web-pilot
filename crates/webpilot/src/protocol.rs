@@ -70,24 +70,24 @@ pub enum Command {
         timeout_ms: u64,
     },
     Status,
-    ListTabs,
-    SwitchTab {
+    TabList,
+    TabSwitch {
         tab_id: String,
     },
-    NewTab {
+    TabNew {
         url: String,
     },
-    CloseTab {
+    TabClose {
         tab_id: String,
     },
-    SetDom {
+    DomSet {
         selector: String,
         property: String,
         value: String,
         #[serde(default)]
         attr: Option<String>,
     },
-    GetDom {
+    DomGet {
         selector: String,
         property: String,
         #[serde(default)]
@@ -100,8 +100,8 @@ pub enum Command {
         #[serde(default)]
         body: Option<String>,
     },
-    ListFrames,
-    SwitchFrame {
+    FrameList,
+    FrameSwitch {
         #[serde(default)]
         name: Option<String>,
         #[serde(default)]
@@ -111,10 +111,10 @@ pub enum Command {
         #[serde(default)]
         main: bool,
     },
-    GetCookies {
+    CookieList {
         url: String,
     },
-    SetCookie {
+    CookieSet {
         url: String,
         name: String,
         value: String,
@@ -123,7 +123,7 @@ pub enum Command {
         #[serde(default)]
         secure: bool,
     },
-    DeleteCookie {
+    CookieDelete {
         url: String,
         name: String,
     },
@@ -136,16 +136,16 @@ pub enum Command {
         since: Option<u64>,
     },
     NetworkClear,
-    ExportSession,
-    ImportSession {
+    SessionExport,
+    SessionImport {
         data: String,
     },
-    SetPolicy {
+    PolicySet {
         action_type: crate::types::ActionType,
         verdict: crate::types::PolicyVerdict,
     },
-    GetPolicies,
-    ClearPolicies,
+    PolicyList,
+    PolicyClear,
     Ping,
 }
 

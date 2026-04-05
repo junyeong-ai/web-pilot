@@ -5,15 +5,105 @@ use serde::{Deserialize, Serialize};
 /// Machine-readable error codes for structured error handling.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ErrorCode {
+    // Element interaction
     ElementNotFound,
-    Timeout,
-    PolicyDenied,
-    NoPage,
-    NavigationFailed,
-    FrameNotFound,
     SelectorNotFound,
+    // Timing
+    Timeout,
+    // Navigation/page
+    NavigationFailed,
+    NoPage,
+    FrameNotFound,
+    // Input validation
+    InvalidArgument,
+    // Infrastructure
+    BridgeUnavailable,
+    ConnectionLost,
+    // Security
+    PolicyDenied,
+    CSPViolation,
+    // Session/context
+    TabNotFound,
+    ContextNotFound,
+    SessionError,
     #[default]
     Unknown,
+}
+
+/// Error classification for retry logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// Re-capturable or retryable after DOM refresh
+    Retryable,
+    /// Caller must fix command arguments
+    UserError,
+    /// Infrastructure problem — reconnect or restart
+    Infrastructure,
+    /// Security policy — cannot bypass
+    SecurityBlock,
+    /// Unknown or unclassifiable
+    Unknown,
+}
+
+impl ErrorCode {
+    /// Classify this error for retry decisions.
+    pub fn category(&self) -> ErrorCategory {
+        match self {
+            Self::ElementNotFound | Self::SelectorNotFound | Self::Timeout
+            | Self::NavigationFailed | Self::NoPage | Self::FrameNotFound => ErrorCategory::Retryable,
+            Self::InvalidArgument | Self::TabNotFound | Self::ContextNotFound => {
+                ErrorCategory::UserError
+            }
+            Self::BridgeUnavailable | Self::ConnectionLost | Self::SessionError => {
+                ErrorCategory::Infrastructure
+            }
+            Self::PolicyDenied | Self::CSPViolation => ErrorCategory::SecurityBlock,
+            Self::Unknown => ErrorCategory::Unknown,
+        }
+    }
+
+    /// Whether the caller should retry this operation.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self.category(),
+            ErrorCategory::Retryable | ErrorCategory::Infrastructure
+        )
+    }
+
+    /// Map to CLI exit code.
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::ElementNotFound | Self::SelectorNotFound | Self::TabNotFound
+            | Self::ContextNotFound | Self::FrameNotFound => 4,
+            Self::Timeout => 5,
+            Self::PolicyDenied | Self::CSPViolation => 6,
+            Self::ConnectionLost | Self::BridgeUnavailable => 3,
+            Self::InvalidArgument => 7,
+            Self::NavigationFailed | Self::NoPage => 8,
+            Self::SessionError | Self::Unknown => 1,
+        }
+    }
+
+    /// Parse from string (case-insensitive), for bridge.js PascalCase codes.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "elementnotfound" => Self::ElementNotFound,
+            "selectornotfound" => Self::SelectorNotFound,
+            "timeout" => Self::Timeout,
+            "navigationfailed" => Self::NavigationFailed,
+            "nopage" => Self::NoPage,
+            "framenotfound" => Self::FrameNotFound,
+            "invalidargument" => Self::InvalidArgument,
+            "bridgeunavailable" => Self::BridgeUnavailable,
+            "connectionlost" => Self::ConnectionLost,
+            "policydenied" => Self::PolicyDenied,
+            "cspviolation" => Self::CSPViolation,
+            "tabnotfound" => Self::TabNotFound,
+            "contextnotfound" => Self::ContextNotFound,
+            "sessionerror" => Self::SessionError,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 impl std::fmt::Display for ErrorCode {
@@ -26,6 +116,13 @@ impl std::fmt::Display for ErrorCode {
             Self::NavigationFailed => write!(f, "NavigationFailed"),
             Self::FrameNotFound => write!(f, "FrameNotFound"),
             Self::SelectorNotFound => write!(f, "SelectorNotFound"),
+            Self::InvalidArgument => write!(f, "InvalidArgument"),
+            Self::BridgeUnavailable => write!(f, "BridgeUnavailable"),
+            Self::ConnectionLost => write!(f, "ConnectionLost"),
+            Self::CSPViolation => write!(f, "CSPViolation"),
+            Self::TabNotFound => write!(f, "TabNotFound"),
+            Self::ContextNotFound => write!(f, "ContextNotFound"),
+            Self::SessionError => write!(f, "SessionError"),
             Self::Unknown => write!(f, "Unknown"),
         }
     }
@@ -36,6 +133,30 @@ impl std::fmt::Display for ErrorCode {
 pub struct ProtocolError {
     pub message: String,
     pub code: ErrorCode,
+}
+
+/// Structured error type for CLI exit code propagation.
+#[derive(Debug)]
+pub struct WebPilotError {
+    pub code: ErrorCode,
+    pub message: String,
+}
+
+impl std::fmt::Display for WebPilotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for WebPilotError {}
+
+impl From<ProtocolError> for WebPilotError {
+    fn from(e: ProtocolError) -> Self {
+        Self {
+            code: e.code,
+            message: e.message,
+        }
+    }
 }
 
 // ── Policy types ─────────────────────────────────────────────────────────────
@@ -96,6 +217,29 @@ impl std::fmt::Display for PolicyVerdict {
         match self {
             Self::Allow => write!(f, "allow"),
             Self::Deny => write!(f, "deny"),
+        }
+    }
+}
+
+impl From<&crate::protocol::BrowserAction> for ActionType {
+    fn from(action: &crate::protocol::BrowserAction) -> Self {
+        use crate::protocol::BrowserAction;
+        match action {
+            BrowserAction::Click { .. } => Self::Click,
+            BrowserAction::Type { .. } => Self::Type,
+            BrowserAction::KeyPress { .. } => Self::KeyPress,
+            BrowserAction::Navigate { .. } => Self::Navigate,
+            BrowserAction::Back => Self::Back,
+            BrowserAction::Forward => Self::Forward,
+            BrowserAction::Reload => Self::Reload,
+            BrowserAction::ScrollDown { .. } => Self::ScrollDown,
+            BrowserAction::ScrollUp { .. } => Self::ScrollUp,
+            BrowserAction::ScrollToElement { .. } => Self::ScrollToElement,
+            BrowserAction::Select { .. } => Self::Select,
+            BrowserAction::Hover { .. } => Self::Hover,
+            BrowserAction::Focus { .. } => Self::Focus,
+            BrowserAction::Upload { .. } => Self::Upload,
+            BrowserAction::Drag { .. } => Self::Drag,
         }
     }
 }
@@ -187,8 +331,10 @@ pub struct CookieInfo {
 // ── DOM types ────────────────────────────────────────────────────────────────
 
 /// An interactive element extracted from the page DOM.
+/// Split into logical sub-groups for maintainability; JSON shape unchanged via `#[serde(flatten)]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InteractiveElement {
+    // Identity
     pub index: u32,
     pub tag: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,16 +342,46 @@ pub struct InteractiveElement {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub text: String,
+
+    // Semantic attributes
+    #[serde(flatten)]
+    pub semantics: ElementSemantics,
+
+    // Form/interaction state
+    #[serde(flatten)]
+    pub state: ElementState,
+
+    // Spatial/visibility info
+    #[serde(flatten)]
+    pub spatial: ElementSpatial,
+}
+
+/// Semantic attributes of an interactive element.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ElementSemantics {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub href: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autocomplete: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form_id: Option<String>,
+}
+
+/// Form/interaction state of an interactive element.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ElementState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
     #[serde(default)]
     pub disabled: bool,
     #[serde(default)]
@@ -229,28 +405,24 @@ pub struct InteractiveElement {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<SelectOption>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub landmark: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub in_viewport: Option<bool>,
+}
+
+/// Spatial/visibility information of an interactive element.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ElementSpatial {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<Bounds>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_new: Option<bool>,
+    pub in_viewport: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub occluded: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub landmark: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub frame: Option<String>,
-    // New fields for AI agent effectiveness
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub form_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub autocomplete: Option<String>,
+    pub is_new: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,8 +437,8 @@ pub struct SelectOption {
 pub struct Bounds {
     pub x: i32,
     pub y: i32,
-    pub w: i32,
-    pub h: i32,
+    pub w: u32,
+    pub h: u32,
 }
 
 /// Frame information for iframe navigation.
@@ -437,8 +609,8 @@ pub struct ElementFilter {
 impl InteractiveElement {
     /// Get the implicit ARIA role based on tag name and input type.
     pub fn implicit_role(&self) -> Option<&'static str> {
-        match (self.tag.as_str(), self.input_type.as_deref()) {
-            ("a", _) if self.href.is_some() => Some("link"),
+        match (self.tag.as_str(), self.semantics.input_type.as_deref()) {
+            ("a", _) if self.semantics.href.is_some() => Some("link"),
             ("button", _) => Some("button"),
             ("input", Some("text" | "search" | "email" | "url" | "tel")) => Some("textbox"),
             ("input", Some("checkbox")) => Some("checkbox"),
@@ -480,6 +652,7 @@ impl InteractiveElement {
             let text_lower = text.to_lowercase();
             let in_text = self.text.to_lowercase().contains(&text_lower);
             let in_name = self
+                .semantics
                 .name
                 .as_ref()
                 .map(|n| n.to_lowercase().contains(&text_lower))
@@ -491,6 +664,7 @@ impl InteractiveElement {
         if let Some(ref label) = filter.label {
             let label_lower = label.to_lowercase();
             if !self
+                .semantics
                 .label
                 .as_ref()
                 .map(|l| l.to_lowercase().contains(&label_lower))
@@ -502,6 +676,7 @@ impl InteractiveElement {
         if let Some(ref ph) = filter.placeholder {
             let ph_lower = ph.to_lowercase();
             if !self
+                .semantics
                 .placeholder
                 .as_ref()
                 .map(|p| p.to_lowercase().contains(&ph_lower))
@@ -521,137 +696,137 @@ impl InteractiveElement {
 
 // ── DOM serialization ────────────────────────────────────────────────────────
 
-/// Serialize a DomSnapshot to LLM-friendly text format.
-pub fn serialize_dom(snapshot: &DomSnapshot) -> String {
-    let mut out = String::with_capacity(snapshot.elements.len() * 80);
+impl DomSnapshot {
+    /// Serialize to LLM-friendly text format.
+    pub fn to_text(&self) -> String {
+        let mut out = String::with_capacity(self.elements.len() * 80);
 
-    for el in &snapshot.elements {
-        // Index with new-element marker
-        let new_marker = if el.is_new == Some(true) { "*" } else { "" };
+        for el in &self.elements {
+            let new_marker = if el.spatial.is_new == Some(true) { "*" } else { "" };
 
-        // Tag with optional #id suffix
-        let tag_id = if let Some(ref id) = el.id {
-            format!("{}#{id}", el.tag)
-        } else {
-            el.tag.clone()
-        };
-        out.push_str(&format!("{new_marker}[{}] {tag_id} ", el.index));
-
-        if let Some(ref role) = el.role
-            && role != &el.tag
-        {
-            out.push_str(&format!("role={role} "));
-        }
-
-        if !el.text.is_empty() {
-            out.push_str(&format!("\"{}\" ", el.text));
-        } else if let Some(ref name) = el.name {
-            out.push_str(&format!("\"{}\" ", name));
-        }
-
-        if let Some(ref label) = el.label {
-            out.push_str(&format!("label=\"{label}\" "));
-        }
-        // Only show placeholder if different from text
-        if let Some(ref ph) = el.placeholder
-            && ph != &el.text
-        {
-            out.push_str(&format!("placeholder=\"{ph}\" "));
-        }
-        if let Some(ref href) = el.href {
-            if href.len() > 50 {
-                out.push_str(&format!("href=\"{}...\" ", &href[..50]));
+            let tag_id = if let Some(ref id) = el.id {
+                format!("{}#{id}", el.tag)
             } else {
-                out.push_str(&format!("href=\"{href}\" "));
+                el.tag.clone()
+            };
+            out.push_str(&format!("{new_marker}[{}] {tag_id} ", el.index));
+
+            if let Some(ref role) = el.role
+                && role != &el.tag
+            {
+                out.push_str(&format!("role={role} "));
             }
-        }
-        if let Some(ref val) = el.value
-            && !val.is_empty()
-        {
-            out.push_str(&format!("value=\"{val}\" "));
-        }
-        if let Some(ref it) = el.input_type {
-            out.push_str(&format!("type={it} "));
-        }
-        if let Some(ref ac) = el.autocomplete {
-            out.push_str(&format!("autocomplete={ac} "));
-        }
-        if let Some(true) = el.checked {
-            out.push_str("[checked] ");
-        }
-        if el.expanded == Some(true) {
-            out.push_str("[expanded] ");
-        }
-        if el.selected == Some(true) {
-            out.push_str("[selected] ");
-        }
-        if let Some(true) = el.required {
-            out.push_str("[required] ");
-        }
-        if let Some(true) = el.readonly {
-            out.push_str("[readonly] ");
-        }
-        if el.disabled {
-            out.push_str("[disabled] ");
-        }
-        if el.focused {
-            out.push_str("[focused] ");
-        }
-        if let Some(ref opts) = el.options {
-            let sel = opts
-                .iter()
-                .find(|o| o.selected)
-                .map(|o| o.text.as_str())
-                .unwrap_or("");
-            let count = opts.len();
-            out.push_str(&format!("options({count}) selected=\"{sel}\" "));
-        }
-        if let Some(true) = el.occluded {
-            out.push_str("[occluded] ");
-        }
-        if let Some(false) = el.in_viewport {
-            out.push_str("[offscreen] ");
-        }
-        if let Some(ref desc) = el.description {
-            out.push_str(&format!("description=\"{desc}\" "));
-        }
-        if let Some(ref form) = el.form_id {
-            out.push_str(&format!("form={form} "));
-        }
-        if let Some(ref frame) = el.frame {
-            out.push_str(&format!("frame={frame} "));
-        }
-        if let Some(ref lm) = el.landmark {
-            out.push_str(&format!("@{lm} "));
+
+            if !el.text.is_empty() {
+                out.push_str(&format!("\"{}\" ", el.text));
+            } else if let Some(ref name) = el.semantics.name {
+                out.push_str(&format!("\"{}\" ", name));
+            }
+
+            if let Some(ref label) = el.semantics.label {
+                out.push_str(&format!("label=\"{label}\" "));
+            }
+            if let Some(ref ph) = el.semantics.placeholder
+                && ph != &el.text
+            {
+                out.push_str(&format!("placeholder=\"{ph}\" "));
+            }
+            if let Some(ref href) = el.semantics.href {
+                if href.len() > 50 {
+                    out.push_str(&format!("href=\"{}...\" ", &href[..50]));
+                } else {
+                    out.push_str(&format!("href=\"{href}\" "));
+                }
+            }
+            if let Some(ref val) = el.state.value
+                && !val.is_empty()
+            {
+                out.push_str(&format!("value=\"{val}\" "));
+            }
+            if let Some(ref it) = el.semantics.input_type {
+                out.push_str(&format!("type={it} "));
+            }
+            if let Some(ref ac) = el.semantics.autocomplete {
+                out.push_str(&format!("autocomplete={ac} "));
+            }
+            if let Some(true) = el.state.checked {
+                out.push_str("[checked] ");
+            }
+            if el.state.expanded == Some(true) {
+                out.push_str("[expanded] ");
+            }
+            if el.state.selected == Some(true) {
+                out.push_str("[selected] ");
+            }
+            if let Some(true) = el.state.required {
+                out.push_str("[required] ");
+            }
+            if let Some(true) = el.state.readonly {
+                out.push_str("[readonly] ");
+            }
+            if el.state.disabled {
+                out.push_str("[disabled] ");
+            }
+            if el.state.focused {
+                out.push_str("[focused] ");
+            }
+            if let Some(ref opts) = el.state.options {
+                let sel = opts
+                    .iter()
+                    .find(|o| o.selected)
+                    .map(|o| o.text.as_str())
+                    .unwrap_or("");
+                let count = opts.len();
+                out.push_str(&format!("options({count}) selected=\"{sel}\" "));
+            }
+            if let Some(true) = el.spatial.occluded {
+                out.push_str("[occluded] ");
+            }
+            if let Some(false) = el.spatial.in_viewport {
+                out.push_str("[offscreen] ");
+            }
+            if let Some(ref desc) = el.semantics.description {
+                out.push_str(&format!("description=\"{desc}\" "));
+            }
+            if let Some(ref form) = el.semantics.form_id {
+                out.push_str(&format!("form={form} "));
+            }
+            if let Some(ref frame) = el.spatial.frame {
+                out.push_str(&format!("frame={frame} "));
+            }
+            if let Some(ref lm) = el.spatial.landmark {
+                out.push_str(&format!("@{lm} "));
+            }
+
+            out.push('\n');
         }
 
-        out.push('\n');
-    }
-
-    // Footer
-    out.push_str(&format!(
-        "--- Page: {} ({}) ---\n",
-        snapshot.page_title, snapshot.page_url
-    ));
-
-    let scroll = &snapshot.scroll;
-    let above = scroll.pages_above();
-    let below = scroll.pages_below();
-    let pct = snapshot.scroll_percent;
-    if above < 0.05 && below < 0.05 {
-        out.push_str("--- Scroll: entire page visible ---\n");
-    } else {
+        // Footer
         out.push_str(&format!(
-            "--- Scroll: {pct}% ({above:.1} above, {below:.1} below) ---\n"
+            "--- Page: {} ({}) ---\n",
+            self.page_title, self.page_url
         ));
+
+        let scroll = &self.scroll;
+        let above = scroll.pages_above();
+        let below = scroll.pages_below();
+        let pct = self.scroll_percent;
+        if above < 0.05 && below < 0.05 {
+            out.push_str("--- Scroll: entire page visible ---\n");
+        } else {
+            out.push_str(&format!(
+                "--- Scroll: {pct}% ({above:.1} above, {below:.1} below) ---\n"
+            ));
+        }
+
+        out.push_str(&format!(
+            "--- {} elements (from {} nodes, {}ms) ---\n",
+            self.elements.len(),
+            self.total_nodes,
+            self.extraction_ms,
+        ));
+
+        out
     }
-
-    out.push_str(&format!(
-        "--- {} elements (from {} nodes, {}ms) ---\n",
-        snapshot.elements.len(),
-        snapshot.total_nodes,
-        snapshot.extraction_ms,
-    ));
-
-    out
 }
+
