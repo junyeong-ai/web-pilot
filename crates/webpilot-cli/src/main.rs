@@ -29,32 +29,36 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        let msg = format!("{e:#}");
-        eprintln!("Error: {msg}");
-        std::process::exit(classify_exit_code(&msg));
+        let output_mode = output::detect_output_mode(
+            std::env::args().any(|a| a == "--json"),
+        );
+
+        if let Some(we) = e.downcast_ref::<webpilot::types::WebPilotError>() {
+            // Structured error: deterministic exit code + formatted output
+            output::render_error(we, output_mode);
+            std::process::exit(we.code.exit_code());
+        } else {
+            // External error: heuristic exit code + raw message
+            let msg = format!("{e:#}");
+            eprintln!("Error: {msg}");
+            std::process::exit(infer_exit_code(&msg));
+        }
     }
 }
 
-/// Map error messages to standardized exit codes for AI agent consumption.
-fn classify_exit_code(msg: &str) -> i32 {
-    let msg_lower = msg.to_lowercase();
-    if msg_lower.contains("elementnotfound")
-        || msg_lower.contains("element not found")
-        || msg_lower.contains("out of range")
+/// Infer exit code from unstructured error messages (external crate errors only).
+/// All WebPilot-originated errors should use `WebPilotError` instead.
+fn infer_exit_code(msg: &str) -> i32 {
+    let lower = msg.to_lowercase();
+    if lower.contains("timeout") || lower.contains("timed out") {
+        5
+    } else if lower.contains("not connected")
+        || lower.contains("not running")
+        || lower.contains("failed to connect")
+        || lower.contains("connection")
     {
-        4 // Element not found
-    } else if msg_lower.contains("timeout") || msg_lower.contains("timed out") {
-        5 // Timeout
-    } else if msg_lower.contains("policydenied")
-        || msg_lower.contains("policy") && msg_lower.contains("denied")
-    {
-        6 // Policy denied
-    } else if msg_lower.contains("not connected")
-        || msg_lower.contains("not running")
-        || msg_lower.contains("failed to connect")
-    {
-        3 // Connection error
+        3
     } else {
-        1 // General error
+        1
     }
 }
