@@ -175,9 +175,7 @@ function connectToHost() {
     // Start keepalive pings (clear any stale timer first)
     clearInterval(keepaliveTimer);
     keepaliveTimer = setInterval(() => {
-      if (nmPort) {
-        nmPort.postMessage({ id: 0, command: { type: "Ping" } });
-      }
+      nmPort?.postMessage({ id: 0, command: { type: "Ping" } });
     }, KEEPALIVE_INTERVAL);
   } catch (e) {
     console.error("[WebPilot] Failed to connect:", e);
@@ -1048,7 +1046,7 @@ async function handleStatus() {
   const [tab] = await chrome.tabs.query({ active: true });
   return {
     type: "Status",
-    connected: true,
+    connected: !!nmPort,
     tab_url: tab?.url || null,
     tab_title: tab?.title || null,
     extension_version: chrome.runtime.getManifest().version,

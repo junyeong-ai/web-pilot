@@ -24,7 +24,7 @@ mod wait;
 
 use crate::cdp::CdpClient;
 use crate::commands;
-use crate::output::{self, CommandOutput, OutputMode};
+use crate::output::{self, OutputMode};
 use anyhow::Result;
 
 use context::resolve_context_target;
@@ -113,9 +113,7 @@ pub async fn run(
         commands::Command::Context(_) => {
             anyhow::bail!("internal error: Context should have been handled above")
         }
-        commands::Command::Install(_) => Ok(CommandOutput::Ok(
-            "Install is only needed for --browser mode. Headless works without setup.".into(),
-        )),
+        commands::Command::Install(_) => unreachable!(),
     };
 
     match result {

@@ -42,6 +42,18 @@ pub async fn run_cli() -> anyhow::Result<()> {
 
     let output_mode = output::detect_output_mode(cli.json);
 
+    // Install is mode-independent — no Chrome needed
+    if let commands::Command::Install(args) = cli.command {
+        let result = commands::install::run(args).await;
+        return match result {
+            Ok(cmd_output) => {
+                output::render(cmd_output, output_mode);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        };
+    }
+
     // Headless mode (default): use CDP directly, no Extension needed
     if !cli.browser {
         return crate::headless::run(cli.command, output_mode, cli.context).await;
@@ -79,7 +91,7 @@ pub async fn run_cli() -> anyhow::Result<()> {
         commands::Command::Context(_) => {
             anyhow::bail!("Context management is only supported in headless mode");
         }
-        commands::Command::Install(args) => commands::install::run(args).await,
+        commands::Command::Install(_) => unreachable!(),
         commands::Command::Quit => {
             crate::session::quit_session().await?;
             return Ok(());

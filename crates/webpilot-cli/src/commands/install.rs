@@ -8,15 +8,18 @@ use crate::output::CommandOutput;
 pub struct InstallArgs {
     /// Chrome extension ID (from chrome://extensions after loading)
     #[arg(long)]
-    pub extension_id: Option<String>,
+    pub extension_id: String,
 }
 
 pub async fn run(args: InstallArgs) -> Result<CommandOutput> {
-    let binary_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("webpilot"));
+    let ext_id = &args.extension_id;
+    if !is_valid_extension_id(ext_id) {
+        anyhow::bail!(
+            "Invalid extension ID: {ext_id}\n  Expected 32 lowercase characters (a-p).\n  Find your ID at chrome://extensions with Developer mode enabled."
+        );
+    }
 
-    let ext_id = args
-        .extension_id
-        .unwrap_or_else(|| "EXTENSION_ID_HERE".to_string());
+    let binary_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("webpilot"));
 
     let host_manifest = serde_json::json!({
         "name": "com.webpilot.host",
@@ -35,19 +38,11 @@ pub async fn run(args: InstallArgs) -> Result<CommandOutput> {
     let json = serde_json::to_string_pretty(&host_manifest)?;
     std::fs::write(&manifest_path, &json)?;
 
-    let human = if ext_id == "EXTENSION_ID_HERE" {
-        format!(
-            "Native Messaging host installed!\n  Manifest: {}\n  Binary:   {}\n\nNext steps:\n  1. Load extension in Chrome:\n     chrome://extensions -> Developer mode -> Load unpacked\n     Select: extension/\n  2. Copy the Extension ID and re-run:\n     webpilot install --extension-id <ID>\n  3. Reload the extension in Chrome\n  4. Test: webpilot status",
-            manifest_path.display(),
-            binary_path.display()
-        )
-    } else {
-        format!(
-            "Native Messaging host installed!\n  Manifest: {}\n  Binary:   {}\n\nExtension ID: {ext_id}\nReload the extension in Chrome, then test: webpilot status",
-            manifest_path.display(),
-            binary_path.display()
-        )
-    };
+    let human = format!(
+        "Native Messaging host installed!\n  Manifest: {}\n  Binary:   {}\n  Extension ID: {ext_id}\n\nReload the extension in Chrome, then test: webpilot --browser status",
+        manifest_path.display(),
+        binary_path.display()
+    );
 
     Ok(CommandOutput::Data {
         json: serde_json::json!({
@@ -80,4 +75,8 @@ fn dirs_home() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
+}
+
+fn is_valid_extension_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|b| b.is_ascii_lowercase() && b <= b'p')
 }
