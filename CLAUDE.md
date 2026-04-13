@@ -41,49 +41,12 @@ Single binary, auto-detected modes: CLI (default), Browser (`--browser`), Host (
 - **Force JSON**: `--json` flag
 
 All command handlers return `CommandOutput` enum → rendered by `output::render()`.
-Handlers never see `OutputMode` — dispatch layer handles formatting.
 
-## Coding Conventions
+## Error Handling
 
-### Naming
-- Subcommand enums: singular `XCommand` (e.g., `TabCommand`, `FrameCommand`, `CookieCommand`)
-- Args structs: `XArgs` with subcommand field named `command`
-- Protocol commands: NounVerb pattern (e.g., `TabList`, `CookieSet`, `FrameSwitch`)
-- Bridge calls: `invoke_bridge()` + `parse_bridge_response()` for standardized error handling
-
-### Error Handling
-- `WebPilotError { code: ErrorCode, message }` for structured exit codes
-- `ErrorCode` has `category()`, `is_retryable()`, `exit_code()` methods
 - Exit codes: 0=success, 1=general, 3=connection, 4=not-found, 5=timeout, 6=security, 7=invalid-arg, 8=navigation
 - `format_error(&ProtocolError)` provides AI-friendly guidance per error code
-
-### Command Handler Pattern
-```rust
-// All handlers follow this pattern — no OutputMode parameter
-pub async fn run(cdp: &CdpClient, args: FooArgs) -> Result<CommandOutput> {
-    // ... do work ...
-    Ok(CommandOutput::Ok("OK".into()))
-}
-```
-Variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`, `Content { stdout, json }`, `List { items, human_lines, summary }`, `Silent`
-
-### Context Isolation
-- `HeadlessContext` carries `browser_context_id` and `target_id` for multi-agent isolation
-- `navigate_reconnect()` filters targets by `browserContextId` via `find_page_target()`
-- `quit_context()` disposes CDP BrowserContext; `quit_session()` kills Chrome process
-- `ensure_session()` uses `libc::flock` to prevent concurrent Chrome launch race
-
-### Timeouts
-All configurable via env vars (e.g., `WEBPILOT_CDP_SEND_TIMEOUT_MS`).
-Defaults in `timeouts.rs`: cdp_send(30s), navigation(15s), reload_wait(10s), back_forward(5s),
-poll_interval(300ms), post_navigate(200ms), post_reconnect(500ms), ipc_response(60s),
-chrome_launch(15s), heartbeat(10s).
-
-### bridge.js
-Shared between headless (`include_str!` → `Runtime.evaluate`) and browser mode (content script).
-- Error responses: `{ success: false, error: { message, code } }` with PascalCase codes
-- Text limit: 300 chars per element
-- `keyToCode()` maps special keys (Enter, Tab, Space, Arrow, etc.)
+- All timeouts configurable via `WEBPILOT_*_TIMEOUT_MS` env vars (see `timeouts.rs`, `ipc.rs`)
 
 ## Troubleshooting
 
