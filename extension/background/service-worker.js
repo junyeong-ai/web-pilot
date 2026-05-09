@@ -254,8 +254,8 @@ async function processCommand(id, command) {
         }
         break;
 
-      case "Evaluate":
-        result = await handleEvaluate(command);
+      case "Eval":
+        result = await handleEval(command);
         break;
 
       case "Wait":
@@ -768,11 +768,11 @@ async function handleStatus() {
   };
 }
 
-// ── Evaluate ───────────────────────────────────────────────────────────────
+// ── Eval ───────────────────────────────────────────────────────────────────
 
-async function handleEvaluate(command) {
+async function handleEval(command) {
   const tab = await findHttpTab();
-  if (!tab) return { type: "Evaluate", success: false, error: noPageErr() };
+  if (!tab) return { type: "Eval", success: false, error: noPageErr() };
 
   try {
     const r = await withCdp(tab.id, async (tid) => {
@@ -786,9 +786,9 @@ async function handleEvaluate(command) {
       const v = ev.result?.value;
       return { success: true, result: v !== undefined ? JSON.stringify(v) : null };
     });
-    return { type: "Evaluate", ...r };
+    return { type: "Eval", ...r };
   } catch (e) {
-    return { type: "Evaluate", success: false, error: otherErr(e.message) };
+    return { type: "Eval", success: false, error: otherErr(e.message) };
   }
 }
 
@@ -938,7 +938,7 @@ async function handleFrameList() {
   await Promise.allSettled(frames.map(async (f) => {
     if (f.frame_id === 0 || !f.url?.startsWith("http")) return;
     try {
-      const r = await sendToContent(tab.id, { type: "evaluate", code: "window.name" }, f.frame_id, 2000);
+      const r = await sendToContent(tab.id, { type: "eval", code: "window.name" }, f.frame_id, 2000);
       if (r?.success && r.result) f.name = JSON.parse(r.result) || null;
     } catch {}
   }));
@@ -967,7 +967,7 @@ async function handleFrameSwitch(selector) {
   if (selector.by === "name") {
     for (const f of httpFrames) {
       try {
-        const r = await sendToContent(tab.id, { type: "evaluate", code: "window.name" }, f.frameId, 2000);
+        const r = await sendToContent(tab.id, { type: "eval", code: "window.name" }, f.frameId, 2000);
         if (r?.success && r.result && JSON.parse(r.result) === selector.value) {
           matched = f;
           break;
@@ -983,7 +983,7 @@ async function handleFrameSwitch(selector) {
   } else if (selector.by === "predicate") {
     for (const f of httpFrames) {
       try {
-        const r = await sendToContent(tab.id, { type: "evaluate", code: selector.js }, f.frameId, 2000);
+        const r = await sendToContent(tab.id, { type: "eval", code: selector.js }, f.frameId, 2000);
         if (r?.success && r.result && JSON.parse(r.result) === true) {
           matched = f;
           break;

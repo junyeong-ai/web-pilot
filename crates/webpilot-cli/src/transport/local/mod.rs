@@ -288,7 +288,7 @@ impl Transport for LocalTransport {
                 url,
             } => self.do_capture(include, opts, url).await,
             Command::Action { action, capture } => self.do_action(action, capture).await,
-            Command::Evaluate { code } => self.do_evaluate(&code).await,
+            Command::Eval { code } => self.do_evaluate(&code).await,
             Command::Wait {
                 condition,
                 timeout_ms,

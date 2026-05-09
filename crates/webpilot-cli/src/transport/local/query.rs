@@ -28,12 +28,12 @@ impl LocalTransport {
             Err(e) => Err(e),
         };
         match val {
-            Ok(v) => Ok(ResponseData::Evaluate {
+            Ok(v) => Ok(ResponseData::Eval {
                 success: true,
                 result: Some(serde_json::to_string(&v).unwrap_or_else(|_| "null".into())),
                 error: None,
             }),
-            Err(e) => Ok(ResponseData::Evaluate {
+            Err(e) => Ok(ResponseData::Eval {
                 success: false,
                 result: None,
                 error: Some(WebPilotError::Other {

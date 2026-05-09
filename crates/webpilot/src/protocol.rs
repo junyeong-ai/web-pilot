@@ -57,7 +57,7 @@ pub enum Command {
         #[serde(default)]
         capture: bool,
     },
-    Evaluate {
+    Eval {
         code: String,
     },
     Wait {
@@ -205,7 +205,7 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         new_tab: Option<TabInfo>,
     },
-    Evaluate {
+    Eval {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<String>,

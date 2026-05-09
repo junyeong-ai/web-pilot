@@ -12,10 +12,10 @@ pub struct EvalArgs {
 }
 
 pub async fn run<T: Transport>(transport: &mut T, args: EvalArgs) -> Result<CommandOutput> {
-    let result = transport.send(Command::Evaluate { code: args.code }).await?;
+    let result = transport.send(Command::Eval { code: args.code }).await?;
 
     match result {
-        ResponseData::Evaluate {
+        ResponseData::Eval {
             success,
             result,
             error,

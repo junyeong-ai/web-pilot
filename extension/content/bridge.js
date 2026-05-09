@@ -683,7 +683,7 @@
         };
       case "executeAction":
         return executeAction(msg.action);
-      case "evaluate": {
+      case "eval": {
         try {
           let result;
           try {
