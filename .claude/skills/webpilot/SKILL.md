@@ -60,7 +60,7 @@ webpilot capture --include dom screenshot text               # multiple in one c
 webpilot capture --include screenshot --annotate             # numbered overlay on shot
 webpilot capture --include dom --bounds                      # adds bounds: {x,y,w,h}
 webpilot capture --include dom --occlusion                   # marks occluded:true elements
-webpilot --browser capture --include screenshot --full-page  # tile-stitched (browser only)
+webpilot capture --include screenshot --full-page            # entire scrollable area
 webpilot capture --include dom --url URL                     # navigate first, then capture
 ```
 
@@ -235,7 +235,7 @@ webpilot --browser status
 webpilot --browser capture --include dom            # uses logged-in tab
 ```
 
-Headless-only commands (`device`, `profile`, `record`, `context`) reject `--browser` with `InvalidArgument`.
+`--browser` rejects `device`, `profile`, `record`, `context`, `quit`, and `--context NAME` with `InvalidArgument` (exit 7) — these all assume the headless lifecycle, which is not yours to manage in browser mode.
 
 ## Status
 
@@ -297,4 +297,4 @@ Errors carry typed data: `ElementNotFound { requested, available }`, `SelectorNo
 - **`frame switch` and `tab switch` persist across CLI processes.** Once you switch, every later command (in any new shell) runs in that frame/tab until you switch back (`frame main`, or another `tab switch`). Watch for "wrong frame" symptoms after long sessions.
 - **`action navigate` may race the DOM.** Cross-origin loads and SPA route changes finish at unpredictable times — chain `wait selector` / `wait idle`, or pass `--capture` so the DOM is re-read after settle.
 - **Cookies and storage are per-context.** With `--context X` set, expect zero data sharing across contexts. `session export` only covers the active context's data.
-- **Headless-only commands.** `device`, `profile`, `record`, `context` reject `--browser` with `InvalidArgument` (exit 7). Switch to headless or drop `--browser`.
+- **Headless-only options.** `device`, `profile`, `record`, `context`, `quit`, and the `--context NAME` flag all reject `--browser` with `InvalidArgument` (exit 7). Drop `--browser` or stay in headless.
