@@ -252,11 +252,15 @@ pub enum ResponseData {
     },
     Frames {
         frames: Vec<FrameInfo>,
-        active_frame_id: i64,
+        /// `None` when the main frame is active.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        active_frame_id: Option<String>,
     },
     FrameSwitched {
         success: bool,
-        frame_id: i64,
+        /// `None` when switched back to the main frame.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        frame_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]

@@ -117,10 +117,7 @@ impl LocalTransport {
         if let Some(tree) = result.get("frameTree") {
             collect_frames(tree, &mut frames);
         }
-        let active_frame_id = match self.active_frame_id.lock().await.as_deref() {
-            Some(s) => parse_loose_id(s),
-            None => 0,
-        };
+        let active_frame_id = self.active_frame_id.lock().await.clone();
         Ok(ResponseData::Frames {
             frames,
             active_frame_id,
@@ -136,7 +133,7 @@ impl LocalTransport {
             super::clear_persisted_active_frame(self.persisted_context_key());
             return Ok(ResponseData::FrameSwitched {
                 success: true,
-                frame_id: 0,
+                frame_id: None,
                 name: Some("main".into()),
                 url: None,
                 error: None,
@@ -222,7 +219,7 @@ impl LocalTransport {
                 );
                 Ok(ResponseData::FrameSwitched {
                     success: true,
-                    frame_id: parse_loose_id(&frame.frame_id),
+                    frame_id: Some(frame.frame_id.clone()),
                     name: frame.name.clone(),
                     url: Some(frame.url.clone()),
                     error: None,
@@ -233,7 +230,7 @@ impl LocalTransport {
                     .expect("FrameSelector serializes losslessly");
                 Ok(ResponseData::FrameSwitched {
                     success: false,
-                    frame_id: 0,
+                    frame_id: None,
                     name: None,
                     url: None,
                     error: Some(WebPilotError::FrameNotFound { selector: detail }),
@@ -313,13 +310,12 @@ fn collect_frame_records(node: &Value, out: &mut Vec<FrameRecord>) {
 
 fn collect_frames(node: &Value, out: &mut Vec<FrameInfo>) {
     if let Some(frame) = node.get("frame") {
-        let frame_id = frame
-            .get("id")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or(0);
         out.push(FrameInfo {
-            frame_id,
+            frame_id: frame
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
             url: frame
                 .get("url")
                 .and_then(|v| v.as_str())
@@ -332,7 +328,7 @@ fn collect_frames(node: &Value, out: &mut Vec<FrameInfo>) {
             parent_frame_id: frame
                 .get("parentId")
                 .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<i64>().ok()),
+                .map(str::to_string),
             is_main: frame.get("parentId").is_none(),
         });
     }
@@ -356,19 +352,6 @@ fn parse_chrome_product(product: &str) -> String {
         .to_string()
 }
 
-/// Best-effort: parse a CDP frame id (a hex hash) into the legacy i64 slot
-/// used by `FrameInfo` / `FrameSwitched`. When parsing fails, hash the
-/// string into a stable i64 so callers always have a value they can compare.
-fn parse_loose_id(s: &str) -> i64 {
-    if let Ok(n) = s.parse::<i64>() {
-        return n;
-    }
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish() as i64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,20 +372,5 @@ mod tests {
     #[test]
     fn parse_chrome_product_passes_unknown_prefix_through() {
         assert_eq!(parse_chrome_product("Brave/1.2.3"), "Brave/1.2.3");
-    }
-
-    #[test]
-    fn parse_loose_id_accepts_numeric() {
-        assert_eq!(parse_loose_id("42"), 42);
-        assert_eq!(parse_loose_id("-7"), -7);
-    }
-
-    #[test]
-    fn parse_loose_id_hashes_non_numeric_stably() {
-        let a = parse_loose_id("ABC123");
-        let b = parse_loose_id("ABC123");
-        assert_eq!(a, b, "same input must produce same id");
-        let c = parse_loose_id("DEF456");
-        assert_ne!(a, c, "different inputs should produce different ids");
     }
 }

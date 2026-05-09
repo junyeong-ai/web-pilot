@@ -158,12 +158,15 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrameInfo {
-    pub frame_id: i64,
+    /// Opaque per-mode frame identifier (CDP hex hash in headless, integer
+    /// stringified in browser mode). Treat as a token to round-trip back to
+    /// `frame switch`; do not parse.
+    pub frame_id: String,
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_frame_id: Option<i64>,
+    pub parent_frame_id: Option<String>,
     pub is_main: bool,
 }
 

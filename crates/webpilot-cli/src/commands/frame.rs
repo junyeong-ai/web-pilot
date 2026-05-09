@@ -48,22 +48,36 @@ async fn list_frames<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
             frames,
             active_frame_id,
         } => {
+            let active_id = active_frame_id.as_deref();
             let human_lines: Vec<String> = frames
                 .iter()
                 .map(|f| {
-                    let marker = if f.frame_id == active_frame_id { "*" } else { " " };
+                    let is_active = match (active_id, f.is_main) {
+                        (Some(id), _) => id == f.frame_id,
+                        (None, true) => true,
+                        (None, false) => false,
+                    };
+                    let marker = if is_active { "*" } else { " " };
                     let main = if f.is_main { " [main]" } else { "" };
+                    let id_short: String = f.frame_id.chars().take(8).collect();
                     let url_short: String = f.url.chars().take(60).collect();
-                    format!("{marker} [{:>3}] {url_short}{main}", f.frame_id)
+                    format!("{marker} [{id_short}] {url_short}{main}")
                 })
                 .collect();
+            let summary = match &active_frame_id {
+                Some(id) => {
+                    let id_short: String = id.chars().take(8).collect();
+                    format!("({} frames, active={id_short})", frames.len())
+                }
+                None => format!("({} frames, active=main)", frames.len()),
+            };
             Ok(CommandOutput::List {
                 items: serde_json::json!({
                     "frames": frames,
                     "active_frame_id": active_frame_id,
                 }),
                 human_lines,
-                summary: format!("({} frames, active={})", frames.len(), active_frame_id),
+                summary,
             })
         }
         ResponseData::Error { error } => Err(error.into()),
@@ -85,10 +99,11 @@ async fn switch_frame<T: Transport>(
             ..
         } => {
             lift_error(success, error, ())?;
+            let target = frame_id.as_deref().unwrap_or("main");
             Ok(CommandOutput::Data {
                 json: serde_json::json!({"success": true, "frame_id": frame_id, "url": url}),
                 human: format!(
-                    "Switched to frame {frame_id} ({})",
+                    "Switched to frame {target} ({})",
                     url.unwrap_or_default()
                 ),
             })

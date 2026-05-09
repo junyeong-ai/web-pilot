@@ -922,28 +922,32 @@ async function handleFetch(command) {
 
 // ── Frames ─────────────────────────────────────────────────────────────────
 
+function activeFrameIdWire() {
+  return activeFrameId === 0 ? null : String(activeFrameId);
+}
+
 async function handleFrameList() {
   const tab = await findHttpTab();
-  if (!tab) return { type: "Frames", frames: [], active_frame_id: 0 };
+  if (!tab) return { type: "Frames", frames: [], active_frame_id: null };
 
   const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => []);
   const frames = all.map((f) => ({
-    frame_id: f.frameId,
+    frame_id: String(f.frameId),
     url: f.url || "",
     name: null,
-    parent_frame_id: f.parentFrameId >= 0 ? f.parentFrameId : null,
+    parent_frame_id: f.parentFrameId >= 0 ? String(f.parentFrameId) : null,
     is_main: f.frameId === 0,
   }));
 
-  await Promise.allSettled(frames.map(async (f) => {
-    if (f.frame_id === 0 || !f.url?.startsWith("http")) return;
+  await Promise.allSettled(all.map(async (f, idx) => {
+    if (f.frameId === 0 || !f.url?.startsWith("http")) return;
     try {
-      const r = await sendToContent(tab.id, { type: "eval", code: "window.name" }, f.frame_id, 2000);
-      if (r?.success && r.result) f.name = JSON.parse(r.result) || null;
+      const r = await sendToContent(tab.id, { type: "eval", code: "window.name" }, f.frameId, 2000);
+      if (r?.success && r.result) frames[idx].name = JSON.parse(r.result) || null;
     } catch {}
   }));
 
-  return { type: "Frames", frames, active_frame_id: activeFrameId };
+  return { type: "Frames", frames, active_frame_id: activeFrameIdWire() };
 }
 
 async function handleFrameSwitch(selector) {
@@ -951,12 +955,12 @@ async function handleFrameSwitch(selector) {
 
   if (selector.by === "main") {
     setActiveFrameId(0);
-    return { type: "FrameSwitched", success: true, frame_id: 0, name: "main", url: null };
+    return { type: "FrameSwitched", success: true, frame_id: null, name: "main", url: null };
   }
 
   const tab = await findHttpTab();
   if (!tab) {
-    return { type: "FrameSwitched", success: false, frame_id: activeFrameId, error: noPageErr() };
+    return { type: "FrameSwitched", success: false, frame_id: activeFrameIdWire(), error: noPageErr() };
   }
 
   const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => []);
@@ -997,7 +1001,7 @@ async function handleFrameSwitch(selector) {
     return {
       type: "FrameSwitched",
       success: true,
-      frame_id: matched.frameId,
+      frame_id: String(matched.frameId),
       url: matched.url,
     };
   }
@@ -1006,7 +1010,7 @@ async function handleFrameSwitch(selector) {
   return {
     type: "FrameSwitched",
     success: false,
-    frame_id: activeFrameId,
+    frame_id: activeFrameIdWire(),
     error: err("FrameNotFound", `No matching frame: ${sel}`, { selector: sel }),
   };
 }
