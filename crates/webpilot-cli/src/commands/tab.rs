@@ -6,7 +6,7 @@ use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
 
 #[derive(Args)]
-pub struct TabsArgs {
+pub struct TabArgs {
     #[command(subcommand)]
     pub command: Option<TabCommand>,
 }
@@ -22,7 +22,7 @@ pub enum TabCommand {
     },
 }
 
-pub async fn run<T: Transport>(transport: &mut T, args: TabsArgs) -> Result<CommandOutput> {
+pub async fn run<T: Transport>(transport: &mut T, args: TabArgs) -> Result<CommandOutput> {
     match args.command {
         None => list_tabs(transport).await,
         Some(TabCommand::Switch { tab_id }) => switch_tab(transport, tab_id).await,

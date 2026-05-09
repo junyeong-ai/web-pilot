@@ -6,7 +6,7 @@ use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
 
 #[derive(Args)]
-pub struct CookiesArgs {
+pub struct CookieArgs {
     #[command(subcommand)]
     pub command: CookieCommand,
 }
@@ -31,7 +31,7 @@ pub enum CookieCommand {
     Delete { url: String, name: String },
 }
 
-pub async fn run<T: Transport>(transport: &mut T, args: CookiesArgs) -> Result<CommandOutput> {
+pub async fn run<T: Transport>(transport: &mut T, args: CookieArgs) -> Result<CommandOutput> {
     match args.command {
         CookieCommand::List { ref url } | CookieCommand::Get { ref url, .. } => {
             let name_filter = match &args.command {

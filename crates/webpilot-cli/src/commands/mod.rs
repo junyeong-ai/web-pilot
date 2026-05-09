@@ -2,14 +2,14 @@ pub mod action;
 pub mod capture;
 pub mod console;
 pub mod context;
-pub mod cookies;
+pub mod cookie;
 pub mod device;
 pub mod diff;
 pub mod dom;
 pub mod eval;
 pub mod fetch;
 pub mod find;
-pub mod frames;
+pub mod frame;
 pub mod install;
 pub mod network;
 pub mod policy;
@@ -17,7 +17,7 @@ pub mod profile;
 pub mod record;
 pub mod session;
 pub mod status;
-pub mod tabs;
+pub mod tab;
 pub mod wait;
 
 use clap::Subcommand;
@@ -33,9 +33,9 @@ pub enum Command {
     /// Wait for a condition (element, text, navigation)
     Wait(wait::WaitArgs),
     /// Manage browser tabs
-    Tabs(tabs::TabsArgs),
+    Tab(tab::TabArgs),
     /// Navigate and manage iframes
-    Frames(frames::FramesArgs),
+    Frame(frame::FrameArgs),
     /// Read/write DOM elements (innerHTML, textContent, attributes)
     Dom(dom::DomArgs),
     /// Fetch URL using browser session cookies
@@ -53,7 +53,7 @@ pub enum Command {
     /// Set action safety policies (allow/deny)
     Policy(policy::PolicyArgs),
     /// Manage cookies
-    Cookies(cookies::CookiesArgs),
+    Cookie(cookie::CookieArgs),
     /// Emulate device viewport and user agent
     Device(device::DeviceArgs),
     /// CPU performance profiling

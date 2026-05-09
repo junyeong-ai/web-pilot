@@ -6,7 +6,7 @@ use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
 
 #[derive(Args)]
-pub struct FramesArgs {
+pub struct FrameArgs {
     #[command(subcommand)]
     pub command: Option<FrameCommand>,
 }
@@ -34,7 +34,7 @@ impl FrameCommand {
     }
 }
 
-pub async fn run<T: Transport>(transport: &mut T, args: FramesArgs) -> Result<CommandOutput> {
+pub async fn run<T: Transport>(transport: &mut T, args: FrameArgs) -> Result<CommandOutput> {
     match args.command {
         None => list_frames(transport).await,
         Some(cmd) => switch_frame(transport, cmd.into_selector()).await,
