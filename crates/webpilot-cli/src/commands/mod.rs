@@ -66,6 +66,6 @@ pub enum Command {
     Context(context::ContextArgs),
     /// Install Native Messaging host manifest (for --browser mode)
     Install(install::InstallArgs),
-    /// Stop the headless Chrome session, or close one named context when `--context` is set.
+    /// Stop the entire headless Chrome session. Use `context close NAME` to close one context.
     Quit,
 }

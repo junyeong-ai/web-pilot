@@ -108,11 +108,7 @@ async fn run_headless_mode(
     }
 
     if matches!(command, commands::Command::Quit) {
-        if let Some(ref name) = context {
-            crate::transport::local::quit_named_context(name).await?;
-        } else {
-            crate::session::quit_session().await?;
-        }
+        crate::session::quit_session().await?;
         return Ok(());
     }
 

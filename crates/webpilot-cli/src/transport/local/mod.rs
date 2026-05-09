@@ -577,29 +577,10 @@ fn spawn_frame_context_listener(page: &CdpClient, map: Arc<Mutex<HashMap<String,
     });
 }
 
-// ── Lifecycle (used by cli.rs Quit path) ─────────────────────────────────
-
-/// Dispose a single named context's CDP browser context and remove its
-/// on-disk state file. Returns `ContextNotFound` if no such context exists.
-pub async fn quit_named_context(context_name: &str) -> Result<()> {
-    let file_path = local_context::context_file_path(context_name);
-    let data = std::fs::read_to_string(&file_path).map_err(|_| {
-        WebPilotError::ContextNotFound {
-            name: context_name.to_string(),
-        }
-    })?;
-    let entry: local_context::ContextEntry = serde_json::from_str(&data)?;
-
-    if let Some(ws_url) = session::get_existing_session()
-        && let Ok(browser) = CdpClient::connect(&ws_url).await
-    {
-        let _ = browser
-            .dispose_browser_context(&entry.browser_context_id)
-            .await;
-    }
-
-    let _ = std::fs::remove_file(&file_path);
-    clear_persisted_active_frame(Some(&entry.browser_context_id));
-    clear_persisted_active_tab(Some(&entry.browser_context_id));
-    Ok(())
+/// Clear all per-context session state (active tab/frame markers) tied to
+/// `browser_context_id`. Callers that dispose the CDP browser context
+/// should invoke this so no stale runtime files remain.
+pub(crate) fn clear_context_state(browser_context_id: &str) {
+    clear_persisted_active_frame(Some(browser_context_id));
+    clear_persisted_active_tab(Some(browser_context_id));
 }

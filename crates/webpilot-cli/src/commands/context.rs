@@ -98,6 +98,7 @@ async fn close_contexts(
                     let _ = browser
                         .dispose_browser_context(&ctx.browser_context_id)
                         .await;
+                    crate::transport::local::clear_context_state(&ctx.browser_context_id);
                 }
                 let _ = std::fs::remove_file(entry.path());
                 count += 1;
@@ -120,6 +121,7 @@ async fn close_contexts(
         let _ = browser
             .dispose_browser_context(&ctx.browser_context_id)
             .await;
+        crate::transport::local::clear_context_state(&ctx.browser_context_id);
     }
     let _ = std::fs::remove_file(&file_path);
     Ok(CommandOutput::Ok(format!("Closed context '{name}'")))
