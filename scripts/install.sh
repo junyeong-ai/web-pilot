@@ -386,7 +386,7 @@ print_summary() {
 
     echo -e "  ${BOLD}Next steps:${NC}" >&2
     echo -e "    ${CYAN}→${NC} ${BOLD}$BINARY_NAME status${NC}                              Check connection" >&2
-    echo -e "    ${CYAN}→${NC} ${BOLD}$BINARY_NAME capture --dom --url${NC} \"https://...\"   Capture a page" >&2
+    echo -e "    ${CYAN}→${NC} ${BOLD}$BINARY_NAME capture --include dom --url${NC} \"https://...\"   Capture a page" >&2
     echo -e "    ${CYAN}→${NC} ${BOLD}/webpilot${NC} in Claude Code                        Invoke skill" >&2
     echo "" >&2
 }
