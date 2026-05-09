@@ -2,7 +2,7 @@
 description: Drive a real Chrome from the command line — open a URL, click an element, type into a form, take a screenshot, run JavaScript, watch network/console traffic, manage cookies and tabs. Use whenever the user pastes a URL, says "open / check / browse / fill / submit / login / scrape / screenshot", asks about a website's contents, or needs to automate any browser flow. Headless Chrome launches automatically — no setup.
 argument-hint: "[url]"
 allowed-tools: Bash Read
-version: 1.0.0
+version: 0.2.0
 ---
 
 # WebPilot
