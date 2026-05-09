@@ -151,4 +151,3 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
         }
     }
 }
-

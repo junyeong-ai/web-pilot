@@ -210,9 +210,7 @@ impl LocalTransport {
             .and_then(|targets| {
                 targets
                     .iter()
-                    .find(|t| {
-                        t.get("targetId").and_then(|v| v.as_str()) == Some(&self.target_id)
-                    })
+                    .find(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(&self.target_id))
                     .and_then(|t| t.get("url").and_then(|v| v.as_str()))
                     .map(str::to_string)
             })
@@ -282,11 +280,7 @@ impl LocalTransport {
 impl Transport for LocalTransport {
     async fn send(&mut self, command: Command) -> Result<ResponseData> {
         match command {
-            Command::Capture {
-                include,
-                opts,
-                url,
-            } => self.do_capture(include, opts, url).await,
+            Command::Capture { include, opts, url } => self.do_capture(include, opts, url).await,
             Command::Action { action, capture } => self.do_action(action, capture).await,
             Command::Eval { code } => self.do_evaluate(&code).await,
             Command::Wait {
@@ -305,7 +299,8 @@ impl Transport for LocalTransport {
             } => self.do_dom_set(&selector, property, &value).await,
             Command::DomGet { selector, property } => self.do_dom_get(&selector, property).await,
             Command::Fetch { url, method, body } => {
-                self.do_fetch(&url, method.as_deref(), body.as_deref()).await
+                self.do_fetch(&url, method.as_deref(), body.as_deref())
+                    .await
             }
             Command::FrameList => self.do_frame_list().await,
             Command::FrameSwitch { selector } => self.do_frame_switch(selector).await,
@@ -431,13 +426,9 @@ async fn resolve_target(
             .and_then(|data| serde_json::from_str::<local_context::ContextEntry>(&data).ok())
             .map(|e| e.browser_context_id);
 
-        let target_id = pick_active_target(
-            browser,
-            browser_context_id.as_deref(),
-            Some(&initial),
-        )
-        .await
-        .unwrap_or(initial);
+        let target_id = pick_active_target(browser, browser_context_id.as_deref(), Some(&initial))
+            .await
+            .unwrap_or(initial);
 
         let cdp = connect_to_page(ws_url, &target_id).await?;
         Ok((cdp, browser_context_id, target_id))
@@ -486,7 +477,11 @@ async fn pick_active_target(
     targets
         .iter()
         .find(|t| is_page(t) && in_ctx(t))
-        .and_then(|t| t.get("targetId").and_then(|v| v.as_str()).map(str::to_string))
+        .and_then(|t| {
+            t.get("targetId")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
 }
 
 pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<CdpClient> {
@@ -550,8 +545,7 @@ fn spawn_frame_context_listener(page: &CdpClient, map: Arc<Mutex<HashMap<String,
                                 .pointer("/params/context/auxData/frameId")
                                 .and_then(|v| v.as_str())
                                 .map(str::to_string);
-                            let cid =
-                                event.pointer("/params/context/id").and_then(|v| v.as_i64());
+                            let cid = event.pointer("/params/context/id").and_then(|v| v.as_i64());
                             if let (Some(fid), Some(c)) = (frame_id, cid) {
                                 map.lock().await.insert(fid, c);
                             }

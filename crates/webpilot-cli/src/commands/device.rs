@@ -122,23 +122,38 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
 fn preset(name: &str) -> Option<(u32, u32, bool, f64, &'static str)> {
     Some(match name.to_lowercase().as_str() {
         "iphone-15" | "iphone15" => (
-            393, 852, true, 3.0,
+            393,
+            852,
+            true,
+            3.0,
             "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
         ),
         "iphone-15-pro" | "iphone15pro" => (
-            393, 852, true, 3.0,
+            393,
+            852,
+            true,
+            3.0,
             "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
         ),
         "pixel-8" | "pixel8" => (
-            412, 915, true, 2.625,
+            412,
+            915,
+            true,
+            2.625,
             "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
         ),
         "ipad-pro" | "ipadpro" => (
-            1024, 1366, true, 2.0,
+            1024,
+            1366,
+            true,
+            2.0,
             "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/604.1",
         ),
         "galaxy-s24" | "galaxys24" => (
-            360, 780, true, 3.0,
+            360,
+            780,
+            true,
+            3.0,
             "Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
         ),
         _ => return None,

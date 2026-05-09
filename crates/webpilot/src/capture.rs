@@ -47,7 +47,9 @@ pub struct CaptureOpts {
 impl CaptureOpts {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.annotate && self.full_page {
-            return Err("`annotate` and `full_page` cannot be combined; annotations are viewport-only");
+            return Err(
+                "`annotate` and `full_page` cannot be combined; annotations are viewport-only",
+            );
         }
         Ok(())
     }

@@ -31,16 +31,18 @@ pub enum PolicyCommand {
 pub async fn run<T: Transport>(transport: &mut T, args: PolicyArgs) -> Result<CommandOutput> {
     let cmd = match &args.command {
         PolicyCommand::Set { action, verdict } => {
-            let action: ActionKind = action.parse().map_err(|_| {
-                webpilot::WebPilotError::InvalidArgument {
-                    detail: format!("unknown action kind '{action}'"),
-                }
-            })?;
-            let verdict: PolicyVerdict = verdict.parse().map_err(|_| {
-                webpilot::WebPilotError::InvalidArgument {
-                    detail: format!("unknown verdict '{verdict}' (use 'allow' or 'deny')"),
-                }
-            })?;
+            let action: ActionKind =
+                action
+                    .parse()
+                    .map_err(|_| webpilot::WebPilotError::InvalidArgument {
+                        detail: format!("unknown action kind '{action}'"),
+                    })?;
+            let verdict: PolicyVerdict =
+                verdict
+                    .parse()
+                    .map_err(|_| webpilot::WebPilotError::InvalidArgument {
+                        detail: format!("unknown verdict '{verdict}' (use 'allow' or 'deny')"),
+                    })?;
             Command::PolicySet { action, verdict }
         }
         PolicyCommand::List => Command::PolicyList,

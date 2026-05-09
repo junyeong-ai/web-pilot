@@ -78,7 +78,9 @@ mod nm_detection_tests {
 
     #[test]
     fn accepts_valid_extension_origin() {
-        assert!(check("chrome-extension://abcdefghijklmnopabcdefghijklmnop/"));
+        assert!(check(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop/"
+        ));
         assert!(check("chrome-extension://abcdefghijklmnopabcdefghijklmnop"));
     }
 

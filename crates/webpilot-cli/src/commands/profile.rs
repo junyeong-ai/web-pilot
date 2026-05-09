@@ -22,11 +22,12 @@ pub async fn run(local: &mut LocalTransport, args: ProfileArgs) -> Result<Comman
         use crate::transport::Transport;
         use webpilot::Action;
         use webpilot::protocol::Command;
-        local.send(Command::Action {
-            action: Action::Navigate { url },
-            capture: false,
-        })
-        .await?;
+        local
+            .send(Command::Action {
+                action: Action::Navigate { url },
+                capture: false,
+            })
+            .await?;
     }
 
     let cdp = local.page();

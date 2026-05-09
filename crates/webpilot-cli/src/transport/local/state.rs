@@ -75,7 +75,10 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_console_read(&self) -> Result<ResponseData> {
-        let result = self.page.evaluate("window.__webpilot_console || []").await?;
+        let result = self
+            .page
+            .evaluate("window.__webpilot_console || []")
+            .await?;
         let entries: Vec<ConsoleEntry> = result
             .as_array()
             .map(|arr| {
@@ -171,11 +174,10 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_session_import(&self, data: &str) -> Result<ResponseData> {
-        let parsed: Value = serde_json::from_str(data).map_err(|e| {
-            WebPilotError::InvalidArgument {
+        let parsed: Value =
+            serde_json::from_str(data).map_err(|e| WebPilotError::InvalidArgument {
                 detail: format!("session JSON parse error: {e}"),
-            }
-        })?;
+            })?;
 
         if let Some(arr) = parsed.get("cookies").and_then(|v| v.as_array()) {
             for v in arr {

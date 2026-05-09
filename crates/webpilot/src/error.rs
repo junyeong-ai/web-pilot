@@ -17,7 +17,9 @@ use thiserror::Error;
 /// Structured error type. Use `Display` for AI-friendly guidance.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum WebPilotError {
-    #[error("Element [{requested}] not found (page has [1]-[{available}]). Re-capture: webpilot capture --include dom")]
+    #[error(
+        "Element [{requested}] not found (page has [1]-[{available}]). Re-capture: webpilot capture --include dom"
+    )]
     ElementNotFound { requested: u32, available: u32 },
 
     #[error("Selector not found: {selector}. Verify CSS selector syntax.")]

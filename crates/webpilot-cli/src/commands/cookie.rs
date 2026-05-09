@@ -89,18 +89,20 @@ pub async fn run<T: Transport>(transport: &mut T, args: CookieArgs) -> Result<Co
             value,
             httponly,
             secure,
-        } => simple(
-            transport,
-            Command::CookieSet {
-                url,
-                name,
-                value,
-                http_only: httponly,
-                secure,
-            },
-            "Cookie set",
-        )
-        .await,
+        } => {
+            simple(
+                transport,
+                Command::CookieSet {
+                    url,
+                    name,
+                    value,
+                    http_only: httponly,
+                    secure,
+                },
+                "Cookie set",
+            )
+            .await
+        }
         CookieCommand::Delete { url, name } => {
             simple(
                 transport,

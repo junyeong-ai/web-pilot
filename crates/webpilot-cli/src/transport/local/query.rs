@@ -161,7 +161,10 @@ impl LocalTransport {
             method = serde_json::to_string(method.unwrap_or("GET"))?,
         );
         let result = self.page.evaluate(&js).await?;
-        let status = result.get("status").and_then(|v| v.as_u64()).map(|s| s as u32);
+        let status = result
+            .get("status")
+            .and_then(|v| v.as_u64())
+            .map(|s| s as u32);
         let body = result
             .get("body")
             .and_then(|v| v.as_str())

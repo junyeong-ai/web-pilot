@@ -46,7 +46,9 @@ pub async fn run_cli() -> Result<()> {
     let mode = output::detect_output_mode(cli.json);
 
     if cli.browser && cli.context.is_some() {
-        return Err(invalid_arg("--context is only valid in headless mode (omit --browser)"));
+        return Err(invalid_arg(
+            "--context is only valid in headless mode (omit --browser)",
+        ));
     }
 
     // Mode-independent commands handled before any transport is opened.
@@ -72,11 +74,9 @@ pub async fn run_cli() -> Result<()> {
 async fn run_browser_mode(command: commands::Command, mode: OutputMode) -> Result<()> {
     let result = match command {
         Cmd::Status => commands::status::run().await,
-        Cmd::Device(_)
-        | Cmd::Profile(_)
-        | Cmd::Record(_)
-        | Cmd::Context(_)
-        | Cmd::Quit => Err(headless_only(label_of(&command))),
+        Cmd::Device(_) | Cmd::Profile(_) | Cmd::Record(_) | Cmd::Context(_) | Cmd::Quit => {
+            Err(headless_only(label_of(&command)))
+        }
         Cmd::Diff(_) | Cmd::Install(_) => unreachable!("handled in run_cli"),
         cmd => dispatch_via_transport(&mut IpcTransport::new(), cmd).await,
     };
@@ -156,7 +156,8 @@ async fn run_headless_status(mode: OutputMode, context: Option<&str>) -> Result<
     use webpilot::protocol::{Command, ResponseData, RunMode};
 
     if crate::session::get_existing_session().is_none() {
-        let out = commands::status::render(false, RunMode::Headless, None, None, None, None, context);
+        let out =
+            commands::status::render(false, RunMode::Headless, None, None, None, None, context);
         output::render(out, mode);
         return Ok(());
     }

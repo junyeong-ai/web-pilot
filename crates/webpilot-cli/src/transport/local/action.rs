@@ -6,9 +6,9 @@
 
 use anyhow::Result;
 use serde_json::json;
+use webpilot::protocol::ResponseData;
 use webpilot::types::PolicyVerdict;
 use webpilot::{Action, WebPilotError};
-use webpilot::protocol::ResponseData;
 
 use super::state::policy_store;
 use super::{LocalTransport, action_success};

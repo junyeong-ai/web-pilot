@@ -102,10 +102,7 @@ async fn switch_frame<T: Transport>(
             let target = frame_id.as_deref().unwrap_or("main");
             Ok(CommandOutput::Data {
                 json: serde_json::json!({"success": true, "frame_id": frame_id, "url": url}),
-                human: format!(
-                    "Switched to frame {target} ({})",
-                    url.unwrap_or_default()
-                ),
+                human: format!("Switched to frame {target} ({})", url.unwrap_or_default()),
             })
         }
         ResponseData::Error { error } => Err(error.into()),

@@ -17,9 +17,10 @@ impl LocalTransport {
         opts: CaptureOpts,
         url: Option<String>,
     ) -> Result<ResponseData> {
-        opts.validate().map_err(|m| WebPilotError::InvalidArgument {
-            detail: m.to_owned(),
-        })?;
+        opts.validate()
+            .map_err(|m| WebPilotError::InvalidArgument {
+                detail: m.to_owned(),
+            })?;
 
         if let Some(url) = url {
             self.navigate_reconnect(&url).await?;
@@ -50,9 +51,7 @@ impl LocalTransport {
         }
 
         if want_text {
-            let r = self
-                .invoke_bridge(&json!({"type": "extractText"}))
-                .await?;
+            let r = self.invoke_bridge(&json!({"type": "extractText"})).await?;
             if let Some(text) = r.get("text").and_then(|v| v.as_str()) {
                 text_content = Some(text.to_string());
             }
@@ -65,9 +64,7 @@ impl LocalTransport {
                 let annotations: Vec<_> = snap
                     .elements
                     .iter()
-                    .filter(|e| {
-                        e.spatial.in_viewport == Some(true) && e.spatial.bounds.is_some()
-                    })
+                    .filter(|e| e.spatial.in_viewport == Some(true) && e.spatial.bounds.is_some())
                     .filter_map(|e| {
                         let b = e.spatial.bounds.as_ref()?;
                         Some(json!({
@@ -129,10 +126,7 @@ impl LocalTransport {
 
         let mut ax_tree_json: Option<String> = None;
         if want_ax {
-            let r = self
-                .page
-                .send("Accessibility.getFullAXTree", None)
-                .await?;
+            let r = self.page.send("Accessibility.getFullAXTree", None).await?;
             ax_tree_json = Some(serde_json::to_string_pretty(&r)?);
         }
 
@@ -162,8 +156,8 @@ impl LocalTransport {
         // Text and accessibility tree are stored on `DomSnapshot`. When a
         // caller asks for *only* those (no DOM), we still need a snapshot
         // shell to carry the data — otherwise the response silently drops it.
-        let needs_snapshot_shell = snapshot.is_none()
-            && (text_content.is_some() || ax_tree_json.is_some());
+        let needs_snapshot_shell =
+            snapshot.is_none() && (text_content.is_some() || ax_tree_json.is_some());
         if needs_snapshot_shell {
             snapshot = Some(empty_snapshot(&page_url, &page_title));
         }

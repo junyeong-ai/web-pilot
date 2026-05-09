@@ -13,9 +13,15 @@ pub struct TabArgs {
 
 #[derive(Subcommand)]
 pub enum TabCommand {
-    Switch { tab_id: String },
-    New { url: String },
-    Close { tab_id: String },
+    Switch {
+        tab_id: String,
+    },
+    New {
+        url: String,
+    },
+    Close {
+        tab_id: String,
+    },
     Find {
         #[arg(long)]
         url: String,

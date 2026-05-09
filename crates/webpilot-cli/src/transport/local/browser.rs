@@ -38,10 +38,7 @@ impl LocalTransport {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                active: t
-                    .get("attached")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
+                active: t.get("attached").and_then(|v| v.as_bool()).unwrap_or(false),
             })
             .collect();
         Ok(ResponseData::Tabs { tabs })
@@ -49,10 +46,7 @@ impl LocalTransport {
 
     pub(super) async fn do_tab_switch(&mut self, tab_id: &str) -> Result<ResponseData> {
         self.browser
-            .send(
-                "Target.activateTarget",
-                Some(json!({"targetId": tab_id})),
-            )
+            .send("Target.activateTarget", Some(json!({"targetId": tab_id})))
             .await?;
         let new_page = connect_to_page(&self.ws_url, tab_id).await?;
         self.page = new_page;
@@ -100,8 +94,7 @@ impl LocalTransport {
         self.browser
             .send("Target.closeTarget", Some(json!({"targetId": tab_id})))
             .await?;
-        if super::read_persisted_active_tab(self.persisted_context_key()).as_deref()
-            == Some(tab_id)
+        if super::read_persisted_active_tab(self.persisted_context_key()).as_deref() == Some(tab_id)
         {
             super::clear_persisted_active_tab(self.persisted_context_key());
             super::clear_persisted_active_frame(self.persisted_context_key());
@@ -124,10 +117,7 @@ impl LocalTransport {
         })
     }
 
-    pub(super) async fn do_frame_switch(
-        &self,
-        selector: FrameSelector,
-    ) -> Result<ResponseData> {
+    pub(super) async fn do_frame_switch(&self, selector: FrameSelector) -> Result<ResponseData> {
         if matches!(selector, FrameSelector::Main) {
             *self.active_frame_id.lock().await = None;
             super::clear_persisted_active_frame(self.persisted_context_key());
@@ -162,8 +152,7 @@ impl LocalTransport {
             FrameSelector::Predicate { js } => {
                 let mut found = None;
                 for f in &candidates {
-                    let Some(cid) =
-                        self.frame_contexts.lock().await.get(&f.frame_id).copied()
+                    let Some(cid) = self.frame_contexts.lock().await.get(&f.frame_id).copied()
                     else {
                         continue;
                     };
@@ -202,21 +191,28 @@ impl LocalTransport {
                 // `eval`/`invoke_bridge` would silently fall back to the
                 // main world. Force a re-emit and settle until the map
                 // catches up (or the budget expires).
-                if !self.frame_contexts.lock().await.contains_key(&frame.frame_id) {
+                if !self
+                    .frame_contexts
+                    .lock()
+                    .await
+                    .contains_key(&frame.frame_id)
+                {
                     let _ = self.page.send("Runtime.disable", None).await;
                     let _ = self.page.send("Runtime.enable", None).await;
                     for _ in 0..20 {
                         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                        if self.frame_contexts.lock().await.contains_key(&frame.frame_id) {
+                        if self
+                            .frame_contexts
+                            .lock()
+                            .await
+                            .contains_key(&frame.frame_id)
+                        {
                             break;
                         }
                     }
                 }
                 *self.active_frame_id.lock().await = Some(frame.frame_id.clone());
-                super::write_persisted_active_frame(
-                    self.persisted_context_key(),
-                    &frame.frame_id,
-                );
+                super::write_persisted_active_frame(self.persisted_context_key(), &frame.frame_id);
                 Ok(ResponseData::FrameSwitched {
                     success: true,
                     frame_id: Some(frame.frame_id.clone()),
@@ -226,8 +222,8 @@ impl LocalTransport {
                 })
             }
             None => {
-                let detail = serde_json::to_string(&selector)
-                    .expect("FrameSelector serializes losslessly");
+                let detail =
+                    serde_json::to_string(&selector).expect("FrameSelector serializes losslessly");
                 Ok(ResponseData::FrameSwitched {
                     success: false,
                     frame_id: None,
@@ -358,7 +354,10 @@ mod tests {
 
     #[test]
     fn parse_chrome_product_strips_chrome_prefix() {
-        assert_eq!(parse_chrome_product("Chrome/120.0.6099.71"), "120.0.6099.71");
+        assert_eq!(
+            parse_chrome_product("Chrome/120.0.6099.71"),
+            "120.0.6099.71"
+        );
     }
 
     #[test]

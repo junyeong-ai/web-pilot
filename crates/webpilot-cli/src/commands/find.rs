@@ -34,8 +34,9 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
         && args.tag.is_none()
     {
         return Err(webpilot::WebPilotError::InvalidArgument {
-            detail: "at least one filter required: --role, --text, --label, --placeholder, or --tag"
-                .into(),
+            detail:
+                "at least one filter required: --role, --text, --label, --placeholder, or --tag"
+                    .into(),
         }
         .into());
     }
@@ -81,7 +82,11 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
     let human_lines: Vec<String> = matches
         .iter()
         .map(|el| {
-            let id_suffix = el.id.as_deref().map(|i| format!("#{i}")).unwrap_or_default();
+            let id_suffix = el
+                .id
+                .as_deref()
+                .map(|i| format!("#{i}"))
+                .unwrap_or_default();
             let landmark = el
                 .spatial
                 .landmark

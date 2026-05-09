@@ -198,7 +198,10 @@ impl CdpClient {
             }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                anyhow::bail!("CDP timeout: method={method} elapsed={}s", timeout.as_secs());
+                anyhow::bail!(
+                    "CDP timeout: method={method} elapsed={}s",
+                    timeout.as_secs()
+                );
             }
         };
 
@@ -307,8 +310,7 @@ impl CdpClient {
     /// Per `Storage.getCookies` semantics, scopes to the given `browserContextId`
     /// when provided (multi-agent isolation), or browser-wide otherwise.
     pub async fn get_all_cookies(&self, browser_context_id: Option<&str>) -> Result<Vec<Value>> {
-        let params =
-            browser_context_id.map(|id| serde_json::json!({"browserContextId": id}));
+        let params = browser_context_id.map(|id| serde_json::json!({"browserContextId": id}));
         let result = self.send("Storage.getCookies", params).await?;
         Ok(result
             .get("cookies")

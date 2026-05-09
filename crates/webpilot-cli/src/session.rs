@@ -38,7 +38,9 @@ pub fn find_chrome() -> Result<PathBuf> {
         let browsers_dir = PathBuf::from(&home).join(".agent-browser/browsers");
         if let Ok(entries) = std::fs::read_dir(&browsers_dir) {
             let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-            versions.sort_by_key(|b| std::cmp::Reverse(natural_sort_key(&b.file_name().to_string_lossy())));
+            versions.sort_by_key(|b| {
+                std::cmp::Reverse(natural_sort_key(&b.file_name().to_string_lossy()))
+            });
             for entry in versions {
                 let candidates = [
                     "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",

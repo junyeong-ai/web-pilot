@@ -467,7 +467,11 @@ impl DomSnapshot {
         let mut out = String::with_capacity(self.elements.len() * 80);
 
         for el in &self.elements {
-            let new_marker = if el.spatial.is_new == Some(true) { "*" } else { "" };
+            let new_marker = if el.spatial.is_new == Some(true) {
+                "*"
+            } else {
+                ""
+            };
 
             let tag_id = match &el.id {
                 Some(id) => format!("{}#{id}", el.tag),

@@ -109,7 +109,9 @@ fn frame_selector_uses_by_tag() {
 fn dom_property_attr_carries_name() {
     let cmd = Command::DomGet {
         selector: "#x".into(),
-        property: DomProperty::Attr { name: "href".into() },
+        property: DomProperty::Attr {
+            name: "href".into(),
+        },
     };
     let v = serde_json::to_value(&cmd).unwrap();
     assert_eq!(v["type"], "DomGet");
@@ -156,10 +158,11 @@ fn response_action_carries_typed_error() {
 
     let back = round_trip(&r);
     if let ResponseData::Action {
-        error: Some(WebPilotError::ElementNotFound {
-            requested,
-            available,
-        }),
+        error:
+            Some(WebPilotError::ElementNotFound {
+                requested,
+                available,
+            }),
         ..
     } = back.result
     {
@@ -300,11 +303,7 @@ fn action_kind_matches_action_wire_tag() {
             "ActionKind::{kind:?} serde"
         );
         // 4. Display + FromStr round-trip uses same string
-        assert_eq!(
-            kind.to_string(),
-            expected,
-            "ActionKind::{kind:?} Display"
-        );
+        assert_eq!(kind.to_string(), expected, "ActionKind::{kind:?} Display");
         let parsed: ActionKind = expected.parse().unwrap();
         assert_eq!(parsed, kind, "ActionKind FromStr({expected})");
     }
