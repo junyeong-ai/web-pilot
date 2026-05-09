@@ -1,8 +1,10 @@
 use clap::Parser;
 
-use crate::commands;
+use crate::commands::{self, Command as Cmd};
 use crate::output::{self, OutputMode};
-use crate::transport::{IpcTransport, LocalTransport};
+use crate::transport::{IpcTransport, LocalTransport, Transport};
+use anyhow::Result;
+use webpilot::WebPilotError;
 
 #[derive(Parser)]
 #[command(
@@ -31,7 +33,7 @@ struct Cli {
     context: Option<String>,
 }
 
-pub async fn run_cli() -> anyhow::Result<()> {
+pub async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
 
     let filter = if cli.verbose { "debug" } else { "warn" };
@@ -43,16 +45,21 @@ pub async fn run_cli() -> anyhow::Result<()> {
 
     let mode = output::detect_output_mode(cli.json);
 
-    // Mode-independent commands handled before any transport is opened.
-    if let commands::Command::Install(args) = cli.command {
-        let result = commands::install::run(args).await?;
-        output::render(result, mode);
-        return Ok(());
+    if cli.browser && cli.context.is_some() {
+        return Err(invalid_arg("--context is only valid in headless mode (omit --browser)"));
     }
-    if let commands::Command::Diff(args) = cli.command {
-        let result = commands::diff::run(args).await?;
-        output::render(result, mode);
-        return Ok(());
+
+    // Mode-independent commands handled before any transport is opened.
+    match cli.command {
+        Cmd::Install(args) => {
+            output::render(commands::install::run(args).await?, mode);
+            return Ok(());
+        }
+        Cmd::Diff(args) => {
+            output::render(commands::diff::run(args).await?, mode);
+            return Ok(());
+        }
+        _ => {}
     }
 
     if cli.browser {
@@ -62,38 +69,18 @@ pub async fn run_cli() -> anyhow::Result<()> {
     }
 }
 
-async fn run_browser_mode(command: commands::Command, mode: OutputMode) -> anyhow::Result<()> {
-    let mut transport = IpcTransport::new();
-
+async fn run_browser_mode(command: commands::Command, mode: OutputMode) -> Result<()> {
     let result = match command {
-        commands::Command::Capture(args) => commands::capture::run(&mut transport, args).await,
-        commands::Command::Action(args) => commands::action::run(&mut transport, args).await,
-        commands::Command::Eval(args) => commands::eval::run(&mut transport, args).await,
-        commands::Command::Wait(args) => commands::wait::run(&mut transport, args).await,
-        commands::Command::Tab(args) => commands::tab::run(&mut transport, args).await,
-        commands::Command::Frame(args) => commands::frame::run(&mut transport, args).await,
-        commands::Command::Dom(args) => commands::dom::run(&mut transport, args).await,
-        commands::Command::Find(args) => commands::find::run(&mut transport, args).await,
-        commands::Command::Network(args) => commands::network::run(&mut transport, args).await,
-        commands::Command::Console(args) => commands::console::run(&mut transport, args).await,
-        commands::Command::Session(args) => commands::session::run(&mut transport, args).await,
-        commands::Command::Policy(args) => commands::policy::run(&mut transport, args).await,
-        commands::Command::Fetch(args) => commands::fetch::run(&mut transport, args).await,
-        commands::Command::Cookie(args) => commands::cookie::run(&mut transport, args).await,
-        commands::Command::Status => commands::status::run().await,
-        commands::Command::Device(_) => Err(headless_only("device emulation")),
-        commands::Command::Profile(_) => Err(headless_only("CPU profiling")),
-        commands::Command::Record(_) => Err(headless_only("frame recording")),
-        commands::Command::Context(_) => Err(headless_only("context management")),
-        commands::Command::Diff(_) | commands::Command::Install(_) => unreachable!(),
-        commands::Command::Quit => {
-            crate::session::quit_session().await?;
-            return Ok(());
-        }
+        Cmd::Status => commands::status::run().await,
+        Cmd::Device(_)
+        | Cmd::Profile(_)
+        | Cmd::Record(_)
+        | Cmd::Context(_)
+        | Cmd::Quit => Err(headless_only(label_of(&command))),
+        Cmd::Diff(_) | Cmd::Install(_) => unreachable!("handled in run_cli"),
+        cmd => dispatch_via_transport(&mut IpcTransport::new(), cmd).await,
     };
-
-    let cmd_output = result?;
-    output::render(cmd_output, mode);
+    output::render(result?, mode);
     Ok(())
 }
 
@@ -101,13 +88,14 @@ async fn run_headless_mode(
     command: commands::Command,
     mode: OutputMode,
     context: Option<String>,
-) -> anyhow::Result<()> {
-    // Status without a live session: short-circuit before launching Chrome.
-    if matches!(command, commands::Command::Status) {
+) -> Result<()> {
+    // Status: short-circuit before launching Chrome so it works even when no
+    // session is running.
+    if matches!(command, Cmd::Status) {
         return run_headless_status(mode, context.as_deref()).await;
     }
 
-    if matches!(command, commands::Command::Quit) {
+    if matches!(command, Cmd::Quit) {
         crate::session::quit_session().await?;
         return Ok(());
     }
@@ -115,53 +103,60 @@ async fn run_headless_mode(
     let mut transport = LocalTransport::open(context.as_deref()).await?;
 
     let result = match command {
-        commands::Command::Capture(args) => commands::capture::run(&mut transport, args).await,
-        commands::Command::Action(args) => commands::action::run(&mut transport, args).await,
-        commands::Command::Eval(args) => commands::eval::run(&mut transport, args).await,
-        commands::Command::Wait(args) => commands::wait::run(&mut transport, args).await,
-        commands::Command::Tab(args) => commands::tab::run(&mut transport, args).await,
-        commands::Command::Frame(args) => commands::frame::run(&mut transport, args).await,
-        commands::Command::Dom(args) => commands::dom::run(&mut transport, args).await,
-        commands::Command::Find(args) => commands::find::run(&mut transport, args).await,
-        commands::Command::Network(args) => commands::network::run(&mut transport, args).await,
-        commands::Command::Console(args) => commands::console::run(&mut transport, args).await,
-        commands::Command::Session(args) => commands::session::run(&mut transport, args).await,
-        commands::Command::Policy(args) => commands::policy::run(&mut transport, args).await,
-        commands::Command::Fetch(args) => commands::fetch::run(&mut transport, args).await,
-        commands::Command::Cookie(args) => commands::cookie::run(&mut transport, args).await,
+        // Headless-only commands take the LocalTransport directly for raw CDP access.
+        Cmd::Profile(args) => commands::profile::run(&mut transport, args).await,
+        Cmd::Record(args) => commands::record::run(&mut transport, args).await,
+        Cmd::Device(args) => commands::device::run(&mut transport, args).await,
+        Cmd::Context(args) => commands::context::run(&mut transport, args).await,
 
-        // Headless-only commands: take the full LocalTransport for direct CDP access.
-        commands::Command::Profile(args) => commands::profile::run(&mut transport, args).await,
-        commands::Command::Record(args) => commands::record::run(&mut transport, args).await,
-        commands::Command::Device(args) => commands::device::run(&mut transport, args).await,
-        commands::Command::Context(args) => commands::context::run(&mut transport, args).await,
+        Cmd::Status | Cmd::Quit | Cmd::Diff(_) | Cmd::Install(_) => {
+            unreachable!("handled before this match")
+        }
 
-        // Status / Quit / Diff / Install: handled before this match.
-        commands::Command::Status
-        | commands::Command::Quit
-        | commands::Command::Diff(_)
-        | commands::Command::Install(_) => unreachable!(),
+        cmd => dispatch_via_transport(&mut transport, cmd).await,
     };
-
-    let cmd_output = result?;
-    output::render(cmd_output, mode);
+    output::render(result?, mode);
     Ok(())
 }
 
-async fn run_headless_status(mode: OutputMode, context: Option<&str>) -> anyhow::Result<()> {
-    use crate::transport::Transport;
+/// Dispatch any command that is generic over `Transport` (i.e., works
+/// identically in browser and headless modes). Mode-specific variants must
+/// be intercepted by the caller before reaching here.
+async fn dispatch_via_transport<T: Transport>(
+    transport: &mut T,
+    command: commands::Command,
+) -> Result<output::CommandOutput> {
+    match command {
+        Cmd::Capture(args) => commands::capture::run(transport, args).await,
+        Cmd::Action(args) => commands::action::run(transport, args).await,
+        Cmd::Eval(args) => commands::eval::run(transport, args).await,
+        Cmd::Wait(args) => commands::wait::run(transport, args).await,
+        Cmd::Tab(args) => commands::tab::run(transport, args).await,
+        Cmd::Frame(args) => commands::frame::run(transport, args).await,
+        Cmd::Dom(args) => commands::dom::run(transport, args).await,
+        Cmd::Find(args) => commands::find::run(transport, args).await,
+        Cmd::Network(args) => commands::network::run(transport, args).await,
+        Cmd::Console(args) => commands::console::run(transport, args).await,
+        Cmd::Session(args) => commands::session::run(transport, args).await,
+        Cmd::Policy(args) => commands::policy::run(transport, args).await,
+        Cmd::Fetch(args) => commands::fetch::run(transport, args).await,
+        Cmd::Cookie(args) => commands::cookie::run(transport, args).await,
+        Cmd::Status
+        | Cmd::Quit
+        | Cmd::Device(_)
+        | Cmd::Profile(_)
+        | Cmd::Record(_)
+        | Cmd::Context(_)
+        | Cmd::Diff(_)
+        | Cmd::Install(_) => unreachable!("non-transport command reached generic dispatch"),
+    }
+}
+
+async fn run_headless_status(mode: OutputMode, context: Option<&str>) -> Result<()> {
     use webpilot::protocol::{Command, ResponseData, RunMode};
 
     if crate::session::get_existing_session().is_none() {
-        let out = commands::status::render(
-            false,
-            RunMode::Headless,
-            None,
-            None,
-            None,
-            None,
-            context,
-        );
+        let out = commands::status::render(false, RunMode::Headless, None, None, None, None, context);
         output::render(out, mode);
         return Ok(());
     }
@@ -193,9 +188,26 @@ async fn run_headless_status(mode: OutputMode, context: Option<&str>) -> anyhow:
     Ok(())
 }
 
-fn headless_only(feature: &str) -> anyhow::Error {
-    webpilot::WebPilotError::InvalidArgument {
-        detail: format!("{feature} is only supported in headless mode (omit --browser)"),
+fn label_of(cmd: &commands::Command) -> &'static str {
+    match cmd {
+        Cmd::Device(_) => "device emulation",
+        Cmd::Profile(_) => "CPU profiling",
+        Cmd::Record(_) => "frame recording",
+        Cmd::Context(_) => "context management",
+        Cmd::Quit => "session lifecycle (quit)",
+        _ => "this command",
+    }
+}
+
+fn invalid_arg(detail: &str) -> anyhow::Error {
+    WebPilotError::InvalidArgument {
+        detail: detail.into(),
     }
     .into()
+}
+
+fn headless_only(feature: &str) -> anyhow::Error {
+    invalid_arg(&format!(
+        "{feature} is only supported in headless mode (omit --browser)"
+    ))
 }
