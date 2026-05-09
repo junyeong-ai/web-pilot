@@ -3,7 +3,11 @@ set -e
 
 # ============================================================================
 #  WebPilot Uninstaller
-#  Removes the webpilot binary, skill, and temporary files.
+#  Removes the webpilot binary, skill, and per-user runtime/cache state.
+#
+#  Runtime layout (matches `webpilot::dirs`):
+#    macOS:  ~/Library/Caches/webpilot/{runtime,contexts,artifacts,chrome-profile}/
+#    Linux:  $XDG_RUNTIME_DIR/webpilot/... or ~/.cache/webpilot/...
 #
 #  Usage:
 #    ./scripts/uninstall.sh            # Interactive
@@ -15,10 +19,36 @@ BINARY_NAME="webpilot"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 SKILL_NAME="webpilot"
 USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
-CURRENT_USER="$(whoami)"
-PID_FILE="/tmp/webpilot-${CURRENT_USER}-headless.pid"
-WS_FILE="/tmp/webpilot-${CURRENT_USER}-headless.ws"
-SCREENSHOT_DIR="/tmp/webpilot"
+
+# --- Resolve runtime root (mirrors webpilot::dirs::resolve_root) -------------
+
+resolve_runtime_root() {
+    if [ -n "${WEBPILOT_HOME:-}" ]; then
+        echo "$WEBPILOT_HOME"
+        return
+    fi
+    if [[ "$OSTYPE" != "darwin"* ]] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ]; then
+        echo "$XDG_RUNTIME_DIR/webpilot"
+        return
+    fi
+    if [[ "$OSTYPE" == "darwin"* ]] && [ -n "${HOME:-}" ]; then
+        echo "$HOME/Library/Caches/webpilot"
+        return
+    fi
+    if [ -n "${XDG_CACHE_HOME:-}" ]; then
+        echo "$XDG_CACHE_HOME/webpilot"
+        return
+    fi
+    if [ -n "${HOME:-}" ]; then
+        echo "$HOME/.cache/webpilot"
+        return
+    fi
+    echo "/tmp/webpilot-$(whoami)"
+}
+
+WEBPILOT_ROOT="$(resolve_runtime_root)"
+PID_FILE="$WEBPILOT_ROOT/runtime/headless.pid"
+WS_FILE="$WEBPILOT_ROOT/runtime/headless.ws"
 
 # Flags
 YES=false
@@ -28,7 +58,7 @@ QUIET=false
 SUMMARY_CHROME=""
 SUMMARY_BINARY=""
 SUMMARY_SKILL=""
-SUMMARY_CACHE=""
+SUMMARY_STATE=""
 
 # --- Colors & Helpers --------------------------------------------------------
 
@@ -77,8 +107,8 @@ done
 main() {
     header "WebPilot" "Uninstaller"
 
-    # --- Current status ---
-    local has_chrome=false has_binary=false has_skill=false has_cache=false
+    local has_chrome=false has_binary=false has_skill=false has_state=false
+    local state_count=0
 
     echo -e "  ${BOLD}Current status:${NC}" >&2
 
@@ -108,28 +138,24 @@ main() {
 
     # Skill
     if [ -d "$USER_SKILL_DIR" ] && [ -f "$USER_SKILL_DIR/SKILL.md" ]; then
-        local skv
-        skv=$(grep "^version:" "$USER_SKILL_DIR/SKILL.md" 2>/dev/null | sed 's/version: *//' || echo "unknown")
-        echo -e "    ${GREEN}●${NC} Skill    ${DIM}$USER_SKILL_DIR${NC}  v$skv" >&2
+        echo -e "    ${GREEN}●${NC} Skill    ${DIM}$USER_SKILL_DIR${NC}" >&2
         has_skill=true
     else
         echo -e "    ${DIM}○${NC} Skill    ${DIM}not installed${NC}" >&2
     fi
 
-    # Screenshot cache
-    if [ -d "$SCREENSHOT_DIR" ]; then
-        local count
-        count=$(find "$SCREENSHOT_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
-        echo -e "    ${GREEN}●${NC} Cache    ${DIM}$SCREENSHOT_DIR${NC}  ${DIM}($count files)${NC}" >&2
-        has_cache=true
+    # Runtime/cache state
+    if [ -d "$WEBPILOT_ROOT" ]; then
+        state_count=$(find "$WEBPILOT_ROOT" -type f 2>/dev/null | wc -l | tr -d ' ')
+        echo -e "    ${GREEN}●${NC} State    ${DIM}$WEBPILOT_ROOT${NC}  ${DIM}($state_count files)${NC}" >&2
+        has_state=true
     else
-        echo -e "    ${DIM}○${NC} Cache    ${DIM}$SCREENSHOT_DIR${NC}  ${DIM}empty${NC}" >&2
+        echo -e "    ${DIM}○${NC} State    ${DIM}$WEBPILOT_ROOT${NC}  ${DIM}empty${NC}" >&2
     fi
 
     echo "" >&2
 
-    # Nothing to remove
-    if ! $has_chrome && ! $has_binary && ! $has_skill && ! $has_cache; then
+    if ! $has_chrome && ! $has_binary && ! $has_skill && ! $has_state; then
         success "Nothing to uninstall"
         return 0
     fi
@@ -140,7 +166,6 @@ main() {
         pid=$(cat "$PID_FILE" 2>/dev/null)
         if prompt_yn "Stop headless Chrome (PID $pid)? ${DIM}[Y/n]${NC}" "y"; then
             if kill "$pid" 2>/dev/null; then
-                # Wait briefly for clean shutdown
                 for _ in 1 2 3; do
                     kill -0 "$pid" 2>/dev/null || break
                     sleep 0.5
@@ -161,7 +186,6 @@ main() {
             SUMMARY_CHROME="${DIM}○${NC} kept running"
         fi
     else
-        # Clean up stale PID/WS files
         rm -f "$PID_FILE" "$WS_FILE"
         SUMMARY_CHROME="${DIM}○${NC} not running"
     fi
@@ -188,12 +212,10 @@ main() {
                 cp -r "$USER_SKILL_DIR" "$USER_SKILL_DIR.backup_$ts"
                 info "Backup: ${DIM}$USER_SKILL_DIR.backup_$ts${NC}"
             fi
-
             rm -rf "$USER_SKILL_DIR"
             success "Removed skill"
             SUMMARY_SKILL="${GREEN}✓${NC} removed"
 
-            # Cleanup empty parent
             if [ -d "$HOME/.claude/skills" ] && [ -z "$(ls -A "$HOME/.claude/skills" 2>/dev/null)" ]; then
                 rmdir "$HOME/.claude/skills" 2>/dev/null || true
             fi
@@ -205,18 +227,18 @@ main() {
         SUMMARY_SKILL="${DIM}○${NC} not installed"
     fi
 
-    # --- Remove screenshot cache ---
-    if $has_cache; then
-        if prompt_yn "Remove screenshot cache? ${DIM}[Y/n]${NC}" "y"; then
-            rm -rf "$SCREENSHOT_DIR"
-            success "Removed ${DIM}$SCREENSHOT_DIR${NC}"
-            SUMMARY_CACHE="${GREEN}✓${NC} removed"
+    # --- Remove runtime/cache state (sockets, screenshots, contexts, profile) ---
+    if $has_state; then
+        if prompt_yn "Remove runtime + cache state at ${DIM}$WEBPILOT_ROOT${NC}? ${DIM}[Y/n]${NC}" "y"; then
+            rm -rf "$WEBPILOT_ROOT"
+            success "Removed ${DIM}$WEBPILOT_ROOT${NC}  ${DIM}($state_count files)${NC}"
+            SUMMARY_STATE="${GREEN}✓${NC} removed  ${DIM}($state_count files)${NC}"
         else
-            info "Kept screenshot cache"
-            SUMMARY_CACHE="${DIM}○${NC} kept"
+            info "Kept runtime state"
+            SUMMARY_STATE="${DIM}○${NC} kept"
         fi
     else
-        SUMMARY_CACHE="${DIM}○${NC} empty"
+        SUMMARY_STATE="${DIM}○${NC} empty"
     fi
 
     # --- Summary ---
@@ -228,7 +250,7 @@ main() {
     echo -e "    Chrome   $SUMMARY_CHROME" >&2
     echo -e "    Binary   $SUMMARY_BINARY" >&2
     echo -e "    Skill    $SUMMARY_SKILL" >&2
-    echo -e "    Cache    $SUMMARY_CACHE" >&2
+    echo -e "    State    $SUMMARY_STATE" >&2
     divider
     echo "" >&2
 
