@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand};
-use webpilot::ipc;
-use webpilot::protocol::{Command, ResponseData};
+use webpilot::protocol::{Command, FrameSelector, ResponseData};
 
 use crate::output::CommandOutput;
+use crate::transport::{Transport, lift_error};
 
 #[derive(Args)]
 pub struct FramesArgs {
@@ -13,37 +13,37 @@ pub struct FramesArgs {
 
 #[derive(Subcommand)]
 pub enum FrameCommand {
-    /// Switch to a frame by name
+    /// Switch to a frame by name.
     Switch { name: String },
-    /// Switch to a frame by URL pattern
+    /// Switch to a frame by URL pattern.
     Url { pattern: String },
-    /// Switch to a frame matching a JS predicate
+    /// Switch to a frame matching a JS predicate.
     Find { predicate: String },
-    /// Switch back to main frame
+    /// Switch back to main frame.
     Main,
 }
 
-pub async fn run(args: FramesArgs) -> Result<CommandOutput> {
-    match args.command {
-        None => list_frames().await,
-        Some(FrameCommand::Switch { name }) => switch_frame(Some(name), None, None, false).await,
-        Some(FrameCommand::Url { pattern }) => switch_frame(None, Some(pattern), None, false).await,
-        Some(FrameCommand::Find { predicate }) => {
-            switch_frame(None, None, Some(predicate), false).await
+impl FrameCommand {
+    pub(crate) fn into_selector(self) -> FrameSelector {
+        match self {
+            Self::Switch { name } => FrameSelector::Name { value: name },
+            Self::Url { pattern } => FrameSelector::Url { pattern },
+            Self::Find { predicate } => FrameSelector::Predicate { js: predicate },
+            Self::Main => FrameSelector::Main,
         }
-        Some(FrameCommand::Main) => switch_frame(None, None, None, true).await,
     }
 }
 
-async fn list_frames() -> Result<CommandOutput> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::FrameList))?;
+pub async fn run<T: Transport>(transport: &mut T, args: FramesArgs) -> Result<CommandOutput> {
+    match args.command {
+        None => list_frames(transport).await,
+        Some(cmd) => switch_frame(transport, cmd.into_selector()).await,
+    }
+}
 
-    let response = ipc::send_request(&request)
-        .await
-        .context("Host not running")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-
-    match resp.result {
+async fn list_frames<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
+    let result = transport.send(Command::FrameList).await?;
+    match result {
         ResponseData::Frames {
             frames,
             active_frame_id,
@@ -51,56 +51,32 @@ async fn list_frames() -> Result<CommandOutput> {
             let human_lines: Vec<String> = frames
                 .iter()
                 .map(|f| {
-                    let marker = if f.frame_id == active_frame_id {
-                        "*"
-                    } else {
-                        " "
-                    };
+                    let marker = if f.frame_id == active_frame_id { "*" } else { " " };
                     let main = if f.is_main { " [main]" } else { "" };
-                    let url_short = if f.url.len() > 60 {
-                        &f.url[..60]
-                    } else {
-                        &f.url
-                    };
-                    format!("{marker} [{:>3}] {}{}", f.frame_id, url_short, main)
+                    let url_short: String = f.url.chars().take(60).collect();
+                    format!("{marker} [{:>3}] {url_short}{main}", f.frame_id)
                 })
                 .collect();
-            let summary = format!("({} frames, active={})", frames.len(), active_frame_id);
             Ok(CommandOutput::List {
                 items: serde_json::json!({
                     "frames": frames,
                     "active_frame_id": active_frame_id,
                 }),
                 human_lines,
-                summary,
+                summary: format!("({} frames, active={})", frames.len(), active_frame_id),
             })
         }
-        _ => anyhow::bail!("Unexpected response"),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
 }
 
-async fn switch_frame(
-    name: Option<String>,
-    url_pattern: Option<String>,
-    predicate: Option<String>,
-    main: bool,
+async fn switch_frame<T: Transport>(
+    transport: &mut T,
+    selector: FrameSelector,
 ) -> Result<CommandOutput> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(
-        1,
-        Command::FrameSwitch {
-            name,
-            url_pattern,
-            predicate,
-            main,
-        },
-    ))?;
-
-    let response = ipc::send_request(&request)
-        .await
-        .context("Host not running")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-
-    match resp.result {
+    let result = transport.send(Command::FrameSwitch { selector }).await?;
+    match result {
         ResponseData::FrameSwitched {
             success,
             frame_id,
@@ -108,23 +84,16 @@ async fn switch_frame(
             error,
             ..
         } => {
-            if !success {
-                if let Some(ref err) = error {
-                    anyhow::bail!("{}", crate::output::format_error(err));
-                } else {
-                    anyhow::bail!("Unknown error");
-                }
-            }
+            lift_error(success, error, ())?;
             Ok(CommandOutput::Data {
                 json: serde_json::json!({"success": true, "frame_id": frame_id, "url": url}),
                 human: format!(
-                    "Switched to frame {} ({})",
-                    frame_id,
+                    "Switched to frame {frame_id} ({})",
                     url.unwrap_or_default()
                 ),
             })
         }
-        ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
-        _ => anyhow::bail!("Unexpected response"),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
 }

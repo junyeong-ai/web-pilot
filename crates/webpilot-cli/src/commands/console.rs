@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand};
-use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
+use webpilot::types::ConsoleLevel;
 
 use crate::output::CommandOutput;
+use crate::transport::{Transport, lift_error};
 
 #[derive(Args)]
 pub struct ConsoleArgs {
@@ -13,67 +14,55 @@ pub struct ConsoleArgs {
 
 #[derive(Subcommand)]
 pub enum ConsoleCommand {
-    /// Start capturing console output
+    /// Start capturing console output.
     Start,
-    /// Read captured console entries
+    /// Read captured console entries.
     Read {
-        /// Filter by level (log, error, warn, info)
+        /// Filter by level (log, error, warn, info, debug).
         #[arg(long)]
         level: Option<String>,
     },
-    /// Clear captured entries
+    /// Clear captured entries.
     Clear,
 }
 
-pub async fn run(args: ConsoleArgs) -> Result<CommandOutput> {
+pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<CommandOutput> {
     let cmd = match &args.command {
         ConsoleCommand::Start => Command::ConsoleStart,
         ConsoleCommand::Read { .. } => Command::ConsoleRead,
         ConsoleCommand::Clear => Command::ConsoleClear,
     };
 
-    let request = serde_json::to_value(webpilot::protocol::Request::new(1, cmd))?;
-    let response = ipc::send_request(&request)
-        .await
-        .context("Host not running")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
+    let result = transport.send(cmd).await?;
 
-    match resp.result {
+    match result {
         ResponseData::ConsoleEntries { entries } => {
-            let filtered = if let ConsoleCommand::Read {
-                level: Some(ref lvl),
-            } = args.command
-            {
-                if let Some(level) = webpilot::types::ConsoleLevel::parse(lvl) {
-                    entries.into_iter().filter(|e| e.level == level).collect()
-                } else {
-                    entries
+            let filtered = match &args.command {
+                ConsoleCommand::Read { level: Some(lvl) } => {
+                    let target = lvl.parse::<ConsoleLevel>().map_err(|_| {
+                        webpilot::WebPilotError::InvalidArgument {
+                            detail: format!("unknown console level '{lvl}'"),
+                        }
+                    })?;
+                    entries.into_iter().filter(|e| e.level == target).collect()
                 }
-            } else {
-                entries
+                _ => entries,
             };
 
             let human_lines: Vec<String> = filtered
                 .iter()
                 .map(|e| format!("[{}] {}", e.level, e.message))
                 .collect();
-            let summary = format!("({} entries)", filtered.len());
             Ok(CommandOutput::List {
                 items: serde_json::to_value(&filtered)?,
                 human_lines,
-                summary,
+                summary: format!("({} entries)", filtered.len()),
             })
         }
         ResponseData::CommandResult { success, error, .. } => {
-            if success {
-                Ok(CommandOutput::Ok("OK".into()))
-            } else if let Some(ref err) = error {
-                anyhow::bail!("{}", crate::output::format_error(err));
-            } else {
-                anyhow::bail!("Unknown error");
-            }
+            lift_error(success, error, CommandOutput::Ok("OK".into()))
         }
-        ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
-        _ => anyhow::bail!("Unexpected response"),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
 }

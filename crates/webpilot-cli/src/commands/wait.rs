@@ -1,58 +1,34 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
-use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
+use webpilot::wait::WaitCondition;
 
 use crate::output::CommandOutput;
+use crate::transport::{Transport, lift_error};
 
 #[derive(Args)]
 pub struct WaitArgs {
-    /// CSS selector to wait for
-    #[arg(long)]
-    pub selector: Option<String>,
+    #[command(subcommand)]
+    pub condition: WaitCondition,
 
-    /// Text to wait for on page
-    #[arg(long)]
-    pub text: Option<String>,
-
-    /// Wait for navigation to complete
-    #[arg(long)]
-    pub navigation: bool,
-
-    /// Timeout in seconds
-    #[arg(long, default_value = "10")]
+    #[arg(long, global = true, default_value_t = 10)]
     pub timeout: u64,
 }
 
-pub async fn run(args: WaitArgs) -> Result<CommandOutput> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(
-        1,
-        Command::Wait {
-            selector: args.selector,
-            text: args.text,
-            navigation: args.navigation,
-            timeout_ms: args.timeout * 1000,
-        },
-    ))?;
+pub async fn run<T: Transport>(transport: &mut T, args: WaitArgs) -> Result<CommandOutput> {
+    let result = transport
+        .send(Command::Wait {
+            condition: args.condition,
+            timeout_ms: args.timeout.saturating_mul(1000),
+        })
+        .await?;
 
-    let response = ipc::send_request(&request)
-        .await
-        .context("Failed to connect")?;
-
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-
-    match resp.result {
+    match result {
         ResponseData::Wait { success, error } => {
-            if !success {
-                if let Some(ref err) = error {
-                    anyhow::bail!("{}", crate::output::format_error(err));
-                } else {
-                    anyhow::bail!("Unknown error");
-                }
-            }
+            lift_error(success, error, ())?;
             Ok(CommandOutput::Ok("OK".into()))
         }
-        ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
-        _ => anyhow::bail!("Unexpected response"),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
 }

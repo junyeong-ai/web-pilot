@@ -1,8 +1,23 @@
+//! Wire protocol between CLI client, host, and extension.
+//!
+//! All shapes derive Serialize/Deserialize so the same types are used on both
+//! sides of the IPC boundary — there is no separate "wire" struct that drifts
+//! from the in-process type.
+
 use serde::{Deserialize, Serialize};
 
-use crate::types::{DomSnapshot, ErrorCode, ProtocolError, TabInfo};
+use crate::action::{Action, ActionKind};
+use crate::capture::{CaptureField, CaptureOpts};
+use crate::error::WebPilotError;
+use crate::types::{
+    ConsoleEntry, CookieInfo, DomSnapshot, FrameInfo, NetworkEntry, PolicyEntry, PolicyVerdict,
+    TabInfo,
+};
+use crate::wait::WaitCondition;
 
-/// Request from CLI → Host → Extension.
+pub const PROTOCOL_VERSION: u8 = 3;
+
+/// Wire envelope: monotonic id + protocol version + command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub id: u32,
@@ -12,47 +27,33 @@ pub struct Request {
 }
 
 fn default_version() -> u8 {
-    2
+    PROTOCOL_VERSION
 }
 
 impl Request {
     pub fn new(id: u32, command: Command) -> Self {
         Self {
             id,
-            version: default_version(),
+            version: PROTOCOL_VERSION,
             command,
         }
     }
 }
 
-/// All commands the CLI can send.
+/// All command kinds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Command {
     Capture {
         #[serde(default)]
-        dom: bool,
+        include: Vec<CaptureField>,
         #[serde(default)]
-        screenshot: bool,
-        #[serde(default)]
-        text: bool,
+        opts: CaptureOpts,
         #[serde(default)]
         url: Option<String>,
-        #[serde(default)]
-        bounds: bool,
-        #[serde(default)]
-        full_page: bool,
-        #[serde(default)]
-        accessibility: bool,
-        #[serde(default)]
-        occlusion: bool,
-        #[serde(default)]
-        annotate: bool,
-        #[serde(default)]
-        pdf: bool,
     },
     Action {
-        action: BrowserAction,
+        action: Action,
         #[serde(default)]
         capture: bool,
     },
@@ -60,13 +61,8 @@ pub enum Command {
         code: String,
     },
     Wait {
-        #[serde(default)]
-        selector: Option<String>,
-        #[serde(default)]
-        text: Option<String>,
-        #[serde(default)]
-        navigation: bool,
-        #[serde(default = "default_timeout")]
+        condition: WaitCondition,
+        #[serde(default = "default_wait_timeout_ms")]
         timeout_ms: u64,
     },
     Status,
@@ -82,16 +78,12 @@ pub enum Command {
     },
     DomSet {
         selector: String,
-        property: String,
+        property: DomProperty,
         value: String,
-        #[serde(default)]
-        attr: Option<String>,
     },
     DomGet {
         selector: String,
-        property: String,
-        #[serde(default)]
-        attr: Option<String>,
+        property: DomProperty,
     },
     Fetch {
         url: String,
@@ -102,14 +94,7 @@ pub enum Command {
     },
     FrameList,
     FrameSwitch {
-        #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        url_pattern: Option<String>,
-        #[serde(default)]
-        predicate: Option<String>,
-        #[serde(default)]
-        main: bool,
+        selector: FrameSelector,
     },
     CookieList {
         url: String,
@@ -141,84 +126,53 @@ pub enum Command {
         data: String,
     },
     PolicySet {
-        action_type: crate::types::ActionType,
-        verdict: crate::types::PolicyVerdict,
+        action: ActionKind,
+        verdict: PolicyVerdict,
     },
     PolicyList,
     PolicyClear,
     Ping,
 }
 
-fn default_timeout() -> u64 {
-    10000
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DomProperty {
+    Html,
+    Text,
+    Attr { name: String },
 }
 
-/// Browser actions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "action")]
-pub enum BrowserAction {
-    Click {
-        index: u32,
-    },
-    Type {
-        index: u32,
-        text: String,
-        #[serde(default)]
-        clear: bool,
-    },
-    KeyPress {
-        key: String,
-        #[serde(default)]
-        modifiers: Vec<String>,
-    },
-    Navigate {
-        url: String,
-    },
-    Back,
-    Forward,
-    Reload,
-    ScrollDown {
-        #[serde(default = "default_scroll")]
-        amount: u32,
-    },
-    ScrollUp {
-        #[serde(default = "default_scroll")]
-        amount: u32,
-    },
-    ScrollToElement {
-        index: u32,
-    },
-    Select {
-        index: u32,
-        value: String,
-    },
-    Hover {
-        index: u32,
-    },
-    Focus {
-        index: u32,
-    },
-    Upload {
-        index: u32,
-        path: String,
-    },
-    Drag {
-        source: u32,
-        target: u32,
-        #[serde(default = "default_drag_steps")]
-        steps: u32,
-    },
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum FrameSelector {
+    Main,
+    Name { value: String },
+    Url { pattern: String },
+    Predicate { js: String },
 }
 
-fn default_scroll() -> u32 {
-    600
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RunMode {
+    Headless,
+    Browser,
 }
 
-fn default_drag_steps() -> u32 {
-    5
+impl std::fmt::Display for RunMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Headless => "headless",
+            Self::Browser => "browser",
+        })
+    }
 }
 
-/// Response from Extension → Host → CLI.
+fn default_wait_timeout_ms() -> u64 {
+    10_000
+}
+
+// ── Response ─────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
     pub id: u32,
@@ -235,13 +189,15 @@ pub enum ResponseData {
         screenshot_path: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         screenshot_error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pdf_path: Option<String>,
         page_url: String,
         page_title: String,
     },
     Action {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<ProtocolError>,
+        error: Option<WebPilotError>,
         #[serde(skip_serializing_if = "Option::is_none")]
         dom: Option<DomSnapshot>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -254,20 +210,26 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<ProtocolError>,
+        error: Option<WebPilotError>,
     },
     Wait {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<ProtocolError>,
+        error: Option<WebPilotError>,
     },
     Status {
         connected: bool,
+        mode: RunMode,
         #[serde(skip_serializing_if = "Option::is_none")]
         tab_url: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         tab_title: Option<String>,
-        extension_version: String,
+        /// Chrome version (always populated when `connected`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        chrome_version: Option<String>,
+        /// WebPilot extension version (browser mode only).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extension_version: Option<String>,
     },
     Tabs {
         tabs: Vec<TabInfo>,
@@ -277,7 +239,7 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         value: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<ProtocolError>,
+        error: Option<WebPilotError>,
     },
     FetchResult {
         success: bool,
@@ -286,10 +248,10 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         body: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<ProtocolError>,
+        error: Option<WebPilotError>,
     },
     Frames {
-        frames: Vec<crate::types::FrameInfo>,
+        frames: Vec<FrameInfo>,
         active_frame_id: i64,
     },
     FrameSwitched {
@@ -300,21 +262,21 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         url: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<ProtocolError>,
+        error: Option<WebPilotError>,
     },
     Cookies {
-        cookies: Vec<crate::types::CookieInfo>,
+        cookies: Vec<CookieInfo>,
     },
     CookieResult {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<ProtocolError>,
+        error: Option<WebPilotError>,
     },
     ConsoleEntries {
-        entries: Vec<crate::types::ConsoleEntry>,
+        entries: Vec<ConsoleEntry>,
     },
     NetworkLog {
-        requests: Vec<crate::types::NetworkEntry>,
+        requests: Vec<NetworkEntry>,
     },
     SessionExport {
         path: String,
@@ -322,20 +284,18 @@ pub enum ResponseData {
     SessionResult {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<ProtocolError>,
+        error: Option<WebPilotError>,
     },
     Policies {
-        policies: Vec<crate::types::PolicyEntry>,
+        policies: Vec<PolicyEntry>,
     },
     PolicyResult {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<ProtocolError>,
+        error: Option<WebPilotError>,
     },
     Pong,
     Error {
-        message: String,
-        #[serde(default)]
-        code: ErrorCode,
+        error: WebPilotError,
     },
 }

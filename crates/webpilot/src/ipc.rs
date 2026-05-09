@@ -6,7 +6,6 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-/// Default IPC round-trip timeout (matches host-side `WEBPILOT_IPC_TIMEOUT_MS`).
 const DEFAULT_IPC_TIMEOUT_MS: u64 = 60_000;
 
 #[derive(Debug, Error)]
@@ -23,19 +22,8 @@ pub enum IpcError {
     Timeout,
 }
 
-/// Get the socket path.
-/// Prefers WEBPILOT_SOCKET env var, then XDG_RUNTIME_DIR (mode 0700), then /tmp.
 pub fn socket_path() -> PathBuf {
-    if let Ok(path) = std::env::var("WEBPILOT_SOCKET") {
-        return PathBuf::from(path);
-    }
-    let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    let dir = std::env::var("XDG_RUNTIME_DIR")
-        .ok()
-        .map(PathBuf::from)
-        .filter(|p| p.exists())
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    dir.join(format!("webpilot-{user}.sock"))
+    crate::dirs::socket_path()
 }
 
 fn ipc_timeout() -> Duration {
@@ -77,12 +65,10 @@ async fn send_to(path: &Path, request: &serde_json::Value) -> Result<serde_json:
     }
 }
 
-/// Send a request to the host and receive a response (CLI side).
 pub async fn send_request(request: &serde_json::Value) -> Result<serde_json::Value, IpcError> {
     send_to(&socket_path(), request).await
 }
 
-/// Send a request to a specific socket path.
 pub async fn send_request_to(
     path: &Path,
     request: &serde_json::Value,
@@ -90,18 +76,26 @@ pub async fn send_request_to(
     send_to(path, request).await
 }
 
-/// Start the IPC server (Host side). Returns the listener.
+/// Bind the IPC server (Host side). Removes any stale socket file.
 pub async fn start_server() -> Result<UnixListener, IpcError> {
     let path = socket_path();
 
-    // Clean up stale socket
+    // Ensure parent dir exists with restrictive perms.
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
     if path.exists() {
         let _ = std::fs::remove_file(&path);
     }
 
     let listener = UnixListener::bind(&path)?;
 
-    // Set socket permissions to owner-only (0600) for security
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

@@ -1,62 +1,105 @@
 mod cdp;
 mod cli;
 mod commands;
-mod headless;
 mod host;
 mod output;
 pub mod session;
 pub mod stitch;
 mod timeouts;
+mod transport;
 
 /// WebPilot: Browser control tool for AI agents.
 ///
-/// Mode detection:
-/// - Chrome launches NM host with: `<binary> chrome-extension://ID/ --parent-window=N`
-///   → Detected by `chrome-extension://` arg → Host mode
-/// - User/AI runs: `webpilot capture --dom` → CLI mode
-/// - No arguments → CLI mode (shows help)
+/// The same binary serves three roles, dispatched at startup:
+/// - **CLI**: user-invoked command (default).
+/// - **NM Host**: launched by Chrome via Native Messaging. Detected by a
+///   strict match on argv[1] against the documented Chrome contract:
+///   `chrome-extension://<32-char id [a-p]>/?` (no other shape is valid).
+///
+/// Errors that escape the entry handlers are always `WebPilotError`. Their
+/// `exit_code()` method gives the CLI exit code; `Display` gives AI-friendly
+/// guidance. There is no string-matching fallback.
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = std::env::args().collect();
-
-    // Chrome Native Messaging passes `chrome-extension://...` as first arg
-    let is_nm_host = args.iter().any(|a| a.starts_with("chrome-extension://"));
-
-    let result = if is_nm_host {
+    let result = if is_nm_host_invocation() {
         host::run_host().await
     } else {
         cli::run_cli().await
     };
 
     if let Err(e) = result {
-        let output_mode = output::detect_output_mode(std::env::args().any(|a| a == "--json"));
-
-        if let Some(we) = e.downcast_ref::<webpilot::types::WebPilotError>() {
-            // Structured error: deterministic exit code + formatted output
-            output::render_error(we, output_mode);
-            std::process::exit(we.code.exit_code());
-        } else {
-            // External error: heuristic exit code + raw message
-            let msg = format!("{e:#}");
-            eprintln!("Error: {msg}");
-            std::process::exit(infer_exit_code(&msg));
-        }
+        let err = into_webpilot_error(e);
+        let mode = output::detect_output_mode(std::env::args().any(|a| a == "--json"));
+        output::render_error(&err, mode);
+        std::process::exit(err.exit_code());
     }
 }
 
-/// Infer exit code from unstructured error messages (external crate errors only).
-/// All WebPilot-originated errors should use `WebPilotError` instead.
-fn infer_exit_code(msg: &str) -> i32 {
-    let lower = msg.to_lowercase();
-    if lower.contains("timeout") || lower.contains("timed out") {
-        5
-    } else if lower.contains("not connected")
-        || lower.contains("not running")
-        || lower.contains("failed to connect")
-        || lower.contains("connection")
-    {
-        3
-    } else {
-        1
+/// Strict check against the Chrome Native Messaging API contract.
+///
+/// Chrome invokes the host binary with the calling extension's origin as
+/// argv[1]: `chrome-extension://<32-char id>/`. The id alphabet is exactly
+/// `a..=p`. We reject anything else so a stray argv that happens to contain
+/// "chrome-extension://" cannot trigger host mode.
+fn is_nm_host_invocation() -> bool {
+    let Some(arg) = std::env::args().nth(1) else {
+        return false;
+    };
+    let Some(rest) = arg.strip_prefix("chrome-extension://") else {
+        return false;
+    };
+    let id = rest.trim_end_matches('/');
+    id.len() == 32 && id.chars().all(|c| c.is_ascii_lowercase() && c <= 'p')
+}
+
+/// Coerce an `anyhow::Error` into a structured `WebPilotError`.
+///
+/// Errors raised by WebPilot's own code paths use `WebPilotError` directly and
+/// pass through unchanged. Errors from third-party crates land in `Other`
+/// with their `Display` text — we never inspect the string to guess a code.
+fn into_webpilot_error(e: anyhow::Error) -> webpilot::WebPilotError {
+    if let Some(we) = e.downcast_ref::<webpilot::WebPilotError>() {
+        return we.clone();
+    }
+    webpilot::WebPilotError::Other {
+        detail: format!("{e:#}"),
+    }
+}
+
+#[cfg(test)]
+mod nm_detection_tests {
+    fn check(arg: &str) -> bool {
+        let Some(rest) = arg.strip_prefix("chrome-extension://") else {
+            return false;
+        };
+        let id = rest.trim_end_matches('/');
+        id.len() == 32 && id.chars().all(|c| c.is_ascii_lowercase() && c <= 'p')
+    }
+
+    #[test]
+    fn accepts_valid_extension_origin() {
+        assert!(check("chrome-extension://abcdefghijklmnopabcdefghijklmnop/"));
+        assert!(check("chrome-extension://abcdefghijklmnopabcdefghijklmnop"));
+    }
+
+    #[test]
+    fn rejects_short_id() {
+        assert!(!check("chrome-extension://abc/"));
+    }
+
+    #[test]
+    fn rejects_id_with_invalid_chars() {
+        assert!(!check(
+            "chrome-extension://ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP/"
+        ));
+        assert!(!check(
+            "chrome-extension://qrstuvwxyzabcdefqrstuvwxyzabcdef/"
+        )); // beyond [a-p]
+    }
+
+    #[test]
+    fn rejects_arbitrary_strings_with_substring() {
+        assert!(!check("--option=chrome-extension://abc/"));
+        assert!(!check("https://example.com"));
     }
 }

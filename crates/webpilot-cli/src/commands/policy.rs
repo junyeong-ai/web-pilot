@@ -1,9 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand};
-use webpilot::ipc;
+use webpilot::ActionKind;
 use webpilot::protocol::{Command, ResponseData};
+use webpilot::types::PolicyVerdict;
 
 use crate::output::CommandOutput;
+use crate::transport::{Transport, lift_error};
 
 #[derive(Args)]
 pub struct PolicyArgs {
@@ -13,51 +15,45 @@ pub struct PolicyArgs {
 
 #[derive(Subcommand)]
 pub enum PolicyCommand {
-    /// Set policy for an action type
+    /// Set policy for an action kind.
     Set {
-        /// Action type (click, type, navigate, etc.)
         #[arg(long)]
         action: String,
-        /// Verdict (allow, deny)
         #[arg(long)]
         verdict: String,
     },
-    /// List all policies
+    /// List all policies.
     List,
-    /// Clear all policies
+    /// Clear all policies.
     Clear,
 }
 
-pub async fn run(args: PolicyArgs) -> Result<CommandOutput> {
+pub async fn run<T: Transport>(transport: &mut T, args: PolicyArgs) -> Result<CommandOutput> {
     let cmd = match &args.command {
         PolicyCommand::Set { action, verdict } => {
-            let action_type: webpilot::types::ActionType =
-                serde_json::from_value(serde_json::Value::String(action.clone()))
-                    .with_context(|| format!("Unknown action type: {action}"))?;
-            let verdict: webpilot::types::PolicyVerdict = serde_json::from_value(
-                serde_json::Value::String(verdict.clone()),
-            )
-            .with_context(|| format!("Unknown verdict: {verdict}. Use 'allow' or 'deny'"))?;
-            Command::PolicySet {
-                action_type,
-                verdict,
-            }
+            let action: ActionKind = action.parse().map_err(|_| {
+                webpilot::WebPilotError::InvalidArgument {
+                    detail: format!("unknown action kind '{action}'"),
+                }
+            })?;
+            let verdict: PolicyVerdict = verdict.parse().map_err(|_| {
+                webpilot::WebPilotError::InvalidArgument {
+                    detail: format!("unknown verdict '{verdict}' (use 'allow' or 'deny')"),
+                }
+            })?;
+            Command::PolicySet { action, verdict }
         }
         PolicyCommand::List => Command::PolicyList,
         PolicyCommand::Clear => Command::PolicyClear,
     };
 
-    let request = serde_json::to_value(webpilot::protocol::Request::new(1, cmd))?;
-    let response = ipc::send_request(&request)
-        .await
-        .context("Host not running")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
+    let result = transport.send(cmd).await?;
 
-    match resp.result {
+    match result {
         ResponseData::Policies { policies } => {
             let human_lines: Vec<String> = policies
                 .iter()
-                .map(|p| format!("{}: {}", p.action_type, p.verdict))
+                .map(|p| format!("{}: {}", p.action, p.verdict))
                 .collect();
             let summary = if policies.is_empty() {
                 "No policies set".into()
@@ -71,15 +67,9 @@ pub async fn run(args: PolicyArgs) -> Result<CommandOutput> {
             })
         }
         ResponseData::PolicyResult { success, error } => {
-            if success {
-                Ok(CommandOutput::Ok("OK".into()))
-            } else if let Some(ref err) = error {
-                anyhow::bail!("{}", crate::output::format_error(err));
-            } else {
-                anyhow::bail!("Unknown error");
-            }
+            lift_error(success, error, CommandOutput::Ok("OK".into()))
         }
-        ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
+        ResponseData::Error { error } => Err(error.into()),
         _ => Ok(CommandOutput::Silent),
     }
 }

@@ -1,95 +1,68 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
-use webpilot::ipc;
-use webpilot::protocol::{BrowserAction, Command, ResponseData};
+use webpilot::Action;
+use webpilot::capture::{CaptureField, CaptureOpts};
+use webpilot::protocol::{Command, ResponseData};
 use webpilot::types::InteractiveElement;
 
 use crate::output::CommandOutput;
+use crate::transport::{Transport, lift_error};
 
 #[derive(Args)]
-/// At least one filter is required
 pub struct FindArgs {
-    /// Filter by ARIA role or tag name
     #[arg(long)]
     pub role: Option<String>,
-
-    /// Filter by visible text (case-insensitive substring match)
     #[arg(long)]
     pub text: Option<String>,
-
-    /// Filter by associated label
     #[arg(long)]
     pub label: Option<String>,
-
-    /// Filter by placeholder text
     #[arg(long)]
     pub placeholder: Option<String>,
-
-    /// Filter by HTML tag name
     #[arg(long)]
     pub tag: Option<String>,
-
-    /// Click the first matching element
     #[arg(long)]
     pub click: bool,
-
-    /// Type text into the first matching element
     #[arg(long)]
     pub fill: Option<String>,
 }
 
-pub async fn run(args: FindArgs) -> Result<CommandOutput> {
+pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<CommandOutput> {
     if args.role.is_none()
         && args.text.is_none()
         && args.label.is_none()
         && args.placeholder.is_none()
         && args.tag.is_none()
     {
-        anyhow::bail!(
-            "At least one filter required: --role, --text, --label, --placeholder, or --tag"
-        );
+        return Err(webpilot::WebPilotError::InvalidArgument {
+            detail: "at least one filter required: --role, --text, --label, --placeholder, or --tag"
+                .into(),
+        }
+        .into());
     }
 
-    // Capture DOM to get current elements
-    let request = serde_json::to_value(webpilot::protocol::Request::new(
-        1,
-        Command::Capture {
-            dom: true,
-            screenshot: false,
-            text: false,
+    let result = transport
+        .send(Command::Capture {
+            include: vec![CaptureField::Dom],
+            opts: CaptureOpts::default(),
             url: None,
-            bounds: false,
-            full_page: false,
-            accessibility: false,
-            occlusion: false,
-            annotate: false,
-            pdf: false,
-        },
-    ))?;
+        })
+        .await?;
 
-    let response = ipc::send_request(&request)
-        .await
-        .context("Host not running")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-
-    let snapshot = match resp.result {
-        ResponseData::Capture {
-            dom: Some(snapshot),
-            ..
-        } => snapshot,
+    let snapshot = match result {
+        ResponseData::Capture { dom: Some(s), .. } => s,
         ResponseData::Capture { dom: None, .. } => {
-            anyhow::bail!("No DOM data. Navigate to a web page first.")
+            return Err(webpilot::WebPilotError::NoPage.into());
         }
-        ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
-        _ => anyhow::bail!("Unexpected response"),
+        ResponseData::Error { error } => return Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     };
 
     let filter = webpilot::types::ElementFilter {
-        role: args.role.clone(),
-        text: args.text.clone(),
-        label: args.label.clone(),
-        placeholder: args.placeholder.clone(),
-        tag: args.tag.clone(),
+        role: args.role,
+        text: args.text,
+        label: args.label,
+        placeholder: args.placeholder,
+        tag: args.tag,
     };
 
     let matches: Vec<&InteractiveElement> = snapshot
@@ -98,19 +71,21 @@ pub async fn run(args: FindArgs) -> Result<CommandOutput> {
         .filter(|el| el.matches(&filter))
         .collect();
 
-    // Build output
+    if matches.is_empty() {
+        return Err(webpilot::WebPilotError::SelectorNotFound {
+            selector: render_filter(&filter),
+        }
+        .into());
+    }
+
     let human_lines: Vec<String> = matches
         .iter()
         .map(|el| {
-            let id_suffix = el
-                .id
-                .as_ref()
-                .map(|id| format!("#{id}"))
-                .unwrap_or_default();
+            let id_suffix = el.id.as_deref().map(|i| format!("#{i}")).unwrap_or_default();
             let landmark = el
                 .spatial
                 .landmark
-                .as_ref()
+                .as_deref()
                 .map(|l| format!(" @{l}"))
                 .unwrap_or_default();
             format!(
@@ -120,63 +95,67 @@ pub async fn run(args: FindArgs) -> Result<CommandOutput> {
         })
         .collect();
     let summary = format!("({} matches)", matches.len());
-
-    let output = CommandOutput::List {
-        items: serde_json::json!({
-            "matches": matches,
-            "count": matches.len(),
-        }),
-        human_lines,
-        summary,
-    };
-
-    if matches.is_empty() {
-        anyhow::bail!("No matching elements found");
-    }
+    let items = serde_json::json!({"matches": matches, "count": matches.len()});
 
     let first_index = matches[0].index;
 
-    // Chain action if requested
     if args.click {
-        execute_action(BrowserAction::Click { index: first_index }).await?;
-    } else if let Some(ref text) = args.fill {
-        execute_action(BrowserAction::Type {
-            index: first_index,
-            text: text.clone(),
-            clear: true,
-        })
+        chain_action(transport, Action::Click { index: first_index }).await?;
+    } else if let Some(text) = args.fill {
+        chain_action(
+            transport,
+            Action::Type {
+                index: first_index,
+                text,
+                clear: true,
+            },
+        )
         .await?;
     }
 
-    Ok(output)
+    Ok(CommandOutput::List {
+        items,
+        human_lines,
+        summary,
+    })
 }
 
-async fn execute_action(action: BrowserAction) -> Result<()> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(
-        2,
-        Command::Action {
+/// Render the active filter criteria as a user-readable selector — used in
+/// `SelectorNotFound` errors instead of the `Debug` repr of `ElementFilter`.
+fn render_filter(filter: &webpilot::types::ElementFilter) -> String {
+    let mut parts = Vec::new();
+    if let Some(ref v) = filter.role {
+        parts.push(format!("role={v}"));
+    }
+    if let Some(ref v) = filter.text {
+        parts.push(format!("text={v:?}"));
+    }
+    if let Some(ref v) = filter.label {
+        parts.push(format!("label={v:?}"));
+    }
+    if let Some(ref v) = filter.placeholder {
+        parts.push(format!("placeholder={v:?}"));
+    }
+    if let Some(ref v) = filter.tag {
+        parts.push(format!("tag={v}"));
+    }
+    if parts.is_empty() {
+        "<no filter>".into()
+    } else {
+        parts.join(" ")
+    }
+}
+
+async fn chain_action<T: Transport>(transport: &mut T, action: Action) -> Result<()> {
+    let result = transport
+        .send(Command::Action {
             action,
             capture: false,
-        },
-    ))?;
-
-    let response = ipc::send_request(&request)
-        .await
-        .context("Host not running")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-
-    match resp.result {
-        ResponseData::Action { success, error, .. } => {
-            if !success {
-                if let Some(ref err) = error {
-                    anyhow::bail!("{}", crate::output::format_error(err));
-                } else {
-                    anyhow::bail!("Unknown error");
-                }
-            }
-        }
-        ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
-        _ => anyhow::bail!("Unexpected response"),
+        })
+        .await?;
+    match result {
+        ResponseData::Action { success, error, .. } => lift_error(success, error, ()),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
-    Ok(())
 }

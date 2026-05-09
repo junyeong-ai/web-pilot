@@ -1,25 +1,20 @@
 //! Native Messaging Host mode.
 //!
-//! Launched by Chrome when the Extension calls connectNative().
-//! Bridges CLI commands (via Unix Socket) to the Extension (via NM stdin/stdout).
+//! Chrome launches the binary with `chrome-extension://...` as the first arg.
+//! `main` recognises that signature and dispatches here. The host owns three
+//! background tasks:
+//!   1. NM stdin reader  — receives messages from Extension.
+//!   2. NM stdout writer — sends messages to Extension.
+//!   3. IPC listener     — accepts CLI requests, forwards them, awaits replies.
 
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
-use webpilot::ipc;
-use webpilot::native_messaging;
+use webpilot::{dirs, ipc, native_messaging};
 
-struct HostState {
-    pending: std::collections::HashMap<
-        u32,
-        (
-            tokio::sync::oneshot::Sender<serde_json::Value>,
-            tokio::time::Instant,
-        ),
-    >,
-}
+type Pending = std::collections::HashMap<u32, oneshot::Sender<serde_json::Value>>;
 
 pub async fn run_host() -> anyhow::Result<()> {
     let _ = tracing_subscriber::fmt()
@@ -30,112 +25,55 @@ pub async fn run_host() -> anyhow::Result<()> {
 
     tracing::info!("WebPilot host starting");
 
-    let state = Arc::new(Mutex::new(HostState {
-        pending: std::collections::HashMap::new(),
-    }));
-
+    let pending: Arc<Mutex<Pending>> = Arc::new(Mutex::new(Pending::new()));
     let (nm_tx, nm_rx) = mpsc::channel::<serde_json::Value>(32);
 
-    let ipc_listener = match ipc::start_server().await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("Failed to start IPC server: {e}");
-            return Err(e.into());
-        }
-    };
+    let ipc_listener = ipc::start_server().await?;
 
-    // NM stdout writer — acquire/release lock per message to avoid Chrome pipe issues
-    let nm_writer_handle = tokio::task::spawn_blocking({
-        let mut nm_rx = nm_rx;
-        move || {
-            while let Some(msg) = nm_rx.blocking_recv() {
-                let mut stdout = std::io::stdout().lock();
-                if let Err(e) = native_messaging::write_message(&mut stdout, &msg) {
-                    tracing::error!("NM write error: {e}");
-                    break;
-                }
+    let nm_writer_handle = spawn_nm_writer(nm_rx);
+    let nm_reader_handle = spawn_nm_reader(pending.clone(), nm_tx.clone());
+    let ipc_handle = tokio::spawn(handle_ipc_connections(
+        ipc_listener,
+        nm_tx.clone(),
+        pending.clone(),
+    ));
+
+    tracing::info!("Host ready");
+
+    // The reader exits when Chrome disconnects — that's our shutdown signal.
+    let _ = nm_reader_handle.await;
+    let _ = std::fs::remove_file(ipc::socket_path());
+
+    drop(nm_tx);
+    let _ = nm_writer_handle.await;
+    ipc_handle.abort();
+
+    Ok(())
+}
+
+fn spawn_nm_writer(mut rx: mpsc::Receiver<serde_json::Value>) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        while let Some(msg) = rx.blocking_recv() {
+            let mut stdout = std::io::stdout().lock();
+            if let Err(e) = native_messaging::write_message(&mut stdout, &msg) {
+                tracing::error!("NM write error: {e}");
+                break;
             }
         }
-    });
+    })
+}
 
-    // NM stdin reader
-    let state_reader = state.clone();
-    let nm_tx_reader = nm_tx.clone();
-    let nm_reader_handle = tokio::task::spawn_blocking(move || {
+fn spawn_nm_reader(
+    pending: Arc<Mutex<Pending>>,
+    nm_tx: mpsc::Sender<serde_json::Value>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
         let mut stdin = std::io::stdin().lock();
         loop {
             match native_messaging::read_message(&mut stdin) {
-                Ok(mut msg) => {
-                    // Handle Ping → respond with Pong (echo the request ID)
-                    let is_pong =
-                        msg.pointer("/result/type").and_then(|v| v.as_str()) == Some("Pong");
-                    let is_ping =
-                        msg.pointer("/command/type").and_then(|v| v.as_str()) == Some("Ping");
-
-                    if is_pong {
-                        continue;
-                    }
-                    if is_ping {
-                        let ping_id = msg.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let pong = serde_json::json!({"id": ping_id, "result": {"type": "Pong"}});
-                        let _ = nm_tx_reader.blocking_send(pong);
-                        continue;
-                    }
-
-                    // Process screenshot: decode base64, resize, save to file
-                    if let Some(b64) = msg
-                        .pointer("/result/screenshot_b64")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                    {
-                        let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
-                        match webpilot::screenshot::process_and_save(&b64, output_dir) {
-                            Ok(info) => {
-                                tracing::info!(
-                                    "Screenshot: {} ({}x{}, {}KB, ~{} tokens)",
-                                    info.path.display(),
-                                    info.width,
-                                    info.height,
-                                    info.bytes / 1024,
-                                    info.estimated_tokens
-                                );
-                                if let Some(result) = msg.get_mut("result") {
-                                    result["screenshot_path"] =
-                                        serde_json::json!(info.path.to_string_lossy());
-                                    result.as_object_mut().map(|o| o.remove("screenshot_b64"));
-                                }
-                            }
-                            Err(e) => tracing::error!("Screenshot save error: {e}"),
-                        }
-                    }
-
-                    // Session export: save session_data to file
-                    if let Some(data) = msg
-                        .pointer("/result/session_data")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                    {
-                        let output_dir = std::path::Path::new(webpilot::OUTPUT_DIR);
-                        let _ = std::fs::create_dir_all(output_dir);
-                        let ts = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis();
-                        let path = output_dir.join(format!("session_{ts}.json"));
-                        if let Err(e) = std::fs::write(&path, &data) {
-                            tracing::error!("Session save error: {e}");
-                        } else if let Some(result) = msg.get_mut("result") {
-                            result["path"] = serde_json::json!(path.to_string_lossy());
-                            result.as_object_mut().map(|o| o.remove("session_data"));
-                        }
-                    }
-
-                    // Dispatch to pending CLI request
-                    if let Some(id) = msg.get("id").and_then(|v| v.as_u64()) {
-                        let mut st = state_reader.blocking_lock();
-                        if let Some((sender, _)) = st.pending.remove(&(id as u32)) {
-                            let _ = sender.send(msg);
-                        }
+                Ok(msg) => {
+                    if let Err(e) = process_nm_message(msg, &pending, &nm_tx) {
+                        tracing::error!("NM message handling failed: {e}");
                     }
                 }
                 Err(native_messaging::NmError::Eof) => {
@@ -148,54 +86,110 @@ pub async fn run_host() -> anyhow::Result<()> {
                 }
             }
         }
-    });
+    })
+}
 
-    // Orphan reaper: clean up stale pending entries every 30s
-    let state_reaper = state.clone();
-    let reaper_handle = tokio::spawn(async move {
-        let max_age = std::time::Duration::from_secs(120);
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            let mut st = state_reaper.lock().await;
-            let now = tokio::time::Instant::now();
-            st.pending
-                .retain(|_id, (_sender, created)| now.duration_since(*created) < max_age);
+fn process_nm_message(
+    mut msg: serde_json::Value,
+    pending: &Arc<Mutex<Pending>>,
+    nm_tx: &mpsc::Sender<serde_json::Value>,
+) -> Result<(), &'static str> {
+    // Ping/Pong are intra-host keepalives; never reach pending.
+    let is_pong = msg.pointer("/result/type").and_then(|v| v.as_str()) == Some("Pong");
+    let is_ping = msg.pointer("/command/type").and_then(|v| v.as_str()) == Some("Ping");
+
+    if is_pong {
+        return Ok(());
+    }
+    if is_ping {
+        let id = msg.get("id").and_then(|v| v.as_u64()).ok_or("missing id")?;
+        let pong = serde_json::json!({"id": id, "result": {"type": "Pong"}});
+        let _ = nm_tx.blocking_send(pong);
+        return Ok(());
+    }
+
+    // Persist screenshot bodies to artifact dir, replace b64 field with path.
+    if let Some(b64) = msg
+        .pointer("/result/screenshot_b64")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+    {
+        let dir = dirs::artifacts_dir();
+        match webpilot::screenshot::process_and_save(&b64, &dir) {
+            Ok(info) => {
+                tracing::info!(
+                    "Screenshot: {} ({}x{}, {}KB, ~{} tokens)",
+                    info.path.display(),
+                    info.width,
+                    info.height,
+                    info.bytes / 1024,
+                    info.estimated_tokens
+                );
+                if let Some(result) = msg.get_mut("result")
+                    && let Some(obj) = result.as_object_mut()
+                {
+                    obj.insert(
+                        "screenshot_path".into(),
+                        serde_json::json!(info.path.to_string_lossy()),
+                    );
+                    obj.remove("screenshot_b64");
+                }
+            }
+            Err(e) => tracing::error!("Screenshot save failed: {e}"),
         }
-    });
+    }
 
-    // IPC handler
-    let ipc_handle = tokio::spawn(handle_ipc_connections(
-        ipc_listener,
-        nm_tx.clone(),
-        state.clone(),
-    ));
+    // Persist session_data to artifact dir.
+    if let Some(data) = msg
+        .pointer("/result/session_data")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+    {
+        let dir = dirs::artifacts_dir();
+        let ts = epoch_ms();
+        let path = dir.join(format!("session_{ts}.json"));
+        match std::fs::write(&path, &data) {
+            Ok(_) => {
+                if let Some(result) = msg.get_mut("result")
+                    && let Some(obj) = result.as_object_mut()
+                {
+                    obj.insert("path".into(), serde_json::json!(path.to_string_lossy()));
+                    obj.remove("session_data");
+                }
+            }
+            Err(e) => tracing::error!("Session save failed: {e}"),
+        }
+    }
 
-    tracing::info!("Host ready");
+    // Dispatch by request id.
+    let id = msg
+        .get("id")
+        .and_then(|v| v.as_u64())
+        .ok_or("response missing id")? as u32;
 
-    let _ = nm_reader_handle.await;
-    let path = ipc::socket_path();
-    let _ = std::fs::remove_file(&path);
-
-    drop(nm_tx);
-    let _ = nm_writer_handle.await;
-    ipc_handle.abort();
-    reaper_handle.abort();
-
+    let mut pending_guard = pending.blocking_lock();
+    if let Some(sender) = pending_guard.remove(&id) {
+        let _ = sender.send(msg);
+    } else {
+        tracing::debug!(id, "received response for no pending request");
+    }
     Ok(())
 }
 
 async fn handle_ipc_connections(
     listener: UnixListener,
     nm_tx: mpsc::Sender<serde_json::Value>,
-    state: Arc<Mutex<HostState>>,
+    pending: Arc<Mutex<Pending>>,
 ) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let nm_tx = nm_tx.clone();
-                let state = state.clone();
+                let pending = pending.clone();
                 tokio::spawn(async move {
-                    let _ = handle_one_cli_request(stream, nm_tx, state).await;
+                    if let Err(e) = handle_one_cli_request(stream, nm_tx, pending).await {
+                        tracing::debug!("IPC request failed: {e}");
+                    }
                 });
             }
             Err(e) => {
@@ -209,7 +203,7 @@ async fn handle_ipc_connections(
 async fn handle_one_cli_request(
     stream: tokio::net::UnixStream,
     nm_tx: mpsc::Sender<serde_json::Value>,
-    state: Arc<Mutex<HostState>>,
+    pending: Arc<Mutex<Pending>>,
 ) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -218,24 +212,25 @@ async fn handle_one_cli_request(
     reader.read_line(&mut line).await?;
     let request: serde_json::Value = serde_json::from_str(line.trim())?;
 
-    let id = request.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let id = request
+        .get("id")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("CLI request missing 'id'"))? as u32;
 
-    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+    let (resp_tx, resp_rx) = oneshot::channel();
     {
-        let mut st = state.lock().await;
-        // Duplicate ID guard: if a request with this ID is already pending, reject
-        if st.pending.contains_key(&id) {
-            let err_response = serde_json::json!({
+        let mut g = pending.lock().await;
+        if g.contains_key(&id) {
+            let err = serde_json::json!({
                 "id": id,
-                "result": {"type": "Error", "message": "Duplicate request ID", "code": "Unknown"}
+                "result": {"type": "Error", "code": "InvalidArgument", "message": "Duplicate request id"}
             });
-            let mut payload = serde_json::to_vec(&err_response)?;
+            let mut payload = serde_json::to_vec(&err)?;
             payload.push(b'\n');
             writer.write_all(&payload).await?;
             return Ok(());
         }
-        st.pending
-            .insert(id, (resp_tx, tokio::time::Instant::now()));
+        g.insert(id, resp_tx);
     }
 
     nm_tx.send(request).await?;
@@ -244,12 +239,12 @@ async fn handle_one_cli_request(
     let response = match tokio::time::timeout(timeout, resp_rx).await {
         Ok(Ok(v)) => v,
         Ok(Err(_)) => {
-            state.lock().await.pending.remove(&id);
-            anyhow::bail!("channel closed");
+            pending.lock().await.remove(&id);
+            anyhow::bail!("response channel closed");
         }
         Err(_) => {
-            state.lock().await.pending.remove(&id);
-            anyhow::bail!("timeout ({}s)", timeout.as_secs());
+            pending.lock().await.remove(&id);
+            anyhow::bail!("response timeout after {}s", timeout.as_secs());
         }
     };
 
@@ -258,4 +253,11 @@ async fn handle_one_cli_request(
     writer.write_all(&payload).await?;
 
     Ok(())
+}
+
+fn epoch_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }

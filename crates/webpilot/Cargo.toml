@@ -15,3 +15,4 @@ image.workspace = true
 fast_image_resize.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+clap = { workspace = true, features = ["derive"] }

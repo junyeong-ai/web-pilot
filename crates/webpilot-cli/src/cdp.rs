@@ -1,7 +1,11 @@
-//! CDP (Chrome DevTools Protocol) client via WebSocket.
-//! Used for headless mode — communicates directly with Chrome, no Extension needed.
+//! CDP (Chrome DevTools Protocol) client over WebSocket.
+//!
+//! Owns the WebSocket and routes responses back to per-request `oneshot`
+//! channels. Used by `LocalTransport` to drive a headless Chrome directly,
+//! without an Extension. Higher-level abstractions (page session, bridge
+//! injection, browser-context lifecycle) live in `transport::local`.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -14,9 +18,13 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type WsWriter = futures_util::stream::SplitSink<WsStream, Message>;
+
+const HEARTBEAT_TIMEOUT_S: u64 = 5;
+const PARSE_PREVIEW_CHARS: usize = 200;
 
 pub struct CdpClient {
-    writer: Arc<Mutex<futures_util::stream::SplitSink<WsStream, Message>>>,
+    writer: Arc<Mutex<WsWriter>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
     next_id: Arc<AtomicU64>,
     events: broadcast::Sender<Value>,
@@ -26,7 +34,6 @@ pub struct CdpClient {
 }
 
 impl CdpClient {
-    /// Connect to Chrome's CDP WebSocket endpoint.
     pub async fn connect(ws_url: &str) -> Result<Self> {
         let (ws, _) = connect_async(ws_url)
             .await
@@ -45,51 +52,46 @@ impl CdpClient {
             .unwrap_or(256);
         let (events_tx, _) = broadcast::channel::<Value>(buffer_size);
 
-        // Background reader: dispatch responses or broadcast events
-        let pending_clone = pending.clone();
-        let events_tx_clone = events_tx.clone();
-        let alive_clone = alive.clone();
+        // Reader: route id-bearing responses to pending channels; broadcast events.
+        let pending_r = pending.clone();
+        let events_r = events_tx.clone();
+        let alive_r = alive.clone();
         let reader_handle = tokio::spawn(async move {
-            while let Some(msg_result) = reader.next().await {
-                match msg_result {
+            while let Some(msg) = reader.next().await {
+                match msg {
                     Ok(Message::Text(text)) => match serde_json::from_str::<Value>(text.as_ref()) {
                         Ok(json) => {
                             if let Some(id) = json.get("id").and_then(|v| v.as_u64()) {
-                                let mut map = pending_clone.lock().await;
-                                if let Some(sender) = map.remove(&id) {
+                                if let Some(sender) = pending_r.lock().await.remove(&id) {
                                     let _ = sender.send(json);
                                 }
                             } else {
-                                let _ = events_tx_clone.send(json);
+                                let _ = events_r.send(json);
                             }
                         }
                         Err(e) => {
-                            tracing::warn!(
-                                "CDP: malformed JSON: {e} (first 200 chars: {})",
-                                &text[..text.len().min(200)]
-                            );
+                            let preview = char_safe_prefix(text.as_ref(), PARSE_PREVIEW_CHARS);
+                            tracing::warn!("CDP: malformed JSON: {e} (preview: {preview})");
                         }
                     },
                     Ok(Message::Close(frame)) => {
                         tracing::debug!("CDP WebSocket closed: {frame:?}");
                         break;
                     }
-                    Ok(_) => {} // Ping/Pong/Binary — handled by tungstenite
+                    Ok(_) => {} // Ping/Pong/Binary handled by tungstenite
                     Err(e) => {
                         tracing::debug!("CDP WebSocket read error: {e}");
                         break;
                     }
                 }
             }
-            // Reader exiting — mark connection as dead and drain all pending
-            alive_clone.store(false, Ordering::Release);
-            let mut map = pending_clone.lock().await;
-            map.drain(); // Drop all senders → callers get RecvError
+            // Reader exiting — mark dead and drain pending so callers get RecvError.
+            alive_r.store(false, Ordering::Release);
+            pending_r.lock().await.drain();
         });
-
         let reader_handle = Arc::new(Mutex::new(Some(reader_handle)));
 
-        // Heartbeat: periodic health check to detect TCP half-open
+        // Heartbeat: detect TCP half-open by periodically issuing Browser.getVersion.
         let heartbeat_handle = {
             let writer = writer.clone();
             let pending = pending.clone();
@@ -105,30 +107,35 @@ impl CdpClient {
 
                     let id = next_id.fetch_add(1, Ordering::Relaxed);
                     let msg = serde_json::json!({
-                        "id": id,
-                        "method": "Browser.getVersion",
-                        "params": {},
+                        "id": id, "method": "Browser.getVersion", "params": {},
                     });
+                    let payload = match serde_json::to_string(&msg) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!("heartbeat serialize failed: {e}");
+                            alive.store(false, Ordering::Release);
+                            break;
+                        }
+                    };
 
                     let (tx, rx) = oneshot::channel();
                     pending.lock().await.insert(id, tx);
 
-                    let send_result = writer
+                    if writer
                         .lock()
                         .await
-                        .send(Message::Text(
-                            serde_json::to_string(&msg).unwrap_or_default().into(),
-                        ))
-                        .await;
-
-                    if send_result.is_err() {
+                        .send(Message::Text(payload.into()))
+                        .await
+                        .is_err()
+                    {
                         alive.store(false, Ordering::Release);
                         pending.lock().await.remove(&id);
                         break;
                     }
 
-                    match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
-                        Ok(Ok(_)) => {} // Healthy
+                    let timeout = std::time::Duration::from_secs(HEARTBEAT_TIMEOUT_S);
+                    match tokio::time::timeout(timeout, rx).await {
+                        Ok(Ok(_)) => {} // healthy
                         _ => {
                             tracing::warn!("CDP heartbeat failed — marking connection dead");
                             alive.store(false, Ordering::Release);
@@ -151,19 +158,11 @@ impl CdpClient {
         })
     }
 
-    /// Check if the CDP connection is still alive.
-    #[allow(dead_code)]
-    pub fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::Acquire)
-    }
-
-    /// Send a CDP command and wait for response (default timeout).
     pub async fn send(&self, method: &str, params: Option<Value>) -> Result<Value> {
         self.send_with_timeout(method, params, crate::timeouts::cdp_send())
             .await
     }
 
-    /// Send a CDP command with a custom timeout.
     pub async fn send_with_timeout(
         &self,
         method: &str,
@@ -175,7 +174,6 @@ impl CdpClient {
         }
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-
         let msg = serde_json::json!({
             "id": id,
             "method": method,
@@ -196,50 +194,27 @@ impl CdpClient {
             Ok(Ok(v)) => v,
             Ok(Err(_)) => {
                 self.pending.lock().await.remove(&id);
-                anyhow::bail!("CDP channel closed");
+                anyhow::bail!("CDP channel closed (method={method})");
             }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                anyhow::bail!("CDP timeout ({}s)", timeout.as_secs());
+                anyhow::bail!("CDP timeout: method={method} elapsed={}s", timeout.as_secs());
             }
         };
 
         if let Some(error) = response.get("error") {
-            anyhow::bail!("CDP error: {}", error);
+            anyhow::bail!("CDP error: {error}");
         }
 
         Ok(response.get("result").cloned().unwrap_or(Value::Null))
     }
 
-    /// Fire a CDP command without waiting for response.
-    /// Used for Page.navigate where cross-origin navigation may kill the connection
-    /// before Chrome sends a response.
-    #[allow(dead_code)]
-    pub async fn fire(&self, method: &str, params: Option<Value>) -> Result<()> {
-        if !self.alive.load(Ordering::Acquire) {
-            anyhow::bail!("CDP connection is dead (reader exited)");
-        }
-
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-
-        let msg = serde_json::json!({
-            "id": id,
-            "method": method,
-            "params": params.unwrap_or(Value::Object(Default::default())),
-        });
-
-        // Don't register in pending — we don't care about the response
-        self.writer
-            .lock()
-            .await
-            .send(Message::Text(serde_json::to_string(&msg)?.into()))
-            .await
-            .context("CDP fire failed")?;
-
-        Ok(())
+    /// Subscribe to the broadcast stream of unsolicited CDP events (e.g.,
+    /// `Runtime.executionContextCreated`, `Page.frameNavigated`).
+    pub fn subscribe_events(&self) -> broadcast::Receiver<Value> {
+        self.events.subscribe()
     }
 
-    /// Evaluate JavaScript in the page context.
     pub async fn evaluate(&self, expression: &str) -> Result<Value> {
         let result = self
             .send(
@@ -255,7 +230,7 @@ impl CdpClient {
         if let Some(exception) = result.get("exceptionDetails") {
             let msg = exception
                 .pointer("/exception/description")
-                .or(exception.pointer("/text"))
+                .or_else(|| exception.pointer("/text"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("JS exception");
             anyhow::bail!("{msg}");
@@ -268,40 +243,19 @@ impl CdpClient {
             .unwrap_or(Value::Null))
     }
 
-    /// Navigate to URL and wait for load.
-    pub async fn navigate(&self, url: &str) -> Result<()> {
-        let resp = self
-            .send("Page.navigate", Some(serde_json::json!({"url": url})))
-            .await?;
-        if let Some(err) = resp.get("errorText").and_then(|v| v.as_str()) {
-            anyhow::bail!("Navigation failed: {err}");
-        }
-        match self
-            .wait_for_event("Page.loadEventFired", crate::timeouts::navigation())
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                tokio::time::sleep(crate::timeouts::post_reconnect()).await;
-                Ok(())
-            }
-        }
-    }
-
-    /// Wait for a CDP event by method name, with timeout.
     pub async fn wait_for_event(
         &self,
         method: &str,
         timeout: std::time::Duration,
     ) -> Result<Value> {
         let mut rx = self.events.subscribe();
-        let method = method.to_string();
-        let method_for_err = method.clone();
+        let target = method.to_string();
+        let target_for_err = target.clone();
         match tokio::time::timeout(timeout, async move {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if event.get("method").and_then(|v| v.as_str()) == Some(&method) {
+                        if event.get("method").and_then(|v| v.as_str()) == Some(&target) {
                             return Ok(event);
                         }
                     }
@@ -315,30 +269,47 @@ impl CdpClient {
         .await
         {
             Ok(result) => result,
-            Err(_) => anyhow::bail!("Timeout waiting for {method_for_err}"),
+            Err(_) => anyhow::bail!("Timeout waiting for {target_for_err}"),
         }
     }
 
-    /// Capture screenshot as base64 PNG.
+    /// Viewport screenshot (PNG, base64).
     pub async fn screenshot(&self) -> Result<String> {
+        self.screenshot_inner(false).await
+    }
+
+    /// Full-page screenshot (PNG, base64). Uses CDP's `captureBeyondViewport`
+    /// so we get the entire scrollable area in a single call — no tiling.
+    pub async fn screenshot_full_page(&self) -> Result<String> {
+        self.screenshot_inner(true).await
+    }
+
+    async fn screenshot_inner(&self, beyond: bool) -> Result<String> {
+        let mut params = serde_json::json!({"format": "png"});
+        if beyond {
+            params["captureBeyondViewport"] = true.into();
+        }
         let result = self
-            .send(
+            .send_with_timeout(
                 "Page.captureScreenshot",
-                Some(serde_json::json!({
-                    "format": "png",
-                })),
+                Some(params),
+                std::time::Duration::from_secs(30),
             )
             .await?;
         result
             .get("data")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("No screenshot data"))
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("No screenshot data"))
     }
 
-    /// Get all cookies.
-    pub async fn get_cookies(&self) -> Result<Vec<Value>> {
-        let result = self.send("Network.getCookies", None).await?;
+    /// All cookies in the page's browser context. Use this for session export.
+    /// Per `Storage.getCookies` semantics, scopes to the given `browserContextId`
+    /// when provided (multi-agent isolation), or browser-wide otherwise.
+    pub async fn get_all_cookies(&self, browser_context_id: Option<&str>) -> Result<Vec<Value>> {
+        let params =
+            browser_context_id.map(|id| serde_json::json!({"browserContextId": id}));
+        let result = self.send("Storage.getCookies", params).await?;
         Ok(result
             .get("cookies")
             .and_then(|v| v.as_array())
@@ -346,7 +317,6 @@ impl CdpClient {
             .unwrap_or_default())
     }
 
-    /// Get browser targets (tabs).
     pub async fn get_targets(&self) -> Result<Vec<Value>> {
         let result = self.send("Target.getTargets", None).await?;
         Ok(result
@@ -356,7 +326,6 @@ impl CdpClient {
             .unwrap_or_default())
     }
 
-    /// Get all browser context IDs.
     pub async fn get_browser_contexts(&self) -> Result<Vec<String>> {
         let result = self.send("Target.getBrowserContexts", None).await?;
         Ok(result
@@ -364,13 +333,12 @@ impl CdpClient {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(str::to_string))
                     .collect()
             })
             .unwrap_or_default())
     }
 
-    /// Create an isolated browser context (separate cookies, cache, storage).
     pub async fn create_browser_context(&self) -> Result<String> {
         let result = self
             .send(
@@ -381,11 +349,10 @@ impl CdpClient {
         result
             .get("browserContextId")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("No browserContextId in response"))
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("No browserContextId in response"))
     }
 
-    /// Dispose (destroy) a browser context and all its targets.
     pub async fn dispose_browser_context(&self, browser_context_id: &str) -> Result<()> {
         self.send(
             "Target.disposeBrowserContext",
@@ -395,7 +362,6 @@ impl CdpClient {
         Ok(())
     }
 
-    /// Create a new page target within a specific browser context.
     pub async fn create_target_in_context(
         &self,
         browser_context_id: &str,
@@ -413,14 +379,14 @@ impl CdpClient {
         result
             .get("targetId")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("No targetId in response"))
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("No targetId in response"))
     }
 }
 
 impl Drop for CdpClient {
     fn drop(&mut self) {
-        // Abort background tasks to prevent resource leaks
+        // Abort background tasks to prevent resource leaks.
         if let Ok(mut handle) = self.reader_handle.try_lock()
             && let Some(h) = handle.take()
         {
@@ -431,5 +397,28 @@ impl Drop for CdpClient {
         {
             h.abort();
         }
+    }
+}
+
+/// UTF-8 safe character-bounded prefix for log previews.
+fn char_safe_prefix(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::char_safe_prefix;
+
+    #[test]
+    fn prefix_is_codepoint_safe_for_multibyte() {
+        let s: String = "한".repeat(500);
+        let p = char_safe_prefix(&s, 200);
+        assert_eq!(p.chars().count(), 200);
+    }
+
+    #[test]
+    fn prefix_does_not_overrun() {
+        let s = "abc";
+        assert_eq!(char_safe_prefix(s, 100), "abc");
     }
 }

@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand};
-use webpilot::ipc;
 use webpilot::protocol::{Command, ResponseData};
 
 use crate::output::CommandOutput;
+use crate::transport::{Transport, lift_error};
 
 #[derive(Args)]
 pub struct TabsArgs {
@@ -13,38 +13,28 @@ pub struct TabsArgs {
 
 #[derive(Subcommand)]
 pub enum TabCommand {
-    /// Switch to a tab by ID
     Switch { tab_id: String },
-    /// Open a new tab
     New { url: String },
-    /// Close a tab
     Close { tab_id: String },
-    /// Find and switch to a tab by URL pattern
     Find {
         #[arg(long)]
         url: String,
     },
 }
 
-pub async fn run(args: TabsArgs) -> Result<CommandOutput> {
+pub async fn run<T: Transport>(transport: &mut T, args: TabsArgs) -> Result<CommandOutput> {
     match args.command {
-        None => list_tabs().await,
-        Some(TabCommand::Switch { tab_id }) => switch_tab(tab_id).await,
-        Some(TabCommand::New { url }) => new_tab(&url).await,
-        Some(TabCommand::Close { tab_id }) => close_tab(tab_id).await,
-        Some(TabCommand::Find { url }) => find_tab(&url).await,
+        None => list_tabs(transport).await,
+        Some(TabCommand::Switch { tab_id }) => switch_tab(transport, tab_id).await,
+        Some(TabCommand::New { url }) => new_tab(transport, &url).await,
+        Some(TabCommand::Close { tab_id }) => close_tab(transport, tab_id).await,
+        Some(TabCommand::Find { url }) => find_tab(transport, &url).await,
     }
 }
 
-async fn list_tabs() -> Result<CommandOutput> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::TabList))?;
-
-    let response = ipc::send_request(&request)
-        .await
-        .context("Failed to connect")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-
-    match resp.result {
+async fn list_tabs<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
+    let result = transport.send(Command::TabList).await?;
+    match result {
         ResponseData::Tabs { tabs } => {
             let human_lines: Vec<String> = tabs
                 .iter()
@@ -59,99 +49,67 @@ async fn list_tabs() -> Result<CommandOutput> {
                 summary: String::new(),
             })
         }
-        _ => anyhow::bail!("Unexpected response"),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
 }
 
-async fn switch_tab(tab_id: String) -> Result<CommandOutput> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(
-        1,
-        Command::TabSwitch {
+async fn switch_tab<T: Transport>(transport: &mut T, tab_id: String) -> Result<CommandOutput> {
+    let result = transport
+        .send(Command::TabSwitch {
             tab_id: tab_id.clone(),
-        },
-    ))?;
-    let response = ipc::send_request(&request)
-        .await
-        .context("Failed to connect")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-    match resp.result {
-        ResponseData::Action { success, error, .. } => {
-            if !success {
-                if let Some(ref err) = error {
-                    anyhow::bail!("{}", crate::output::format_error(err));
-                } else {
-                    anyhow::bail!("Unknown error");
-                }
-            }
-            Ok(CommandOutput::Ok(format!("Switched to tab {tab_id}")))
-        }
-        _ => anyhow::bail!("Unexpected response"),
-    }
+        })
+        .await?;
+    expect_action(result)?;
+    Ok(CommandOutput::Ok(format!("Switched to tab {tab_id}")))
 }
 
-async fn new_tab(url: &str) -> Result<CommandOutput> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(
-        1,
-        Command::TabNew {
+async fn new_tab<T: Transport>(transport: &mut T, url: &str) -> Result<CommandOutput> {
+    let result = transport
+        .send(Command::TabNew {
             url: url.to_string(),
-        },
-    ))?;
-    let response = ipc::send_request(&request)
-        .await
-        .context("Failed to connect")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-    match resp.result {
-        ResponseData::Action { success, .. } => {
-            if !success {
-                anyhow::bail!("Failed to open new tab");
-            }
-            Ok(CommandOutput::Data {
-                json: serde_json::json!({"success": true, "url": url}),
-                human: format!("New tab opened: {url}"),
-            })
-        }
-        _ => anyhow::bail!("Unexpected response"),
-    }
+        })
+        .await?;
+    expect_action(result)?;
+    Ok(CommandOutput::Data {
+        json: serde_json::json!({"success": true, "url": url}),
+        human: format!("New tab opened: {url}"),
+    })
 }
 
-async fn close_tab(tab_id: String) -> Result<CommandOutput> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(
-        1,
-        Command::TabClose {
+async fn close_tab<T: Transport>(transport: &mut T, tab_id: String) -> Result<CommandOutput> {
+    let result = transport
+        .send(Command::TabClose {
             tab_id: tab_id.clone(),
-        },
-    ))?;
-    let response = ipc::send_request(&request)
-        .await
-        .context("Failed to connect")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-    match resp.result {
-        ResponseData::Action { success, .. } => {
-            if !success {
-                anyhow::bail!("Failed to close tab");
+        })
+        .await?;
+    expect_action(result)?;
+    Ok(CommandOutput::Ok(format!("Tab {tab_id} closed")))
+}
+
+async fn find_tab<T: Transport>(transport: &mut T, pattern: &str) -> Result<CommandOutput> {
+    let result = transport.send(Command::TabList).await?;
+    match result {
+        ResponseData::Tabs { tabs } => {
+            let needle = pattern.replace('*', "");
+            if let Some(tab) = tabs.iter().find(|t| t.url.contains(&needle)) {
+                switch_tab(transport, tab.id.clone()).await
+            } else {
+                Err(webpilot::WebPilotError::TabNotFound {
+                    tab_id: pattern.to_string(),
+                }
+                .into())
             }
-            Ok(CommandOutput::Ok(format!("Tab {tab_id} closed")))
         }
-        _ => anyhow::bail!("Unexpected response"),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
 }
 
-async fn find_tab(url_pattern: &str) -> Result<CommandOutput> {
-    let request = serde_json::to_value(webpilot::protocol::Request::new(1, Command::TabList))?;
-    let response = ipc::send_request(&request)
-        .await
-        .context("Failed to connect")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
-
-    match resp.result {
-        ResponseData::Tabs { tabs } => {
-            let pattern = url_pattern.replace('*', "");
-            if let Some(tab) = tabs.iter().find(|t| t.url.contains(&pattern)) {
-                switch_tab(tab.id.clone()).await
-            } else {
-                anyhow::bail!("No tab matching '{url_pattern}'");
-            }
-        }
-        _ => anyhow::bail!("Unexpected response"),
+fn expect_action(data: ResponseData) -> Result<()> {
+    match data {
+        ResponseData::Action { success, error, .. } => lift_error(success, error, ()),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
 }

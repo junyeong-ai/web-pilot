@@ -1,29 +1,21 @@
 //! Headless Chrome session management via direct CDP.
-//! No Extension or Native Messaging needed — uses Chrome DevTools Protocol directly.
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
+use webpilot::dirs;
 
-/// Chrome for Testing paths (installed by agent-browser or manually).
-const CHROME_FOR_TESTING_PATHS: &[&str] = &[
-    // macOS standard Chrome
+const SYSTEM_CHROME_PATHS: &[&str] = &[
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
 ];
 
-/// Get the runtime directory for PID/WS files.
-/// Prefers XDG_RUNTIME_DIR (Linux, mode 0700) for security, falls back to /tmp.
-fn runtime_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
-        let p = PathBuf::from(&dir);
-        if p.exists() {
-            return p;
-        }
-    }
-    PathBuf::from("/tmp")
-}
+/// Headless Chrome's launch viewport. `device reset` snaps the page back to
+/// these dimensions because CDP `Emulation.clearDeviceMetricsOverride`
+/// removes the override flag without triggering a layout pass on its own.
+pub const HEADLESS_VIEWPORT_WIDTH: u32 = 1280;
+pub const HEADLESS_VIEWPORT_HEIGHT: u32 = 720;
 
-/// Write data atomically: write to a temp file, then rename.
+/// Atomic write: write to a temp file, then rename.
 fn atomic_write(path: &std::path::Path, data: &str) -> std::io::Result<()> {
     let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     std::fs::write(&tmp, data)?;
@@ -31,7 +23,7 @@ fn atomic_write(path: &std::path::Path, data: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Find a Chrome binary. Prefers Chrome for Testing (no single-instance lock).
+/// Locate a Chrome binary. Prefers Chrome for Testing.
 pub fn find_chrome() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("WEBPILOT_CHROME") {
         let p = PathBuf::from(&path);
@@ -41,38 +33,35 @@ pub fn find_chrome() -> Result<PathBuf> {
         anyhow::bail!("WEBPILOT_CHROME={path} not found");
     }
 
-    // Check agent-browser's Chrome for Testing (preferred — no single-instance lock)
-    let home = std::env::var("HOME").unwrap_or_default();
-    let browsers_dir = PathBuf::from(&home).join(".agent-browser/browsers");
-    if browsers_dir.exists()
-        && let Ok(entries) = std::fs::read_dir(&browsers_dir)
-    {
-        let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-        versions.sort_by_key(|b| std::cmp::Reverse(b.file_name())); // Latest first
-        for entry in versions {
-            let app = entry
-                .path()
-                .join("Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
-            if app.exists() {
-                return Ok(app);
-            }
-            let app2 = entry.path()
-                    .join("chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
-            if app2.exists() {
-                return Ok(app2);
+    // agent-browser layout: ~/.agent-browser/browsers/<version>/chrome-mac-arm64/...
+    if let Ok(home) = std::env::var("HOME") {
+        let browsers_dir = PathBuf::from(&home).join(".agent-browser/browsers");
+        if let Ok(entries) = std::fs::read_dir(&browsers_dir) {
+            let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+            versions.sort_by_key(|b| std::cmp::Reverse(natural_sort_key(&b.file_name().to_string_lossy())));
+            for entry in versions {
+                let candidates = [
+                    "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                    "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                    "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                ];
+                for rel in candidates {
+                    let p = entry.path().join(rel);
+                    if p.exists() {
+                        return Ok(p);
+                    }
+                }
             }
         }
     }
 
-    // Fallback: system Chrome
-    for c in CHROME_FOR_TESTING_PATHS {
+    for c in SYSTEM_CHROME_PATHS {
         let p = PathBuf::from(c);
         if p.exists() {
             return Ok(p);
         }
     }
 
-    // Linux PATH
     if let Ok(out) = std::process::Command::new("which")
         .arg("google-chrome")
         .output()
@@ -87,40 +76,70 @@ pub fn find_chrome() -> Result<PathBuf> {
     anyhow::bail!("Chrome not found. Install Chrome or set WEBPILOT_CHROME=/path/to/chrome")
 }
 
-/// Send a signal to a process. Returns Ok(true) if delivered, Ok(false) if process doesn't exist.
+/// Natural-order sort key. Splits a name into runs of digits and non-digits so
+/// that `"10.0"` sorts after `"9.0"` instead of before it.
+fn natural_sort_key(s: &str) -> Vec<NatPart> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut in_digit = false;
+    for c in s.chars() {
+        let now_digit = c.is_ascii_digit();
+        if !buf.is_empty() && now_digit != in_digit {
+            out.push(if in_digit {
+                NatPart::Num(buf.parse().unwrap_or(0))
+            } else {
+                NatPart::Str(std::mem::take(&mut buf))
+            });
+            buf = String::new();
+        }
+        buf.push(c);
+        in_digit = now_digit;
+    }
+    if !buf.is_empty() {
+        out.push(if in_digit {
+            NatPart::Num(buf.parse().unwrap_or(0))
+        } else {
+            NatPart::Str(buf)
+        });
+    }
+    out
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum NatPart {
+    Str(String),
+    Num(u64),
+}
+
+/// `kill(pid, signal)` wrapper. Returns Ok(true) if delivered, Ok(false) if no
+/// such process, Err otherwise.
 fn send_signal(pid: i32, signal: i32) -> Result<bool> {
-    // SAFETY: kill() is a standard POSIX syscall with no memory safety implications.
-    // pid is validated from our PID file; signal is a well-known constant.
+    // SAFETY: kill() is a POSIX syscall with no memory safety implications.
+    // pid comes from our own PID file; signal is a known constant.
     let ret = unsafe { libc::kill(pid, signal) };
     if ret == 0 {
         return Ok(true);
     }
     let err = std::io::Error::last_os_error();
     if err.raw_os_error() == Some(libc::ESRCH) {
-        Ok(false) // No such process
+        Ok(false)
     } else {
         Err(err.into())
     }
 }
 
-/// Check if a process is alive (signal 0 probe).
 fn is_process_alive(pid: i32) -> bool {
     send_signal(pid, 0).unwrap_or(false)
 }
 
-/// PID file path.
 pub fn pid_path() -> PathBuf {
-    let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    runtime_dir().join(format!("webpilot-{user}-headless.pid"))
+    dirs::pid_file()
 }
 
-/// WebSocket URL file path.
 pub fn ws_url_path() -> PathBuf {
-    let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    runtime_dir().join(format!("webpilot-{user}-headless.ws"))
+    dirs::ws_url_file()
 }
 
-/// Read the Chrome PID from the PID file. Returns 0 if unavailable.
 pub fn read_pid() -> i32 {
     std::fs::read_to_string(pid_path())
         .ok()
@@ -128,12 +147,9 @@ pub fn read_pid() -> i32 {
         .unwrap_or(0)
 }
 
-/// Launch headless Chrome and return CDP WebSocket URL.
 pub async fn launch_chrome() -> Result<(u32, String)> {
     let chrome = find_chrome()?;
-    let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    let profile_dir = PathBuf::from(format!("/tmp/webpilot-{user}-headless-profile"));
-    let _ = std::fs::create_dir_all(&profile_dir);
+    let profile_dir = dirs::chrome_profile_dir();
 
     // Clean stale DevToolsActivePort
     let devtools_port_file = profile_dir.join("DevToolsActivePort");
@@ -156,7 +172,7 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
             "--enable-features=NetworkService,NetworkServiceInProcess",
             "--password-store=basic",
             "--use-mock-keychain",
-            "--window-size=1280,720",
+            &format!("--window-size={HEADLESS_VIEWPORT_WIDTH},{HEADLESS_VIEWPORT_HEIGHT}"),
             &format!("--user-data-dir={}", profile_dir.display()),
             "about:blank",
         ])
@@ -171,7 +187,7 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
     // Detach: Chrome runs independently, managed via PID file + signals.
     std::mem::forget(child);
 
-    // Poll DevToolsActivePort (Puppeteer/Playwright standard)
+    // Poll DevToolsActivePort (Puppeteer/Playwright standard).
     let deadline = tokio::time::Instant::now() + crate::timeouts::chrome_launch();
     let ws_url = loop {
         if tokio::time::Instant::now() > deadline {
@@ -189,7 +205,6 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
 
-    // Save PID and WS URL atomically
     atomic_write(&pid_path(), &pid.to_string())?;
     atomic_write(&ws_url_path(), &ws_url)?;
 
@@ -197,9 +212,8 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
     Ok((pid, ws_url))
 }
 
-/// Get WebSocket URL for an already-running headless session (TOCTOU mitigated).
+/// Read the WebSocket URL of an existing healthy session, or `None`.
 pub fn get_existing_session() -> Option<String> {
-    // Read both files directly — no exists() check (eliminates TOCTOU window)
     let pid_str = std::fs::read_to_string(pid_path()).ok()?;
     let pid: i32 = pid_str.trim().parse().ok()?;
 
@@ -215,15 +229,14 @@ pub fn get_existing_session() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Ensure a headless session is running. Returns CDP WebSocket URL.
-/// Uses file locking to prevent concurrent Chrome launches from multiple agents.
+/// Ensure a headless session is running. Uses an advisory file lock so that
+/// concurrent agents do not race to launch Chrome.
 pub async fn ensure_session() -> Result<String> {
     if let Some(url) = get_existing_session() {
         return Ok(url);
     }
 
-    // Acquire advisory file lock to serialize Chrome launches
-    let lock_path = runtime_dir().join("webpilot-launch.lock");
+    let lock_path = dirs::launch_lock_file();
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -232,7 +245,7 @@ pub async fn ensure_session() -> Result<String> {
         .context("Failed to create launch lock file")?;
 
     use std::os::unix::io::AsRawFd;
-    // SAFETY: flock() is a standard POSIX advisory lock with no memory safety implications.
+    // SAFETY: flock() is a POSIX advisory lock; no memory safety implications.
     let ret = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
     if ret != 0 {
         anyhow::bail!(
@@ -241,12 +254,11 @@ pub async fn ensure_session() -> Result<String> {
         );
     }
 
-    // Re-check after acquiring lock — another process may have launched Chrome
     if let Some(url) = get_existing_session() {
         return Ok(url);
     }
 
-    // Clean up orphaned Chrome
+    // Clean up an orphaned Chrome whose PID file we own.
     if let Ok(pid_str) = std::fs::read_to_string(pid_path())
         && let Ok(pid) = pid_str.trim().parse::<i32>()
         && is_process_alive(pid)
@@ -259,38 +271,10 @@ pub async fn ensure_session() -> Result<String> {
 
     let (_, ws_url) = launch_chrome().await?;
     Ok(ws_url)
-    // lock_file dropped here, releasing flock
 }
 
-/// Dispose a single context: close its browser context via CDP, then remove the file.
-pub async fn quit_context(context_name: &str) -> Result<()> {
-    let file_path = crate::headless::context::context_file_path(context_name);
-    let data = std::fs::read_to_string(&file_path)
-        .map_err(|_| anyhow::anyhow!("Context '{context_name}' not found"))?;
-    let entry = serde_json::from_str::<crate::headless::context::ContextEntry>(&data)?;
-
-    // Dispose the browser context via CDP (closes all targets in that context)
-    if let Some(ws_url) = get_existing_session()
-        && let Ok(browser) = crate::cdp::CdpClient::connect(&ws_url).await
-    {
-        let _ = browser
-            .dispose_browser_context(&entry.browser_context_id)
-            .await;
-    }
-
-    let _ = std::fs::remove_file(&file_path);
-    Ok(())
-}
-
-/// Shut down the entire headless Chrome session (process + all files).
-/// Context files are cleaned by quit_session_force(), Chrome process is killed via SIGTERM.
-/// No need to dispose_browser_context — Chrome dying handles that.
+/// Shut down the entire headless Chrome session. Idempotent.
 pub async fn quit_session() -> Result<()> {
-    quit_session_force().await
-}
-
-/// Unconditional Chrome shutdown — kills process and cleans all files.
-async fn quit_session_force() -> Result<()> {
     let pid_file = pid_path();
     if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
         && let Ok(pid) = pid_str.trim().parse::<i32>()
@@ -304,9 +288,21 @@ async fn quit_session_force() -> Result<()> {
     }
     let _ = std::fs::remove_file(ws_url_path());
 
-    // Clean up any remaining context files
-    let dir = std::path::Path::new(webpilot::OUTPUT_DIR);
-    if let Ok(entries) = std::fs::read_dir(dir) {
+    // Per-(context|default) active-frame and active-tab state — session-scoped,
+    // gone with Chrome.
+    if let Ok(entries) = std::fs::read_dir(dirs::runtime_dir()) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let n = entry.file_name();
+            let name = n.to_string_lossy();
+            if name.starts_with("active_frame_") || name.starts_with("active_tab_") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    // Context state files
+    let contexts = dirs::contexts_dir();
+    if let Ok(entries) = std::fs::read_dir(&contexts) {
         for entry in entries.filter_map(|e| e.ok()) {
             if entry.file_name().to_string_lossy().starts_with("ctx-") {
                 let _ = std::fs::remove_file(entry.path());
@@ -314,17 +310,31 @@ async fn quit_session_force() -> Result<()> {
         }
     }
 
-    // Clean up Chrome profile directory
-    let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    let profile_dir = PathBuf::from(format!("/tmp/webpilot-{user}-headless-profile"));
+    // Chrome profile dir
+    let profile_dir = dirs::chrome_profile_dir();
     if profile_dir.exists() {
         let _ = std::fs::remove_dir_all(&profile_dir);
     }
 
-    // Clean up launch lock file
-    let lock_path = runtime_dir().join("webpilot-launch.lock");
-    let _ = std::fs::remove_file(lock_path);
+    // Launch lock
+    let _ = std::fs::remove_file(dirs::launch_lock_file());
 
     tracing::info!("Headless session stopped.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn natural_sort_orders_versions() {
+        let mut keys: Vec<_> = ["9.0.123", "10.0.5", "10.0.20", "9.5.7"]
+            .iter()
+            .map(|s| (natural_sort_key(s), *s))
+            .collect();
+        keys.sort_by(|a, b| a.0.cmp(&b.0));
+        let sorted: Vec<&str> = keys.iter().map(|(_, s)| *s).collect();
+        assert_eq!(sorted, ["9.0.123", "9.5.7", "10.0.5", "10.0.20"]);
+    }
 }

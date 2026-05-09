@@ -5,19 +5,20 @@ members = ["crates/webpilot", "crates/webpilot-cli"]
 [workspace.package]
 version = "1.0.0"
 edition = "2024"
-rust-version = "1.94.0"
+rust-version = "1.95.0"
 license = "MIT"
 
 [workspace.dependencies]
-# Async
-tokio = { version = "1", features = ["full"] }
+# Async runtime — feature-trimmed (no `process` or `signal` here; stdlib is enough)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Image (screenshot processing in host)
-image = "0.25"
+# Image (screenshot processing)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 fast_image_resize = "6"
 base64 = "0.22"
 
@@ -33,6 +34,19 @@ anyhow = "1"
 thiserror = "2"
 similar = "2"
 
-# WebSocket (CDP client)
+# WebSocket (CDP)
 tokio-tungstenite = "0.29"
-futures-util = "0.3"
+
+# Unix syscalls
+libc = "0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+opt-level = 3
+
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"

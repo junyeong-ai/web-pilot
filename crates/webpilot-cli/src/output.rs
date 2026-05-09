@@ -1,6 +1,12 @@
-use std::io::IsTerminal;
+//! Command output rendering.
+//!
+//! Handlers return `CommandOutput`; the dispatch layer calls `render` to
+//! emit JSON or human-readable text. Errors render via `Display` on the
+//! structured `WebPilotError` — there is no message-string parsing.
 
-use webpilot::types::{DomSnapshot, ErrorCode, ProtocolError, WebPilotError};
+use std::io::IsTerminal;
+use webpilot::WebPilotError;
+use webpilot::types::DomSnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
@@ -16,82 +22,64 @@ pub fn detect_output_mode(force_json: bool) -> OutputMode {
     }
 }
 
-// ── Unified command result types ─────────────────────────────────────────────
-
 /// Unified return type from all command handlers.
-/// Handlers return this instead of doing their own output formatting.
-/// Use with `render()` in dispatch layer — handlers never see OutputMode.
 pub enum CommandOutput {
-    /// Simple success with optional message: "OK", "Switched to tab X", etc.
     Ok(String),
-
-    /// Success with structured JSON data + human-readable summary.
     Data {
         json: serde_json::Value,
         human: String,
     },
-
-    /// DOM snapshot (special case: to_text for Human, JSON for Json).
     Dom {
         snapshot: DomSnapshot,
         extra: serde_json::Map<String, serde_json::Value>,
     },
-
-    /// Content to print to stdout (e.g., cookie value, eval result, DOM text).
     Content {
         stdout: String,
         json: serde_json::Value,
     },
-
-    /// List of items with human-readable lines and JSON representation.
     List {
         items: serde_json::Value,
         human_lines: Vec<String>,
         summary: String,
     },
-
-    /// Silent success (e.g., quit).
     Silent,
 }
 
-/// Render a successful command result to stdout/stderr.
 pub fn render(result: CommandOutput, mode: OutputMode) {
     match (result, mode) {
         (CommandOutput::Ok(msg), OutputMode::Human) => eprintln!("{msg}"),
-        (CommandOutput::Ok(_), OutputMode::Json) => println!("{{\"success\":true}}"),
+        (CommandOutput::Ok(_), OutputMode::Json) => println!(r#"{{"success":true}}"#),
 
         (CommandOutput::Data { human, .. }, OutputMode::Human) => eprintln!("{human}"),
-        (CommandOutput::Data { json, .. }, OutputMode::Json) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).unwrap_or_default()
-            )
-        }
+        (CommandOutput::Data { json, .. }, OutputMode::Json) => emit_json(&json),
 
         (CommandOutput::Dom { snapshot, extra }, OutputMode::Human) => {
             if !snapshot.elements.is_empty() {
                 print!("{}", snapshot.to_text());
             }
-            if let Some(path) = extra.get("screenshot_path").and_then(|v| v.as_str()) {
-                eprintln!("Screenshot: {path}");
-            }
-            if let Some(path) = extra.get("pdf_path").and_then(|v| v.as_str()) {
-                eprintln!("PDF: {path}");
+            for (key, label) in [
+                ("screenshot_path", "Screenshot"),
+                ("pdf_path", "PDF"),
+                ("accessibility_path", "Accessibility tree"),
+            ] {
+                if let Some(p) = extra.get(key).and_then(|v| v.as_str()) {
+                    eprintln!("{label}: {p}");
+                }
             }
         }
         (CommandOutput::Dom { snapshot, extra }, OutputMode::Json) => {
-            let mut obj = serde_json::to_value(&snapshot)
-                .unwrap_or(serde_json::Value::Object(Default::default()));
-            if let Some(map) = obj.as_object_mut() {
-                for (k, v) in &extra {
-                    map.insert(k.clone(), v.clone());
+            let mut value = serde_json::to_value(&snapshot)
+                .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+            if let Some(map) = value.as_object_mut() {
+                for (k, v) in extra {
+                    map.insert(k, v);
                 }
             }
-            println!("{obj}");
+            emit_json(&value);
         }
 
         (CommandOutput::Content { stdout, .. }, OutputMode::Human) => println!("{stdout}"),
-        (CommandOutput::Content { json, .. }, OutputMode::Json) => println!("{json}"),
+        (CommandOutput::Content { json, .. }, OutputMode::Json) => emit_json(&json),
 
         (
             CommandOutput::List {
@@ -108,89 +96,40 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
                 eprintln!("{summary}");
             }
         }
-        (CommandOutput::List { items, .. }, OutputMode::Json) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&items).unwrap_or_default()
-            )
-        }
+        (CommandOutput::List { items, .. }, OutputMode::Json) => emit_json(&items),
 
         (CommandOutput::Silent, _) => {}
     }
 }
 
-/// Render a WebPilotError to stderr (Human) or JSON (Json).
+fn emit_json(value: &serde_json::Value) {
+    match serde_json::to_string_pretty(value) {
+        Ok(s) => println!("{s}"),
+        Err(e) => {
+            // Serialization failure of an in-memory Value is essentially
+            // impossible, but we surface it explicitly rather than swallow.
+            eprintln!("Internal: failed to serialize output: {e}");
+            println!(r#"{{"success":false,"error":"output serialization failed"}}"#);
+        }
+    }
+}
+
+/// Render an error to stderr (Human) or stdout (Json).
+///
+/// Guidance text comes from `Display` on the structured error variant — the
+/// data is the source of truth, the message is derived. There is no
+/// fallback that inspects the message text for substrings.
 pub fn render_error(err: &WebPilotError, mode: OutputMode) {
-    let protocol_err = ProtocolError {
-        message: err.message.clone(),
-        code: err.code.clone(),
-    };
     match mode {
-        OutputMode::Human => eprintln!("{}", format_error(&protocol_err)),
-        OutputMode::Json => println!(
-            "{}",
-            serde_json::json!({"success": false, "error": {"message": err.message, "code": err.code.to_string()}})
-        ),
-    }
-}
-
-// ── Error formatting (AI-friendly guidance) ──────────────────────────────────
-
-/// Transform raw error messages into AI-friendly guidance with actionable next steps.
-pub fn format_error(err: &ProtocolError) -> String {
-    match err.code {
-        ErrorCode::ElementNotFound => {
-            let numbers: Vec<&str> = err
-                .message
-                .split(|c: char| !c.is_ascii_digit())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if numbers.len() >= 3 {
-                let idx = numbers[0];
-                let max = numbers[2];
-                return format!(
-                    "Element [{idx}] not found (page has [1]-[{max}]). Re-capture: webpilot capture --dom"
-                );
+        OutputMode::Human => eprintln!("{err}"),
+        OutputMode::Json => {
+            let wire = err.to_wire();
+            match serde_json::to_string(&wire) {
+                Ok(s) => println!(r#"{{"success":false,"error":{s}}}"#),
+                Err(_) => println!(
+                    r#"{{"success":false,"error":{{"code":"Other","message":"output serialization failed"}}}}"#
+                ),
             }
-            format!("{}. Re-capture: webpilot capture --dom", err.message)
         }
-        ErrorCode::SelectorNotFound => {
-            format!(
-                "Selector not found: {}. Verify CSS selector syntax.",
-                err.message
-            )
-        }
-        ErrorCode::Timeout => "Timed out. Try: webpilot wait --timeout 15".into(),
-        ErrorCode::PolicyDenied => "Blocked by policy. Check: webpilot policy list".into(),
-        ErrorCode::CSPViolation => {
-            "CSP blocks script injection. Use: webpilot dom get-text SELECTOR".into()
-        }
-        ErrorCode::NoPage => "No web page open. Navigate: webpilot action navigate URL".into(),
-        ErrorCode::NavigationFailed => {
-            format!("Navigation failed: {}. Check URL and retry.", err.message)
-        }
-        ErrorCode::FrameNotFound => "Frame not found. List frames: webpilot frames list".into(),
-        ErrorCode::InvalidArgument => format!("Invalid argument: {}", err.message),
-        ErrorCode::BridgeUnavailable => {
-            "Bridge not loaded. Try: webpilot capture --dom (re-injects bridge)".into()
-        }
-        ErrorCode::ConnectionLost => "Chrome connection lost. Run: webpilot status".into(),
-        ErrorCode::TabNotFound => "Tab not found. List: webpilot tabs list".into(),
-        ErrorCode::ContextNotFound => "Context not found. List: webpilot context list".into(),
-        ErrorCode::SessionError => format!("Session error: {}", err.message),
-        ErrorCode::Unknown => format_error_str(&err.message),
-    }
-}
-
-/// Format a plain error string with actionable guidance.
-pub fn format_error_str(msg: &str) -> String {
-    if msg.contains("No web page tab") {
-        "No web page open. Navigate: webpilot capture --dom --url URL".into()
-    } else if msg.contains("not running") || msg.contains("Not connected") {
-        "Not connected. Run: webpilot install, then reload Chrome extension".into()
-    } else if msg.contains("Content Security Policy") || msg.contains("CSP") {
-        "CSP blocks eval. Use: webpilot dom get-text SELECTOR".into()
-    } else {
-        msg.to_string()
     }
 }

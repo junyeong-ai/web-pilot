@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand};
-use webpilot::ipc;
-use webpilot::protocol::{Command, ResponseData};
+use webpilot::protocol::{Command, DomProperty, ResponseData};
 
 use crate::output::CommandOutput;
+use crate::transport::Transport;
 
 #[derive(Args)]
 pub struct DomArgs {
@@ -13,50 +13,62 @@ pub struct DomArgs {
 
 #[derive(Subcommand)]
 pub enum DomCommand {
-    /// Set element innerHTML
     #[command(name = "set-html")]
     SetHtml { selector: String, value: String },
-    /// Set element textContent
     #[command(name = "set-text")]
     SetText { selector: String, value: String },
-    /// Set element attribute
     #[command(name = "set-attr")]
     SetAttr {
         selector: String,
         attr: String,
         value: String,
     },
-    /// Get element innerHTML
     #[command(name = "get-html")]
     GetHtml { selector: String },
-    /// Get element textContent
     #[command(name = "get-text")]
     GetText { selector: String },
-    /// Get element attribute value
     #[command(name = "get-attr")]
     GetAttr { selector: String, attr: String },
 }
 
-pub async fn run(args: DomArgs) -> Result<CommandOutput> {
-    let request = match &args.command {
-        DomCommand::SetHtml { selector, value } => make_set(selector, "html", value, None),
-        DomCommand::SetText { selector, value } => make_set(selector, "text", value, None),
+pub async fn run<T: Transport>(transport: &mut T, args: DomArgs) -> Result<CommandOutput> {
+    let cmd = match args.command {
+        DomCommand::SetHtml { selector, value } => Command::DomSet {
+            selector,
+            property: DomProperty::Html,
+            value,
+        },
+        DomCommand::SetText { selector, value } => Command::DomSet {
+            selector,
+            property: DomProperty::Text,
+            value,
+        },
         DomCommand::SetAttr {
             selector,
             attr,
             value,
-        } => make_set(selector, "attr", value, Some(attr.clone())),
-        DomCommand::GetHtml { selector } => make_get(selector, "html", None),
-        DomCommand::GetText { selector } => make_get(selector, "text", None),
-        DomCommand::GetAttr { selector, attr } => make_get(selector, "attr", Some(attr.clone())),
-    }?;
+        } => Command::DomSet {
+            selector,
+            property: DomProperty::Attr { name: attr },
+            value,
+        },
+        DomCommand::GetHtml { selector } => Command::DomGet {
+            selector,
+            property: DomProperty::Html,
+        },
+        DomCommand::GetText { selector } => Command::DomGet {
+            selector,
+            property: DomProperty::Text,
+        },
+        DomCommand::GetAttr { selector, attr } => Command::DomGet {
+            selector,
+            property: DomProperty::Attr { name: attr },
+        },
+    };
 
-    let response = ipc::send_request(&request)
-        .await
-        .context("Host not running")?;
-    let resp: webpilot::protocol::Response = serde_json::from_value(response)?;
+    let result = transport.send(cmd).await?;
 
-    match resp.result {
+    match result {
         ResponseData::CommandResult {
             success,
             value,
@@ -69,41 +81,13 @@ pub async fn run(args: DomArgs) -> Result<CommandOutput> {
                 })
             } else if success {
                 Ok(CommandOutput::Ok("OK".into()))
-            } else if let Some(ref err) = error {
-                anyhow::bail!("{}", crate::output::format_error(err));
             } else {
-                anyhow::bail!("Unknown error");
+                Err(error
+                    .map(anyhow::Error::from)
+                    .unwrap_or_else(|| anyhow::anyhow!("DOM operation failed")))
             }
         }
-        ResponseData::Error { message, .. } => anyhow::bail!("{message}"),
-        _ => anyhow::bail!("Unexpected response"),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
-}
-
-fn make_set(
-    selector: &str,
-    property: &str,
-    value: &str,
-    attr: Option<String>,
-) -> Result<serde_json::Value> {
-    Ok(serde_json::to_value(webpilot::protocol::Request::new(
-        1,
-        Command::DomSet {
-            selector: selector.to_string(),
-            property: property.to_string(),
-            value: value.to_string(),
-            attr,
-        },
-    ))?)
-}
-
-fn make_get(selector: &str, property: &str, attr: Option<String>) -> Result<serde_json::Value> {
-    Ok(serde_json::to_value(webpilot::protocol::Request::new(
-        1,
-        Command::DomGet {
-            selector: selector.to_string(),
-            property: property.to_string(),
-            attr,
-        },
-    ))?)
 }
