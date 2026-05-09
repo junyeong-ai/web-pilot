@@ -11,9 +11,9 @@ pub struct RecordArgs {
     #[arg(long)]
     pub frames: Option<u32>,
 
-    /// Total recording duration in milliseconds (alternative to --frames).
+    /// Total recording duration in seconds (alternative to --frames; fractional allowed).
     #[arg(long)]
-    pub duration: Option<u64>,
+    pub duration: Option<f64>,
 
     /// Interval between frames in milliseconds.
     #[arg(long, default_value = "500")]
@@ -42,7 +42,10 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
 
     let frame_count = match (args.frames, args.duration) {
         (Some(f), _) => f,
-        (None, Some(d)) => ((d as f64 / args.interval as f64).ceil() as u32).max(1),
+        (None, Some(secs)) => {
+            let interval_secs = args.interval as f64 / 1000.0;
+            ((secs / interval_secs).ceil() as u32).max(1)
+        }
         _ => {
             return Err(webpilot::WebPilotError::InvalidArgument {
                 detail: "specify --frames or --duration".into(),
