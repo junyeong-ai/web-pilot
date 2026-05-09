@@ -172,20 +172,19 @@ get_installed_version() {
     fi
 }
 
-get_skill_version() {
-    local skill_md="$1"
-    [ -f "$skill_md" ] && grep "^version:" "$skill_md" 2>/dev/null | sed 's/version: *//' || echo "unknown"
-}
-
-compare_versions() {
-    local v1="$1" v2="$2"
-    [ "$v1" = "$v2" ] && { echo "equal"; return; }
-    [ "$v1" = "unknown" ] || [ "$v2" = "unknown" ] && { echo "unknown"; return; }
-    if [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" = "$v1" ]; then
-        echo "older"
-    else
-        echo "newer"
-    fi
+get_workspace_version() {
+    local cargo_toml="${PROJECT_ROOT:-.}/Cargo.toml"
+    [ -f "$cargo_toml" ] || { echo "unknown"; return; }
+    awk '
+        /^\[workspace\.package\]/ { in_pkg = 1; next }
+        /^\[/                     { in_pkg = 0 }
+        in_pkg && /^version[[:space:]]*=/ {
+            sub(/^version[[:space:]]*=[[:space:]]*"/, "")
+            sub(/".*$/, "")
+            print
+            exit
+        }
+    ' "$cargo_toml"
 }
 
 # --- Download Binary ---------------------------------------------------------
@@ -303,50 +302,27 @@ do_skill_installation() {
     fi
 
     local project_ver
-    project_ver=$(get_skill_version "$PROJECT_SKILL_DIR/SKILL.md")
+    project_ver=$(get_workspace_version)
 
     header "Claude Code Skill" "v$project_ver"
 
     if [ -d "$USER_SKILL_DIR" ] && [ -f "$USER_SKILL_DIR/SKILL.md" ]; then
-        local existing_ver comparison
-        existing_ver=$(get_skill_version "$USER_SKILL_DIR/SKILL.md")
-        comparison=$(compare_versions "$existing_ver" "$project_ver")
-
         echo -e "  ${BOLD}Current:${NC}" >&2
-        echo -e "    ${GREEN}●${NC} User-level  ${DIM}$USER_SKILL_DIR${NC}  v$existing_ver" >&2
+        echo -e "    ${GREEN}●${NC} User-level  ${DIM}$USER_SKILL_DIR${NC}" >&2
         echo "" >&2
 
-        case "$comparison" in
-            equal)
-                success "Already up to date"
-                SUMMARY_SKILL="${GREEN}●${NC} up to date  ${DIM}v$existing_ver${NC}"
-                ;;
-            older)
-                info "Update available: v$existing_ver ${DIM}→${NC} v$project_ver"
-                if prompt_yn "Update? ${DIM}[Y/n]${NC}" "y"; then
-                    local ts; ts=$(date +%Y%m%d_%H%M%S)
-                    cp -r "$USER_SKILL_DIR" "$USER_SKILL_DIR.backup_$ts"
-                    install_skill_files "$USER_SKILL_DIR" "$PROJECT_SKILL_DIR"
-                    success "Updated to v$project_ver  ${DIM}(backup: .backup_$ts)${NC}"
-                    SUMMARY_SKILL="${GREEN}●${NC} updated     ${DIM}v$existing_ver → v$project_ver${NC}"
-                else
-                    SUMMARY_SKILL="${GREEN}●${NC} kept        ${DIM}v$existing_ver${NC}"
-                fi
-                ;;
-            newer)
-                warn "Installed v$existing_ver is newer than source v$project_ver"
-                SUMMARY_SKILL="${GREEN}●${NC} kept        ${DIM}v$existing_ver (newer)${NC}"
-                ;;
-            *)
-                if prompt_yn "Reinstall? ${DIM}[y/N]${NC}" "n"; then
-                    install_skill_files "$USER_SKILL_DIR" "$PROJECT_SKILL_DIR"
-                    success "Reinstalled"
-                    SUMMARY_SKILL="${GREEN}●${NC} reinstalled ${DIM}v$project_ver${NC}"
-                else
-                    SUMMARY_SKILL="${GREEN}●${NC} kept        ${DIM}v$existing_ver${NC}"
-                fi
-                ;;
-        esac
+        if cmp -s "$PROJECT_SKILL_DIR/SKILL.md" "$USER_SKILL_DIR/SKILL.md"; then
+            success "Already up to date"
+            SUMMARY_SKILL="${GREEN}●${NC} up to date  ${DIM}v$project_ver${NC}"
+        elif prompt_yn "Skill changed — overwrite? ${DIM}[Y/n]${NC}" "y"; then
+            local ts; ts=$(date +%Y%m%d_%H%M%S)
+            cp -r "$USER_SKILL_DIR" "$USER_SKILL_DIR.backup_$ts"
+            install_skill_files "$USER_SKILL_DIR" "$PROJECT_SKILL_DIR"
+            success "Updated  ${DIM}(backup: .backup_$ts)${NC}"
+            SUMMARY_SKILL="${GREEN}●${NC} updated     ${DIM}v$project_ver${NC}"
+        else
+            SUMMARY_SKILL="${GREEN}●${NC} kept        ${DIM}(differs from source)${NC}"
+        fi
     else
         echo -e "  ${BOLD}Install scope:${NC}" >&2
         echo "" >&2
@@ -411,8 +387,7 @@ main() {
         echo -e "    ${DIM}○${NC} Binary   ${DIM}$INSTALL_DIR/$BINARY_NAME${NC}  ${DIM}not installed${NC}" >&2
     fi
     if [ -d "$USER_SKILL_DIR" ] && [ -f "$USER_SKILL_DIR/SKILL.md" ]; then
-        local skv; skv=$(get_skill_version "$USER_SKILL_DIR/SKILL.md")
-        echo -e "    ${GREEN}●${NC} Skill    ${DIM}$USER_SKILL_DIR${NC}  v$skv" >&2
+        echo -e "    ${GREEN}●${NC} Skill    ${DIM}$USER_SKILL_DIR${NC}" >&2
     else
         echo -e "    ${DIM}○${NC} Skill    ${DIM}$USER_SKILL_DIR${NC}  ${DIM}not installed${NC}" >&2
     fi

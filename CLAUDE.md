@@ -59,10 +59,10 @@ crates/webpilot-cli/    single binary
       state.rs          cookies, console+network monitoring, session, policies
       browser.rs        do_tab_*, do_frame_*, do_status (browser-level + frames)
   commands/             single command-handler set, generic over Transport
-    action.rs   capture.rs   console.rs   cookies.rs   diff.rs
-    dom.rs      eval.rs      fetch.rs     find.rs       frames.rs
-    install.rs  network.rs   policy.rs    session.rs    status.rs
-    tabs.rs     wait.rs      profile.rs   record.rs     device.rs    context.rs
+    action.rs   capture.rs   console.rs   cookie.rs    diff.rs
+    dom.rs      eval.rs      fetch.rs     find.rs      frame.rs
+    install.rs  network.rs   policy.rs    session.rs   status.rs
+    tab.rs      wait.rs      profile.rs   record.rs    device.rs    context.rs
 
 extension/              Chrome extension (browser mode)
   content/bridge.js     __webpilot_handle entry point

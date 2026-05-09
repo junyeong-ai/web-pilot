@@ -2,15 +2,22 @@
 description: Drive a real Chrome from the command line — open a URL, click an element, type into a form, take a screenshot, run JavaScript, watch network/console traffic, manage cookies and tabs. Use whenever the user pastes a URL, says "open / check / browse / fill / submit / login / scrape / screenshot", asks about a website's contents, or needs to automate any browser flow. Headless Chrome launches automatically — no setup.
 argument-hint: "[url]"
 allowed-tools: Bash Read
-version: 0.2.0
 ---
 
 # WebPilot
 
 `webpilot` is the CLI. JSON when piped, human text in a terminal. `--json` forces JSON.
 
+If invoked with a URL argument, start with `webpilot capture --include dom --url <arg>` to see the page's indexed elements before deciding what to do.
+
+## Lifecycle
+
+- Headless Chrome **auto-starts on the first command** — no setup. `webpilot quit` stops it (use it when switching to an unrelated task to free memory).
+- `--browser` connects to the user's authenticated Chrome instead — preserves SSO, bookmarks, extensions. Requires one-time `webpilot install --extension-id <ID>`.
+- `--context NAME` pins a command to an isolated CDP browser context — for parallel agents on the same Chrome.
+
 ```bash
-webpilot capture --include dom --url "https://example.com"   # headless
+webpilot capture --include dom --url "https://example.com"   # headless (default)
 webpilot --browser capture --include dom                      # user's Chrome (SSO)
 webpilot --context agent-1 capture --include dom              # isolated context
 ```
@@ -116,11 +123,11 @@ webpilot dom set-attr "input" "value" "x"
 ## Frames (iframes)
 
 ```bash
-webpilot frames                            # list, with active_frame_id
-webpilot frames switch "frame-name"        # name attribute
-webpilot frames url "*pattern*"            # URL substring
-webpilot frames find "window.foo === 1"    # JS predicate per-frame
-webpilot frames main                       # back to top frame
+webpilot frame                            # list, with active_frame_id
+webpilot frame switch "frame-name"        # name attribute
+webpilot frame url "*pattern*"            # URL substring
+webpilot frame find "window.foo === 1"    # JS predicate per-frame
+webpilot frame main                       # back to top frame
 ```
 
 After switching, all subsequent eval / capture / dom commands run inside that frame's execution context until you switch back.
@@ -128,20 +135,20 @@ After switching, all subsequent eval / capture / dom commands run inside that fr
 ## Tabs
 
 ```bash
-webpilot tabs                              # list (id / url / title / active)
-webpilot tabs new "https://…"
-webpilot tabs switch <ID>
-webpilot tabs close <ID>
-webpilot tabs find --url "*pattern*"
+webpilot tab                              # list (id / url / title / active)
+webpilot tab new "https://…"
+webpilot tab switch <ID>
+webpilot tab close <ID>
+webpilot tab find --url "*pattern*"
 ```
 
 ## Cookies / session
 
 ```bash
-webpilot cookies list "https://example.com"
-webpilot cookies get  "https://example.com" SESSION
-webpilot cookies set  "https://example.com" name value --secure --httponly
-webpilot cookies delete "https://example.com" name
+webpilot cookie list "https://example.com"
+webpilot cookie get  "https://example.com" SESSION
+webpilot cookie set  "https://example.com" name value --secure --httponly
+webpilot cookie delete "https://example.com" name
 
 webpilot session export                            # → ~/Library/Caches/webpilot/artifacts/session_*.json
 webpilot session export --output /tmp/s.json
@@ -189,7 +196,6 @@ webpilot --context agent-A capture --include dom --url "https://…"
 webpilot --context agent-B capture --include dom --url "https://…"   # isolated cookies
 webpilot context list
 webpilot context close agent-A         # or `--all`
-webpilot --context agent-A quit        # same effect
 ```
 
 Each context is a separate CDP browser context: cookies, localStorage, history are isolated. Up to 16 concurrent. Context state lives in `~/Library/Caches/webpilot/contexts/`.
@@ -215,7 +221,7 @@ webpilot diff --dom        a.json b.json
 webpilot diff --screenshot a.png  b.png             # writes diff.png
 
 webpilot record --frames 10 --interval 500          # PNG sequence in artifacts dir
-webpilot record --duration 5000 --interval 200 --dom
+webpilot record --duration 5 --interval 200 --dom   # 5 seconds, fractional allowed (`--duration 0.5`)
 
 webpilot profile --duration 5                       # → .cpuprofile (Chrome DevTools format)
 ```
@@ -231,13 +237,13 @@ webpilot --browser capture --include dom            # uses logged-in tab
 
 Headless-only commands (`device`, `profile`, `record`, `context`) reject `--browser` with `InvalidArgument`.
 
-## Lifecycle
+## Status
 
 ```bash
 webpilot status                                # connected, mode, chrome_version, tab info
-webpilot quit                                  # stop headless Chrome
-webpilot --context agent-A quit                # close one context (Chrome stays up)
 ```
+
+`webpilot quit` (stop Chrome) and `webpilot context close NAME` (one context only) are documented under Lifecycle and Multi-agent contexts above.
 
 ## Exit codes
 
@@ -265,7 +271,7 @@ Errors carry typed data: `ElementNotFound { requested, available }`, `SelectorNo
 | page still rendering | `wait selector ".content"` or `wait idle` |
 | after `action navigate` | check `url_changed` in response, or `wait navigation` |
 | element below the fold | `action scroll-to N` then `action click N` |
-| inside an iframe | `frames switch "name"` → ops → `frames main` |
+| inside an iframe | `frame switch "name"` → ops → `frame main` |
 | API call with auth | `fetch URL --method POST --body '…'` |
 | debugging a failed click | `network start` → action → `network read`; same with `console` |
 | mobile layout | `device preset iphone-15` then capture |
@@ -284,3 +290,11 @@ Errors carry typed data: `ElementNotFound { requested, available }`, `SelectorNo
 | `PolicyDenied` (6) | inspect `webpilot policy list` and clear/relax with `policy set` |
 | `InvalidArgument` (7) | re-read the relevant `webpilot help <command>` |
 | `NavigationFailed` (8) | URL/network issue — try `eval 'navigator.onLine'`, retry |
+
+## Pitfalls
+
+- **Indices are snapshot-bound.** `[N]` is valid only for the most recent `capture --include dom`. After any DOM-changing action (especially `action navigate`, form submits, or page transitions), re-capture before the next index-based action. `ElementNotFound` (exit 4) almost always means stale indices.
+- **`frame switch` and `tab switch` persist across CLI processes.** Once you switch, every later command (in any new shell) runs in that frame/tab until you switch back (`frame main`, or another `tab switch`). Watch for "wrong frame" symptoms after long sessions.
+- **`action navigate` may race the DOM.** Cross-origin loads and SPA route changes finish at unpredictable times — chain `wait selector` / `wait idle`, or pass `--capture` so the DOM is re-read after settle.
+- **Cookies and storage are per-context.** With `--context X` set, expect zero data sharing across contexts. `session export` only covers the active context's data.
+- **Headless-only commands.** `device`, `profile`, `record`, `context` reject `--browser` with `InvalidArgument` (exit 7). Switch to headless or drop `--browser`.
