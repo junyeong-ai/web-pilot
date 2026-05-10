@@ -13,7 +13,7 @@ mod transport;
 /// The same binary serves three roles, dispatched at startup:
 /// - **CLI**: user-invoked command (default).
 /// - **NM Host**: launched by Chrome via Native Messaging. Detected by a
-///   strict match on argv[1] against the documented Chrome contract:
+///   strict match on `argv[1]` against the documented Chrome contract:
 ///   `chrome-extension://<32-char id [a-p]>/?` (no other shape is valid).
 ///
 /// Errors that escape the entry handlers are always `WebPilotError`. Their
@@ -38,7 +38,7 @@ async fn main() {
 /// Strict check against the Chrome Native Messaging API contract.
 ///
 /// Chrome invokes the host binary with the calling extension's origin as
-/// argv[1]: `chrome-extension://<32-char id>/`. The id alphabet is exactly
+/// `argv[1]`: `chrome-extension://<32-char id>/`. The id alphabet is exactly
 /// `a..=p`. We reject anything else so a stray argv that happens to contain
 /// "chrome-extension://" cannot trigger host mode.
 fn is_nm_host_invocation() -> bool {

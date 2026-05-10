@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a new capability for WebPilot.
+title: "feat: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can you not do today, and why does it matter?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: |
+        How should WebPilot solve it? If this changes the wire protocol
+        (Command / Action / Response / Error), sketch the new variant
+        here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Affected modes
+      multiple: true
+      options:
+        - Headless
+        - Browser
+        - Both
+        - Neither (tooling / docs)
+    validations:
+      required: true

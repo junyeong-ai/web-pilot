@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a defect in WebPilot.
+title: "bug: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. The more reproducible the report,
+        the faster the fix.
+
+  - type: input
+    id: version
+    attributes:
+      label: WebPilot version
+      description: Output of `webpilot --version`.
+      placeholder: webpilot 0.2.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Headless (default)
+        - Browser (--browser)
+        - Both
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Platform
+      options:
+        - macOS (arm64)
+        - macOS (x86_64)
+        - Linux (x86_64)
+        - Linux (arm64)
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: input
+    id: chrome
+    attributes:
+      label: Chrome version
+      description: Output of `webpilot status --json | jq .chrome_version`.
+    validations:
+      required: false
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal command sequence that triggers the bug.
+      render: shell
+      placeholder: |
+        webpilot capture --include dom --url "https://example.com"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include the full error output if any.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Run with `RUST_LOG=webpilot=debug` and paste the relevant tail.
+      render: shell
+    validations:
+      required: false

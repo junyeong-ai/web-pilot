@@ -1,0 +1,15 @@
+# Default owner — every change requires this review unless overridden below.
+*                           @junyeong-ai
+
+# Wire protocol & cross-mode contracts.
+/crates/webpilot/           @junyeong-ai
+
+# Single-binary CLI: transports, command handlers, output renderer.
+/crates/webpilot-cli/       @junyeong-ai
+
+# Browser-mode bridge (Chrome extension surface).
+/extension/                 @junyeong-ai
+
+# CI / release / supply-chain.
+/.github/                   @junyeong-ai
+/deny.toml                  @junyeong-ai
