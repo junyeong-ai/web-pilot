@@ -9,6 +9,7 @@ publish = false
 [[bin]]
 name = "webpilot"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 webpilot = { path = "../webpilot" }
