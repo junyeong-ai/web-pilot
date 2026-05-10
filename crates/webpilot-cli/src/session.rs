@@ -134,12 +134,20 @@ fn is_process_alive(pid: i32) -> bool {
     send_signal(pid, 0).unwrap_or(false)
 }
 
+/// Pure path accessors: locate the PID/WS files without materialising the
+/// runtime directory. Writers must call [`ensure_runtime`] beforehand.
 pub fn pid_path() -> PathBuf {
-    dirs::pid_file()
+    dirs::pid_file_path()
 }
 
 pub fn ws_url_path() -> PathBuf {
-    dirs::ws_url_file()
+    dirs::ws_url_file_path()
+}
+
+/// Materialise the cache + runtime directories. Call this once at any
+/// point that writes to the runtime files (PID, WebSocket URL, lock).
+fn ensure_runtime() {
+    let _ = dirs::runtime_dir();
 }
 
 pub fn read_pid() -> i32 {
@@ -207,6 +215,7 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
 
+    ensure_runtime();
     atomic_write(&pid_path(), &pid.to_string())?;
     atomic_write(&ws_url_path(), &ws_url)?;
 
@@ -215,17 +224,23 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
 }
 
 /// Read the WebSocket URL of an existing healthy session, or `None`.
+///
+/// This is a *read-only inspection*: it must not materialise the runtime
+/// directory just to look at the PID file. We use the pure path accessors
+/// (`*_path()`) and let the callers at write sites create the dir.
 pub fn get_existing_session() -> Option<String> {
-    let pid_str = std::fs::read_to_string(pid_path()).ok()?;
+    let pid_path = dirs::pid_file_path();
+    let ws_path = dirs::ws_url_file_path();
+    let pid_str = std::fs::read_to_string(&pid_path).ok()?;
     let pid: i32 = pid_str.trim().parse().ok()?;
 
     if !is_process_alive(pid) {
-        let _ = std::fs::remove_file(ws_url_path());
-        let _ = std::fs::remove_file(pid_path());
+        let _ = std::fs::remove_file(&ws_path);
+        let _ = std::fs::remove_file(&pid_path);
         return None;
     }
 
-    std::fs::read_to_string(ws_url_path())
+    std::fs::read_to_string(&ws_path)
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())

@@ -86,14 +86,14 @@ fn diagnose(error: &anyhow::Error) -> CommandOutput {
         Some(IpcError::HostNotRunning(path)) => {
             let hint = match check_nm_manifest() {
                 ManifestState::NotFound => {
-                    "  NM manifest not found.\n  Run: webpilot install --extension-id <ID>".into()
+                    "  NM manifest not found.\n  Run: webpilot setup nm-host --extension-id <ID>".into()
                 }
                 ManifestState::InvalidJson => {
-                    "  NM manifest is corrupted (invalid JSON).\n  Run: webpilot install --extension-id <ID>"
+                    "  NM manifest is corrupted (invalid JSON).\n  Run: webpilot setup nm-host --extension-id <ID>"
                         .into()
                 }
                 ManifestState::BinaryMissing(p) => format!(
-                    "  NM manifest binary not found: {p}\n  Run: cargo install --path crates/webpilot-cli"
+                    "  NM manifest binary not found: {p}\n  Re-register with: webpilot setup nm-host --extension-id <ID>"
                 ),
                 ManifestState::Ok => {
                     "  NM manifest OK. Ensure the extension is loaded and active in Chrome.".into()

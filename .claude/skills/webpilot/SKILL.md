@@ -13,7 +13,7 @@ If invoked with a URL argument, start with `webpilot capture --include dom --url
 ## Lifecycle
 
 - Headless Chrome **auto-starts on the first command** — no setup. `webpilot quit` stops it (use it when switching to an unrelated task to free memory).
-- `--browser` connects to the user's authenticated Chrome instead — preserves SSO, bookmarks, extensions. Requires one-time `webpilot install --extension-id <ID>`.
+- `--browser` connects to the user's authenticated Chrome instead — preserves SSO, bookmarks, extensions. Requires a one-time `webpilot setup` (extracts the extension and registers the Native Messaging host).
 - `--context NAME` pins a command to an isolated CDP browser context — for parallel agents on the same Chrome.
 
 ```bash
@@ -229,8 +229,9 @@ webpilot profile --duration 5                       # → .cpuprofile (Chrome De
 ## Browser mode (`--browser`) — user's authenticated Chrome
 
 ```bash
-webpilot install --extension-id <32-char-id>        # one-time NM host manifest install
-# then load extension/ in chrome://extensions
+webpilot setup extension                            # extracts ext to ~/.local/share/webpilot/extension/
+# load that path in chrome://extensions, copy the 32-char ID
+webpilot setup nm-host --extension-id <32-char-id>  # registers the Native Messaging host
 webpilot --browser status
 webpilot --browser capture --include dom            # uses logged-in tab
 ```

@@ -1,3 +1,4 @@
+mod assets;
 mod cdp;
 mod cli;
 mod commands;

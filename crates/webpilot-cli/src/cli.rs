@@ -53,8 +53,16 @@ pub async fn run_cli() -> Result<()> {
 
     // Mode-independent commands handled before any transport is opened.
     match cli.command {
-        Cmd::Install(args) => {
-            output::render(commands::install::run(args).await?, mode);
+        Cmd::Setup(args) => {
+            output::render(commands::setup::run(args).await?, mode);
+            return Ok(());
+        }
+        Cmd::SelfCmd(args) => {
+            output::render(commands::self_cmd::run(args)?, mode);
+            return Ok(());
+        }
+        Cmd::Uninstall(args) => {
+            output::render(commands::uninstall::run(args).await?, mode);
             return Ok(());
         }
         Cmd::Diff(args) => {
@@ -77,7 +85,9 @@ async fn run_browser_mode(command: commands::Command, mode: OutputMode) -> Resul
         Cmd::Device(_) | Cmd::Profile(_) | Cmd::Record(_) | Cmd::Context(_) | Cmd::Quit => {
             Err(headless_only(label_of(&command)))
         }
-        Cmd::Diff(_) | Cmd::Install(_) => unreachable!("handled in run_cli"),
+        Cmd::Diff(_) | Cmd::Setup(_) | Cmd::SelfCmd(_) | Cmd::Uninstall(_) => {
+            unreachable!("handled in run_cli")
+        }
         cmd => dispatch_via_transport(&mut IpcTransport::new(), cmd).await,
     };
     output::render(result?, mode);
@@ -109,7 +119,12 @@ async fn run_headless_mode(
         Cmd::Device(args) => commands::device::run(&mut transport, args).await,
         Cmd::Context(args) => commands::context::run(&mut transport, args).await,
 
-        Cmd::Status | Cmd::Quit | Cmd::Diff(_) | Cmd::Install(_) => {
+        Cmd::Status
+        | Cmd::Quit
+        | Cmd::Diff(_)
+        | Cmd::Setup(_)
+        | Cmd::SelfCmd(_)
+        | Cmd::Uninstall(_) => {
             unreachable!("handled before this match")
         }
 
@@ -148,7 +163,9 @@ async fn dispatch_via_transport<T: Transport>(
         | Cmd::Record(_)
         | Cmd::Context(_)
         | Cmd::Diff(_)
-        | Cmd::Install(_) => unreachable!("non-transport command reached generic dispatch"),
+        | Cmd::Setup(_)
+        | Cmd::SelfCmd(_)
+        | Cmd::Uninstall(_) => unreachable!("non-transport command reached generic dispatch"),
     }
 }
 

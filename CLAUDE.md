@@ -61,8 +61,11 @@ crates/webpilot-cli/    single binary
   commands/             single command-handler set, generic over Transport
     action.rs   capture.rs   console.rs   cookie.rs    diff.rs
     dom.rs      eval.rs      fetch.rs     find.rs      frame.rs
-    install.rs  network.rs   policy.rs    session.rs   status.rs
-    tab.rs      wait.rs      profile.rs   record.rs    device.rs    context.rs
+    network.rs  policy.rs    session.rs   status.rs    tab.rs
+    wait.rs     profile.rs   record.rs    device.rs    context.rs
+    self_cmd.rs uninstall.rs setup/{mod,skill,extension,nm_host}.rs
+
+  assets.rs               compile-time embedded skill + extension (include_dir!)
 
 extension/              Chrome extension (browser mode)
   content/bridge.js     __webpilot_handle entry point

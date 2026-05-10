@@ -19,16 +19,26 @@
 ## 빠른 시작
 
 ```bash
-# 빌드
-cargo build --release
+# 한 줄 설치 — 바이너리 다운로드 + 체크섬 검증 + 대화형 셋업
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
 
 # 바로 사용 (headless — Chrome 자동 실행)
 webpilot capture --dom --url "https://example.com"
 
 # SSO가 필요한 경우 (사용자 Chrome 연결)
-webpilot install --extension-id <ID>
+webpilot setup extension                       # 확장 추출 + Chrome 가이드
+webpilot setup nm-host --extension-id <ID>     # Native Messaging host 등록
 webpilot --browser capture --dom
 ```
+
+설치 옵션:
+
+| 환경변수 | 기본값 | 설명 |
+|---|---|---|
+| `WEBPILOT_VERSION` | latest | 특정 태그로 핀 (예: `v0.3.0`) |
+| `WEBPILOT_INSTALL_DIR` | `$HOME/.local/bin` | 설치 경로 |
+| `WEBPILOT_REPO` | `junyeong-ai/web-pilot` | 포크 사용 시 오버라이드 |
+| `WEBPILOT_NO_SETUP=1` | — | 설치 후 `webpilot setup` 자동 실행 생략 |
 
 ---
 
@@ -135,13 +145,21 @@ Browser (--browser):
 
 ---
 
-## Claude Code 스킬
+## 생애주기
 
 ```bash
-./scripts/install.sh          # 바이너리 + 스킬 통합 설치
+webpilot setup                 # 스킬 + 확장 + NM host 대화형 셋업
+webpilot setup skill           # 스킬만 재설치/갱신
+webpilot setup extension       # 확장 추출 + Chrome 안내 (chrome://extensions 자동 오픈)
+webpilot setup nm-host --extension-id <ID>
+
+webpilot self update           # 최신 release로 자기 업데이트 (atomic, sha256 검증)
+webpilot self update --version 0.3.0   # 특정 버전 핀
+
+webpilot uninstall             # 흔적 없이 제거 (Chrome 종료 + 모든 디렉토리 정리)
 ```
 
-설치 후 Claude Code에서 `/webpilot` 또는 자연어로 자동 활성화됩니다.
+스킬과 확장은 바이너리에 컴파일 타임 임베드되어 있습니다. 버전 드리프트가 원천적으로 발생하지 않으며, 설치 후 별도 다운로드 단계가 없습니다. 설치 후 Claude Code에서 `/webpilot` 또는 자연어로 자동 활성화됩니다.
 
 ---
 

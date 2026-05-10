@@ -1,490 +1,149 @@
 #!/usr/bin/env bash
-set -e
-
-# ============================================================================
-#  WebPilot Installer
-#  Installs the webpilot binary and optionally the Claude Code skill.
+# WebPilot installer.
 #
-#  Usage:
-#    ./scripts/install.sh              # Interactive
-#    ./scripts/install.sh --yes        # Accept all defaults (CI)
-#    ./scripts/install.sh --source     # Force build from source
-#    ./scripts/install.sh --no-skill   # Skip skill installation
-#    ./scripts/install.sh --quiet      # Minimal output
-# ============================================================================
+# Single responsibility: land a verified `webpilot` binary on PATH and
+# hand off to `webpilot setup` for everything else (Claude skill, Chrome
+# extension, Native Messaging host). The binary owns its own lifecycle —
+# update via `webpilot self update`, uninstall via `webpilot uninstall`.
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
+#
+# Environment:
+#   WEBPILOT_VERSION       Pin to a specific tag (e.g. v0.3.0). Default: latest.
+#   WEBPILOT_INSTALL_DIR   Install path. Default: $HOME/.local/bin.
+#   WEBPILOT_REPO          Override repo (e.g. fork). Default: junyeong-ai/web-pilot.
+#   WEBPILOT_NO_SETUP=1    Skip the post-install `webpilot setup` walkthrough.
+#
+set -euo pipefail
 
-BINARY_NAME="webpilot"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
-REPO="junyeong-ai/web-pilot"
-SKILL_NAME="webpilot"
+REPO="${WEBPILOT_REPO:-junyeong-ai/web-pilot}"
+INSTALL_DIR="${WEBPILOT_INSTALL_DIR:-$HOME/.local/bin}"
+VERSION="${WEBPILOT_VERSION:-}"
 
-# Flags
-YES=false
-QUIET=false
-NO_SKILL=false
-FORCE_SOURCE=false
-FORCE_DOWNLOAD=false
+# --- output ------------------------------------------------------------------
 
-# State tracking for summary
-SUMMARY_BINARY=""
-SUMMARY_SKILL=""
-SUMMARY_PATH=""
+if [ -t 2 ]; then C_DIM=$'\033[2m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_RED=$'\033[31m'; C_RST=$'\033[0m'
+else            C_DIM=; C_GRN=; C_YEL=; C_RED=; C_RST=
+fi
+say()  { printf '  %s→%s %s\n' "$C_DIM" "$C_RST" "$*" >&2; }
+ok()   { printf '  %s✓%s %s\n' "$C_GRN" "$C_RST" "$*" >&2; }
+warn() { printf '  %s!%s %s\n' "$C_YEL" "$C_RST" "$*" >&2; }
+die()  { printf '  %s✗%s %s\n' "$C_RED" "$C_RST" "$*" >&2; exit 1; }
 
-# --- Colors & Helpers --------------------------------------------------------
+require() { command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1"; }
+require curl
+require tar
 
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-RED='\033[0;31m'
-BOLD='\033[1m'
-DIM='\033[2m'
-NC='\033[0m'
+# --- platform ----------------------------------------------------------------
 
-info()    { $QUIET || echo -e "  ${CYAN}→${NC} $*" >&2; }
-success() { $QUIET || echo -e "  ${GREEN}✓${NC} $*" >&2; }
-warn()    { echo -e "  ${YELLOW}!${NC} $*" >&2; }
-error()   { echo -e "  ${RED}✗${NC} $*" >&2; }
-header()  { $QUIET || { echo "" >&2; echo -e "  ${BOLD}${BLUE}$1${NC}  ${DIM}$2${NC}" >&2; echo -e "  ${DIM}────────────────────────────────────${NC}" >&2; echo "" >&2; }; }
-divider() { $QUIET || echo -e "  ${DIM}────────────────────────────────────${NC}" >&2; }
+case "$(uname -s)" in
+    Linux)  os="unknown-linux-gnu" ;;
+    Darwin) os="apple-darwin" ;;
+    *)      die "unsupported OS: $(uname -s)" ;;
+esac
+case "$(uname -m)" in
+    x86_64|amd64)   arch="x86_64" ;;
+    arm64|aarch64)  arch="aarch64" ;;
+    *)              die "unsupported architecture: $(uname -m)" ;;
+esac
+target="${arch}-${os}"
 
-prompt() {
-    local message="$1" default="$2" var="$3"
-    if $YES; then
-        eval "$var=\"$default\""
-        return
-    fi
-    printf "  %b " "$message" >&2
-    read -r reply
-    eval "$var=\"${reply:-$default}\""
-}
+# --- resolve version ---------------------------------------------------------
 
-prompt_yn() {
-    local message="$1" default="$2"
-    if $YES; then
-        [ "$default" = "y" ] && return 0 || return 1
-    fi
-    printf "  %b " "$message" >&2
-    read -r reply
-    reply="${reply:-$default}"
-    [[ "$reply" =~ ^[yY]$ ]]
-}
-
-# --- Parse Flags -------------------------------------------------------------
-
-for arg in "$@"; do
-    case "$arg" in
-        --yes|-y)        YES=true ;;
-        --quiet|-q)      QUIET=true; YES=true ;;
-        --no-skill)      NO_SKILL=true ;;
-        --source)        FORCE_SOURCE=true ;;
-        --download)      FORCE_DOWNLOAD=true ;;
-        --help|-h)
-            echo "Usage: install.sh [--yes] [--quiet] [--no-skill] [--source] [--download]"
-            exit 0 ;;
-        *)               warn "Unknown flag: $arg" ;;
+if [ -z "$VERSION" ]; then
+    say "Resolving latest release"
+    redirect=$(curl -fsSLI --connect-timeout 10 -o /dev/null -w '%{url_effective}' \
+        "https://github.com/$REPO/releases/latest") \
+        || die "could not reach GitHub releases"
+    case "$redirect" in
+        */releases/tag/v*)
+            VERSION="${redirect##*/releases/tag/v}"
+            VERSION="${VERSION%%[/?#]*}"
+            ;;
+        *)
+            die "no published release at github.com/$REPO — pin one with WEBPILOT_VERSION=vX.Y.Z"
+            ;;
     esac
-done
+fi
+VERSION="${VERSION#v}"
+[[ "$VERSION" =~ ^[0-9][0-9A-Za-z._+-]*$ ]] || die "invalid version: $VERSION"
 
-# --- Resolve Project Root ----------------------------------------------------
+# --- download + verify -------------------------------------------------------
 
-resolve_project_root() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+archive="webpilot-${VERSION}-${target}.tar.gz"
+base="https://github.com/$REPO/releases/download/v${VERSION}"
 
-    # Running from scripts/ inside the project
-    if [ -f "$script_dir/../Cargo.toml" ]; then
-        echo "$(cd "$script_dir/.." && pwd)"
-        return
-    fi
-    # Running from project root
-    if [ -f "./Cargo.toml" ]; then
-        echo "$(pwd)"
-        return
-    fi
-    echo ""
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/webpilot-install.XXXXXX")
+staged=""
+cleanup() {
+    rm -rf "$tmp"
+    [ -n "$staged" ] && [ -f "$staged" ] && rm -f "$staged"
 }
+trap cleanup EXIT
 
-PROJECT_ROOT=$(resolve_project_root)
-PROJECT_SKILL_DIR="${PROJECT_ROOT:+$PROJECT_ROOT/.claude/skills/$SKILL_NAME}"
-USER_SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
+say "Downloading $archive"
+curl -fsSL --retry 3 --connect-timeout 10 -o "$tmp/$archive" "$base/$archive" \
+    || die "download failed: $base/$archive"
+curl -fsSL --retry 3 --connect-timeout 10 -o "$tmp/$archive.sha256" "$base/$archive.sha256" \
+    || die "checksum download failed: $base/$archive.sha256"
 
-# --- Toolchain Detection -----------------------------------------------------
+say "Verifying checksum"
+if   command -v sha256sum >/dev/null 2>&1; then
+    ( cd "$tmp" && sha256sum -c "$archive.sha256" >/dev/null )
+elif command -v shasum >/dev/null 2>&1; then
+    ( cd "$tmp" && shasum -a 256 -c "$archive.sha256" >/dev/null )
+else
+    die "no sha256 tool found (need sha256sum or shasum)"
+fi
 
-CARGO=""
+# --- extract + atomic install -----------------------------------------------
 
-find_cargo() {
-    # 1. Already in PATH
-    local c
-    c=$(command -v cargo 2>/dev/null) && [ -x "$c" ] && { echo "$c"; return 0; }
-    # 2. rustup default (~/.cargo/bin)
-    [ -x "$HOME/.cargo/bin/cargo" ] && { echo "$HOME/.cargo/bin/cargo"; return 0; }
-    # 3. mise shim
-    [ -x "$HOME/.local/share/mise/shims/cargo" ] && { echo "$HOME/.local/share/mise/shims/cargo"; return 0; }
-    # 4. mise which (activate mode, no shims in PATH)
-    c=$(mise which cargo 2>/dev/null) && [ -x "$c" ] && { echo "$c"; return 0; }
-    # 5. asdf shim
-    [ -x "$HOME/.asdf/shims/cargo" ] && { echo "$HOME/.asdf/shims/cargo"; return 0; }
-    # 6. Well-known system paths (brew, system)
-    local p
-    for p in /opt/homebrew/bin/cargo /usr/local/bin/cargo /usr/bin/cargo; do
-        [ -x "$p" ] && { echo "$p"; return 0; }
-    done
-    return 1
-}
+tar -xzf "$tmp/$archive" -C "$tmp"
+extracted="$tmp/webpilot-${VERSION}-${target}/webpilot"
+[ -x "$extracted" ] || die "archive missing webpilot binary"
 
-# --- Platform Detection ------------------------------------------------------
+mkdir -p "$INSTALL_DIR"
+staged="$INSTALL_DIR/.webpilot.install.$$"
+cp "$extracted" "$staged"
+chmod 0755 "$staged"
+mv -f "$staged" "$INSTALL_DIR/webpilot"
+staged=""  # mv consumed it; tell trap there's nothing to clean
 
-detect_platform() {
-    local os arch
-    os=$(uname -s | tr '[:upper:]' '[:lower:]')
-    arch=$(uname -m)
+if [ "$os" = "apple-darwin" ]; then
+    codesign --force --sign - "$INSTALL_DIR/webpilot" 2>/dev/null || true
+fi
 
-    case "$os" in
-        linux)  os="unknown-linux-gnu" ;;
-        darwin) os="apple-darwin" ;;
-        *)      error "Unsupported OS: $os"; exit 1 ;;
-    esac
+ok "Installed webpilot v$VERSION to $INSTALL_DIR/webpilot"
 
-    case "$arch" in
-        x86_64)        arch="x86_64" ;;
-        aarch64|arm64) arch="aarch64" ;;
-        *)             error "Unsupported architecture: $arch"; exit 1 ;;
-    esac
+# --- PATH guidance -----------------------------------------------------------
 
-    echo "${arch}-${os}"
-}
+case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *)
+        warn "$INSTALL_DIR is not on PATH"
+        printf '\n    Add to your shell profile (~/.zshrc, ~/.bashrc):\n' >&2
+        # shellcheck disable=SC2016  # literal $PATH for the user to copy
+        printf '      export PATH="%s:$PATH"\n\n' "$INSTALL_DIR" >&2
+        ;;
+esac
 
-# --- Version Helpers ---------------------------------------------------------
+# --- hand off to `webpilot setup` -------------------------------------------
+#
+# `curl ... | bash` consumes stdin with the script content, so a binary
+# spawned from inside the pipeline cannot read from stdin. We re-route stdin
+# from /dev/tty when one is available so `webpilot setup` can prompt the
+# user. If neither $1 nor /dev/tty exists, we just print the next step.
 
-get_latest_version() {
-    curl -sf "https://api.github.com/repos/$REPO/releases/latest" \
-        | grep '"tag_name"' \
-        | sed -E 's/.*"v([^"]+)".*/\1/' \
-        || echo ""
-}
+if [ "${WEBPILOT_NO_SETUP:-0}" = "1" ]; then
+    exit 0
+fi
 
-get_installed_version() {
-    if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
-        "$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null | sed -E 's/.*[[:space:]]+//' || echo "unknown"
-    else
-        echo ""
-    fi
-}
-
-get_workspace_version() {
-    local cargo_toml="${PROJECT_ROOT:-.}/Cargo.toml"
-    [ -f "$cargo_toml" ] || { echo "unknown"; return; }
-    awk '
-        /^\[workspace\.package\]/ { in_pkg = 1; next }
-        /^\[/                     { in_pkg = 0 }
-        in_pkg && /^version[[:space:]]*=/ {
-            sub(/^version[[:space:]]*=[[:space:]]*"/, "")
-            sub(/".*$/, "")
-            print
-            exit
-        }
-    ' "$cargo_toml"
-}
-
-# --- Download Binary ---------------------------------------------------------
-
-download_binary() {
-    local version="$1" target="$2"
-    local archive="webpilot-v${version}-${target}.tar.gz"
-    local url="https://github.com/$REPO/releases/download/v${version}/${archive}"
-    local checksum_url="${url}.sha256"
-    local tmpdir
-    tmpdir=$(mktemp -d)
-
-    info "Downloading ${BOLD}$archive${NC}..."
-
-    if ! curl -fL -o "$tmpdir/$archive" "$url" 2>/dev/null; then
-        rm -rf "$tmpdir"
-        return 1
-    fi
-
-    # Verify checksum
-    if curl -fL -o "$tmpdir/${archive}.sha256" "$checksum_url" 2>/dev/null; then
-        cd "$tmpdir"
-        if command -v sha256sum >/dev/null; then
-            sha256sum -c "${archive}.sha256" >/dev/null 2>&1 || { error "Checksum mismatch"; rm -rf "$tmpdir"; return 1; }
-        elif command -v shasum >/dev/null; then
-            shasum -a 256 -c "${archive}.sha256" >/dev/null 2>&1 || { error "Checksum mismatch"; rm -rf "$tmpdir"; return 1; }
-        fi
-        success "Checksum verified"
-        cd - >/dev/null
-    fi
-
-    tar -xzf "$tmpdir/$archive" -C "$tmpdir" 2>/dev/null
-    echo "$tmpdir/$BINARY_NAME"
-}
-
-# --- Build from Source -------------------------------------------------------
-
-build_from_source() {
-    if [ -z "$PROJECT_ROOT" ]; then
-        error "Not in project directory — cannot build from source"
-        error "Run from the web-pilot repo, or use ${BOLD}--download${NC}"
-        exit 1
-    fi
-
-    if [ -z "$CARGO" ]; then
-        error "cargo not found — install Rust: https://rustup.rs"
-        exit 1
-    fi
-
-    info "Building from source... ${DIM}(this may take a few minutes)${NC}"
-    $QUIET || info "Using ${DIM}$CARGO${NC}"
-    echo "" >&2
-
-    local build_log
-    build_log=$(mktemp)
-
-    (cd "$PROJECT_ROOT" && "$CARGO" build --release 2>&1) | tee "$build_log" | while IFS= read -r line; do
-        if $QUIET; then
-            :
-        elif echo "$line" | grep -q "^   Compiling"; then
-            printf "\r  ${DIM}%s${NC}%40s" "$line" "" >&2
-        elif echo "$line" | grep -q "Finished"; then
-            printf "\r%80s\r" "" >&2
-            success "$line"
-        elif echo "$line" | grep -q "^error"; then
-            echo "  $line" >&2
-        fi
-    done
-
-    if ! grep -q "^    Finished" "$build_log"; then
-        error "Build failed"
-        rm -f "$build_log"
-        exit 1
-    fi
-    rm -f "$build_log"
-
-    echo "$PROJECT_ROOT/target/release/$BINARY_NAME"
-}
-
-# --- Install Binary ----------------------------------------------------------
-
-install_binary() {
-    local binary_path="$1"
-
-    mkdir -p "$INSTALL_DIR"
-    cp "$binary_path" "$INSTALL_DIR/$BINARY_NAME"
-    chmod +x "$INSTALL_DIR/$BINARY_NAME"
-
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        codesign --force --deep --sign - "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null || true
-    fi
-
-    # Clean up temp dir if download was used
-    local tmpdir
-    tmpdir=$(dirname "$binary_path")
-    if [ "$tmpdir" != "$PROJECT_ROOT/target/release" ]; then
-        rm -rf "$tmpdir"
-    fi
-}
-
-# --- Skill Installation ------------------------------------------------------
-
-install_skill_files() {
-    local dest="$1" source="$2"
-    mkdir -p "$dest"
-    cp "$source/SKILL.md" "$dest/SKILL.md"
-}
-
-do_skill_installation() {
-    if $NO_SKILL; then return 0; fi
-    if [ -z "$PROJECT_SKILL_DIR" ] || [ ! -f "$PROJECT_SKILL_DIR/SKILL.md" ]; then
-        $QUIET || warn "Skill source not found — skipping"
-        SUMMARY_SKILL="skipped ${DIM}(source not found)${NC}"
-        return 0
-    fi
-
-    local project_ver
-    project_ver=$(get_workspace_version)
-
-    header "Claude Code Skill" "v$project_ver"
-
-    if [ -d "$USER_SKILL_DIR" ] && [ -f "$USER_SKILL_DIR/SKILL.md" ]; then
-        echo -e "  ${BOLD}Current:${NC}" >&2
-        echo -e "    ${GREEN}●${NC} User-level  ${DIM}$USER_SKILL_DIR${NC}" >&2
-        echo "" >&2
-
-        if cmp -s "$PROJECT_SKILL_DIR/SKILL.md" "$USER_SKILL_DIR/SKILL.md"; then
-            success "Already up to date"
-            SUMMARY_SKILL="${GREEN}●${NC} up to date  ${DIM}v$project_ver${NC}"
-        elif prompt_yn "Skill changed — overwrite? ${DIM}[Y/n]${NC}" "y"; then
-            local ts; ts=$(date +%Y%m%d_%H%M%S)
-            cp -r "$USER_SKILL_DIR" "$USER_SKILL_DIR.backup_$ts"
-            install_skill_files "$USER_SKILL_DIR" "$PROJECT_SKILL_DIR"
-            success "Updated  ${DIM}(backup: .backup_$ts)${NC}"
-            SUMMARY_SKILL="${GREEN}●${NC} updated     ${DIM}v$project_ver${NC}"
-        else
-            SUMMARY_SKILL="${GREEN}●${NC} kept        ${DIM}(differs from source)${NC}"
-        fi
-    else
-        echo -e "  ${BOLD}Install scope:${NC}" >&2
-        echo "" >&2
-        echo -e "    ${CYAN}1${NC}  User-level   ${DIM}All projects on this machine${NC}" >&2
-        echo -e "    ${CYAN}2${NC}  Skip" >&2
-        echo "" >&2
-
-        local choice
-        prompt "Choice ${DIM}[1]${NC}:" "1" choice
-
-        case "$choice" in
-            1)
-                install_skill_files "$USER_SKILL_DIR" "$PROJECT_SKILL_DIR"
-                success "Skill installed to ${DIM}$USER_SKILL_DIR${NC}"
-                SUMMARY_SKILL="${GREEN}●${NC} installed   ${DIM}v$project_ver${NC}"
-                ;;
-            *)
-                SUMMARY_SKILL="${DIM}○${NC} skipped"
-                ;;
-        esac
-    fi
-}
-
-# --- Summary -----------------------------------------------------------------
-
-print_summary() {
-    $QUIET && return
-
-    echo "" >&2
-    echo -e "  ${BOLD}Summary${NC}" >&2
-    divider
-    echo -e "    Binary   $SUMMARY_BINARY" >&2
-    echo -e "    Skill    $SUMMARY_SKILL" >&2
-    echo -e "    PATH     $SUMMARY_PATH" >&2
-    divider
-    echo "" >&2
-
-    echo -e "  ${BOLD}Next steps:${NC}" >&2
-    echo -e "    ${CYAN}→${NC} ${BOLD}$BINARY_NAME status${NC}                              Check connection" >&2
-    echo -e "    ${CYAN}→${NC} ${BOLD}$BINARY_NAME capture --include dom --url${NC} \"https://...\"   Capture a page" >&2
-    echo -e "    ${CYAN}→${NC} ${BOLD}/webpilot${NC} in Claude Code                        Invoke skill" >&2
-    echo "" >&2
-}
-
-# --- Main --------------------------------------------------------------------
-
-main() {
-    header "WebPilot" "Installer"
-
-    # --- Prerequisites ---
-    local target version installed_ver
-    target=$(detect_platform)
-    version=$(get_latest_version)
-    installed_ver=$(get_installed_version)
-    CARGO=$(find_cargo 2>/dev/null || true)
-
-    # Show current status
-    echo -e "  ${BOLD}Status:${NC}" >&2
-    if [ -n "$installed_ver" ]; then
-        echo -e "    ${GREEN}●${NC} Binary   ${DIM}$INSTALL_DIR/$BINARY_NAME${NC}  v$installed_ver" >&2
-    else
-        echo -e "    ${DIM}○${NC} Binary   ${DIM}$INSTALL_DIR/$BINARY_NAME${NC}  ${DIM}not installed${NC}" >&2
-    fi
-    if [ -d "$USER_SKILL_DIR" ] && [ -f "$USER_SKILL_DIR/SKILL.md" ]; then
-        echo -e "    ${GREEN}●${NC} Skill    ${DIM}$USER_SKILL_DIR${NC}" >&2
-    else
-        echo -e "    ${DIM}○${NC} Skill    ${DIM}$USER_SKILL_DIR${NC}  ${DIM}not installed${NC}" >&2
-    fi
-    if [ -n "$PROJECT_ROOT" ]; then
-        echo -e "    ${GREEN}●${NC} Source   ${DIM}$PROJECT_ROOT${NC}" >&2
-    else
-        echo -e "    ${DIM}○${NC} Source   ${DIM}not in project directory${NC}" >&2
-    fi
-    if [ -n "$CARGO" ]; then
-        local cargo_ver; cargo_ver=$("$CARGO" --version 2>/dev/null | head -1 || echo "unknown")
-        echo -e "    ${GREEN}●${NC} Cargo    ${DIM}$CARGO${NC}  ${DIM}($cargo_ver)${NC}" >&2
-    else
-        echo -e "    ${DIM}○${NC} Cargo    ${DIM}not found${NC}" >&2
-    fi
-    echo "" >&2
-
-    # --- Choose install method ---
-    local binary_path=""
-    local can_download=false can_build=false
-
-    [ -n "$version" ] && command -v curl >/dev/null && can_download=true
-    [ -n "$PROJECT_ROOT" ] && [ -n "$CARGO" ] && can_build=true
-
-    if $FORCE_SOURCE; then
-        binary_path=$(build_from_source)
-    elif $FORCE_DOWNLOAD; then
-        if ! $can_download; then
-            error "Cannot download — no release found or curl missing"
-            exit 1
-        fi
-        binary_path=$(download_binary "$version" "$target") || { error "Download failed"; exit 1; }
-    elif $can_download && $can_build; then
-        if [ -n "$version" ]; then
-            info "Latest release: ${BOLD}v$version${NC}  ${DIM}($target)${NC}"
-        fi
-        echo "" >&2
-        echo -e "  ${BOLD}Install method:${NC}" >&2
-        echo "" >&2
-        echo -e "    ${CYAN}1${NC}  Download prebuilt binary  ${DIM}(fast)${NC}" >&2
-        echo -e "    ${CYAN}2${NC}  Build from source         ${DIM}(requires Rust)${NC}" >&2
-        echo "" >&2
-
-        local method
-        prompt "Choice ${DIM}[1]${NC}:" "1" method
-
-        case "$method" in
-            2)  binary_path=$(build_from_source) ;;
-            *)
-                binary_path=$(download_binary "$version" "$target") || {
-                    warn "Download failed, falling back to source build"
-                    binary_path=$(build_from_source)
-                }
-                ;;
-        esac
-    elif $can_download; then
-        info "Downloading v$version..."
-        binary_path=$(download_binary "$version" "$target") || { error "Download failed"; exit 1; }
-    elif $can_build; then
-        binary_path=$(build_from_source)
-    else
-        error "Cannot install: no release available and cargo not found"
-        error "Install Rust (https://rustup.rs) or download a release from GitHub"
-        exit 1
-    fi
-
-    # --- Install binary ---
-    install_binary "$binary_path"
-
-    local new_ver
-    new_ver=$("$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null | sed -E 's/.*[[:space:]]+//' || echo "installed")
-
-    if [ -n "$installed_ver" ] && [ "$installed_ver" != "$new_ver" ]; then
-        success "Binary updated  ${DIM}v$installed_ver → v$new_ver${NC}"
-        SUMMARY_BINARY="${GREEN}●${NC} $INSTALL_DIR/$BINARY_NAME  ${DIM}v$installed_ver → v$new_ver${NC}"
-    elif [ -n "$installed_ver" ]; then
-        success "Binary reinstalled  ${DIM}v$new_ver${NC}"
-        SUMMARY_BINARY="${GREEN}●${NC} $INSTALL_DIR/$BINARY_NAME  ${DIM}v$new_ver (reinstalled)${NC}"
-    else
-        success "Binary installed  ${DIM}v$new_ver${NC}"
-        SUMMARY_BINARY="${GREEN}●${NC} $INSTALL_DIR/$BINARY_NAME  ${DIM}v$new_ver${NC}"
-    fi
-
-    # --- PATH check ---
-    if echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
-        SUMMARY_PATH="${GREEN}●${NC} $INSTALL_DIR ${DIM}in PATH${NC}"
-    else
-        warn "$INSTALL_DIR is not in PATH"
-        echo -e "    ${DIM}Add to ~/.zshrc or ~/.bashrc:${NC}" >&2
-        echo -e "    ${BOLD}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}" >&2
-        SUMMARY_PATH="${YELLOW}!${NC} $INSTALL_DIR ${DIM}not in PATH${NC}"
-    fi
-
-    # --- Skill installation ---
-    do_skill_installation
-
-    # --- Summary ---
-    print_summary
-}
-
-main "$@"
+if [ -r /dev/tty ]; then
+    printf '\n' >&2
+    "$INSTALL_DIR/webpilot" setup < /dev/tty
+else
+    # shellcheck disable=SC2016  # literal `webpilot setup` is a command to copy
+    printf '\n  Next: run `%s` to install the Claude skill and Chrome extension.\n' \
+        "webpilot setup" >&2
+fi

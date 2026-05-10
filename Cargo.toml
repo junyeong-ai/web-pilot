@@ -39,6 +39,9 @@ tokio-tungstenite = "0.29"
 # Unix syscalls
 libc = "0.2"
 
+# Compile-time embedded assets (Claude skill + Chrome extension)
+include_dir = "0.7"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

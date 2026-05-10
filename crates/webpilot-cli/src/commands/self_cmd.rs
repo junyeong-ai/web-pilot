@@ -1,0 +1,372 @@
+//! `webpilot self update` — replace this binary with the latest release.
+//!
+//! Implementation rules (deliberately conservative):
+//!
+//! - Networking is shelled out to `curl`. Every macOS and Linux box has it,
+//!   and it ships with a battle-tested TLS stack — pulling `reqwest`/`ureq`
+//!   into the binary just for one update path would be net-negative.
+//! - Checksums are verified with `shasum -a 256` (macOS) or `sha256sum`
+//!   (Linux). If neither is present we refuse to proceed; an unverified
+//!   self-update is worse than no self-update.
+//! - The replace step is `rename(2)` on the same filesystem. On Unix that
+//!   is atomic, and the kernel keeps the running binary's inode alive until
+//!   this process exits — no need to re-exec.
+//! - On macOS the freshly written binary is re-signed ad-hoc so Gatekeeper
+//!   does not block subsequent invocations.
+
+use anyhow::{Context, Result, bail};
+use clap::{Args, Subcommand};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::output::CommandOutput;
+
+const REPO: &str = "junyeong-ai/web-pilot";
+
+#[derive(Args)]
+pub struct SelfArgs {
+    #[command(subcommand)]
+    pub command: SelfCommand,
+}
+
+#[derive(Subcommand)]
+pub enum SelfCommand {
+    /// Replace this binary with a release artefact from GitHub.
+    Update(UpdateArgs),
+}
+
+#[derive(Args)]
+pub struct UpdateArgs {
+    /// Pin to a specific version (e.g. `0.3.1`). Defaults to latest.
+    #[arg(long)]
+    pub version: Option<String>,
+
+    /// Reinstall even if the binary already reports the target version.
+    #[arg(long)]
+    pub force: bool,
+}
+
+pub fn run(args: SelfArgs) -> Result<CommandOutput> {
+    match args.command {
+        SelfCommand::Update(a) => update(a),
+    }
+}
+
+fn update(args: UpdateArgs) -> Result<CommandOutput> {
+    require_tools()?;
+    let target = detect_target()?;
+    let current = env!("CARGO_PKG_VERSION").to_owned();
+    let target_version = match args.version {
+        Some(v) => normalise_version(&v),
+        None => resolve_latest()?,
+    };
+
+    if !args.force && current == target_version {
+        let human = format!("Already on v{current} — pass --force to reinstall.");
+        return Ok(CommandOutput::Data {
+            json: serde_json::json!({
+                "updated": false,
+                "version": current,
+            }),
+            human,
+        });
+    }
+
+    let dest = std::env::current_exe()
+        .context("locating own binary path")?
+        .canonicalize()
+        .context("resolving own binary path")?;
+
+    let tmp = TempDir::new()?;
+    let archive = format!("webpilot-{target_version}-{target}.tar.gz");
+    let url = format!("https://github.com/{REPO}/releases/download/v{target_version}/{archive}");
+
+    download(&url, &tmp.path().join(&archive))?;
+    download(
+        &format!("{url}.sha256"),
+        &tmp.path().join(format!("{archive}.sha256")),
+    )?;
+    verify_checksum(tmp.path(), &archive)?;
+    extract(&tmp.path().join(&archive), tmp.path())?;
+
+    let extracted = tmp
+        .path()
+        .join(format!("webpilot-{target_version}-{target}"))
+        .join("webpilot");
+    if !extracted.exists() {
+        bail!(
+            "release archive missing expected binary at {}",
+            extracted.display()
+        );
+    }
+
+    atomic_replace(&extracted, &dest)?;
+    if cfg!(target_os = "macos") {
+        codesign(&dest);
+    }
+
+    let human = format!(
+        "✓ Updated v{current} → v{target_version}\n  {}",
+        dest.display()
+    );
+    Ok(CommandOutput::Data {
+        json: serde_json::json!({
+            "updated": true,
+            "from": current,
+            "to": target_version,
+            "path": dest.display().to_string(),
+        }),
+        human,
+    })
+}
+
+fn require_tools() -> Result<()> {
+    for t in ["curl", "tar"] {
+        if Command::new(t).arg("--version").output().is_err() {
+            bail!("required tool not found in PATH: {t}");
+        }
+    }
+    if Command::new("sha256sum").arg("--version").output().is_err()
+        && Command::new("shasum").arg("--version").output().is_err()
+    {
+        bail!("neither `sha256sum` nor `shasum` is available — cannot verify download");
+    }
+    Ok(())
+}
+
+fn detect_target() -> Result<String> {
+    let os = if cfg!(target_os = "macos") {
+        "apple-darwin"
+    } else if cfg!(target_os = "linux") {
+        "unknown-linux-gnu"
+    } else {
+        bail!("unsupported OS for self-update");
+    };
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        bail!("unsupported architecture for self-update");
+    };
+    Ok(format!("{arch}-{os}"))
+}
+
+/// Resolve the current `latest` tag by following the redirect on the
+/// `releases/latest` URL.
+///
+/// GitHub redirects this URL to `…/releases/tag/vX.Y.Z` only when a Release
+/// object is published. If only a git tag exists (no Release), the redirect
+/// goes to the bare `…/releases` listing — we treat that as "no release"
+/// rather than silently picking up the literal token "releases".
+///
+/// This is faster than the JSON API and not subject to the unauthenticated
+/// 60/hr rate limit.
+fn resolve_latest() -> Result<String> {
+    let out = Command::new("curl")
+        .args([
+            "-fsSLI",
+            "--connect-timeout",
+            "10",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{url_effective}",
+            &format!("https://github.com/{REPO}/releases/latest"),
+        ])
+        .output()
+        .context("curl")?;
+    if !out.status.success() {
+        bail!("could not resolve latest release (HTTP error)");
+    }
+    let url = String::from_utf8(out.stdout).context("non-UTF8 redirect URL")?;
+    parse_tag_from_redirect(&url).with_context(|| {
+        format!("no published release at github.com/{REPO} — pass --version vX.Y.Z explicitly")
+    })
+}
+
+/// Pull the version out of GitHub's `releases/latest` redirect target.
+///
+/// Returns `Some("0.2.0")` for `https://github.com/owner/repo/releases/tag/v0.2.0`,
+/// `None` for `https://github.com/owner/repo/releases` (no Release published).
+fn parse_tag_from_redirect(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let after = url.rsplit_once("/releases/tag/")?.1;
+    let tag = after.split(['/', '?', '#']).next()?.trim();
+    if tag.is_empty() {
+        return None;
+    }
+    Some(normalise_version(tag))
+}
+
+fn normalise_version(s: &str) -> String {
+    s.trim().trim_start_matches('v').to_owned()
+}
+
+fn download(url: &str, dest: &Path) -> Result<()> {
+    let status = Command::new("curl")
+        .args([
+            "-fsSL",
+            "--retry",
+            "3",
+            "--retry-delay",
+            "1",
+            "--connect-timeout",
+            "10",
+            "-o",
+        ])
+        .arg(dest)
+        .arg(url)
+        .status()
+        .context("curl")?;
+    if !status.success() {
+        bail!("download failed: {url}");
+    }
+    Ok(())
+}
+
+fn verify_checksum(dir: &Path, archive: &str) -> Result<()> {
+    let tool = if Command::new("sha256sum").arg("--version").output().is_ok() {
+        "sha256sum"
+    } else {
+        "shasum"
+    };
+    let mut cmd = Command::new(tool);
+    if tool == "shasum" {
+        cmd.args(["-a", "256"]);
+    }
+    cmd.arg("-c").arg(format!("{archive}.sha256"));
+    cmd.current_dir(dir);
+    let status = cmd.status().with_context(|| format!("running {tool}"))?;
+    if !status.success() {
+        bail!("checksum verification failed");
+    }
+    Ok(())
+}
+
+fn extract(archive: &Path, dest: &Path) -> Result<()> {
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(archive)
+        .arg("-C")
+        .arg(dest)
+        .status()
+        .context("tar")?;
+    if !status.success() {
+        bail!("tar extraction failed");
+    }
+    Ok(())
+}
+
+/// Atomic replace.
+///
+/// `src` lives in a temp directory that is typically on a different
+/// filesystem (e.g., macOS `/var/folders/.../T` vs. `~/.local/bin`), so a
+/// direct `rename(2)` would fail with `EXDEV`. The two-step here:
+/// 1. `copy` the new binary into the destination directory under a hidden
+///    staging name — same filesystem as `dest`, so no cross-FS issues.
+/// 2. `rename` staging → `dest`. This step *is* atomic on Unix and the
+///    kernel keeps the running binary's old inode alive until exit, so a
+///    self-update can replace its own executable safely.
+fn atomic_replace(src: &Path, dest: &Path) -> Result<()> {
+    let parent = dest
+        .parent()
+        .context("destination has no parent directory")?;
+    let staged = parent.join(format!(".webpilot.new.{}", std::process::id()));
+    std::fs::copy(src, &staged).with_context(|| format!("copy to {}", staged.display()))?;
+    set_executable(&staged)?;
+    if let Err(e) = std::fs::rename(&staged, dest) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e).with_context(|| format!("rename -> {}", dest.display()));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_executable(p: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perm = std::fs::metadata(p)?.permissions();
+    perm.set_mode(0o755);
+    std::fs::set_permissions(p, perm)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_executable(_: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn codesign(p: &Path) {
+    let _ = Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(p)
+        .status();
+}
+
+/// Self-cleaning temp directory.
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new() -> Result<Self> {
+        let base = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = base.join(format!("webpilot-update-{pid}-{nanos}"));
+        std::fs::create_dir_all(&path)?;
+        Ok(Self(path))
+    }
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalise_strips_leading_v() {
+        assert_eq!(normalise_version("v0.2.0"), "0.2.0");
+        assert_eq!(normalise_version("0.2.0"), "0.2.0");
+        assert_eq!(normalise_version("  v1.0.0  "), "1.0.0");
+    }
+
+    #[test]
+    fn detect_target_known_platform() {
+        let t = detect_target().unwrap();
+        assert!(t.contains("-apple-darwin") || t.contains("-unknown-linux-gnu"));
+        assert!(t.starts_with("x86_64-") || t.starts_with("aarch64-"));
+    }
+
+    #[test]
+    fn parse_tag_extracts_version_from_release_redirect() {
+        assert_eq!(
+            parse_tag_from_redirect("https://github.com/o/r/releases/tag/v0.2.0").as_deref(),
+            Some("0.2.0")
+        );
+        assert_eq!(
+            parse_tag_from_redirect("https://github.com/o/r/releases/tag/v1.2.3-rc.1").as_deref(),
+            Some("1.2.3-rc.1")
+        );
+        assert_eq!(
+            parse_tag_from_redirect("https://github.com/o/r/releases/tag/v0.2.0/").as_deref(),
+            Some("0.2.0")
+        );
+    }
+
+    #[test]
+    fn parse_tag_returns_none_when_no_release_published() {
+        assert!(parse_tag_from_redirect("https://github.com/o/r/releases").is_none());
+        assert!(parse_tag_from_redirect("https://github.com/o/r").is_none());
+        assert!(parse_tag_from_redirect("https://github.com/o/r/releases/tag/").is_none());
+    }
+}

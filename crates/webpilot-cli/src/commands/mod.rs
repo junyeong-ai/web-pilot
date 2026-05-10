@@ -10,14 +10,16 @@ pub mod eval;
 pub mod fetch;
 pub mod find;
 pub mod frame;
-pub mod install;
 pub mod network;
 pub mod policy;
 pub mod profile;
 pub mod record;
+pub mod self_cmd;
 pub mod session;
+pub mod setup;
 pub mod status;
 pub mod tab;
+pub mod uninstall;
 pub mod wait;
 
 use clap::Subcommand;
@@ -64,8 +66,13 @@ pub enum Command {
     Status,
     /// Manage isolated browser contexts for multi-agent use
     Context(context::ContextArgs),
-    /// Install Native Messaging host manifest (for --browser mode)
-    Install(install::InstallArgs),
+    /// Install the Claude skill, Chrome extension, and NM host (post-install setup)
+    Setup(setup::SetupArgs),
+    /// Self-update from the latest GitHub release
+    #[command(name = "self")]
+    SelfCmd(self_cmd::SelfArgs),
+    /// Remove every artefact this binary created
+    Uninstall(uninstall::UninstallArgs),
     /// Stop the entire headless Chrome session. Use `context close NAME` to close one context.
     Quit,
 }
