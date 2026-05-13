@@ -78,7 +78,10 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/webpilot-install.XXXXXX")
 staged=""
 cleanup() {
     rm -rf "$tmp"
-    [ -n "$staged" ] && [ -f "$staged" ] && rm -f "$staged"
+    if [ -n "$staged" ] && [ -f "$staged" ]; then
+        rm -f "$staged"
+    fi
+    return 0  # bash propagates the EXIT trap's last $? as the script's exit status
 }
 trap cleanup EXIT
 
