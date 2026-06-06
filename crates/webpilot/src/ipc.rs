@@ -6,8 +6,6 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-const DEFAULT_IPC_TIMEOUT_MS: u64 = 60_000;
-
 #[derive(Debug, Error)]
 pub enum IpcError {
     #[error("IO error: {0}")]
@@ -27,11 +25,7 @@ pub fn socket_path() -> PathBuf {
 }
 
 fn ipc_timeout() -> Duration {
-    std::env::var("WEBPILOT_IPC_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(Duration::from_millis(DEFAULT_IPC_TIMEOUT_MS))
+    crate::settings::timeouts().ipc_response
 }
 
 async fn send_to(path: &Path, request: &serde_json::Value) -> Result<serde_json::Value, IpcError> {

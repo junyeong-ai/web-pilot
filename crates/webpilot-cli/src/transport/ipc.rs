@@ -26,6 +26,11 @@ impl Default for IpcTransport {
 
 impl Transport for IpcTransport {
     async fn send(&mut self, command: Command) -> Result<ResponseData> {
+        // Policy is enforced in the Native Messaging host (the process that
+        // actually reaches the authenticated browser), not here — the CLI side
+        // is just a socket writer and could be bypassed by writing the socket
+        // directly. The host returns a `ResponseData::Error { PolicyDenied }`
+        // which surfaces below exactly like any other typed failure.
         let request = Request::new(self.ids.next(), command);
         let raw = ipc::send_request(&serde_json::to_value(&request)?)
             .await

@@ -30,7 +30,7 @@ webpilot status / webpilot quit
 - `extension/` — browser 모드 Chrome 확장 (`bridge.js` 규약: `.claude/rules/extension.md`)
 - Rust 규약: `.claude/rules/rust-conventions.md`
 
-**명령 추가 = 4 지점 수정** (두 모드 동시 지원): `protocol::Command` enum + `commands/<x>.rs` 핸들러 + `LocalTransport::send` 한 arm (headless) + `service-worker.js` 의 command 라우터 case (browser). 새 content-script 동작이 필요할 때만 `bridge.js` 에 case 추가.
+**명령 추가 = 5 지점 수정** (두 모드 동시 지원): `protocol::Command` enum + `commands/<x>.rs` 핸들러 + `cli.rs::Cmd::execution()` 분류 + `LocalTransport::send` 한 arm (headless) + `service-worker.js` 의 command 라우터 case (browser). 새 content-script 동작이 필요할 때만 `bridge.js` 에 case 추가. 정책 게이트가 필요하면 `protocol::Command::policy_key()` 에 한 arm 추가(enforcement 는 각 privileged sink 에서 자동).
 
 ## DOM Output Format
 
@@ -39,9 +39,10 @@ webpilot status / webpilot quit
 [2] button "Go" @search
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
+--- 1 iframe(s) not shown — list: webpilot frame, enter: webpilot frame switch ---
 ```
 
-`[index]` = `action click N` 의 인자. `*` = 직전 capture 이후 새로 등장 (URL 변경 시 bridge.js 내부에서 baseline 자동 리셋). `@landmark` = 의미 컨텍스트.
+`[index]` = `action click N` 의 인자. **인덱스는 직전 `capture` 의 스냅샷에 바인딩**된다 — bridge.js 가 capture 시점의 요소 참조를 저장하고, 인덱스 액션은 그 목록으로 해석한다. 스냅샷이 없거나(캡처 전) 요소가 DOM 에서 사라지면 라이브 DOM 재해석이 아니라 타입드 `StaleSnapshot` 오류(exit 4). `*` = 직전 capture 이후 새로 등장 (URL 변경 시 baseline 자동 리셋). `@landmark` = 의미 컨텍스트. `--- N iframe(s) not shown ---` = active-frame 밖 HTTP iframe 수(`DomSnapshot.subframes`) — `frame switch` 로 진입.
 
 ## Wire Protocol
 
@@ -49,8 +50,8 @@ webpilot status / webpilot quit
 |---|---|
 | Action | `{"kind": "click", "index": 7}` — 단일 정의 (clap+serde, snake_case) |
 | ActionKind | snake_case 와이어로 `Action.kind` 와 정확히 일치 |
-| PolicyKey | 정책 enforcement 키 — `ActionKind` ∪ {`eval`, `fetch`}, `From<ActionKind>` exhaustive. `PolicySet`/`PolicyEntry` 의 와이어 필드명은 `operation` |
-| Wait | `{"until": "selector", "value": ".loading"}` — 4 변종 중 하나만 |
+| PolicyKey | 정책 enforcement 키 — **효과(effect) 기준**. `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`}. `navigate` 는 URL 로드 효과를 모두 게이트 — `navigate` 액션 + `capture --url` + `tab new URL`. `eval` 은 MAIN-world JS 주입 전부 — `eval` + `frame find` predicate + `console start`/`network start`(모니터 훅 주입). `cookie_list` 는 쿠키 값(세션 토큰) 읽기라 read-only 라도 게이트. `Command::policy_key()` 가 명령→키 매핑(비밀 아닌 읽기는 `None`). enforcement(`policy::parse_and_enforce`)는 **브라우저에 닿는 privileged sink 에서** — headless 는 `LocalTransport::send`, browser 는 **NM Host**(CLI-side `IpcTransport` 아님; host 는 와이어 값을 `Command` 로 파싱 검증 후 enforce — 파싱 실패는 `InvalidArgument` 로 거부해 "Rust 거부 / JS 수용" 강제변환 우회 차단). 저장소는 `artifacts/policies.json` 단일 파일(양 모드 공유), `webpilot policy` 는 로컬 파일 명령(브라우저 왕복 없음) |
+| Wait | `{"until": "selector", "value": ".loading"}` — `selector`/`text`/`navigation`/`idle` 중 하나 |
 | Capture | `{"include": ["dom","screenshot"], "opts": {...}}` |
 | Status | `{connected, mode: "headless"\|"browser", chrome_version, extension_version}` — 모드별 의미 분리 |
 | Errors | `{"code": "ElementNotFound", "message": "...", "requested": 5, "available": 3}` |
@@ -73,12 +74,14 @@ snake_case 단일 enum 의 Display/FromStr 은 `serde_plain` 으로 파생 — �
 |---|---|---|
 | 0 | success | — |
 | 1 | `Other`, `Session` | unknown / session |
-| 3 | `ConnectionLost`, `BridgeUnavailable` | infra |
-| 4 | `ElementNotFound`, `SelectorNotFound`, `TabNotFound`, `ContextNotFound`, `FrameNotFound` | not-found |
+| 3 | `ConnectionLost`, `BridgeUnavailable`, `VersionMismatch` | infra |
+| 4 | `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `TabNotFound`, `ContextNotFound`, `FrameNotFound` | not-found |
 | 5 | `Timeout` | timeout |
 | 6 | `PolicyDenied`, `CspViolation` | security |
 | 7 | `InvalidArgument` | user error |
 | 8 | `NavigationFailed`, `NoPage` | navigation |
+
+`StaleSnapshot` = 인덱스가 가리키던 요소가 capture 이후 DOM 에서 사라짐(재캡처 필요). `VersionMismatch` = 설치된 extension 버전 ≠ 바이너리 번들 버전(`webpilot setup extension` 후 reload).
 
 가이던스 텍스트는 `WebPilotError::Display` 가 데이터로부터 직접 생성. 메시지 파싱·substring 매칭 없음. 외부 크레이트 에러는 `main::into_webpilot_error` 경계에서 `Other` 로 래핑.
 
@@ -91,4 +94,6 @@ $XDG_RUNTIME_DIR/webpilot   Linux/BSD (tmpfs, mode 0700)
 ~/.cache/webpilot           Linux fallback
 ```
 
-서브디렉토리: `runtime/` (sockets, PIDs, locks), `contexts/` (멀티 에이전트), `artifacts/` (screenshots, PDFs, sessions), `chrome-profile/`. 타임아웃은 `WEBPILOT_*_TIMEOUT_MS` 환경변수로 override.
+서브디렉토리: `runtime/` (sockets, PIDs, locks), `contexts/` (멀티 에이전트), `artifacts/` (screenshots, PDFs, sessions, `policies.json`), `chrome-profile/`.
+
+설정은 `webpilot::settings` 단일 레이어로 해석: **기본값 < `config.toml` < env var**. `config.toml`(루트 직하, `WEBPILOT_CONFIG` 로 override)의 `[timeouts]`/`[chrome]`/`[context]`/`[cdp]` 섹션, 또는 `WEBPILOT_*` env(예: `WEBPILOT_NAVIGATION_TIMEOUT_MS`)로 튜닝. 경로 해석만 env/플랫폼 전용(`dirs`, 순환 방지).

@@ -5,9 +5,8 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use webpilot::WebPilotError;
 use webpilot::protocol::{FrameSelector, ResponseData, RunMode};
-use webpilot::types::{FrameInfo, PolicyKey, TabInfo};
+use webpilot::types::{FrameInfo, TabInfo};
 
-use super::state::policy_store;
 use super::{LocalTransport, action_success, connect_to_page};
 
 impl LocalTransport {
@@ -149,21 +148,8 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_frame_switch(&self, selector: FrameSelector) -> Result<ResponseData> {
-        // A predicate runs arbitrary caller JS — gated by the same key as `eval`
-        // and rejected before any CDP work so a deny rule is cheap and total.
-        if matches!(selector, FrameSelector::Predicate { .. }) && policy_store::denies(PolicyKey::Eval)
-        {
-            return Ok(ResponseData::FrameSwitched {
-                success: false,
-                frame_id: None,
-                name: None,
-                url: None,
-                error: Some(WebPilotError::PolicyDenied {
-                    operation: PolicyKey::Eval.to_string(),
-                }),
-            });
-        }
-
+        // A predicate's `eval` gate is enforced at the transport boundary
+        // (`Command::policy_key`), before this handler runs.
         if matches!(selector, FrameSelector::Main) {
             *self.active_frame_id.lock().await = None;
             super::clear_persisted_active_frame(self.persisted_context_key());

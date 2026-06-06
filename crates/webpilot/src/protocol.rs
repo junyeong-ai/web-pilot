@@ -10,8 +10,7 @@ use crate::action::Action;
 use crate::capture::{CaptureField, CaptureOpts};
 use crate::error::WebPilotError;
 use crate::types::{
-    ConsoleEntry, CookieInfo, DomSnapshot, FrameInfo, NetworkEntry, PolicyEntry, PolicyKey,
-    PolicyVerdict, TabInfo,
+    ConsoleEntry, CookieInfo, DomSnapshot, FrameInfo, NetworkEntry, PolicyKey, TabInfo,
 };
 use crate::wait::WaitCondition;
 
@@ -113,13 +112,48 @@ pub enum Command {
     SessionImport {
         data: String,
     },
-    PolicySet {
-        operation: PolicyKey,
-        verdict: PolicyVerdict,
-    },
-    PolicyList,
-    PolicyClear,
     Ping,
+}
+
+impl Command {
+    /// The policy key this command is gated by, if any. Drives the single
+    /// enforcement point at the transport boundary. Read-only observation
+    /// (capture, status, list/read commands) returns `None` — only operations
+    /// that mutate page/browser state or move credentials are gated.
+    pub fn policy_key(&self) -> Option<PolicyKey> {
+        match self {
+            Command::Action { action, .. } => Some(PolicyKey::from(action.kind())),
+            Command::Eval { .. } => Some(PolicyKey::Eval),
+            Command::Fetch { .. } => Some(PolicyKey::Fetch),
+            Command::DomSet { .. } => Some(PolicyKey::DomSet),
+            Command::TabClose { .. } => Some(PolicyKey::TabClose),
+            // `console start` / `network start` install monitoring hooks by
+            // executing JS in the page's MAIN world — agent-initiated code
+            // injection, gated by the same key as `eval`. Reading or clearing
+            // the captured buffer afterwards is bookkeeping and stays ungated.
+            Command::ConsoleStart | Command::NetworkStart => Some(PolicyKey::Eval),
+            // Cookie reads return live session-cookie *values*, so the same
+            // `cookie list` key gates both `cookie list` and `cookie get`.
+            Command::CookieList { .. } => Some(PolicyKey::CookieList),
+            Command::CookieSet { .. } => Some(PolicyKey::CookieSet),
+            Command::CookieDelete { .. } => Some(PolicyKey::CookieDelete),
+            Command::SessionExport => Some(PolicyKey::SessionExport),
+            Command::SessionImport { .. } => Some(PolicyKey::SessionImport),
+            // Navigation is keyed by effect, not command name: a `capture --url`
+            // and `tab new URL` load a URL into a browsing context exactly as the
+            // `navigate` action does, so all three sit behind `navigate`. A
+            // URL-less capture only reads the current page and is not gated.
+            Command::Capture { url: Some(_), .. } | Command::TabNew { .. } => {
+                Some(PolicyKey::Navigate)
+            }
+            // A predicate runs caller-supplied script, so it sits behind the
+            // same gate as `eval`; structural frame selectors do not.
+            Command::FrameSwitch {
+                selector: FrameSelector::Predicate { .. },
+            } => Some(PolicyKey::Eval),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -279,14 +313,6 @@ pub enum ResponseData {
         path: String,
     },
     SessionResult {
-        success: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<WebPilotError>,
-    },
-    Policies {
-        policies: Vec<PolicyEntry>,
-    },
-    PolicyResult {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<WebPilotError>,

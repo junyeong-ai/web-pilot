@@ -121,18 +121,158 @@ fn dom_property_attr_carries_name() {
 
 #[test]
 fn request_envelope_serializes_id_and_command() {
-    let req = Request::new(
-        42,
-        Command::PolicySet {
-            operation: webpilot::types::PolicyKey::Eval,
-            verdict: PolicyVerdict::Deny,
-        },
-    );
+    let req = Request::new(42, Command::Eval { code: "1+1".into() });
     let v = serde_json::to_value(&req).unwrap();
     assert_eq!(v["id"], 42);
-    assert_eq!(v["command"]["type"], "PolicySet");
-    assert_eq!(v["command"]["operation"], "eval");
-    assert_eq!(v["command"]["verdict"], "deny");
+    assert_eq!(v["command"]["type"], "Eval");
+    assert_eq!(v["command"]["code"], "1+1");
+}
+
+#[test]
+fn command_policy_key_gates_by_effect() {
+    use webpilot::Action;
+    use webpilot::protocol::FrameSelector;
+    use webpilot::types::PolicyKey;
+
+    // Gated.
+    assert_eq!(
+        Command::Action {
+            action: Action::Click { index: 1 },
+            capture: false,
+        }
+        .policy_key(),
+        Some(PolicyKey::Click)
+    );
+    assert_eq!(
+        Command::Eval { code: "x".into() }.policy_key(),
+        Some(PolicyKey::Eval)
+    );
+    assert_eq!(
+        Command::SessionExport.policy_key(),
+        Some(PolicyKey::SessionExport)
+    );
+    assert_eq!(
+        Command::FrameSwitch {
+            selector: FrameSelector::Predicate { js: "true".into() },
+        }
+        .policy_key(),
+        Some(PolicyKey::Eval)
+    );
+
+    // Keyed by effect, not command name: every navigation surface gates under
+    // `navigate`, and cookie-value reads under `cookie_list`.
+    assert_eq!(
+        Command::Capture {
+            include: vec![],
+            opts: Default::default(),
+            url: Some("http://x".into()),
+        }
+        .policy_key(),
+        Some(PolicyKey::Navigate),
+        "capture --url navigates, so it must gate under navigate"
+    );
+    assert_eq!(
+        Command::TabNew {
+            url: "http://x".into()
+        }
+        .policy_key(),
+        Some(PolicyKey::Navigate),
+        "tab new URL loads a URL, so it must gate under navigate"
+    );
+    assert_eq!(
+        Command::CookieList { url: "u".into() }.policy_key(),
+        Some(PolicyKey::CookieList),
+        "cookie list/get returns credential values, so it is gated"
+    );
+    assert_eq!(
+        Command::TabClose { tab_id: "1".into() }.policy_key(),
+        Some(PolicyKey::TabClose),
+        "closing a tab is a destructive browser-state mutation"
+    );
+    // Monitoring hooks inject MAIN-world JS → gated as eval; their buffer
+    // read/clear is bookkeeping and stays ungated.
+    assert_eq!(Command::ConsoleStart.policy_key(), Some(PolicyKey::Eval));
+    assert_eq!(Command::NetworkStart.policy_key(), Some(PolicyKey::Eval));
+
+    // Ungated: read-only observation, buffer bookkeeping, structural selection.
+    assert_eq!(Command::Status.policy_key(), None);
+    assert_eq!(Command::TabList.policy_key(), None);
+    assert_eq!(
+        Command::Wait {
+            condition: WaitCondition::Idle,
+            timeout_ms: 1000,
+        }
+        .policy_key(),
+        None
+    );
+    assert_eq!(Command::ConsoleRead.policy_key(), None);
+    assert_eq!(Command::ConsoleClear.policy_key(), None);
+    assert_eq!(Command::NetworkRead { since: None }.policy_key(), None);
+    assert_eq!(Command::NetworkClear.policy_key(), None);
+    assert_eq!(Command::FrameList.policy_key(), None);
+    assert_eq!(Command::TabSwitch { tab_id: "1".into() }.policy_key(), None);
+    assert_eq!(
+        Command::DomGet {
+            selector: "#x".into(),
+            property: DomProperty::Text,
+        }
+        .policy_key(),
+        None,
+        "dom get reads rendered DOM, not a credential store"
+    );
+    assert_eq!(
+        Command::FrameSwitch {
+            selector: FrameSelector::Name { value: "f".into() },
+        }
+        .policy_key(),
+        None,
+        "structural (non-predicate) frame selection runs no caller JS"
+    );
+    assert_eq!(
+        Command::Capture {
+            include: vec![],
+            opts: Default::default(),
+            url: None,
+        }
+        .policy_key(),
+        None,
+        "a URL-less capture only reads the current page"
+    );
+    assert_eq!(
+        Command::FrameSwitch {
+            selector: FrameSelector::Main,
+        }
+        .policy_key(),
+        None
+    );
+}
+
+/// Security invariant the NM host's policy enforcement depends on: a gated
+/// command with a type-mismatched field must FAIL to deserialize into `Command`.
+/// The host rejects anything it cannot parse, so this is what stops a
+/// `{"index": "1"}` (string) payload — which the loose JS bridge would coerce
+/// and execute — from slipping past a deny rule. If `Action.index` ever gained
+/// string coercion, this test fails and flags the reopened bypass.
+#[test]
+fn type_mismatched_gated_command_is_rejected_by_deserialization() {
+    // Well-formed: parses, and is a gated click.
+    let ok = serde_json::json!({"type": "Action", "action": {"kind": "click", "index": 1}});
+    let parsed: Command = serde_json::from_value(ok).expect("valid click parses");
+    assert!(parsed.policy_key().is_some());
+
+    // Index as a string: Rust `u32` rejects it, so the host rejects the payload
+    // instead of forwarding it unenforced.
+    let bad = serde_json::json!({"type": "Action", "action": {"kind": "click", "index": "1"}});
+    assert!(
+        serde_json::from_value::<Command>(bad).is_err(),
+        "string index must not deserialize — else it bypasses policy host-side"
+    );
+
+    // Unknown extra fields do NOT bypass: the command still parses (serde
+    // ignores them) and is therefore still policy-checked.
+    let extra = serde_json::json!({"type": "Eval", "code": "x", "evil": true});
+    let parsed: Command = serde_json::from_value(extra).expect("unknown fields are ignored");
+    assert_eq!(parsed.policy_key(), Some(webpilot::types::PolicyKey::Eval));
 }
 
 #[test]

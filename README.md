@@ -81,7 +81,7 @@ webpilot console start && webpilot console read      # JS 콘솔 캡처
 
 ### 세션 관리
 ```bash
-webpilot cookies list "https://example.com"          # 쿠키 조회
+webpilot cookie list "https://example.com"           # 쿠키 조회
 webpilot session export --output session.json        # 세션 저장
 webpilot fetch "https://api.example.com" --method POST --body '{}' # 인증 포함 API 호출
 ```

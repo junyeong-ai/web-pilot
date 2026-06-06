@@ -17,10 +17,32 @@
 use include_dir::{Dir, include_dir};
 use std::io;
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub static SKILL: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../.claude/skills/webpilot");
 
 pub static EXTENSION: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../extension");
+
+/// Version string of the extension baked into this binary, read from the
+/// embedded `manifest.json`. The host compares it against the version the
+/// installed extension reports, so a stale install is caught at connect time
+/// rather than surfacing as a subtle protocol mismatch later.
+pub fn expected_extension_version() -> &'static str {
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION.get_or_init(|| {
+        let manifest = EXTENSION
+            .get_file("manifest.json")
+            .expect("embedded extension always carries manifest.json")
+            .contents_utf8()
+            .expect("manifest.json is valid UTF-8");
+        let parsed: serde_json::Value =
+            serde_json::from_str(manifest).expect("embedded manifest.json is valid JSON");
+        parsed["version"]
+            .as_str()
+            .expect("manifest.json carries a string version")
+            .to_owned()
+    })
+}
 
 /// Materialise an embedded `Dir` onto disk under `dest`.
 ///

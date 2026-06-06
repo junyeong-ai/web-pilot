@@ -45,6 +45,7 @@ const PID_FILENAME: &str = "headless.pid";
 const WS_URL_FILENAME: &str = "headless.ws";
 const LAUNCH_LOCK_FILENAME: &str = "launch.lock";
 const SOCKET_FILENAME: &str = "ipc.sock";
+const CONFIG_FILENAME: &str = "config.toml";
 
 // --- Cache root -------------------------------------------------------------
 
@@ -118,6 +119,14 @@ pub fn ws_url_file_path() -> PathBuf {
 /// Chrome launch advisory lock file. Materialises the runtime dir.
 pub fn launch_lock_file() -> PathBuf {
     runtime_dir().join(LAUNCH_LOCK_FILENAME)
+}
+
+/// Pure path to the optional user settings file (`config.toml` under the cache
+/// root), overridable via `WEBPILOT_CONFIG`. Pure: reading settings must not
+/// create state, and path resolution itself is never config-driven (it would
+/// be circular), so this performs no filesystem side effects.
+pub fn config_file_path() -> PathBuf {
+    env_path("WEBPILOT_CONFIG").unwrap_or_else(|| root_path().join(CONFIG_FILENAME))
 }
 
 // --- Data root --------------------------------------------------------------

@@ -77,7 +77,7 @@ impl LocalTransport {
                         "type": "addAnnotations", "elements": annotations,
                     }))
                     .await?;
-                    tokio::time::sleep(crate::timeouts::annotation_paint()).await;
+                    tokio::time::sleep(webpilot::settings::timeouts().annotation_paint).await;
                 }
             }
 
@@ -164,6 +164,12 @@ impl LocalTransport {
         if let Some(s) = snapshot.as_mut() {
             s.text_content = text_content;
             s.accessibility_tree = ax_tree_json;
+            // Capture is scoped to the active frame; surface how many HTTP
+            // iframes exist outside this scope so the agent knows `frame
+            // switch` is the way in. Only meaningful from the main frame.
+            if self.active_frame_id.lock().await.is_none() {
+                s.subframes = self.count_http_subframes().await;
+            }
         }
 
         Ok(ResponseData::Capture {
@@ -180,6 +186,33 @@ impl LocalTransport {
             page_title,
         })
     }
+
+    /// Number of HTTP(S) subframes in the page's frame tree (main excluded).
+    pub(super) async fn count_http_subframes(&self) -> u32 {
+        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
+            return 0;
+        };
+        fn walk(node: &serde_json::Value, is_root: bool, count: &mut u32) {
+            if !is_root
+                && node
+                    .pointer("/frame/url")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|u| u.starts_with("http"))
+            {
+                *count += 1;
+            }
+            if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
+                for child in children {
+                    walk(child, false, count);
+                }
+            }
+        }
+        let mut count = 0;
+        if let Some(root) = tree.get("frameTree") {
+            walk(root, true, &mut count);
+        }
+        count
+    }
 }
 
 fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
@@ -191,6 +224,7 @@ fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
         scroll: ScrollInfo::default(),
         scroll_percent: 0,
         extraction_ms: 0,
+        subframes: 0,
         text_content: None,
         accessibility_tree: None,
     }

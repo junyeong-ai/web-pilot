@@ -48,6 +48,8 @@ webpilot capture --include dom                                # 4. verify (check
 - `autocomplete=…` — input semantic hint
 - text truncated at 300 chars
 
+`capture --include dom` lists only **interactive/indexable** elements (links, buttons, inputs, …). To read plain page text (a `<p>`, a revealed value, a heading) use `dom get-text "<selector>"`, `capture --include text`, or `eval`.
+
 ## Capture
 
 ```bash
@@ -111,6 +113,8 @@ webpilot wait idle                  --timeout 10   # 500ms DOM-mutation idle
 webpilot eval 'document.title'                     # expression
 webpilot eval '({a:1, b:2})'                       # object literal works
 webpilot eval 'console.log("x"); 7'                # multi-statement (returns 7)
+# `result` is JSON-encoded: a string comes back quoted ("\"Title\""). To just
+# read the current page title, `webpilot status` → `tab_title` is plain text.
 
 webpilot dom get-text "h1"
 webpilot dom get-html ".card"
@@ -130,7 +134,7 @@ webpilot frame find "window.foo === 1"    # JS predicate per-frame
 webpilot frame main                       # back to top frame
 ```
 
-After switching, eval / dom / capture scope to that frame until you switch back (`frame main`). With no frame active, `capture --include dom` merges every frame so iframe content is visible by default.
+`capture` is always scoped to one frame — the active frame, or the main frame by default. It never merges frames, so an element's `[N]` index is the same index its action resolves against in that frame. When the main frame contains HTTP iframes, capture appends `--- N iframe(s) not shown ---`; enter one with `frame switch` to capture and act inside it, then `frame main` to return. After switching, eval / dom / capture / actions all scope to that frame until you switch back. (Viewport-coordinate actions — `hover`, `drag`, `upload` — only work in the main frame; run them after `frame main`.)
 
 ## Tabs
 
@@ -192,7 +196,7 @@ webpilot device preset iphone-15        # iphone-15-pro pixel-8 ipad-pro galaxy-
 webpilot device set --width 800 --height 600 --scale 1.0
 webpilot device set --width 800 --height 600 --mobile         # add --mobile flag (no value)
 webpilot device set ... --user-agent "MyUA"
-webpilot device reset                                          # back to 1280×720
+webpilot device reset                                          # back to the launch viewport (1280×720 default)
 ```
 
 ## Multi-agent contexts (headless only)
@@ -215,9 +219,15 @@ webpilot policy list
 webpilot policy clear
 ```
 
-`--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus `eval` and `fetch`, which gate the `webpilot eval` / `webpilot fetch` commands and the arbitrary-JS `frame find` predicate.
+`--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus the non-action operations that run code, mutate state, or move credentials: `eval`, `fetch`, `dom_set` (gate `dom set`), `tab_close`, `cookie_list` (gate `cookie list` **and** `cookie get` — both return live cookie values), `cookie_set` / `cookie_delete`, and `session_export` / `session_import`.
 
-A blocked operation fails with `PolicyDenied` (exit 6).
+Keys gate by **effect**, not command name:
+- `navigate` blocks every URL load — the `navigate` action, `capture --url`, and `tab new URL` — so denying it actually prevents the agent from reaching new pages.
+- `eval` blocks all agent-initiated MAIN-world JS — `webpilot eval`, the `frame find` predicate, **and** the `console start` / `network start` monitoring hooks (they inject JS to wrap `console`/`fetch`).
+
+A URL-less `capture`, buffer reads (`console`/`network read` & `clear`), `dom get`, and `find` are never gated. To deny all credential reads, set `session_export`, `cookie_list`, and `session_import` to `deny`.
+
+Policies are a single local file (`artifacts/policies.json`) read identically in both modes — `webpilot policy` never touches the browser, and a rule applies the moment it's set. A blocked operation fails with `PolicyDenied` (exit 6).
 
 ## Diff / record / profile
 
@@ -258,14 +268,14 @@ webpilot status                                # connected, mode, chrome_version
 |------|---------|
 | 0 | success |
 | 1 | session error / unknown |
-| 3 | infrastructure (Chrome connection, bridge) |
-| 4 | not found (element / selector / tab / context / frame) |
+| 3 | infrastructure (Chrome connection, bridge, `VersionMismatch`) |
+| 4 | not found (element / `StaleSnapshot` / selector / tab / context / frame) |
 | 5 | timeout |
 | 6 | security (`PolicyDenied`, `CspViolation`) |
 | 7 | invalid argument |
 | 8 | navigation failed / no page |
 
-Errors carry typed data: `ElementNotFound { requested, available }`, `SelectorNotFound { selector }`, `Timeout { kind, elapsed_ms }`, `NavigationFailed { url, reason }`, `PolicyDenied { operation }`. Treat the `code` field as authoritative; the `message` is a human-readable rendering.
+Errors carry typed data: `ElementNotFound { requested, available }`, `StaleSnapshot { index }`, `SelectorNotFound { selector }`, `Timeout { kind, elapsed_ms }`, `NavigationFailed { url, reason }`, `PolicyDenied { operation }`, `VersionMismatch { extension, expected }`. Treat the `code` field as authoritative; the `message` is a human-readable rendering. `VersionMismatch` (browser mode) means the installed extension is stale — re-run `webpilot setup extension` and reload it at `chrome://extensions`.
 
 ## Decision guide
 
@@ -289,8 +299,9 @@ Errors carry typed data: `ElementNotFound { requested, available }`, `SelectorNo
 
 | error code | what to do |
 |------------|------------|
-| `ElementNotFound` (4) | indices changed — re-run `capture --include dom` |
-| `SelectorNotFound` (4) | check CSS selector / `find` filters |
+| `ElementNotFound` (4) | index out of range for the current snapshot — re-run `capture --include dom` |
+| `StaleSnapshot` (4) | the page changed since the last capture (or there was none) — re-run `capture --include dom`, then act |
+| `SelectorNotFound` (4) | valid selector but no match — **or you're on the wrong page/tab**: `webpilot tab` to check the active page, then `action navigate URL` (or `tab switch`) to re-pin |
 | `NoPage` (8) | call `capture --include dom --url URL` first |
 | `Timeout` (5) | raise with `--timeout`, or run `network read` to see what's pending |
 | `BridgeUnavailable` / `ConnectionLost` (3) | `webpilot quit` then retry; check `webpilot status` |
@@ -300,7 +311,7 @@ Errors carry typed data: `ElementNotFound { requested, available }`, `SelectorNo
 
 ## Pitfalls
 
-- **Indices are snapshot-bound.** `[N]` is valid only for the most recent `capture --include dom`. After any DOM-changing action (especially `action navigate`, form submits, or page transitions), re-capture before the next index-based action. `ElementNotFound` (exit 4) almost always means stale indices.
+- **Indices are snapshot-bound.** `[N]` resolves against the exact elements the most recent `capture --include dom` emitted — not a live re-query. After any DOM-changing action (especially `action navigate`, form submits, or page transitions), re-capture before the next index-based action; otherwise you get a typed `StaleSnapshot` (exit 4) rather than a silent wrong-element click.
 - **`frame switch` and `tab switch` persist across CLI processes.** Once you switch, every later command (in any new shell) runs in that frame/tab until you switch back (`frame main`, or another `tab switch`). Watch for "wrong frame" symptoms after long sessions.
 - **`action navigate` may race the DOM.** Cross-origin loads and SPA route changes finish at unpredictable times — chain `wait selector` / `wait idle`, or pass `--capture` so the DOM is re-read after settle.
 - **Cookies and storage are per-context.** With `--context X` set, expect zero data sharing across contexts. `session export` only covers the active context's data.

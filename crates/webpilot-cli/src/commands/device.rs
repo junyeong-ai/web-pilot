@@ -97,11 +97,12 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
             // stay at the previously emulated dimensions. Snap the viewport
             // back to the launch size first; the subsequent clear leaves the
             // page in a "no override" state with the natural layout in place.
+            let (vw, vh) = crate::session::headless_viewport();
             cdp.send(
                 "Emulation.setDeviceMetricsOverride",
                 Some(serde_json::json!({
-                    "width": crate::session::HEADLESS_VIEWPORT_WIDTH,
-                    "height": crate::session::HEADLESS_VIEWPORT_HEIGHT,
+                    "width": vw,
+                    "height": vh,
                     "deviceScaleFactor": 1.0,
                     "mobile": false,
                 })),

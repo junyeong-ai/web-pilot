@@ -30,14 +30,21 @@ pub async fn run<T: Transport>(transport: &mut T, args: FooArgs) -> Result<Comma
     match result { /* destructure ResponseData */ }
 }
 ```
-Headless-only commands (`profile`, `record`, `device`, `context`) take `&mut LocalTransport` directly so they can reach the underlying CDP via `local.page()` / `local.browser()`.
+Headless-only commands (`profile`, `record`, `device`, `context`) take `&mut LocalTransport` directly so they can reach the underlying CDP via `local.page()` / `local.browser()`. Pure-local commands (`policy`, `setup`, `diff`, `uninstall`, `self`) take no transport at all — resolved in `run_cli` before any session opens.
 
-Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`, `Content { stdout, json }`, `List { items, human_lines, summary }`, `Silent`.
+Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`, `Content { stdout, json }`, `List { items, human_lines, summary }`.
 
 ## Transport
 - `Transport` trait — sole boundary between command logic and I/O. `send(Command) -> ResponseData`.
-- `IpcTransport` — Unix socket → NM Host → Extension → bridge.js (browser mode).
-- `LocalTransport` — direct CDP WebSocket → bridge.js (headless mode). Holds `browser`/`page` `CdpClient`s, `ws_url`, optional `browser_context_id`, `target_id`. Owns navigation reconnect logic.
+- `IpcTransport` — Unix socket → NM Host → Extension → bridge.js (browser mode). Does **not** enforce policy (it is only a socket writer); the host does.
+- `LocalTransport` — direct CDP WebSocket → bridge.js (headless mode). Holds `browser`/`page` `CdpClient`s, `ws_url`, optional `browser_context_id`, `target_id`. Owns navigation reconnect logic. Calls `policy::enforce` first — it is the headless privileged sink.
+
+## Policy
+- `webpilot::protocol::Command::policy_key()` maps a command to its gated `PolicyKey` (read-only commands → `None`). `webpilot-cli::policy` owns the single file store (`artifacts/policies.json`) and `enforce`. `webpilot policy` is a local file command — no wire variant, no browser round-trip.
+- Enforcement runs at the process that actually reaches a browser, never at a mere pipe: `LocalTransport::send` (headless) and the **NM host** request loop (browser). Enforcing only in the CLI-side `IpcTransport` would be bypassable by writing the socket directly.
+
+## Settings
+- All tunables resolve through `webpilot::settings` (defaults < `config.toml` < env). No scattered `std::env::var` for timeouts/viewport/TTL/CDP-buffer — add new tunables there. Path resolution stays in `dirs` (env/platform only).
 
 ## Context isolation
 - `LocalTransport::open(Some("agent-1"))` resolves a named CDP browser context, creating one if absent. Per-user state under `dirs::contexts_dir()`.

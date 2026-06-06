@@ -18,7 +18,6 @@ pub(crate) struct ContextEntry {
 }
 
 pub(crate) const MAX_CONTEXTS: usize = 16;
-pub(crate) const DEFAULT_TTL_SECS: u64 = 3_600;
 
 pub(crate) fn context_hash(name: &str) -> String {
     use std::hash::{Hash, Hasher};
@@ -151,10 +150,7 @@ pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> R
 }
 
 pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
-    let ttl = std::env::var("WEBPILOT_CONTEXT_TTL")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_TTL_SECS);
+    let ttl = webpilot::settings::get().context.ttl.as_secs();
     let now = now_secs();
     let Ok(entries) = std::fs::read_dir(dirs::contexts_dir()) else {
         return;

@@ -22,6 +22,11 @@ pub enum WebPilotError {
     )]
     ElementNotFound { requested: u32, available: u32 },
 
+    #[error(
+        "Element [{index}] is from a stale or missing snapshot — the page changed since the last capture. Re-capture: webpilot capture --include dom"
+    )]
+    StaleSnapshot { index: u32 },
+
     #[error("Selector not found: {selector}. Verify CSS selector syntax.")]
     SelectorNotFound { selector: String },
 
@@ -45,6 +50,11 @@ pub enum WebPilotError {
 
     #[error("Chrome connection lost: {detail}. Run: webpilot status")]
     ConnectionLost { detail: String },
+
+    #[error(
+        "Extension v{extension} does not match this binary's bundled v{expected}. Reinstall: webpilot setup extension, then reload it at chrome://extensions"
+    )]
+    VersionMismatch { extension: String, expected: String },
 
     #[error("Blocked by policy: {operation}. Check: webpilot policy list")]
     PolicyDenied { operation: String },
@@ -71,13 +81,14 @@ impl WebPilotError {
         use WebPilotError as E;
         match self {
             E::ElementNotFound { .. }
+            | E::StaleSnapshot { .. }
             | E::SelectorNotFound { .. }
             | E::TabNotFound { .. }
             | E::ContextNotFound { .. }
             | E::FrameNotFound { .. } => 4,
             E::Timeout { .. } => 5,
             E::PolicyDenied { .. } | E::CspViolation => 6,
-            E::ConnectionLost { .. } | E::BridgeUnavailable => 3,
+            E::ConnectionLost { .. } | E::BridgeUnavailable | E::VersionMismatch { .. } => 3,
             E::InvalidArgument { .. } => 7,
             E::NavigationFailed { .. } | E::NoPage => 8,
             E::Session { .. } | E::Other { .. } => 1,
@@ -89,6 +100,8 @@ impl WebPilotError {
         use WebPilotError as E;
         match self {
             E::ElementNotFound { .. } => "ElementNotFound",
+            E::StaleSnapshot { .. } => "StaleSnapshot",
+            E::VersionMismatch { .. } => "VersionMismatch",
             E::SelectorNotFound { .. } => "SelectorNotFound",
             E::Timeout { .. } => "Timeout",
             E::NavigationFailed { .. } => "NavigationFailed",
@@ -118,6 +131,13 @@ impl WebPilotError {
             "ElementNotFound" => Self::ElementNotFound {
                 requested: u32_field("requested").unwrap_or(0),
                 available: u32_field("available").unwrap_or(0),
+            },
+            "StaleSnapshot" => Self::StaleSnapshot {
+                index: u32_field("index").unwrap_or(0),
+            },
+            "VersionMismatch" => Self::VersionMismatch {
+                extension: str_field("extension").unwrap_or_default(),
+                expected: str_field("expected").unwrap_or_default(),
             },
             "SelectorNotFound" => Self::SelectorNotFound {
                 selector: str_field("selector").unwrap_or(w.message),
@@ -166,6 +186,14 @@ impl WebPilotError {
             } => {
                 put("requested", (*requested).into());
                 put("available", (*available).into());
+            }
+            E::StaleSnapshot { index } => put("index", (*index).into()),
+            E::VersionMismatch {
+                extension,
+                expected,
+            } => {
+                put("extension", extension.clone().into());
+                put("expected", expected.clone().into());
             }
             E::SelectorNotFound { selector } => put("selector", selector.clone().into()),
             E::Timeout { kind, elapsed_ms } => {
@@ -263,6 +291,34 @@ mod tests {
         let recovered: WebPilotError = serde_json::from_value(json).unwrap();
         assert_eq!(recovered, original);
         assert_eq!(recovered.exit_code(), 6);
+    }
+
+    #[test]
+    fn stale_snapshot_round_trips_with_exit_4() {
+        let original = WebPilotError::StaleSnapshot { index: 9 };
+        let json = serde_json::to_value(original.to_wire()).unwrap();
+        assert_eq!(json["code"], "StaleSnapshot");
+        assert_eq!(json["index"], 9);
+
+        let recovered: WebPilotError = serde_json::from_value(json).unwrap();
+        assert_eq!(recovered, original);
+        assert_eq!(recovered.exit_code(), 4);
+    }
+
+    #[test]
+    fn version_mismatch_round_trips_with_exit_3() {
+        let original = WebPilotError::VersionMismatch {
+            extension: "1.0.0".into(),
+            expected: "2.0.0".into(),
+        };
+        let json = serde_json::to_value(original.to_wire()).unwrap();
+        assert_eq!(json["code"], "VersionMismatch");
+        assert_eq!(json["extension"], "1.0.0");
+        assert_eq!(json["expected"], "2.0.0");
+
+        let recovered: WebPilotError = serde_json::from_value(json).unwrap();
+        assert_eq!(recovered, original);
+        assert_eq!(recovered.exit_code(), 3);
     }
 
     #[test]

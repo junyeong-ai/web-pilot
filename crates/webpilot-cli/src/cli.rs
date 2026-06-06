@@ -43,6 +43,10 @@ pub async fn run_cli() -> Result<()> {
         .with_target(false)
         .try_init();
 
+    // Validate settings up front so a malformed `config.toml` fails loudly with
+    // a clear message instead of being silently ignored.
+    webpilot::settings::init().map_err(|detail| WebPilotError::InvalidArgument { detail })?;
+
     let mode = output::detect_output_mode(cli.json);
 
     if cli.browser && cli.context.is_some() {
@@ -71,6 +75,7 @@ async fn run_local(command: commands::Command, mode: OutputMode) -> Result<()> {
         Cmd::SelfCmd(args) => commands::self_cmd::run(args)?,
         Cmd::Uninstall(args) => commands::uninstall::run(args).await?,
         Cmd::Diff(args) => commands::diff::run(args).await?,
+        Cmd::Policy(args) => commands::policy::run(args)?,
         _ => unreachable!("execution() routes only Execution::Local commands here"),
     };
     output::render(out, mode);
@@ -97,17 +102,27 @@ enum Execution {
 impl Cmd {
     fn execution(&self) -> Execution {
         match self {
-            Cmd::Setup(_) | Cmd::SelfCmd(_) | Cmd::Uninstall(_) | Cmd::Diff(_) => Execution::Local,
+            Cmd::Setup(_) | Cmd::SelfCmd(_) | Cmd::Uninstall(_) | Cmd::Diff(_) | Cmd::Policy(_) => {
+                Execution::Local
+            }
             Cmd::Status => Execution::Status,
             Cmd::Quit => Execution::Quit,
             Cmd::Device(_) | Cmd::Profile(_) | Cmd::Record(_) | Cmd::Context(_) => {
                 Execution::HeadlessOnly
             }
-            Cmd::Capture(_) | Cmd::Action(_) | Cmd::Eval(_) | Cmd::Wait(_) | Cmd::Tab(_)
-            | Cmd::Frame(_) | Cmd::Dom(_) | Cmd::Find(_) | Cmd::Network(_) | Cmd::Console(_)
-            | Cmd::Session(_) | Cmd::Policy(_) | Cmd::Fetch(_) | Cmd::Cookie(_) => {
-                Execution::TransportGeneric
-            }
+            Cmd::Capture(_)
+            | Cmd::Action(_)
+            | Cmd::Eval(_)
+            | Cmd::Wait(_)
+            | Cmd::Tab(_)
+            | Cmd::Frame(_)
+            | Cmd::Dom(_)
+            | Cmd::Find(_)
+            | Cmd::Network(_)
+            | Cmd::Console(_)
+            | Cmd::Session(_)
+            | Cmd::Fetch(_)
+            | Cmd::Cookie(_) => Execution::TransportGeneric,
         }
     }
 }
@@ -171,7 +186,6 @@ async fn dispatch_via_transport<T: Transport>(
         Cmd::Network(args) => commands::network::run(transport, args).await,
         Cmd::Console(args) => commands::console::run(transport, args).await,
         Cmd::Session(args) => commands::session::run(transport, args).await,
-        Cmd::Policy(args) => commands::policy::run(transport, args).await,
         Cmd::Fetch(args) => commands::fetch::run(transport, args).await,
         Cmd::Cookie(args) => commands::cookie::run(transport, args).await,
         Cmd::Status
@@ -181,6 +195,7 @@ async fn dispatch_via_transport<T: Transport>(
         | Cmd::Record(_)
         | Cmd::Context(_)
         | Cmd::Diff(_)
+        | Cmd::Policy(_)
         | Cmd::Setup(_)
         | Cmd::SelfCmd(_)
         | Cmd::Uninstall(_) => unreachable!("non-transport command reached generic dispatch"),

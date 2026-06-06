@@ -13,7 +13,7 @@
 //!   - `action`  — page-mutating actions (click/type/scroll/drag/navigate/...)
 //!   - `capture` — DOM extraction, screenshot, PDF, accessibility tree
 //!   - `query`   — eval, wait, dom get/set, fetch
-//!   - `state`   — cookies, console + network monitoring, session, policies
+//!   - `state`   — cookies, console + network monitoring, session
 //!   - `browser` — tab list/switch/new/close, frame list/switch, status
 
 mod action;
@@ -260,7 +260,7 @@ impl LocalTransport {
             }
         };
 
-        let deadline = std::time::Instant::now() + crate::timeouts::navigation();
+        let deadline = std::time::Instant::now() + webpilot::settings::timeouts().navigation;
         let loader = loader_id.as_deref();
         loop {
             if let Some((target_id, target_url)) = self.bound_target().await {
@@ -289,13 +289,14 @@ impl LocalTransport {
             }
 
             if std::time::Instant::now() >= deadline {
-                return Err(start_error.unwrap_or(WebPilotError::Timeout {
-                    kind: "navigation".into(),
-                    elapsed_ms: crate::timeouts::navigation().as_millis() as u64,
-                })
-                .into());
+                return Err(start_error
+                    .unwrap_or(WebPilotError::Timeout {
+                        kind: "navigation".into(),
+                        elapsed_ms: webpilot::settings::timeouts().navigation.as_millis() as u64,
+                    })
+                    .into());
             }
-            tokio::time::sleep(crate::timeouts::poll_interval()).await;
+            tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
         }
     }
 
@@ -327,7 +328,10 @@ impl LocalTransport {
 
     /// URL of the bound page target (empty if it can't be read).
     pub(super) async fn bound_target_url(&self) -> String {
-        self.bound_target().await.map(|(_, url)| url).unwrap_or_default()
+        self.bound_target()
+            .await
+            .map(|(_, url)| url)
+            .unwrap_or_default()
     }
 }
 
@@ -348,7 +352,9 @@ async fn navigation_settled(page: &CdpClient, loader_id: Option<&str>, before_ur
         return false;
     };
     let frame = tree.pointer("/frameTree/frame");
-    let loader = frame.and_then(|f| f.get("loaderId")).and_then(|v| v.as_str());
+    let loader = frame
+        .and_then(|f| f.get("loaderId"))
+        .and_then(|v| v.as_str());
     let frame_url = frame
         .and_then(|f| f.get("url"))
         .and_then(|v| v.as_str())
@@ -377,12 +383,13 @@ async fn wait_navigation_settled(
         if std::time::Instant::now() >= deadline {
             return false;
         }
-        tokio::time::sleep(crate::timeouts::poll_interval()).await;
+        tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
     }
 }
 
 impl Transport for LocalTransport {
     async fn send(&mut self, command: Command) -> Result<ResponseData> {
+        crate::policy::enforce(&command)?;
         match command {
             Command::Capture { include, opts, url } => self.do_capture(include, opts, url).await,
             Command::Action { action, capture } => self.do_action(action, capture).await,
@@ -428,11 +435,6 @@ impl Transport for LocalTransport {
             Command::NetworkClear => self.do_network_clear().await,
             Command::SessionExport => self.do_session_export().await,
             Command::SessionImport { data } => self.do_session_import(&data).await,
-            Command::PolicySet { operation, verdict } => {
-                self.do_policy_set(operation, verdict).await
-            }
-            Command::PolicyList => self.do_policy_list().await,
-            Command::PolicyClear => self.do_policy_clear().await,
             Command::Ping => Ok(ResponseData::Pong),
         }
     }

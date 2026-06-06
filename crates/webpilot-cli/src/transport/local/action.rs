@@ -7,35 +7,18 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 use webpilot::protocol::ResponseData;
-use webpilot::types::PolicyKey;
 use webpilot::{Action, WebPilotError};
 
-use super::state::policy_store;
 use super::{LocalTransport, action_success};
 
 impl LocalTransport {
+    // Policy is enforced once at the transport boundary (`Transport::send`),
+    // so handlers run only after the command is permitted.
     pub(super) async fn do_action(
         &mut self,
         action: Action,
         capture: bool,
     ) -> Result<ResponseData> {
-        // Policy enforcement — shared `denies` predicate over the same
-        // snake_case key space as the eval/fetch gates and the browser-mode SW,
-        // so `webpilot policy set --operation click --verdict deny` is honoured
-        // everywhere.
-        let key = PolicyKey::from(action.kind());
-        if policy_store::denies(key) {
-            return Ok(ResponseData::Action {
-                success: false,
-                error: Some(WebPilotError::PolicyDenied {
-                    operation: key.to_string(),
-                }),
-                dom: None,
-                url_changed: None,
-                new_tab: None,
-            });
-        }
-
         match &action {
             Action::Navigate { url } => {
                 let url = url.clone();
@@ -51,32 +34,20 @@ impl LocalTransport {
                 });
             }
             Action::Back => {
-                // The navigation back is the goal: it tears down the calling
-                // execution context, so the evaluate's own response racing with
-                // that teardown ("target navigated") is the success signal, not
-                // an error. Confirm via the navigation event instead.
-                let _ = self.page.evaluate("history.back()").await;
-                self.page
-                    .wait_for_event("Page.frameNavigated", crate::timeouts::back_forward())
-                    .await
-                    .ok();
-                // The document changed — a switched-to frame is now stale.
-                self.clear_active_frame().await;
+                self.history_nav("history.back()").await?;
                 return Ok(action_success(None));
             }
             Action::Forward => {
-                let _ = self.page.evaluate("history.forward()").await;
-                self.page
-                    .wait_for_event("Page.frameNavigated", crate::timeouts::back_forward())
-                    .await
-                    .ok();
-                self.clear_active_frame().await;
+                self.history_nav("history.forward()").await?;
                 return Ok(action_success(None));
             }
             Action::Reload => {
                 self.page.send("Page.reload", None).await?;
                 self.page
-                    .wait_for_event("Page.loadEventFired", crate::timeouts::reload_wait())
+                    .wait_for_event(
+                        "Page.loadEventFired",
+                        webpilot::settings::timeouts().reload_wait,
+                    )
                     .await
                     .ok();
                 self.clear_active_frame().await;
@@ -87,6 +58,7 @@ impl LocalTransport {
                 target,
                 steps,
             } => {
+                self.require_main_frame("drag").await?;
                 self.do_drag(*source, *target, *steps).await?;
                 return Ok(action_success(None));
             }
@@ -94,10 +66,12 @@ impl LocalTransport {
                 // Browser-input mouse move so CSS `:hover` actually fires.
                 // Bridge.js dispatchEvent only triggers JS listeners, not the
                 // internal hover state.
+                self.require_main_frame("hover").await?;
                 self.do_hover(*index).await?;
                 return Ok(action_success(None));
             }
             Action::Upload { index, path } => {
+                self.require_main_frame("upload").await?;
                 let path = path.clone();
                 self.do_upload(*index, &path).await?;
                 return Ok(action_success(None));
@@ -115,12 +89,34 @@ impl LocalTransport {
             let r = self
                 .invoke_bridge(&json!({"type": "extractDOM", "options": {}}))
                 .await?;
-            serde_json::from_value(r).ok()
+            let mut snapshot: Option<webpilot::types::DomSnapshot> = serde_json::from_value(r).ok();
+            if let Some(s) = snapshot.as_mut()
+                && self.active_frame_id.lock().await.is_none()
+            {
+                s.subframes = self.count_http_subframes().await;
+            }
+            snapshot
         } else {
             None
         };
 
         Ok(action_success(dom))
+    }
+
+    /// Typed guard for actions whose CDP path (page-viewport coordinates or
+    /// main-document node lookup) cannot target an iframe. Inside a switched
+    /// frame these would silently act on the wrong position — fail loudly
+    /// instead.
+    async fn require_main_frame(&self, kind: &str) -> Result<()> {
+        if self.active_frame_id.lock().await.is_some() {
+            return Err(WebPilotError::InvalidArgument {
+                detail: format!(
+                    "'{kind}' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"
+                ),
+            }
+            .into());
+        }
+        Ok(())
     }
 
     async fn do_upload(&self, index: u32, path: &std::path::Path) -> Result<()> {
@@ -209,6 +205,34 @@ impl LocalTransport {
         Ok(())
     }
 
+    /// Drive a same-document history navigation (`history.back()`/`forward()`).
+    ///
+    /// The navigation tears down the execution context the expression runs in,
+    /// so the evaluate's own response can come back as a CDP "target navigated"
+    /// teardown — that is the success path, not a failure. Only typed transport
+    /// failures (`ConnectionLost`/`Timeout`) are propagated; the navigation is
+    /// then confirmed via the frame event and the active frame is reset, just
+    /// as `navigate_reconnect` does.
+    async fn history_nav(&self, expression: &str) -> Result<()> {
+        if let Err(e) = self.page.evaluate(expression).await
+            && matches!(
+                e.downcast_ref::<WebPilotError>(),
+                Some(WebPilotError::ConnectionLost { .. } | WebPilotError::Timeout { .. })
+            )
+        {
+            return Err(e);
+        }
+        self.page
+            .wait_for_event(
+                "Page.frameNavigated",
+                webpilot::settings::timeouts().back_forward,
+            )
+            .await
+            .ok();
+        self.clear_active_frame().await;
+        Ok(())
+    }
+
     async fn do_drag(&self, source: u32, target: u32, steps: u32) -> Result<()> {
         let coords = self
             .invoke_bridge(&json!({
@@ -268,12 +292,10 @@ impl LocalTransport {
 /// lifted by `parse_bridge_response`), so a missing field means the response
 /// shape itself is wrong — surface it rather than actuating at the origin.
 fn coord(resp: &Value, key: &str) -> Result<f64> {
-    resp.get(key)
-        .and_then(Value::as_f64)
-        .ok_or_else(|| {
-            WebPilotError::Other {
-                detail: format!("getElementCoords response missing numeric field `{key}`"),
-            }
-            .into()
-        })
+    resp.get(key).and_then(Value::as_f64).ok_or_else(|| {
+        WebPilotError::Other {
+            detail: format!("getElementCoords response missing numeric field `{key}`"),
+        }
+        .into()
+    })
 }

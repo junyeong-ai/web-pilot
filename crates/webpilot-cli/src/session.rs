@@ -12,8 +12,12 @@ const SYSTEM_CHROME_PATHS: &[&str] = &[
 /// Headless Chrome's launch viewport. `device reset` snaps the page back to
 /// these dimensions because CDP `Emulation.clearDeviceMetricsOverride`
 /// removes the override flag without triggering a layout pass on its own.
-pub const HEADLESS_VIEWPORT_WIDTH: u32 = 1280;
-pub const HEADLESS_VIEWPORT_HEIGHT: u32 = 720;
+/// Resolved from settings (default 1280×720, `[chrome]` config, or
+/// `WEBPILOT_VIEWPORT_*`).
+pub fn headless_viewport() -> (u32, u32) {
+    let c = &webpilot::settings::get().chrome;
+    (c.viewport_width, c.viewport_height)
+}
 
 /// Atomic write: write to a temp file, then rename.
 fn atomic_write(path: &std::path::Path, data: &str) -> std::io::Result<()> {
@@ -25,12 +29,12 @@ fn atomic_write(path: &std::path::Path, data: &str) -> std::io::Result<()> {
 
 /// Locate a Chrome binary. Prefers Chrome for Testing.
 pub fn find_chrome() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("WEBPILOT_CHROME") {
-        let p = PathBuf::from(&path);
+    if let Some(path) = &webpilot::settings::get().chrome.binary {
+        let p = PathBuf::from(path);
         if p.exists() {
             return Ok(p);
         }
-        anyhow::bail!("WEBPILOT_CHROME={path} not found");
+        anyhow::bail!("configured Chrome binary not found: {path}");
     }
 
     // agent-browser layout: ~/.agent-browser/browsers/<version>/chrome-mac-arm64/...
@@ -167,6 +171,7 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
 
     tracing::info!("Launching headless Chrome...");
 
+    let (vw, vh) = headless_viewport();
     let child = std::process::Command::new(&chrome)
         .args([
             "--headless=new",
@@ -182,7 +187,7 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
             "--enable-features=NetworkService,NetworkServiceInProcess",
             "--password-store=basic",
             "--use-mock-keychain",
-            &format!("--window-size={HEADLESS_VIEWPORT_WIDTH},{HEADLESS_VIEWPORT_HEIGHT}"),
+            &format!("--window-size={vw},{vh}"),
             &format!("--user-data-dir={}", profile_dir.display()),
             "about:blank",
         ])
@@ -198,7 +203,7 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
     std::mem::forget(child);
 
     // Poll DevToolsActivePort (Puppeteer/Playwright standard).
-    let deadline = tokio::time::Instant::now() + crate::timeouts::chrome_launch();
+    let deadline = tokio::time::Instant::now() + webpilot::settings::timeouts().chrome_launch;
     let ws_url = loop {
         if tokio::time::Instant::now() > deadline {
             let _ = send_signal(pid as i32, libc::SIGTERM);

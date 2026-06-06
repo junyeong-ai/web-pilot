@@ -4,9 +4,9 @@ mod cli;
 mod commands;
 mod host;
 mod output;
+mod policy;
 pub mod session;
 pub mod stitch;
-mod timeouts;
 mod transport;
 
 /// WebPilot: Browser control tool for AI agents.

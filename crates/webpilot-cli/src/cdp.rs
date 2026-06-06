@@ -8,7 +8,6 @@
 use anyhow::{Context, Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
-use webpilot::WebPilotError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,6 +16,7 @@ use tokio::sync::{Mutex, broadcast, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use webpilot::WebPilotError;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWriter = futures_util::stream::SplitSink<WsStream, Message>;
@@ -47,10 +47,7 @@ impl CdpClient {
         let next_id = Arc::new(AtomicU64::new(1));
         let alive = Arc::new(AtomicBool::new(true));
 
-        let buffer_size: usize = std::env::var("WEBPILOT_CDP_EVENT_BUFFER")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(256);
+        let buffer_size = webpilot::settings::get().cdp.event_buffer;
         let (events_tx, _) = broadcast::channel::<Value>(buffer_size);
 
         // Reader: route id-bearing responses to pending channels; broadcast events.
@@ -98,7 +95,7 @@ impl CdpClient {
             let pending = pending.clone();
             let next_id = next_id.clone();
             let alive = alive.clone();
-            let interval = crate::timeouts::heartbeat();
+            let interval = webpilot::settings::timeouts().heartbeat;
             Arc::new(Mutex::new(Some(tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(interval).await;
@@ -160,7 +157,7 @@ impl CdpClient {
     }
 
     pub async fn send(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        self.send_with_timeout(method, params, crate::timeouts::cdp_send())
+        self.send_with_timeout(method, params, webpilot::settings::timeouts().cdp_send)
             .await
     }
 

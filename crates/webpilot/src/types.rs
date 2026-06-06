@@ -67,11 +67,28 @@ pub enum PolicyVerdict {
 serde_plain::derive_display_from_serialize!(PolicyVerdict);
 serde_plain::derive_fromstr_from_deserialize!(PolicyVerdict);
 
-/// A policy-gated operation. Superset of [`ActionKind`] plus `eval` and `fetch` —
-/// the two that run caller-supplied script (directly, or via a `frame find`
-/// predicate) and so sit behind the same policy surface. Shares the snake_case
-/// wire string space of `ActionKind`, so every key is looked up identically in
-/// both transport modes.
+/// A policy-gated operation, keyed by *effect* rather than by command name, so
+/// every surface that produces the effect is gated by one key. Superset of
+/// [`ActionKind`] plus:
+/// - `eval` — run code in the page's MAIN world. Covers caller-supplied script
+///   (`eval`, the `frame switch` predicate) *and* the fixed monitoring hooks
+///   `console start` / `network start` install, since both execute
+///   agent-initiated JS in the page exactly as `eval=deny` means to forbid.
+/// - `fetch` — issue a credentialed page-context request.
+/// - `navigate` — load a URL into a browsing context: the `navigate` action,
+///   `capture --url`, and `tab new URL` all sit behind this one key.
+/// - `dom_set` — page mutation.
+/// - `tab_close` — destroy a tab.
+/// - `cookie_set` / `cookie_delete` — cookie-jar mutation.
+/// - `cookie_list` — read cookie *values* (session tokens), a credential-read
+///   surface, so it is gated even though it is read-only.
+/// - `session_export` / `session_import` — credential egress / ingress.
+///
+/// Read-only observation of non-secret page state (capture without a URL, find,
+/// `dom get`) and bookkeeping on WebPilot's own capture buffers (console /
+/// network read & clear) are intentionally ungated. Shares the snake_case wire
+/// string space of `ActionKind`, so every key is looked up identically in both
+/// transport modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyKey {
@@ -91,6 +108,13 @@ pub enum PolicyKey {
     Drag,
     Eval,
     Fetch,
+    DomSet,
+    TabClose,
+    CookieList,
+    CookieSet,
+    CookieDelete,
+    SessionExport,
+    SessionImport,
 }
 
 impl From<ActionKind> for PolicyKey {
@@ -116,12 +140,6 @@ impl From<ActionKind> for PolicyKey {
 
 serde_plain::derive_display_from_serialize!(PolicyKey);
 serde_plain::derive_fromstr_from_deserialize!(PolicyKey);
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyEntry {
-    pub operation: PolicyKey,
-    pub verdict: PolicyVerdict,
-}
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 
@@ -277,8 +295,6 @@ pub struct ElementSpatial {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub landmark: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub frame: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub is_new: Option<bool>,
 }
 
@@ -341,10 +357,20 @@ pub struct DomSnapshot {
     #[serde(default)]
     pub scroll_percent: u32,
     pub extraction_ms: u64,
+    /// HTTP iframes in the page that this capture does not include — capture
+    /// is scoped to the active frame; iframe content is reached via
+    /// `frame switch`. Populated by the transport layer (the in-frame bridge
+    /// cannot see cross-origin frames).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub subframes: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accessibility_tree: Option<String>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -567,9 +593,6 @@ impl DomSnapshot {
             if let Some(ref form) = el.semantics.form_id {
                 out.push_str(&format!("form={form} "));
             }
-            if let Some(ref frame) = el.spatial.frame {
-                out.push_str(&format!("frame={frame} "));
-            }
             if let Some(ref lm) = el.spatial.landmark {
                 out.push_str(&format!("@{lm} "));
             }
@@ -590,6 +613,13 @@ impl DomSnapshot {
         } else {
             out.push_str(&format!(
                 "--- Scroll: {pct}% ({above:.1} above, {below:.1} below) ---\n"
+            ));
+        }
+
+        if self.subframes > 0 {
+            out.push_str(&format!(
+                "--- {} iframe(s) not shown — list: webpilot frame, enter: webpilot frame switch ---\n",
+                self.subframes,
             ));
         }
 
@@ -645,9 +675,32 @@ mod tests {
             scroll: ScrollInfo::default(),
             scroll_percent: 0,
             extraction_ms: 0,
+            subframes: 0,
             text_content: None,
             accessibility_tree: None,
         };
         let _ = snap.to_text(); // Must not panic
+    }
+
+    #[test]
+    fn to_text_mentions_subframes_only_when_present() {
+        let mut snap = DomSnapshot {
+            elements: Vec::new(),
+            total_nodes: 0,
+            page_url: "x".into(),
+            page_title: "y".into(),
+            scroll: ScrollInfo::default(),
+            scroll_percent: 0,
+            extraction_ms: 0,
+            subframes: 0,
+            text_content: None,
+            accessibility_tree: None,
+        };
+        assert!(!snap.to_text().contains("iframe"));
+
+        snap.subframes = 2;
+        let text = snap.to_text();
+        assert!(text.contains("2 iframe(s) not shown"));
+        assert!(text.contains("webpilot frame switch"));
     }
 }

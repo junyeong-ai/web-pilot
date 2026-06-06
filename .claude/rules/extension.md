@@ -13,11 +13,19 @@ paths:
 ## Wire shapes
 - **Action**: `{ kind: "click" | "type" | "key_press" | "navigate" | "scroll" | "scroll_to" | "back" | "forward" | "reload" | "hover" | "focus" | "select" | "upload" | "drag", ...fields }`. `kind` is snake_case to match Rust `serde(rename_all = "snake_case")`.
 - **Wait**: `{ condition: { until: "selector"|"text"|"navigation"|"idle", value? }, timeout_ms }`.
-- **Errors**: `{ success: false, error: { code, message, ...data } }` where `code` matches `WebPilotError` variant (e.g., `ElementNotFound`, `SelectorNotFound`, `Timeout`) and `...data` carries the Rust variant fields (`requested`, `available`, `selector`, `kind`, `elapsed_ms`, ...).
+- **Errors**: `{ success: false, error: { code, message, ...data } }` where `code` matches `WebPilotError` variant (e.g., `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `Timeout`) and `...data` carries the Rust variant fields (`requested`, `available`, `index`, `selector`, `kind`, `elapsed_ms`, ...).
 - **Frames**: `switchFrame` takes `{ selector: { by: "main"|"name"|"url"|"predicate", ... } }`.
+
+## Index resolution (snapshot-bound)
+- `extractDOM` stores the picked element references in `state.snapshot` (index order). Index-addressed messages (`executeAction`, `getElementCoords`, `tagElement`) resolve against that stored list via `resolveIndex`, so an index always targets the element the agent saw at capture time — never a freshly-collected element that may have shifted.
+- `resolveIndex` revalidates only liveness/visibility (`isConnected` + `isVisible`); a still-connected node whose content changed is legitimate. A missing snapshot (no capture yet) or a removed/hidden element returns `StaleSnapshot` (exit 4) — there is no silent re-resolution against the live DOM.
 
 ## New-element semantics
 - `state.previousKeys` baseline is reset whenever `location.href` changes — cross-page navigation is not "all elements are new". Within the same URL, `is_new = true` means the element appeared since the last `extractDOM` call.
+
+## Policy & versioning
+- The service worker does **not** enforce or store policy. Policy is enforced CLI-side at the transport boundary before a command is sent; the SW just executes.
+- Every NM `Ping` (connect-time hello + keepalive) carries `extension_version` from the manifest, so the host can detect a stale install and reject commands with `VersionMismatch`.
 
 ## Listener attachment
 - The `chrome.runtime.onMessage` listener is removed and re-added on every injection, so SPA bfcache/restore cycles cannot leave a stale listener.

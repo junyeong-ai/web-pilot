@@ -42,7 +42,6 @@ pub enum CommandOutput {
         human_lines: Vec<String>,
         summary: String,
     },
-    Silent,
 }
 
 pub fn render(result: CommandOutput, mode: OutputMode) {
@@ -59,6 +58,7 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
             }
             for (key, label) in [
                 ("screenshot_path", "Screenshot"),
+                ("screenshot_error", "Screenshot failed"),
                 ("pdf_path", "PDF"),
                 ("accessibility_path", "Accessibility tree"),
             ] {
@@ -97,8 +97,6 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
             }
         }
         (CommandOutput::List { items, .. }, OutputMode::Json) => emit_json(&items),
-
-        (CommandOutput::Silent, _) => {}
     }
 }
 

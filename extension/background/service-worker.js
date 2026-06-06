@@ -15,25 +15,29 @@ let nmPort = null;
 let keepaliveTimer = null;
 let connectionRetries = 0;
 let activeFrameId = 0;
+const monitoringState = { console: new Set(), network: new Set() };
 
-// Restore active frame on SW restart.
-chrome.storage.session?.get("activeFrameId", (data) => {
-  if (data?.activeFrameId != null) activeFrameId = data.activeFrameId;
-});
+// An MV3 service worker is killed when idle and restarted on the next event,
+// losing in-memory state. `activeFrameId` and the monitoring sets are persisted
+// to session storage and reloaded here. `RESTORED` resolves once both are back;
+// `processCommand` awaits it so a command can never run against un-restored
+// state — otherwise the first command after a restart would silently target the
+// main frame instead of the iframe the agent had switched to.
+const RESTORED = (async () => {
+  try {
+    const data = await chrome.storage.session?.get(["activeFrameId", "monitoringTabs"]);
+    if (data?.activeFrameId != null) activeFrameId = data.activeFrameId;
+    if (data?.monitoringTabs) {
+      (data.monitoringTabs.console || []).forEach((id) => monitoringState.console.add(id));
+      (data.monitoringTabs.network || []).forEach((id) => monitoringState.network.add(id));
+    }
+  } catch {}
+})();
 
 function setActiveFrameId(id) {
   activeFrameId = id;
   chrome.storage.session?.set({ activeFrameId: id });
 }
-
-// Per-tab monitoring state — restored on SW restart.
-const monitoringState = { console: new Set(), network: new Set() };
-chrome.storage.session?.get("monitoringTabs", (data) => {
-  if (data?.monitoringTabs) {
-    (data.monitoringTabs.console || []).forEach((id) => monitoringState.console.add(id));
-    (data.monitoringTabs.network || []).forEach((id) => monitoringState.network.add(id));
-  }
-});
 
 function saveMonitoringState() {
   chrome.storage.session?.set({
@@ -55,9 +59,6 @@ const otherErr = (msg) => err("Other", msg);
 const exceptionErr = (e) => (e?.code ? err(e.code, e.message || String(e)) : otherErr(e?.message || String(e)));
 const timeoutErr = (kind, elapsed_ms) => err("Timeout", `${kind} timed out`, { kind, elapsed_ms });
 const noPageErr = () => err("NoPage", "No web page open");
-const policyDeniedErr = (operation) => err("PolicyDenied", `Operation '${operation}' denied by policy`, { operation });
-const elementNotFoundErr = (requested, available) =>
-  err("ElementNotFound", `Index ${requested} out of range (1-${available})`, { requested, available });
 
 function topErr(error) {
   return { type: "Error", error };
@@ -145,15 +146,17 @@ async function injectNetworkMonitoring(tabId) {
       const xhrProto = XMLHttpRequest.prototype;
       const origOpen = xhrProto.open;
       const origSend = xhrProto.send;
+      const xhrMeta = new WeakMap();
       xhrProto.open = function (m, u, ...a) {
-        this.__wp_method = m; this.__wp_url = String(u);
+        xhrMeta.set(this, { method: m, url: String(u) });
         return origOpen.apply(this, [m, u, ...a]);
       };
       xhrProto.send = function (...a) {
         const t0 = performance.now();
         this.addEventListener("loadend", () => {
+          const meta = xhrMeta.get(this) || {};
           window.__webpilot_network.push({
-            type: "xhr", url: this.__wp_url || "", method: this.__wp_method || "GET",
+            type: "xhr", url: meta.url || "", method: meta.method || "GET",
             status: this.status || undefined,
             error: this.status === 0 ? "Network error" : undefined,
             duration_ms: Math.round(performance.now() - t0),
@@ -176,7 +179,12 @@ function connectToHost() {
     console.log("[WebPilot] Connected to native host");
     connectionRetries = 0;
 
-    nmPort.onMessage.addListener(handleHostMessage);
+    // Bind each connection's messages to that exact port, so a reply always
+    // goes back to the host process that sent the request — never to a
+    // reconnected host whose fresh id space could match the id to a different
+    // pending request.
+    const port = nmPort;
+    port.onMessage.addListener((request) => handleHostMessage(request, port));
     nmPort.onDisconnect.addListener(() => {
       const error = chrome.runtime.lastError?.message || "unknown";
       console.log("[WebPilot] Native host disconnected:", error);
@@ -188,10 +196,16 @@ function connectToHost() {
       setTimeout(connectToHost, delay);
     });
 
+    // Every Ping carries our manifest version (connect-time hello + keepalive),
+    // so the host can detect a stale install and reject CLI commands loudly.
+    const ping = () =>
+      nmPort?.postMessage({
+        id: 0,
+        command: { type: "Ping", extension_version: chrome.runtime.getManifest().version },
+      });
+    ping();
     clearInterval(keepaliveTimer);
-    keepaliveTimer = setInterval(() => {
-      nmPort?.postMessage({ id: 0, command: { type: "Ping" } });
-    }, KEEPALIVE_INTERVAL);
+    keepaliveTimer = setInterval(ping, KEEPALIVE_INTERVAL);
   } catch (e) {
     console.error("[WebPilot] Failed to connect:", e);
     connectionRetries++;
@@ -199,19 +213,19 @@ function connectToHost() {
   }
 }
 
-function handleHostMessage(request) {
+function handleHostMessage(request, port) {
   const { id, command } = request;
   if (!command) return;
-  processCommandWithKeepAlive(id, command);
+  processCommandWithKeepAlive(id, command, port);
 }
 
-async function processCommandWithKeepAlive(id, command) {
+async function processCommandWithKeepAlive(id, command, port) {
   // Reset 30s idle timer while command is in flight.
   const keepAlive = setInterval(() => {
     chrome.runtime.getPlatformInfo(() => {});
   }, 20000);
   try {
-    await processCommand(id, command);
+    await processCommand(id, command, port);
   } finally {
     clearInterval(keepAlive);
   }
@@ -219,7 +233,18 @@ async function processCommandWithKeepAlive(id, command) {
 
 // ── Command dispatch ───────────────────────────────────────────────────────
 
-async function processCommand(id, command) {
+async function processCommand(id, command, port) {
+  // Never act on un-restored state after a service-worker restart.
+  await RESTORED;
+  // Reply to the port that delivered this request, not the mutable global
+  // `nmPort`. A disconnected port throws — drop the reply rather than risk
+  // landing it on a reconnected host (the originating CLI already failed on its
+  // dead socket).
+  const send = (result) => {
+    try {
+      port.postMessage({ id, result });
+    } catch {}
+  };
   try {
     let result;
     switch (command.type) {
@@ -329,18 +354,6 @@ async function processCommand(id, command) {
         result = await handleSessionImport(command.data);
         break;
 
-      case "PolicySet":
-        result = await handlePolicySet(command.operation, command.verdict);
-        break;
-
-      case "PolicyList":
-        result = await handlePolicyList();
-        break;
-
-      case "PolicyClear":
-        result = await handlePolicyClear();
-        break;
-
       case "Ping":
         result = { type: "Pong" };
         break;
@@ -349,9 +362,9 @@ async function processCommand(id, command) {
         result = topErr(otherErr(`Unknown command: ${command.type}`));
     }
 
-    nmPort?.postMessage({ id, result });
+    send(result);
   } catch (e) {
-    nmPort?.postMessage({ id, result: topErr(exceptionErr(e)) });
+    send(topErr(exceptionErr(e)));
   }
 }
 
@@ -391,65 +404,39 @@ async function handleCapture(command) {
     page_title: "",
   };
 
-  // DOM extraction. When a frame is active (after `frame switch`) capture is
-  // scoped to it, matching eval/dom; otherwise every frame is merged so iframe
-  // content is visible by default.
+  // DOM extraction — scoped to the active frame (main by default), exactly
+  // like the headless transport. Indices the agent sees resolve against the
+  // same frame's bridge snapshot at action time, so every shown index is
+  // actionable. Iframe content is reached via `frame switch`, surfaced by
+  // the `subframes` hint below.
   if (include.has("dom")) {
     try {
-      const extractOpts = { bounds: opts.bounds || false, occlusion: opts.occlusion || false };
       const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => [{ frameId: 0 }]);
-      const httpFrames = frames
-        .filter((f) => f.url?.startsWith("http"))
-        .filter((f) => activeFrameId === 0 || f.frameId === activeFrameId);
 
       // A scoped capture whose target frame has since gone is a not-found
       // error, not an empty success — mirror the headless FrameNotFound.
-      if (activeFrameId !== 0 && httpFrames.length === 0) {
+      if (
+        activeFrameId !== 0 &&
+        !frames.some((f) => f.frameId === activeFrameId && f.url?.startsWith("http"))
+      ) {
         const sel = `frame ${activeFrameId}`;
         return topErr(err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel }));
       }
 
-      await ensureBridge(tabId, 0);
-
-      const frameResults = await Promise.allSettled(
-        httpFrames.map((f) =>
-          sendToContent(tabId, { type: "extractDOM", options: extractOpts }, f.frameId, 5000)
-            .then((dom) => ({ frameId: f.frameId, url: f.url, dom })),
-        ),
+      await ensureBridge(tabId, activeFrameId);
+      const dom = await sendToContent(
+        tabId,
+        { type: "extractDOM", options: { bounds: opts.bounds || false, occlusion: opts.occlusion || false } },
+        activeFrameId,
+        5000,
       );
-
-      const allElements = [];
-      let globalIdx = 1;
-      let mainDom = null;
-
-      for (const r of frameResults) {
-        if (r.status !== "fulfilled" || !r.value.dom?.elements) continue;
-        const { frameId, url, dom } = r.value;
-        const frameLabel = frameId === 0 ? null : (url ? new URL(url).hostname : `frame-${frameId}`);
-        if (frameId === 0) mainDom = dom;
-        for (const el of dom.elements) {
-          el.index = globalIdx++;
-          if (frameLabel) el.frame = frameLabel;
-          allElements.push(el);
+      if (dom?.elements) {
+        if (activeFrameId === 0) {
+          dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
         }
-      }
-
-      // Build the snapshot whenever a frame extracted, even with zero
-      // interactive elements — an empty page is an empty DOM, not a missing
-      // one (headless returns the same empty snapshot).
-      const base = mainDom || frameResults.find((r) => r.status === "fulfilled")?.value?.dom;
-      if (base) {
-        result.dom = {
-          elements: allElements,
-          total_nodes: base.total_nodes || 0,
-          page_url: base.page_url || "",
-          page_title: base.page_title || "",
-          scroll: base.scroll || {},
-          scroll_percent: base.scroll_percent || 0,
-          extraction_ms: base.extraction_ms || 0,
-        };
-        result.page_url = result.dom.page_url;
-        result.page_title = result.dom.page_title;
+        result.dom = dom;
+        result.page_url = dom.page_url || "";
+        result.page_title = dom.page_title || "";
       }
     } catch (e) {
       console.error("[WebPilot] DOM error:", e.message);
@@ -486,11 +473,12 @@ async function handleCapture(command) {
     }
   }
 
-  // Annotated overlay before screenshot.
-  if (opts.annotate && result.dom?.elements) {
+  // Annotated overlay before screenshot. Overlay coordinates are page-viewport
+  // relative, so they only line up when capture is scoped to the main frame.
+  if (opts.annotate && activeFrameId === 0 && result.dom?.elements) {
     try {
       const annotations = result.dom.elements
-        .filter((el) => el.in_viewport && el.bounds && el.bounds.w > 0 && el.bounds.h > 0 && !el.frame)
+        .filter((el) => el.in_viewport && el.bounds && el.bounds.w > 0 && el.bounds.h > 0)
         .map((el) => ({ index: el.index, x: el.bounds.x, y: el.bounds.y, w: el.bounds.w, h: el.bounds.h }));
       if (annotations.length > 0) {
         await ensureBridge(tabId, 0);
@@ -596,10 +584,8 @@ function emptyDom() {
 async function handleActionCommand(command) {
   const { action } = command;
 
-  // Policy enforcement (action.kind matches stored policy keys).
-  if (await policyDenies(action.kind)) {
-    return { type: "Action", success: false, error: policyDeniedErr(action.kind) };
-  }
+  // Policy is enforced CLI-side at the transport boundary before the command
+  // is sent, so the service worker never re-checks it.
 
   // Inject dialog override before any action runs in the page.
   const tab = await findHttpTab();
@@ -620,6 +606,21 @@ async function handleActionCommand(command) {
       },
     });
   } catch {}
+
+  // Viewport-coordinate / main-document actions cannot target an iframe: their
+  // CDP path uses page-level coordinates or a main-document node lookup. Reject
+  // inside a switched frame, matching the headless `require_main_frame` guard,
+  // so behaviour is identical across modes.
+  if (activeFrameId !== 0 && (action.kind === "hover" || action.kind === "drag" || action.kind === "upload")) {
+    return {
+      type: "Action",
+      success: false,
+      error: err(
+        "InvalidArgument",
+        `'${action.kind}' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main`,
+      ),
+    };
+  }
 
   let result;
 
@@ -678,7 +679,15 @@ async function handleActionCommand(command) {
       if (t) {
         await ensureBridge(t.id, activeFrameId);
         const dom = await sendToContent(t.id, { type: "extractDOM", options: {} }, activeFrameId, 5000);
-        if (dom) result.dom = dom;
+        if (dom) {
+          // Mirror standalone capture: report out-of-scope http iframes so the
+          // agent's subframe logic works the same after an action.
+          if (activeFrameId === 0 && dom.elements) {
+            const frames = await chrome.webNavigation.getAllFrames({ tabId: t.id }).catch(() => []);
+            dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
+          }
+          result.dom = dom;
+        }
       }
     } catch {}
   }
@@ -725,7 +734,13 @@ async function dispatchActionToPage(tab, action) {
 async function handleUpload(tabId, action) {
   try {
     await ensureBridge(tabId, activeFrameId);
-    await sendToContent(tabId, { type: "tagElement", index: action.index, attr: "data-wp-upload" }, activeFrameId);
+    // Tag the chosen element by index — this resolves through the bridge
+    // snapshot, so a stale index surfaces a typed `StaleSnapshot` here (exit 4
+    // parity with headless) instead of a generic "not found via CDP" later.
+    const tag = await sendToContent(tabId, { type: "tagElement", index: action.index, attr: "data-wp-upload" }, activeFrameId);
+    if (tag && tag.success === false) {
+      return { type: "Action", success: false, error: tag.error };
+    }
 
     try {
       await withCdp(tabId, async (tid) => {
@@ -844,9 +859,6 @@ async function handleStatus() {
 // ── Eval ───────────────────────────────────────────────────────────────────
 
 async function handleEval(command) {
-  if (await policyDenies("eval")) {
-    return { type: "Eval", success: false, error: policyDeniedErr("eval") };
-  }
   const tab = await findHttpTab();
   if (!tab) return { type: "Eval", success: false, error: noPageErr() };
 
@@ -970,9 +982,6 @@ async function handleDomGet(command) {
 // ── Fetch ──────────────────────────────────────────────────────────────────
 
 async function handleFetch(command) {
-  if (await policyDenies("fetch")) {
-    return { type: "FetchResult", success: false, error: policyDeniedErr("fetch") };
-  }
   const tab = await findHttpTab();
   if (!tab) return { type: "FetchResult", success: false, error: noPageErr() };
   try {
@@ -1064,10 +1073,8 @@ async function handleFrameSwitch(selector) {
     const needle = (selector.pattern || "").replace(/\*/g, "");
     matched = httpFrames.find((f) => f.url?.includes(needle));
   } else if (selector.by === "predicate") {
-    // A predicate is arbitrary caller JS — gated by the same key as `eval`.
-    if (await policyDenies("eval")) {
-      return { type: "FrameSwitched", success: false, error: policyDeniedErr("eval") };
-    }
+    // A predicate is arbitrary caller JS, gated by the `eval` key — enforced
+    // CLI-side before the command is sent.
     for (const f of httpFrames) {
       try {
         const r = await sendToContent(tab.id, { type: "eval", code: selector.js }, f.frameId, 2000);
@@ -1296,84 +1303,6 @@ async function handleSessionImport(rawData) {
   }
 }
 
-// ── Policy store ───────────────────────────────────────────────────────────
-//
-// Keyed by operation. Mirrors Rust `PolicyKey`: action kinds plus eval / fetch.
-
-const POLICY_OPERATIONS = new Set([
-  "click", "type", "key_press", "navigate", "back", "forward", "reload",
-  "scroll", "scroll_to", "hover", "focus", "select", "upload", "drag",
-  "eval", "fetch",
-]);
-
-async function loadPolicies() {
-  const stored = await chrome.storage.local.get("policies");
-  return stored?.policies;
-}
-
-// Whether a stored value is a trustworthy policy map. `undefined` (absent key)
-// is the empty no-policy state. Anything present must be a plain object whose
-// keys are all known operations and whose values are all "allow"/"deny" — the
-// same all-or-nothing rule as the Rust store, so a malformed store fails closed.
-function isValidPolicyStore(p) {
-  if (p === undefined) return true;
-  if (p === null || typeof p !== "object" || Array.isArray(p)) return false;
-  return Object.entries(p).every(
-    ([k, v]) => POLICY_OPERATIONS.has(k) && (v === "allow" || v === "deny"),
-  );
-}
-
-// Single enforcement predicate shared by the action, eval, and fetch paths.
-// Fails closed: an unreadable or malformed store denies rather than allowing.
-async function policyDenies(operation) {
-  try {
-    const policies = await loadPolicies();
-    if (!isValidPolicyStore(policies)) return true;
-    return policies?.[operation] === "deny";
-  } catch {
-    return true;
-  }
-}
-
-async function handlePolicySet(operation, verdict) {
-  try {
-    const loaded = await loadPolicies();
-    // Overwrite a malformed store with a fresh one rather than writing back junk.
-    const policies = isValidPolicyStore(loaded) && loaded ? loaded : {};
-    policies[operation] = verdict;
-    await chrome.storage.local.set({ policies });
-    return { type: "PolicyResult", success: true };
-  } catch (e) {
-    return { type: "PolicyResult", success: false, error: exceptionErr(e) };
-  }
-}
-
-async function handlePolicyList() {
-  try {
-    const policies = await loadPolicies();
-    if (!isValidPolicyStore(policies)) {
-      return { type: "Error", error: otherErr("policy store is invalid; run: webpilot policy clear") };
-    }
-    return {
-      type: "Policies",
-      policies: Object.entries(policies || {}).map(([operation, verdict]) => ({ operation, verdict })),
-    };
-  } catch {
-    // Match enforcement (which fails closed) — surface the unreadable store
-    // instead of misreporting "no policies".
-    return { type: "Error", error: otherErr("policy store is unreadable; run: webpilot policy clear") };
-  }
-}
-
-async function handlePolicyClear() {
-  try {
-    await chrome.storage.local.remove("policies");
-    return { type: "PolicyResult", success: true };
-  } catch (e) {
-    return { type: "PolicyResult", success: false, error: exceptionErr(e) };
-  }
-}
-
 // ── Tab / page utilities ───────────────────────────────────────────────────
 
 function sleep(ms) {
@@ -1502,6 +1431,11 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
   if (details.frameId !== 0) return;
   if (!details.url?.startsWith("http")) return;
   const tabId = details.tabId;
+  // This fires independently of command processing, so it must also wait for
+  // the post-restart restore before consulting `monitoringState` — otherwise a
+  // navigation right after an SW restart would skip re-injecting a monitor the
+  // user had started.
+  await RESTORED;
   await injectBridgeOnly(tabId, 0);
   if (monitoringState.console.has(tabId)) {
     try { await injectConsoleMonitoring(tabId); } catch {}

@@ -11,14 +11,22 @@
  */
 
 (() => {
-  // ── New-element baseline ──────────────────────────────────────────────────
-  // "new" means an element appeared since the previous capture (e.g. a modal
-  // opened). The baseline is reset on URL change — see `syncBaselineUrl`, which
-  // runs on every extraction so SPA route changes (no re-injection) are caught.
+  // ── Per-document state ────────────────────────────────────────────────────
+  // `previousKeys` — new-element baseline: "new" means an element appeared
+  // since the previous capture (e.g. a modal opened). Reset on URL change —
+  // see `syncBaselineUrl`, which runs on every extraction so SPA route
+  // changes (no re-injection) are caught.
+  // `snapshot` — the exact element references the last `extractDOM` emitted,
+  // in index order. Index-addressed actions resolve against this list, so an
+  // index always targets the element the agent actually saw. A null snapshot
+  // (no capture in this document yet) or an element that has left the DOM /
+  // become invisible is a typed `StaleSnapshot` error — never a silent
+  // re-resolution against the live DOM.
   if (!window.__webpilot_state) {
     window.__webpilot_state = {
       lastUrl: location.href,
       previousKeys: new Set(),
+      snapshot: null,
     };
   }
   const state = window.__webpilot_state;
@@ -38,6 +46,13 @@
 
   const selectorNotFound = (selector) =>
     err("SelectorNotFound", `Selector not found: ${selector}`, { selector });
+
+  const staleSnapshot = (index) =>
+    err(
+      "StaleSnapshot",
+      `Element [${index}] is from a stale or missing snapshot — the page changed since the last capture. Re-capture: webpilot capture --include dom`,
+      { index },
+    );
 
   // ── Selector for interactive elements ─────────────────────────────────────
   const INTERACTIVE_SELECTOR =
@@ -97,23 +112,53 @@
     return all;
   }
 
-  function getVisibleElements() {
-    const all = collectInteractiveElements();
-    const visible = [];
-    for (const el of all) {
-      const rect = el.getBoundingClientRect();
-      const style = getComputedStyle(el);
-      if (
-        rect.width > 0 &&
-        rect.height > 0 &&
-        style.display !== "none" &&
-        style.visibility !== "hidden" &&
-        parseFloat(style.opacity) > 0
-      ) {
-        visible.push(el);
-      }
+  // Single visibility predicate shared by extraction and action-time
+  // revalidation, so the two can never drift apart.
+  function isVisible(el) {
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      parseFloat(style.opacity) > 0
+    );
+  }
+
+  // Resolve an element index against the stored snapshot.
+  //
+  // The snapshot holds *direct element references*, so an index can never
+  // silently resolve to a different node than the one captured — a reference is
+  // stable identity. Revalidation therefore only confirms the captured node is
+  // still live (`isConnected`) and visible; that is the complete, correct, and
+  // false-positive-free staleness signal:
+  //   - a full navigation builds a new document with a fresh `window`, so this
+  //     whole state object is gone and `snapshot` is null → StaleSnapshot;
+  //   - an SPA navigation that unmounts the old DOM detaches the captured nodes
+  //     → `isConnected === false` → StaleSnapshot;
+  //   - a same-document change that keeps the node (hash change, content update,
+  //     re-render that preserves the element) leaves it connected → still valid,
+  //     which is correct: it is the exact element the agent saw.
+  // We deliberately do NOT invalidate on `location.href` change: that would
+  // falsely reject a valid index after a hash/anchor navigation or for an
+  // element that persists across an SPA route — exactly the kind of heuristic
+  // false positive this design exists to avoid. The agent re-captures after an
+  // action it knows changed the page (the documented capture→act→capture loop).
+  function resolveIndex(index) {
+    if (index == null) {
+      return { error: err("InvalidArgument", "Missing index") };
     }
-    return visible;
+    const snap = state.snapshot;
+    if (!snap) return { error: staleSnapshot(index) };
+    if (index < 1 || index > snap.length) {
+      return { error: elementNotFound(index, snap.length) };
+    }
+    const el = snap[index - 1];
+    if (!el.isConnected || !isVisible(el)) {
+      return { error: staleSnapshot(index) };
+    }
+    return { el };
   }
 
   function elementKey(el, text) {
@@ -203,19 +248,14 @@
       const all = collectInteractiveElements();
       const totalNodes = document.querySelectorAll("*").length;
       const elements = [];
+      const picked = [];
       const currentKeys = new Set();
       let idx = 1;
       const includeBounds = options.bounds || false;
 
       for (const el of all) {
+        if (!isVisible(el)) continue;
         const rect = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        if (
-          rect.width <= 0 || rect.height <= 0 ||
-          style.display === "none" ||
-          style.visibility === "hidden" ||
-          parseFloat(style.opacity) === 0
-        ) continue;
 
         const tag = el.tagName.toLowerCase();
         const innerText = (el.innerText || el.textContent || "")
@@ -307,9 +347,11 @@
           }
         }
         elements.push(entry);
+        picked.push(el);
       }
 
       state.previousKeys = currentKeys;
+      state.snapshot = picked;
 
       const sh = document.documentElement.scrollHeight;
       const vh = innerHeight;
@@ -347,15 +389,8 @@
   // ── Action execution ─────────────────────────────────────────────────────
 
   function resolveTarget(action) {
-    const visible = getVisibleElements();
-    const idx = action.index;
-    if (idx == null) {
-      return { error: err("InvalidArgument", "Missing index") };
-    }
-    if (idx < 1 || idx > visible.length) {
-      return { error: elementNotFound(idx, visible.length) };
-    }
-    return { target: visible[idx - 1] };
+    const r = resolveIndex(action.index);
+    return r.error ? { error: r.error } : { target: r.el };
   }
 
   function reliableClick(el) {
@@ -662,18 +697,13 @@
   // ── Element coords (drag) ────────────────────────────────────────────────
 
   function getElementCoords(msg) {
-    const visible = getVisibleElements();
-    const src = msg.source >= 1 && msg.source <= visible.length
-      ? visible[msg.source - 1]
-      : null;
-    const tgt = msg.target >= 1 && msg.target <= visible.length
-      ? visible[msg.target - 1]
-      : null;
-    if (!src) return elementNotFound(msg.source, visible.length);
-    if (!tgt) return elementNotFound(msg.target, visible.length);
-    src.scrollIntoView({ block: "center", behavior: "instant" });
-    const sr = src.getBoundingClientRect();
-    const tr = tgt.getBoundingClientRect();
+    const src = resolveIndex(msg.source);
+    if (src.error) return src.error;
+    const tgt = resolveIndex(msg.target);
+    if (tgt.error) return tgt.error;
+    src.el.scrollIntoView({ block: "center", behavior: "instant" });
+    const sr = src.el.getBoundingClientRect();
+    const tr = tgt.el.getBoundingClientRect();
     return {
       sx: sr.left + sr.width / 2,
       sy: sr.top + sr.height / 2,
@@ -721,12 +751,9 @@
       case "switchFrame":
         return switchFrame(msg);
       case "tagElement": {
-        const visible = getVisibleElements();
-        const el = msg.index > 0 && msg.index <= visible.length
-          ? visible[msg.index - 1]
-          : null;
-        if (!el) return elementNotFound(msg.index, visible.length);
-        el.setAttribute(msg.attr, "1");
+        const r = resolveIndex(msg.index);
+        if (r.error) return r.error;
+        r.el.setAttribute(msg.attr, "1");
         return { success: true };
       }
       case "untagElement": {
