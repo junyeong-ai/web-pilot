@@ -4,9 +4,11 @@ use anyhow::Result;
 use serde_json::json;
 use webpilot::WebPilotError;
 use webpilot::protocol::{DomProperty, ResponseData};
+use webpilot::types::PolicyKey;
 use webpilot::wait::WaitCondition;
 
 use super::LocalTransport;
+use super::state::policy_store;
 
 /// Recognise V8's SyntaxError variants so we know when to retry as a
 /// multi-statement script. `cdp::evaluate` surfaces the exception's
@@ -17,6 +19,15 @@ fn is_syntax_error(e: &anyhow::Error) -> bool {
 
 impl LocalTransport {
     pub(super) async fn do_evaluate(&self, code: &str) -> Result<ResponseData> {
+        if policy_store::denies(PolicyKey::Eval) {
+            return Ok(ResponseData::Eval {
+                success: false,
+                result: None,
+                error: Some(WebPilotError::PolicyDenied {
+                    operation: PolicyKey::Eval.to_string(),
+                }),
+            });
+        }
         // First try as a single expression (so `{a: 1}` is read as an object
         // literal, not a labeled statement). Fall back to multi-statement
         // form on `SyntaxError` so things like `console.log(x); x` still work.
@@ -151,6 +162,16 @@ impl LocalTransport {
         method: Option<&str>,
         body: Option<&str>,
     ) -> Result<ResponseData> {
+        if policy_store::denies(PolicyKey::Fetch) {
+            return Ok(ResponseData::FetchResult {
+                success: false,
+                status: None,
+                body: None,
+                error: Some(WebPilotError::PolicyDenied {
+                    operation: PolicyKey::Fetch.to_string(),
+                }),
+            });
+        }
         let body_part = match body {
             Some(b) => format!("body: {},", serde_json::to_string(b)?),
             None => String::new(),

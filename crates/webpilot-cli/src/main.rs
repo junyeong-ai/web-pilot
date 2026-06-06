@@ -58,7 +58,7 @@ fn is_nm_host_invocation() -> bool {
 /// Errors raised by WebPilot's own code paths use `WebPilotError` directly and
 /// pass through unchanged. Errors from third-party crates land in `Other`
 /// with their `Display` text — we never inspect the string to guess a code.
-fn into_webpilot_error(e: anyhow::Error) -> webpilot::WebPilotError {
+pub(crate) fn into_webpilot_error(e: anyhow::Error) -> webpilot::WebPilotError {
     if let Some(we) = e.downcast_ref::<webpilot::WebPilotError>() {
         return we.clone();
     }

@@ -51,25 +51,10 @@ pub async fn run_cli() -> Result<()> {
         ));
     }
 
-    // Mode-independent commands handled before any transport is opened.
-    match cli.command {
-        Cmd::Setup(args) => {
-            output::render(commands::setup::run(args).await?, mode);
-            return Ok(());
-        }
-        Cmd::SelfCmd(args) => {
-            output::render(commands::self_cmd::run(args)?, mode);
-            return Ok(());
-        }
-        Cmd::Uninstall(args) => {
-            output::render(commands::uninstall::run(args).await?, mode);
-            return Ok(());
-        }
-        Cmd::Diff(args) => {
-            output::render(commands::diff::run(args).await?, mode);
-            return Ok(());
-        }
-        _ => {}
+    // Local commands resolve before any transport opens. `execution()` is the
+    // single routing source, so this is the only place that decides "local".
+    if matches!(cli.command.execution(), Execution::Local) {
+        return run_local(cli.command, mode).await;
     }
 
     if cli.browser {
@@ -79,16 +64,62 @@ pub async fn run_cli() -> Result<()> {
     }
 }
 
+/// Mode-independent commands: no transport, identical in both modes.
+async fn run_local(command: commands::Command, mode: OutputMode) -> Result<()> {
+    let out = match command {
+        Cmd::Setup(args) => commands::setup::run(args).await?,
+        Cmd::SelfCmd(args) => commands::self_cmd::run(args)?,
+        Cmd::Uninstall(args) => commands::uninstall::run(args).await?,
+        Cmd::Diff(args) => commands::diff::run(args).await?,
+        _ => unreachable!("execution() routes only Execution::Local commands here"),
+    };
+    output::render(out, mode);
+    Ok(())
+}
+
+/// How a command reaches its handler. Single source of truth for command
+/// topology: every `commands::Command` variant maps to exactly one bucket, so
+/// adding a command forces a routing decision here at compile time and both
+/// mode entry points derive their behaviour from it.
+enum Execution {
+    /// Resolved in `run_cli` before any transport opens; mode-independent.
+    Local,
+    /// Bespoke per mode (browser hits the extension; headless short-circuits).
+    Status,
+    /// Tears down the headless session directly; unavailable in browser mode.
+    Quit,
+    /// Needs raw CDP via `LocalTransport`; unavailable in browser mode.
+    HeadlessOnly,
+    /// Identical in both modes through the `Transport` trait.
+    TransportGeneric,
+}
+
+impl Cmd {
+    fn execution(&self) -> Execution {
+        match self {
+            Cmd::Setup(_) | Cmd::SelfCmd(_) | Cmd::Uninstall(_) | Cmd::Diff(_) => Execution::Local,
+            Cmd::Status => Execution::Status,
+            Cmd::Quit => Execution::Quit,
+            Cmd::Device(_) | Cmd::Profile(_) | Cmd::Record(_) | Cmd::Context(_) => {
+                Execution::HeadlessOnly
+            }
+            Cmd::Capture(_) | Cmd::Action(_) | Cmd::Eval(_) | Cmd::Wait(_) | Cmd::Tab(_)
+            | Cmd::Frame(_) | Cmd::Dom(_) | Cmd::Find(_) | Cmd::Network(_) | Cmd::Console(_)
+            | Cmd::Session(_) | Cmd::Policy(_) | Cmd::Fetch(_) | Cmd::Cookie(_) => {
+                Execution::TransportGeneric
+            }
+        }
+    }
+}
+
 async fn run_browser_mode(command: commands::Command, mode: OutputMode) -> Result<()> {
-    let result = match command {
-        Cmd::Status => commands::status::run().await,
-        Cmd::Device(_) | Cmd::Profile(_) | Cmd::Record(_) | Cmd::Context(_) | Cmd::Quit => {
-            Err(headless_only(label_of(&command)))
+    let result = match command.execution() {
+        Execution::Status => commands::status::run().await,
+        Execution::HeadlessOnly | Execution::Quit => Err(headless_only(label_of(&command))),
+        Execution::TransportGeneric => {
+            dispatch_via_transport(&mut IpcTransport::new(), command).await
         }
-        Cmd::Diff(_) | Cmd::Setup(_) | Cmd::SelfCmd(_) | Cmd::Uninstall(_) => {
-            unreachable!("handled in run_cli")
-        }
-        cmd => dispatch_via_transport(&mut IpcTransport::new(), cmd).await,
+        Execution::Local => unreachable!("Local commands are resolved in run_cli"),
     };
     output::render(result?, mode);
     Ok(())
@@ -99,15 +130,12 @@ async fn run_headless_mode(
     mode: OutputMode,
     context: Option<String>,
 ) -> Result<()> {
-    // Status: short-circuit before launching Chrome so it works even when no
-    // session is running.
-    if matches!(command, Cmd::Status) {
-        return run_headless_status(mode, context.as_deref()).await;
-    }
-
-    if matches!(command, Cmd::Quit) {
-        crate::session::quit_session().await?;
-        return Ok(());
+    match command.execution() {
+        // Short-circuit before launching Chrome so status reports cleanly with
+        // no session, and quit can tear an existing one down.
+        Execution::Status => return run_headless_status(mode, context.as_deref()).await,
+        Execution::Quit => return crate::session::quit_session().await,
+        _ => {}
     }
 
     let mut transport = LocalTransport::open(context.as_deref()).await?;
@@ -118,16 +146,6 @@ async fn run_headless_mode(
         Cmd::Record(args) => commands::record::run(&mut transport, args).await,
         Cmd::Device(args) => commands::device::run(&mut transport, args).await,
         Cmd::Context(args) => commands::context::run(&mut transport, args).await,
-
-        Cmd::Status
-        | Cmd::Quit
-        | Cmd::Diff(_)
-        | Cmd::Setup(_)
-        | Cmd::SelfCmd(_)
-        | Cmd::Uninstall(_) => {
-            unreachable!("handled before this match")
-        }
-
         cmd => dispatch_via_transport(&mut transport, cmd).await,
     };
     output::render(result?, mode);

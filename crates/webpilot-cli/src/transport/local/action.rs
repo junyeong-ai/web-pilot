@@ -5,9 +5,9 @@
 //! history, reload) are handled inline against the page CDP connection.
 
 use anyhow::Result;
-use serde_json::json;
+use serde_json::{Value, json};
 use webpilot::protocol::ResponseData;
-use webpilot::types::PolicyVerdict;
+use webpilot::types::PolicyKey;
 use webpilot::{Action, WebPilotError};
 
 use super::state::policy_store;
@@ -19,15 +19,16 @@ impl LocalTransport {
         action: Action,
         capture: bool,
     ) -> Result<ResponseData> {
-        // Policy enforcement — same wire format as browser-mode SW so a single
-        // `webpilot policy set --action click --verdict deny` is honoured in
-        // both modes.
-        let kind = action.kind();
-        if policy_store::read().get(&kind) == Some(&PolicyVerdict::Deny) {
+        // Policy enforcement — shared `denies` predicate over the same
+        // snake_case key space as the eval/fetch gates and the browser-mode SW,
+        // so `webpilot policy set --operation click --verdict deny` is honoured
+        // everywhere.
+        let key = PolicyKey::from(action.kind());
+        if policy_store::denies(key) {
             return Ok(ResponseData::Action {
                 success: false,
                 error: Some(WebPilotError::PolicyDenied {
-                    action: kind.to_string(),
+                    operation: key.to_string(),
                 }),
                 dom: None,
                 url_changed: None,
@@ -39,7 +40,15 @@ impl LocalTransport {
             Action::Navigate { url } => {
                 let url = url.clone();
                 self.navigate_reconnect(&url).await?;
-                return Ok(action_success(None));
+                // Report where the navigation actually landed (after redirects).
+                let landed = self.bound_target_url().await;
+                return Ok(ResponseData::Action {
+                    success: true,
+                    error: None,
+                    dom: None,
+                    url_changed: (!landed.is_empty()).then_some(landed),
+                    new_tab: None,
+                });
             }
             Action::Back => {
                 self.page.evaluate("history.back()").await?;
@@ -177,8 +186,8 @@ impl LocalTransport {
             }))
             .await?;
         let resp = Self::parse_bridge_response(coords)?;
-        let x = resp["sx"].as_f64().unwrap_or(0.0);
-        let y = resp["sy"].as_f64().unwrap_or(0.0);
+        let x = coord(&resp, "sx")?;
+        let y = coord(&resp, "sy")?;
         self.page
             .send(
                 "Input.dispatchMouseEvent",
@@ -198,10 +207,10 @@ impl LocalTransport {
             .await?;
         let resp = Self::parse_bridge_response(coords)?;
 
-        let sx = resp["sx"].as_f64().unwrap_or(0.0);
-        let sy = resp["sy"].as_f64().unwrap_or(0.0);
-        let tx = resp["tx"].as_f64().unwrap_or(0.0);
-        let ty = resp["ty"].as_f64().unwrap_or(0.0);
+        let sx = coord(&resp, "sx")?;
+        let sy = coord(&resp, "sy")?;
+        let tx = coord(&resp, "tx")?;
+        let ty = coord(&resp, "ty")?;
 
         self.page
             .send(
@@ -240,4 +249,19 @@ impl LocalTransport {
             .await?;
         Ok(())
     }
+}
+
+/// Read a numeric coordinate field from a `getElementCoords` response. The
+/// bridge always returns all four coordinates on success (a failure is already
+/// lifted by `parse_bridge_response`), so a missing field means the response
+/// shape itself is wrong — surface it rather than actuating at the origin.
+fn coord(resp: &Value, key: &str) -> Result<f64> {
+    resp.get(key)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| {
+            WebPilotError::Other {
+                detail: format!("getElementCoords response missing numeric field `{key}`"),
+            }
+            .into()
+        })
 }

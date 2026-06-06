@@ -35,19 +35,15 @@ pub fn back_forward() -> Duration {
     from_env_or("WEBPILOT_BACK_FORWARD_TIMEOUT_MS", 5_000)
 }
 
-/// Cross-origin target poll interval (default: 300ms).
+/// Navigation completion poll interval (default: 300ms).
 pub fn poll_interval() -> Duration {
     from_env_or("WEBPILOT_POLL_INTERVAL_MS", 300)
 }
 
-/// Post-navigation settle time (default: 200ms).
-pub fn post_navigate() -> Duration {
-    from_env_or("WEBPILOT_POST_NAVIGATE_MS", 200)
-}
-
-/// Post-reconnect settle time (default: 500ms).
-pub fn post_reconnect() -> Duration {
-    from_env_or("WEBPILOT_POST_RECONNECT_MS", 500)
+/// Settle time after annotating, before a screenshot, for layout + paint
+/// (default: 200ms).
+pub fn annotation_paint() -> Duration {
+    from_env_or("WEBPILOT_ANNOTATION_PAINT_MS", 200)
 }
 
 /// IPC response timeout (default: 60s).

@@ -10,9 +10,9 @@
 //! - `EXTENSION` — the Chrome extension's `extension/` tree (manifest.json,
 //!   bridge.js, service worker, popup, sidepanel, icons).
 //!
-//! Files under the `extension/icons/preview*.png` glob and the macOS
-//! `.DS_Store` cruft are *not* embedded — see the `#[exclude]` filters on
-//! `include_dir!`.
+//! macOS `.DS_Store` cruft is skipped at materialisation time by `is_excluded`
+//! (it can reappear in the source tree between builds); everything else under
+//! the trees is written verbatim.
 
 use include_dir::{Dir, include_dir};
 use std::io;
@@ -60,8 +60,7 @@ fn strip_root<'a>(p: &'a Path, root: &Path) -> &'a Path {
 }
 
 fn is_excluded(p: &Path) -> bool {
-    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    name == ".DS_Store" || name.starts_with("preview")
+    p.file_name().and_then(|n| n.to_str()) == Some(".DS_Store")
 }
 
 #[cfg(unix)]

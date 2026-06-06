@@ -57,7 +57,7 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
     let target = detect_target()?;
     let current = env!("CARGO_PKG_VERSION").to_owned();
     let target_version = match args.version {
-        Some(v) => normalise_version(&v),
+        Some(v) => normalize_version(&v),
         None => resolve_latest()?,
     };
 
@@ -196,10 +196,10 @@ fn parse_tag_from_redirect(url: &str) -> Option<String> {
     if tag.is_empty() {
         return None;
     }
-    Some(normalise_version(tag))
+    Some(normalize_version(tag))
 }
 
-fn normalise_version(s: &str) -> String {
+fn normalize_version(s: &str) -> String {
     s.trim().trim_start_matches('v').to_owned()
 }
 
@@ -334,10 +334,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalise_strips_leading_v() {
-        assert_eq!(normalise_version("v0.2.0"), "0.2.0");
-        assert_eq!(normalise_version("0.2.0"), "0.2.0");
-        assert_eq!(normalise_version("  v1.0.0  "), "1.0.0");
+    fn normalize_strips_leading_v() {
+        assert_eq!(normalize_version("v0.2.0"), "0.2.0");
+        assert_eq!(normalize_version("0.2.0"), "0.2.0");
+        assert_eq!(normalize_version("  v1.0.0  "), "1.0.0");
     }
 
     #[test]

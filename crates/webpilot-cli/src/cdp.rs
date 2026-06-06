@@ -8,6 +8,7 @@
 use anyhow::{Context, Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
+use webpilot::WebPilotError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -129,7 +130,7 @@ impl CdpClient {
                         .is_err()
                     {
                         alive.store(false, Ordering::Release);
-                        pending.lock().await.remove(&id);
+                        pending.lock().await.drain();
                         break;
                     }
 
@@ -139,7 +140,7 @@ impl CdpClient {
                         _ => {
                             tracing::warn!("CDP heartbeat failed — marking connection dead");
                             alive.store(false, Ordering::Release);
-                            pending.lock().await.remove(&id);
+                            pending.lock().await.drain();
                             break;
                         }
                     }
@@ -170,7 +171,10 @@ impl CdpClient {
         timeout: std::time::Duration,
     ) -> Result<Value> {
         if !self.alive.load(Ordering::Acquire) {
-            anyhow::bail!("CDP connection is dead (reader exited)");
+            return Err(WebPilotError::ConnectionLost {
+                detail: format!("CDP reader exited before sending {method}"),
+            }
+            .into());
         }
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -183,25 +187,37 @@ impl CdpClient {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
 
-        self.writer
+        if self
+            .writer
             .lock()
             .await
             .send(Message::Text(serde_json::to_string(&msg)?.into()))
             .await
-            .context("CDP send failed")?;
+            .is_err()
+        {
+            self.pending.lock().await.remove(&id);
+            return Err(WebPilotError::ConnectionLost {
+                detail: format!("CDP socket write failed for {method}"),
+            }
+            .into());
+        }
 
         let response = match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(v)) => v,
             Ok(Err(_)) => {
                 self.pending.lock().await.remove(&id);
-                anyhow::bail!("CDP channel closed (method={method})");
+                return Err(WebPilotError::ConnectionLost {
+                    detail: format!("CDP channel closed while awaiting {method}"),
+                }
+                .into());
             }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                anyhow::bail!(
-                    "CDP timeout: method={method} elapsed={}s",
-                    timeout.as_secs()
-                );
+                return Err(WebPilotError::Timeout {
+                    kind: method.to_string(),
+                    elapsed_ms: timeout.as_millis() as u64,
+                }
+                .into());
             }
         };
 

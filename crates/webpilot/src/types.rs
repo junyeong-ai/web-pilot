@@ -4,7 +4,6 @@
 
 use crate::action::ActionKind;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
 // ── Console ──────────────────────────────────────────────────────────────────
 
@@ -18,32 +17,8 @@ pub enum ConsoleLevel {
     Debug,
 }
 
-impl std::fmt::Display for ConsoleLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Log => "log",
-            Self::Error => "error",
-            Self::Warn => "warn",
-            Self::Info => "info",
-            Self::Debug => "debug",
-        };
-        f.write_str(s)
-    }
-}
-
-impl FromStr for ConsoleLevel {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, ()> {
-        Ok(match s {
-            "log" => Self::Log,
-            "error" => Self::Error,
-            "warn" => Self::Warn,
-            "info" => Self::Info,
-            "debug" => Self::Debug,
-            _ => return Err(()),
-        })
-    }
-}
+serde_plain::derive_display_from_serialize!(ConsoleLevel);
+serde_plain::derive_fromstr_from_deserialize!(ConsoleLevel);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsoleEntry {
@@ -89,29 +64,62 @@ pub enum PolicyVerdict {
     Deny,
 }
 
-impl std::fmt::Display for PolicyVerdict {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Allow => "allow",
-            Self::Deny => "deny",
-        })
+serde_plain::derive_display_from_serialize!(PolicyVerdict);
+serde_plain::derive_fromstr_from_deserialize!(PolicyVerdict);
+
+/// A policy-gated operation. Superset of [`ActionKind`] plus `eval` and `fetch` —
+/// the two that run caller-supplied script (directly, or via a `frame find`
+/// predicate) and so sit behind the same policy surface. Shares the snake_case
+/// wire string space of `ActionKind`, so every key is looked up identically in
+/// both transport modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyKey {
+    Click,
+    Type,
+    KeyPress,
+    Navigate,
+    Back,
+    Forward,
+    Reload,
+    Scroll,
+    ScrollTo,
+    Hover,
+    Focus,
+    Select,
+    Upload,
+    Drag,
+    Eval,
+    Fetch,
+}
+
+impl From<ActionKind> for PolicyKey {
+    fn from(kind: ActionKind) -> Self {
+        match kind {
+            ActionKind::Click => Self::Click,
+            ActionKind::Type => Self::Type,
+            ActionKind::KeyPress => Self::KeyPress,
+            ActionKind::Navigate => Self::Navigate,
+            ActionKind::Back => Self::Back,
+            ActionKind::Forward => Self::Forward,
+            ActionKind::Reload => Self::Reload,
+            ActionKind::Scroll => Self::Scroll,
+            ActionKind::ScrollTo => Self::ScrollTo,
+            ActionKind::Hover => Self::Hover,
+            ActionKind::Focus => Self::Focus,
+            ActionKind::Select => Self::Select,
+            ActionKind::Upload => Self::Upload,
+            ActionKind::Drag => Self::Drag,
+        }
     }
 }
 
-impl FromStr for PolicyVerdict {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, ()> {
-        Ok(match s {
-            "allow" => Self::Allow,
-            "deny" => Self::Deny,
-            _ => return Err(()),
-        })
-    }
-}
+serde_plain::derive_display_from_serialize!(PolicyKey);
+serde_plain::derive_fromstr_from_deserialize!(PolicyKey);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyEntry {
-    pub action: ActionKind,
+    pub operation: PolicyKey,
     pub verdict: PolicyVerdict,
 }
 

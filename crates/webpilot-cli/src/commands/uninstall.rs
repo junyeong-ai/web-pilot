@@ -41,7 +41,7 @@ pub async fn run(args: UninstallArgs) -> Result<CommandOutput> {
 
     if !crate::commands::setup::confirm("Proceed?", false, args.yes) {
         return Ok(CommandOutput::Data {
-            json: serde_json::json!({ "removed": [], "cancelled": true }),
+            json: serde_json::json!({ "removed": [], "canceled": true }),
             human: "Cancelled.".into(),
         });
     }

@@ -135,6 +135,11 @@
         .filter(Boolean);
       if (parts.length > 0) return parts.join(" ").slice(0, 80);
     }
+    // aria-label is an explicit label for the field, ranked by ARIA right after
+    // aria-labelledby and above a native <label>. Without it, `find --label`
+    // can't match inputs labelled only with aria-label.
+    const ariaLabel = el.getAttribute("aria-label")?.trim();
+    if (ariaLabel) return ariaLabel.slice(0, 80);
     if (el.labels && el.labels.length > 0) {
       return el.labels[0].textContent.trim().slice(0, 80) || null;
     }

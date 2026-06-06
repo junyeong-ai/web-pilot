@@ -117,8 +117,9 @@ impl Modifiers {
 /// Categorical action kind for policy lookups and audit logging.
 ///
 /// Wire format matches `Action`'s `kind` discriminator exactly: snake_case.
-/// `Display`, `FromStr`, and serde all agree, so a value round-trips through
-/// any path (CLI text → enum → wire JSON → enum → policy lookup).
+/// `Display` and `FromStr` are derived from the serde representation, so a
+/// value round-trips through any path (CLI text → enum → wire JSON → enum →
+/// policy lookup) from one definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionKind {
@@ -138,55 +139,8 @@ pub enum ActionKind {
     Drag,
 }
 
-impl ActionKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Click => "click",
-            Self::Type => "type",
-            Self::KeyPress => "key_press",
-            Self::Navigate => "navigate",
-            Self::Back => "back",
-            Self::Forward => "forward",
-            Self::Reload => "reload",
-            Self::Scroll => "scroll",
-            Self::ScrollTo => "scroll_to",
-            Self::Hover => "hover",
-            Self::Focus => "focus",
-            Self::Select => "select",
-            Self::Upload => "upload",
-            Self::Drag => "drag",
-        }
-    }
-}
-
-impl std::fmt::Display for ActionKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for ActionKind {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "click" => Self::Click,
-            "type" => Self::Type,
-            "key_press" => Self::KeyPress,
-            "navigate" => Self::Navigate,
-            "back" => Self::Back,
-            "forward" => Self::Forward,
-            "reload" => Self::Reload,
-            "scroll" => Self::Scroll,
-            "scroll_to" => Self::ScrollTo,
-            "hover" => Self::Hover,
-            "focus" => Self::Focus,
-            "select" => Self::Select,
-            "upload" => Self::Upload,
-            "drag" => Self::Drag,
-            _ => return Err(()),
-        })
-    }
-}
+serde_plain::derive_display_from_serialize!(ActionKind);
+serde_plain::derive_fromstr_from_deserialize!(ActionKind);
 
 impl Action {
     pub fn kind(&self) -> ActionKind {

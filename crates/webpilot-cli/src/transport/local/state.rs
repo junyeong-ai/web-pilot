@@ -1,5 +1,5 @@
 //! State-keeping commands: cookies, console + network monitoring,
-//! session export/import, action policies.
+//! session export/import, operation policies.
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -192,9 +192,15 @@ impl LocalTransport {
                     .await;
             }
         }
-        if let Some(ls) = parsed.get("local_storage") {
-            self.invoke_bridge(&json!({"type": "importStorage", "localStorage": ls}))
-                .await?;
+        let local_storage = parsed.get("local_storage");
+        let session_storage = parsed.get("session_storage");
+        if local_storage.is_some() || session_storage.is_some() {
+            self.invoke_bridge(&json!({
+                "type": "importStorage",
+                "localStorage": local_storage.cloned().unwrap_or_else(|| json!({})),
+                "sessionStorage": session_storage.cloned().unwrap_or_else(|| json!({})),
+            }))
+            .await?;
         }
 
         Ok(ResponseData::SessionResult {
@@ -203,15 +209,15 @@ impl LocalTransport {
         })
     }
 
-    // ── Action policies (file-backed store) ──────────────────────────────
+    // ── Operation policies (file-backed store) ───────────────────────────
 
     pub(super) async fn do_policy_set(
         &self,
-        action: webpilot::ActionKind,
+        operation: webpilot::types::PolicyKey,
         verdict: PolicyVerdict,
     ) -> Result<ResponseData> {
         let mut store = policy_store::read();
-        store.insert(action, verdict);
+        store.insert(operation, verdict);
         policy_store::write(&store)?;
         Ok(ResponseData::PolicyResult {
             success: true,
@@ -220,10 +226,15 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_policy_list(&self) -> Result<ResponseData> {
-        let store = policy_store::read();
+        // Strict load: surface a corrupt store as an error so `list` agrees with
+        // enforcement (which denies on corruption) instead of misreporting "no
+        // policies" while everything is in fact denied.
+        let store = policy_store::load().map_err(|_| WebPilotError::Other {
+            detail: "policy store is invalid; run: webpilot policy clear".into(),
+        })?;
         let policies: Vec<PolicyEntry> = store
             .into_iter()
-            .map(|(action, verdict)| PolicyEntry { action, verdict })
+            .map(|(operation, verdict)| PolicyEntry { operation, verdict })
             .collect();
         Ok(ResponseData::Policies { policies })
     }
@@ -309,31 +320,96 @@ pub(super) mod policy_store {
     use anyhow::Result;
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use webpilot::ActionKind;
     use webpilot::dirs;
-    use webpilot::types::PolicyVerdict;
+    use webpilot::types::{PolicyKey, PolicyVerdict};
 
     fn policy_file() -> PathBuf {
         dirs::artifacts_dir().join("policies.json")
     }
 
-    pub fn read() -> HashMap<ActionKind, PolicyVerdict> {
-        let Ok(text) = std::fs::read_to_string(policy_file()) else {
-            return HashMap::new();
-        };
-        let raw: HashMap<String, String> = serde_json::from_str(&text).unwrap_or_default();
-        raw.into_iter()
-            .filter_map(|(a, v)| Some((a.parse().ok()?, v.parse().ok()?)))
-            .collect()
+    /// Load the store. An absent file is the empty (no-policy) state; any other
+    /// read failure or a parse failure is surfaced so enforcement and `list` can
+    /// fail closed rather than silently dropping a user's deny rule.
+    pub fn load() -> std::io::Result<HashMap<PolicyKey, PolicyVerdict>> {
+        match std::fs::read_to_string(policy_file()) {
+            Ok(text) => parse(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+            Err(e) => Err(e),
+        }
     }
 
-    pub fn write(store: &HashMap<ActionKind, PolicyVerdict>) -> Result<()> {
+    /// Parse store JSON. All-or-nothing: an unknown operation or verdict makes
+    /// the whole store untrusted (returns `Err`) so `denies()` fails closed,
+    /// rather than silently dropping the bad entry and letting it through.
+    fn parse(text: &str) -> std::io::Result<HashMap<PolicyKey, PolicyVerdict>> {
+        let invalid =
+            |msg: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, msg.to_owned());
+        let raw: HashMap<String, String> =
+            serde_json::from_str(text).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let mut store = HashMap::with_capacity(raw.len());
+        for (k, v) in raw {
+            let key: PolicyKey = k.parse().map_err(|_| invalid("unknown operation"))?;
+            let verdict: PolicyVerdict = v.parse().map_err(|_| invalid("unknown verdict"))?;
+            store.insert(key, verdict);
+        }
+        Ok(store)
+    }
+
+    /// Lenient load for management commands: a corrupt store reads as empty so a
+    /// `policy set` overwrites it cleanly.
+    pub fn read() -> HashMap<PolicyKey, PolicyVerdict> {
+        load().unwrap_or_default()
+    }
+
+    pub fn write(store: &HashMap<PolicyKey, PolicyVerdict>) -> Result<()> {
         let raw: HashMap<String, String> = store
             .iter()
-            .map(|(a, v)| (a.to_string(), v.to_string()))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         std::fs::write(policy_file(), serde_json::to_string_pretty(&raw)?)?;
         Ok(())
+    }
+
+    /// Enforcement predicate shared by every gated operation across both
+    /// transports. Fails closed: a store that exists but can't be read or parsed
+    /// denies the operation rather than silently allowing it.
+    pub fn denies(key: PolicyKey) -> bool {
+        match load() {
+            Ok(store) => store.get(&key) == Some(&PolicyVerdict::Deny),
+            Err(_) => true,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::parse;
+
+        #[test]
+        fn valid_store_parses() {
+            assert_eq!(parse(r#"{"click":"deny","eval":"allow"}"#).unwrap().len(), 2);
+        }
+
+        #[test]
+        fn empty_store_is_ok() {
+            assert!(parse("{}").unwrap().is_empty());
+        }
+
+        // Fail closed: any untrusted content makes the whole store an error so
+        // `denies()` denies rather than letting an operation slip through.
+        #[test]
+        fn malformed_json_is_error() {
+            assert!(parse("{not json").is_err());
+        }
+
+        #[test]
+        fn unknown_operation_is_error() {
+            assert!(parse(r#"{"teleport":"deny"}"#).is_err());
+        }
+
+        #[test]
+        fn unknown_verdict_is_error() {
+            assert!(parse(r#"{"click":"maybe"}"#).is_err());
+        }
     }
 }
 

@@ -9,6 +9,7 @@ description = "Browser control tool for AI agents — shared library"
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_plain.workspace = true
 base64.workspace = true
 image.workspace = true
 fast_image_resize.workspace = true

@@ -1,8 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use webpilot::ActionKind;
 use webpilot::protocol::{Command, ResponseData};
-use webpilot::types::PolicyVerdict;
+use webpilot::types::{PolicyKey, PolicyVerdict};
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
@@ -15,10 +14,10 @@ pub struct PolicyArgs {
 
 #[derive(Subcommand)]
 pub enum PolicyCommand {
-    /// Set policy for an action kind.
+    /// Set a safety policy for an operation — any action kind, plus `eval` and `fetch`.
     Set {
         #[arg(long)]
-        action: String,
+        operation: String,
         #[arg(long)]
         verdict: String,
     },
@@ -30,12 +29,12 @@ pub enum PolicyCommand {
 
 pub async fn run<T: Transport>(transport: &mut T, args: PolicyArgs) -> Result<CommandOutput> {
     let cmd = match &args.command {
-        PolicyCommand::Set { action, verdict } => {
-            let action: ActionKind =
-                action
+        PolicyCommand::Set { operation, verdict } => {
+            let operation: PolicyKey =
+                operation
                     .parse()
                     .map_err(|_| webpilot::WebPilotError::InvalidArgument {
-                        detail: format!("unknown action kind '{action}'"),
+                        detail: format!("unknown operation '{operation}'"),
                     })?;
             let verdict: PolicyVerdict =
                 verdict
@@ -43,7 +42,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: PolicyArgs) -> Result<Co
                     .map_err(|_| webpilot::WebPilotError::InvalidArgument {
                         detail: format!("unknown verdict '{verdict}' (use 'allow' or 'deny')"),
                     })?;
-            Command::PolicySet { action, verdict }
+            Command::PolicySet { operation, verdict }
         }
         PolicyCommand::List => Command::PolicyList,
         PolicyCommand::Clear => Command::PolicyClear,
@@ -55,7 +54,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: PolicyArgs) -> Result<Co
         ResponseData::Policies { policies } => {
             let human_lines: Vec<String> = policies
                 .iter()
-                .map(|p| format!("{}: {}", p.action, p.verdict))
+                .map(|p| format!("{}: {}", p.operation, p.verdict))
                 .collect();
             let summary = if policies.is_empty() {
                 "No policies set".into()

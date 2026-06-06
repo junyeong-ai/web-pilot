@@ -77,7 +77,7 @@ impl LocalTransport {
                         "type": "addAnnotations", "elements": annotations,
                     }))
                     .await?;
-                    tokio::time::sleep(crate::timeouts::post_navigate()).await;
+                    tokio::time::sleep(crate::timeouts::annotation_paint()).await;
                 }
             }
 

@@ -202,78 +202,182 @@ impl LocalTransport {
     }
 
     pub(super) async fn navigate_reconnect(&mut self, url: &str) -> Result<()> {
-        let before_url = self
-            .browser
-            .get_targets()
-            .await
-            .ok()
-            .and_then(|targets| {
-                targets
-                    .iter()
-                    .find(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(&self.target_id))
-                    .and_then(|t| t.get("url").and_then(|v| v.as_str()))
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
+        let before_url = self.bound_target_url().await;
 
-        let _ = self
+        // `Page.navigate` outcomes:
+        // - `errorText` with a concrete net code (DNS, refused, CSP) → fail now.
+        // - `errorText == net::ERR_ABORTED` → a cross-site swap superseded the old
+        //   renderer's load; usually benign and the new load settles below, but
+        //   keep it as the error to report if nothing ever settles.
+        // - `Ok` with a `loaderId` → a document load; identifies this navigation
+        //   for same-URL reloads, where the URL alone can't.
+        // - `Ok` without a `loaderId` → a same-document (fragment) navigation;
+        //   already complete, nothing to wait for.
+        // - send `Err` → the page socket dropped mid swap; report it if the
+        //   navigation never lands.
+        let mut start_error = None;
+        let loader_id = match self
             .page
             .send_with_timeout(
                 "Page.navigate",
                 Some(json!({"url": url})),
                 std::time::Duration::from_secs(3),
             )
-            .await;
+            .await
+        {
+            Ok(result) => {
+                match result.get("errorText").and_then(|v| v.as_str()) {
+                    Some("net::ERR_ABORTED") => {
+                        start_error = Some(WebPilotError::NavigationFailed {
+                            url: url.to_string(),
+                            reason: "net::ERR_ABORTED".into(),
+                        });
+                    }
+                    Some(reason) if !reason.is_empty() => {
+                        return Err(WebPilotError::NavigationFailed {
+                            url: url.to_string(),
+                            reason: reason.to_string(),
+                        }
+                        .into());
+                    }
+                    _ => {}
+                }
+                let loader = result
+                    .get("loaderId")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                // A same-document navigation (no new loader, no error) — a hash
+                // or history change — is already complete and leaves the document
+                // and its frames intact, so the active frame stays valid.
+                if loader.is_none() && start_error.is_none() {
+                    return Ok(());
+                }
+                loader
+            }
+            Err(e) => {
+                start_error = Some(crate::into_webpilot_error(e));
+                None
+            }
+        };
 
         let deadline = std::time::Instant::now() + crate::timeouts::navigation();
+        let loader = loader_id.as_deref();
         loop {
-            tokio::time::sleep(crate::timeouts::poll_interval()).await;
-
-            if let Ok(targets) = self.browser.get_targets().await
-                && let Some(page_target) =
-                    find_page_in_context(&targets, self.browser_context_id.as_deref())
-            {
-                let current = page_target
-                    .get("url")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                if current != before_url {
-                    tokio::time::sleep(crate::timeouts::post_reconnect()).await;
-                    break;
+            if let Some((target_id, target_url)) = self.bound_target().await {
+                if target_url != before_url {
+                    // Cross-site or cross-page navigation: the renderer process
+                    // may have swapped, leaving the old session's execution
+                    // context dead. Rebind a fresh session to the new target and
+                    // wait for it to commit and parse. A mid-swap target accepts
+                    // the socket but isn't ready, so a failed connect just retries.
+                    if let Ok(new_page) = connect_to_page(&self.ws_url, &target_id).await
+                        && wait_navigation_settled(&new_page, loader, &before_url, deadline).await
+                    {
+                        self.page = new_page;
+                        self.target_id = target_id;
+                        self.clear_active_frame().await;
+                        self.rebind_frame_listener().await;
+                        return Ok(());
+                    }
+                } else if navigation_settled(&self.page, loader, &before_url).await {
+                    // Same-URL navigation: necessarily same-site, so the existing
+                    // session stays valid (no renderer swap). The loader match
+                    // distinguishes the reloaded document from the previous one.
+                    self.clear_active_frame().await;
+                    return Ok(());
                 }
             }
-            if std::time::Instant::now() > deadline {
-                return Err(WebPilotError::Timeout {
+
+            if std::time::Instant::now() >= deadline {
+                return Err(start_error.unwrap_or(WebPilotError::Timeout {
                     kind: "navigation".into(),
                     elapsed_ms: crate::timeouts::navigation().as_millis() as u64,
-                }
+                })
                 .into());
             }
+            tokio::time::sleep(crate::timeouts::poll_interval()).await;
         }
+    }
 
-        let targets = self.browser.get_targets().await?;
-        let target = find_page_in_context(&targets, self.browser_context_id.as_deref())
-            .ok_or(WebPilotError::NoPage)?;
-        let new_target_id = target
-            .get("targetId")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let new_page = connect_to_page(&self.ws_url, &new_target_id).await?;
-
-        let _ = new_page
-            .wait_for_event(
-                "Page.domContentEventFired",
-                std::time::Duration::from_secs(5),
-            )
-            .await;
-        tokio::time::sleep(crate::timeouts::post_navigate()).await;
-
-        self.page = new_page;
-        self.target_id = new_target_id;
+    /// Drop the active frame after a navigation, in memory and on disk, so the
+    /// next CLI invocation doesn't restore an iframe context the page has left.
+    async fn clear_active_frame(&self) {
         *self.active_frame_id.lock().await = None;
-        self.rebind_frame_listener().await;
-        Ok(())
+        clear_persisted_active_frame(self.persisted_context_key());
+    }
+
+    /// `(target_id, url)` of the page WebPilot is bound to — the target it just
+    /// navigated, identified by `self.target_id`. Falls back to the context's
+    /// active page only if that target is gone (e.g. a swap replaced it), so a
+    /// sibling tab in the same context is never mistaken for this navigation.
+    async fn bound_target(&self) -> Option<(String, String)> {
+        let targets = self.browser.get_targets().await.ok()?;
+        let pick = targets
+            .iter()
+            .find(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(&self.target_id))
+            .or_else(|| find_page_in_context(&targets, self.browser_context_id.as_deref()))?;
+        Some((
+            pick.get("targetId").and_then(|v| v.as_str())?.to_string(),
+            pick.get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        ))
+    }
+
+    /// URL of the bound page target (empty if it can't be read).
+    pub(super) async fn bound_target_url(&self) -> String {
+        self.bound_target().await.map(|(_, url)| url).unwrap_or_default()
+    }
+}
+
+/// Per-probe time box: a context busy with an in-flight renderer swap can stall
+/// an evaluate, so each readiness check is bounded and the caller's deadline
+/// governs the overall wait.
+const PROBE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether the navigation WebPilot issued has committed on `page` and the
+/// document has parsed. Committed = the main frame carries our `loader_id` (set
+/// for same-URL reloads, where the URL never moves) OR its URL has left
+/// `before_url` (a cross-page navigation, where the loader may differ across a
+/// process swap). Parsed = `readyState` is past `loading` — DOMContentLoaded has
+/// fired — so the page is usable without waiting on slow trailing subresources.
+async fn navigation_settled(page: &CdpClient, loader_id: Option<&str>, before_url: &str) -> bool {
+    let Ok(Ok(tree)) = tokio::time::timeout(PROBE, page.send("Page.getFrameTree", None)).await
+    else {
+        return false;
+    };
+    let frame = tree.pointer("/frameTree/frame");
+    let loader = frame.and_then(|f| f.get("loaderId")).and_then(|v| v.as_str());
+    let frame_url = frame
+        .and_then(|f| f.get("url"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let committed = (loader_id.is_some() && loader == loader_id) || frame_url != before_url;
+    if !committed {
+        return false;
+    }
+    matches!(
+        tokio::time::timeout(PROBE, page.evaluate("document.readyState")).await,
+        Ok(Ok(state)) if matches!(state.as_str(), Some("interactive") | Some("complete"))
+    )
+}
+
+/// Poll a freshly-bound page until the navigation settles, bounded by `deadline`.
+async fn wait_navigation_settled(
+    page: &CdpClient,
+    loader_id: Option<&str>,
+    before_url: &str,
+    deadline: std::time::Instant,
+) -> bool {
+    loop {
+        if navigation_settled(page, loader_id, before_url).await {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(crate::timeouts::poll_interval()).await;
     }
 }
 
@@ -324,7 +428,9 @@ impl Transport for LocalTransport {
             Command::NetworkClear => self.do_network_clear().await,
             Command::SessionExport => self.do_session_export().await,
             Command::SessionImport { data } => self.do_session_import(&data).await,
-            Command::PolicySet { action, verdict } => self.do_policy_set(action, verdict).await,
+            Command::PolicySet { operation, verdict } => {
+                self.do_policy_set(operation, verdict).await
+            }
             Command::PolicyList => self.do_policy_list().await,
             Command::PolicyClear => self.do_policy_clear().await,
             Command::Ping => Ok(ResponseData::Pong),

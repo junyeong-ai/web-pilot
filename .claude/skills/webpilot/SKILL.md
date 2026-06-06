@@ -157,7 +157,7 @@ webpilot session import /tmp/s.json                # cookies + localStorage
 
 `session export` covers all browser cookies (scoped to the active `--context` if set), plus `localStorage` and `sessionStorage` of the active page.
 
-## Network + console (live monitors, persist across navigations)
+## Network + console (live monitors, per page)
 
 ```bash
 webpilot network start
@@ -169,6 +169,12 @@ webpilot console start
 webpilot console read --level error                # log | warn | info | debug | error
 webpilot console clear
 ```
+
+The recorder is injected into the page and captures activity from `start`
+onward (load-time logs that fire before `start` are missed). In **headless** the
+buffer lives on the page, so a navigation/reload resets it — re-run `start`
+after navigating. In **`--browser`** mode the monitor is re-injected per tab on
+each navigation, so it keeps recording across page loads.
 
 ## Fetch with the page's session
 
@@ -203,15 +209,15 @@ Each context is a separate CDP browser context: cookies, localStorage, history a
 ## Safety policy (gate which actions are allowed)
 
 ```bash
-webpilot policy set --action click  --verdict deny     # blocks all clicks
-webpilot policy set --action type   --verdict allow
+webpilot policy set --operation click  --verdict deny     # blocks all clicks
+webpilot policy set --operation type   --verdict allow
 webpilot policy list
 webpilot policy clear
 ```
 
-`--action` accepts: `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag`.
+`--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus `eval` and `fetch`, which gate the `webpilot eval` / `webpilot fetch` commands and the arbitrary-JS `frame find` predicate.
 
-A blocked action fails with `PolicyDenied` (exit 6).
+A blocked operation fails with `PolicyDenied` (exit 6).
 
 ## Diff / record / profile
 
@@ -259,7 +265,7 @@ webpilot status                                # connected, mode, chrome_version
 | 7 | invalid argument |
 | 8 | navigation failed / no page |
 
-Errors carry typed data: `ElementNotFound { requested, available }`, `SelectorNotFound { selector }`, `Timeout { kind, elapsed_ms }`, `NavigationFailed { url, reason }`, `PolicyDenied { action }`. Treat the `code` field as authoritative; the `message` is a human-readable rendering.
+Errors carry typed data: `ElementNotFound { requested, available }`, `SelectorNotFound { selector }`, `Timeout { kind, elapsed_ms }`, `NavigationFailed { url, reason }`, `PolicyDenied { operation }`. Treat the `code` field as authoritative; the `message` is a human-readable rendering.
 
 ## Decision guide
 

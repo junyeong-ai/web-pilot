@@ -52,7 +52,7 @@ pub enum Command {
     Console(console::ConsoleArgs),
     /// Export/import session state (cookies + localStorage)
     Session(session::SessionArgs),
-    /// Set action safety policies (allow/deny)
+    /// Gate operations (actions, eval, fetch) with allow/deny policies
     Policy(policy::PolicyArgs),
     /// Manage cookies
     Cookie(cookie::CookieArgs),

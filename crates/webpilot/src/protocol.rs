@@ -6,37 +6,25 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::action::{Action, ActionKind};
+use crate::action::Action;
 use crate::capture::{CaptureField, CaptureOpts};
 use crate::error::WebPilotError;
 use crate::types::{
-    ConsoleEntry, CookieInfo, DomSnapshot, FrameInfo, NetworkEntry, PolicyEntry, PolicyVerdict,
-    TabInfo,
+    ConsoleEntry, CookieInfo, DomSnapshot, FrameInfo, NetworkEntry, PolicyEntry, PolicyKey,
+    PolicyVerdict, TabInfo,
 };
 use crate::wait::WaitCondition;
 
-pub const PROTOCOL_VERSION: u8 = 3;
-
-/// Wire envelope: monotonic id + protocol version + command.
+/// Wire envelope: monotonic id + command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub id: u32,
-    #[serde(default = "default_version")]
-    pub version: u8,
     pub command: Command,
-}
-
-fn default_version() -> u8 {
-    PROTOCOL_VERSION
 }
 
 impl Request {
     pub fn new(id: u32, command: Command) -> Self {
-        Self {
-            id,
-            version: PROTOCOL_VERSION,
-            command,
-        }
+        Self { id, command }
     }
 }
 
@@ -126,7 +114,7 @@ pub enum Command {
         data: String,
     },
     PolicySet {
-        action: ActionKind,
+        operation: PolicyKey,
         verdict: PolicyVerdict,
     },
     PolicyList,
@@ -158,14 +146,7 @@ pub enum RunMode {
     Browser,
 }
 
-impl std::fmt::Display for RunMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Headless => "headless",
-            Self::Browser => "browser",
-        })
-    }
-}
+serde_plain::derive_display_from_serialize!(RunMode);
 
 fn default_wait_timeout_ms() -> u64 {
     10_000

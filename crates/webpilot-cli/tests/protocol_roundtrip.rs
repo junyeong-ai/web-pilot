@@ -120,19 +120,18 @@ fn dom_property_attr_carries_name() {
 }
 
 #[test]
-fn request_envelope_assigns_protocol_version() {
+fn request_envelope_serializes_id_and_command() {
     let req = Request::new(
         42,
         Command::PolicySet {
-            action: webpilot::ActionKind::Click,
+            operation: webpilot::types::PolicyKey::Eval,
             verdict: PolicyVerdict::Deny,
         },
     );
     let v = serde_json::to_value(&req).unwrap();
     assert_eq!(v["id"], 42);
-    assert_eq!(v["version"], webpilot::protocol::PROTOCOL_VERSION);
     assert_eq!(v["command"]["type"], "PolicySet");
-    assert_eq!(v["command"]["action"], "click");
+    assert_eq!(v["command"]["operation"], "eval");
     assert_eq!(v["command"]["verdict"], "deny");
 }
 

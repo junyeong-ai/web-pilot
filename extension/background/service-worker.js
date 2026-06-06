@@ -52,7 +52,7 @@ function err(code, message, data) {
 const otherErr = (msg) => err("Other", msg);
 const timeoutErr = (kind, elapsed_ms) => err("Timeout", `${kind} timed out`, { kind, elapsed_ms });
 const noPageErr = () => err("NoPage", "No web page open");
-const policyDeniedErr = (action) => err("PolicyDenied", `Action '${action}' denied by policy`, { action });
+const policyDeniedErr = (operation) => err("PolicyDenied", `Operation '${operation}' denied by policy`, { operation });
 const elementNotFoundErr = (requested, available) =>
   err("ElementNotFound", `Index ${requested} out of range (1-${available})`, { requested, available });
 
@@ -327,7 +327,7 @@ async function processCommand(id, command) {
         break;
 
       case "PolicySet":
-        result = await handlePolicySet(command.action, command.verdict);
+        result = await handlePolicySet(command.operation, command.verdict);
         break;
 
       case "PolicyList":
@@ -580,13 +580,9 @@ async function handleActionCommand(command) {
   const { action } = command;
 
   // Policy enforcement (action.kind matches stored policy keys).
-  try {
-    const stored = await chrome.storage.local.get("policies");
-    const policies = stored?.policies || {};
-    if (policies[action.kind] === "deny") {
-      return { type: "Action", success: false, error: policyDeniedErr(action.kind) };
-    }
-  } catch {}
+  if (await policyDenies(action.kind)) {
+    return { type: "Action", success: false, error: policyDeniedErr(action.kind) };
+  }
 
   // Inject dialog override before any action runs in the page.
   const tab = await findHttpTab();
@@ -612,12 +608,14 @@ async function handleActionCommand(command) {
 
   // SW-handled action kinds (navigation + upload).
   switch (action.kind) {
-    case "navigate":
+    case "navigate": {
       await chrome.tabs.update(tab.id, { url: action.url, active: true });
       await waitForTabReady(tab.id, 15000);
       await sleep(500);
-      result = { type: "Action", success: true };
+      const landed = await chrome.tabs.get(tab.id).catch(() => null);
+      result = { type: "Action", success: true, url_changed: landed?.url || action.url };
       break;
+    }
 
     case "back":
       await chrome.tabs.goBack(tab.id);
@@ -771,6 +769,9 @@ async function handleStatus() {
 // ── Eval ───────────────────────────────────────────────────────────────────
 
 async function handleEval(command) {
+  if (await policyDenies("eval")) {
+    return { type: "Eval", success: false, error: policyDeniedErr("eval") };
+  }
   const tab = await findHttpTab();
   if (!tab) return { type: "Eval", success: false, error: noPageErr() };
 
@@ -894,6 +895,9 @@ async function handleDomGet(command) {
 // ── Fetch ──────────────────────────────────────────────────────────────────
 
 async function handleFetch(command) {
+  if (await policyDenies("fetch")) {
+    return { type: "FetchResult", success: false, error: policyDeniedErr("fetch") };
+  }
   const tab = await findHttpTab();
   if (!tab) return { type: "FetchResult", success: false, error: noPageErr() };
   try {
@@ -985,6 +989,10 @@ async function handleFrameSwitch(selector) {
     const needle = (selector.pattern || "").replace(/\*/g, "");
     matched = httpFrames.find((f) => f.url?.includes(needle));
   } else if (selector.by === "predicate") {
+    // A predicate is arbitrary caller JS — gated by the same key as `eval`.
+    if (await policyDenies("eval")) {
+      return { type: "FrameSwitched", success: false, error: policyDeniedErr("eval") };
+    }
     for (const f of httpFrames) {
       try {
         const r = await sendToContent(tab.id, { type: "eval", code: selector.js }, f.frameId, 2000);
@@ -1209,17 +1217,49 @@ async function handleSessionImport(rawData) {
 
 // ── Policy store ───────────────────────────────────────────────────────────
 //
-// Stored as `{action: "click", verdict: "deny"}` → key by action kind.
+// Keyed by operation. Mirrors Rust `PolicyKey`: action kinds plus eval / fetch.
+
+const POLICY_OPERATIONS = new Set([
+  "click", "type", "key_press", "navigate", "back", "forward", "reload",
+  "scroll", "scroll_to", "hover", "focus", "select", "upload", "drag",
+  "eval", "fetch",
+]);
 
 async function loadPolicies() {
   const stored = await chrome.storage.local.get("policies");
-  return stored?.policies || {};
+  return stored?.policies;
 }
 
-async function handlePolicySet(action, verdict) {
+// Whether a stored value is a trustworthy policy map. `undefined` (absent key)
+// is the empty no-policy state. Anything present must be a plain object whose
+// keys are all known operations and whose values are all "allow"/"deny" — the
+// same all-or-nothing rule as the Rust store, so a malformed store fails closed.
+function isValidPolicyStore(p) {
+  if (p === undefined) return true;
+  if (p === null || typeof p !== "object" || Array.isArray(p)) return false;
+  return Object.entries(p).every(
+    ([k, v]) => POLICY_OPERATIONS.has(k) && (v === "allow" || v === "deny"),
+  );
+}
+
+// Single enforcement predicate shared by the action, eval, and fetch paths.
+// Fails closed: an unreadable or malformed store denies rather than allowing.
+async function policyDenies(operation) {
   try {
     const policies = await loadPolicies();
-    policies[action] = verdict;
+    if (!isValidPolicyStore(policies)) return true;
+    return policies?.[operation] === "deny";
+  } catch {
+    return true;
+  }
+}
+
+async function handlePolicySet(operation, verdict) {
+  try {
+    const loaded = await loadPolicies();
+    // Overwrite a malformed store with a fresh one rather than writing back junk.
+    const policies = isValidPolicyStore(loaded) && loaded ? loaded : {};
+    policies[operation] = verdict;
     await chrome.storage.local.set({ policies });
     return { type: "PolicyResult", success: true };
   } catch (e) {
@@ -1230,12 +1270,17 @@ async function handlePolicySet(action, verdict) {
 async function handlePolicyList() {
   try {
     const policies = await loadPolicies();
+    if (!isValidPolicyStore(policies)) {
+      return { type: "Error", error: otherErr("policy store is invalid; run: webpilot policy clear") };
+    }
     return {
       type: "Policies",
-      policies: Object.entries(policies).map(([action, verdict]) => ({ action, verdict })),
+      policies: Object.entries(policies || {}).map(([operation, verdict]) => ({ operation, verdict })),
     };
   } catch {
-    return { type: "Policies", policies: [] };
+    // Match enforcement (which fails closed) — surface the unreadable store
+    // instead of misreporting "no policies".
+    return { type: "Error", error: otherErr("policy store is unreadable; run: webpilot policy clear") };
   }
 }
 

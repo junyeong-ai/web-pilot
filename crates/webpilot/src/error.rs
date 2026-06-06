@@ -46,8 +46,8 @@ pub enum WebPilotError {
     #[error("Chrome connection lost: {detail}. Run: webpilot status")]
     ConnectionLost { detail: String },
 
-    #[error("Blocked by policy: {action}. Check: webpilot policy list")]
-    PolicyDenied { action: String },
+    #[error("Blocked by policy: {operation}. Check: webpilot policy list")]
+    PolicyDenied { operation: String },
 
     #[error("CSP blocks script injection. Use: webpilot dom get-text SELECTOR")]
     CspViolation,
@@ -106,23 +106,6 @@ impl WebPilotError {
         }
     }
 
-    /// Whether this error class is worth retrying on the same input.
-    pub fn is_retryable(&self) -> bool {
-        use WebPilotError as E;
-        matches!(
-            self,
-            E::ElementNotFound { .. }
-                | E::SelectorNotFound { .. }
-                | E::Timeout { .. }
-                | E::NavigationFailed { .. }
-                | E::NoPage
-                | E::FrameNotFound { .. }
-                | E::BridgeUnavailable
-                | E::ConnectionLost { .. }
-                | E::Session { .. }
-        )
-    }
-
     /// Reconstruct a typed variant from the on-wire shape.
     /// Unknown codes map to `Other { detail: message }` — never fail to parse.
     pub fn from_wire(w: WireError) -> Self {
@@ -155,7 +138,7 @@ impl WebPilotError {
             "BridgeUnavailable" => Self::BridgeUnavailable,
             "ConnectionLost" => Self::ConnectionLost { detail: w.message },
             "PolicyDenied" => Self::PolicyDenied {
-                action: str_field("action").unwrap_or(w.message),
+                operation: str_field("operation").unwrap_or(w.message),
             },
             "CspViolation" => Self::CspViolation,
             "TabNotFound" => Self::TabNotFound {
@@ -194,7 +177,7 @@ impl WebPilotError {
                 put("reason", reason.clone().into());
             }
             E::FrameNotFound { selector } => put("selector", selector.clone().into()),
-            E::PolicyDenied { action } => put("action", action.clone().into()),
+            E::PolicyDenied { operation } => put("operation", operation.clone().into()),
             E::TabNotFound { tab_id } => put("tab_id", tab_id.clone().into()),
             E::ContextNotFound { name } => put("name", name.clone().into()),
             _ => {}
@@ -269,6 +252,20 @@ mod tests {
     }
 
     #[test]
+    fn policy_denied_carries_operation_field() {
+        let original = WebPilotError::PolicyDenied {
+            operation: "eval".into(),
+        };
+        let json = serde_json::to_value(original.to_wire()).unwrap();
+        assert_eq!(json["code"], "PolicyDenied");
+        assert_eq!(json["operation"], "eval");
+
+        let recovered: WebPilotError = serde_json::from_value(json).unwrap();
+        assert_eq!(recovered, original);
+        assert_eq!(recovered.exit_code(), 6);
+    }
+
+    #[test]
     fn from_wire_handles_unknown_code_via_other() {
         let json = serde_json::json!({"code": "MysteryCode", "message": "boom"});
         let e: WebPilotError = serde_json::from_value(json).unwrap();
@@ -283,12 +280,10 @@ mod tests {
             elapsed_ms: 1000,
         };
         assert_eq!(e.exit_code(), 5);
-        assert!(e.is_retryable());
 
         let e = WebPilotError::InvalidArgument {
             detail: "bad".into(),
         };
         assert_eq!(e.exit_code(), 7);
-        assert!(!e.is_retryable());
     }
 }
