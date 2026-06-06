@@ -50,6 +50,9 @@ function err(code, message, data) {
   return { code, message, ...(data || {}) };
 }
 const otherErr = (msg) => err("Other", msg);
+// Preserve a thrown error's typed `code` (e.g. BridgeUnavailable → exit 3)
+// instead of collapsing every exception to Other (exit 1).
+const exceptionErr = (e) => (e?.code ? err(e.code, e.message || String(e)) : otherErr(e?.message || String(e)));
 const timeoutErr = (kind, elapsed_ms) => err("Timeout", `${kind} timed out`, { kind, elapsed_ms });
 const noPageErr = () => err("NoPage", "No web page open");
 const policyDeniedErr = (operation) => err("PolicyDenied", `Operation '${operation}' denied by policy`, { operation });
@@ -250,7 +253,7 @@ async function processCommand(id, command) {
           await chrome.tabs.remove(parseInt(command.tab_id, 10));
           result = { type: "Action", success: true };
         } catch (e) {
-          result = { type: "Action", success: false, error: otherErr(e.message) };
+          result = { type: "Action", success: false, error: exceptionErr(e) };
         }
         break;
 
@@ -348,7 +351,7 @@ async function processCommand(id, command) {
 
     nmPort?.postMessage({ id, result });
   } catch (e) {
-    nmPort?.postMessage({ id, result: topErr(otherErr(e.message)) });
+    nmPort?.postMessage({ id, result: topErr(exceptionErr(e)) });
   }
 }
 
@@ -388,12 +391,16 @@ async function handleCapture(command) {
     page_title: "",
   };
 
-  // DOM extraction (with iframe merge).
+  // DOM extraction. When a frame is active (after `frame switch`) capture is
+  // scoped to it, matching eval/dom; otherwise every frame is merged so iframe
+  // content is visible by default.
   if (include.has("dom")) {
     try {
       const extractOpts = { bounds: opts.bounds || false, occlusion: opts.occlusion || false };
       const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => [{ frameId: 0 }]);
-      const httpFrames = frames.filter((f) => f.url?.startsWith("http"));
+      const httpFrames = frames
+        .filter((f) => f.url?.startsWith("http"))
+        .filter((f) => activeFrameId === 0 || f.frameId === activeFrameId);
 
       await ensureBridge(tabId, 0);
 
@@ -689,7 +696,7 @@ async function dispatchActionToPage(tab, action) {
 
     return result;
   } catch (e) {
-    return { type: "Action", success: false, error: otherErr(e.message) };
+    return { type: "Action", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -713,7 +720,7 @@ async function handleUpload(tabId, action) {
 
     return { type: "Action", success: true };
   } catch (e) {
-    return { type: "Action", success: false, error: otherErr(e.message) };
+    return { type: "Action", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -789,7 +796,7 @@ async function handleEval(command) {
     });
     return { type: "Eval", ...r };
   } catch (e) {
-    return { type: "Eval", success: false, error: otherErr(e.message) };
+    return { type: "Eval", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -869,7 +876,7 @@ async function handleDomSet(command) {
     const r = await sendToContent(tab.id, msg, activeFrameId);
     return { type: "CommandResult", success: r.success, error: r.error || null };
   } catch (e) {
-    return { type: "CommandResult", success: false, error: otherErr(e.message) };
+    return { type: "CommandResult", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -888,7 +895,7 @@ async function handleDomGet(command) {
       error: r.error || null,
     };
   } catch (e) {
-    return { type: "CommandResult", success: false, error: otherErr(e.message) };
+    return { type: "CommandResult", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -920,7 +927,7 @@ async function handleFetch(command) {
     }
     return { type: "FetchResult", success: false, error: otherErr("No fetch result") };
   } catch (e) {
-    return { type: "FetchResult", success: false, error: otherErr(e.message) };
+    return { type: "FetchResult", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -1044,7 +1051,7 @@ async function handleCookieSet(command) {
     });
     return { type: "CookieResult", success: true };
   } catch (e) {
-    return { type: "CookieResult", success: false, error: otherErr(e.message) };
+    return { type: "CookieResult", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -1053,7 +1060,7 @@ async function handleCookieDelete(command) {
     await chrome.cookies.remove({ url: command.url, name: command.name });
     return { type: "CookieResult", success: true };
   } catch (e) {
-    return { type: "CookieResult", success: false, error: otherErr(e.message) };
+    return { type: "CookieResult", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -1077,7 +1084,7 @@ async function handleConsoleStart() {
     saveMonitoringState();
     return { type: "CommandResult", success: true };
   } catch (e) {
-    return { type: "CommandResult", success: false, error: otherErr(e.message) };
+    return { type: "CommandResult", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -1119,7 +1126,7 @@ async function handleNetworkStart() {
     saveMonitoringState();
     return { type: "CommandResult", success: true };
   } catch (e) {
-    return { type: "CommandResult", success: false, error: otherErr(e.message) };
+    return { type: "CommandResult", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -1178,7 +1185,7 @@ async function handleSessionExport() {
     };
     return { type: "SessionExport", path: "", session_data: JSON.stringify(data) };
   } catch (e) {
-    return topErr(otherErr(e.message));
+    return topErr(exceptionErr(e));
   }
 }
 
@@ -1211,7 +1218,7 @@ async function handleSessionImport(rawData) {
     }
     return { type: "SessionResult", success: true };
   } catch (e) {
-    return { type: "SessionResult", success: false, error: otherErr(e.message) };
+    return { type: "SessionResult", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -1263,7 +1270,7 @@ async function handlePolicySet(operation, verdict) {
     await chrome.storage.local.set({ policies });
     return { type: "PolicyResult", success: true };
   } catch (e) {
-    return { type: "PolicyResult", success: false, error: otherErr(e.message) };
+    return { type: "PolicyResult", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -1289,7 +1296,7 @@ async function handlePolicyClear() {
     await chrome.storage.local.remove("policies");
     return { type: "PolicyResult", success: true };
   } catch (e) {
-    return { type: "PolicyResult", success: false, error: otherErr(e.message) };
+    return { type: "PolicyResult", success: false, error: exceptionErr(e) };
   }
 }
 

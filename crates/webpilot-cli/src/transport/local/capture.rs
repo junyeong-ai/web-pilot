@@ -171,6 +171,9 @@ impl LocalTransport {
             screenshot_path,
             screenshot_error,
             pdf_path,
+            // Headless writes files directly; the inline-bytes path is browser-only.
+            pdf_b64: None,
+            screenshot_tiles: Vec::new(),
             page_url,
             page_title,
         })

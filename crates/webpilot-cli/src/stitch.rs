@@ -58,3 +58,42 @@ pub fn stitch_tiles(
 
     Ok(path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::stitch_tiles;
+    use base64::Engine;
+
+    fn png_tile(w: u32, h: u32) -> serde_json::Value {
+        let img = image::RgbaImage::from_pixel(w, h, image::Rgba([10, 20, 30, 255]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        serde_json::Value::String(
+            base64::engine::general_purpose::STANDARD.encode(buf.into_inner()),
+        )
+    }
+
+    #[test]
+    fn stitches_tiles_vertically() {
+        let dir = std::env::temp_dir().join(format!("wp_stitch_{}", std::process::id()));
+        let tiles = vec![png_tile(40, 30), png_tile(40, 20)];
+        let out = stitch_tiles(&tiles, &dir).unwrap();
+        let img = image::open(&out).unwrap();
+        assert_eq!(img.width(), 40);
+        assert_eq!(img.height(), 50); // 30 + 20 stacked
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rejects_width_mismatch() {
+        let dir = std::env::temp_dir();
+        assert!(stitch_tiles(&[png_tile(40, 10), png_tile(50, 10)], &dir).is_err());
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert!(stitch_tiles(&[], &std::env::temp_dir()).is_err());
+    }
+}

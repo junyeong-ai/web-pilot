@@ -64,7 +64,7 @@ webpilot capture --include screenshot --full-page            # entire scrollable
 webpilot capture --include dom --url URL                     # navigate first, then capture
 ```
 
-Artifacts land in `~/Library/Caches/webpilot/artifacts/` (macOS) or `$XDG_CACHE_HOME/webpilot/artifacts/`. `Read` the file paths returned in `screenshot_path` / `pdf_path` / `accessibility_path` to inspect.
+`Read` the file paths returned in `screenshot_path` / `pdf_path` / `accessibility_path` — they are absolute, so just open them. (They live under the per-user cache: `~/Library/Caches/webpilot/artifacts/` on macOS, `$XDG_RUNTIME_DIR`/`$XDG_CACHE_HOME`/`~/.cache/webpilot/artifacts/` on Linux, or `$WEBPILOT_HOME` when set — always trust the returned path rather than guessing.)
 
 ## Action
 
@@ -130,7 +130,7 @@ webpilot frame find "window.foo === 1"    # JS predicate per-frame
 webpilot frame main                       # back to top frame
 ```
 
-After switching, all subsequent eval / capture / dom commands run inside that frame's execution context until you switch back.
+After switching, eval / dom / capture scope to that frame until you switch back (`frame main`). With no frame active, `capture --include dom` merges every frame so iframe content is visible by default.
 
 ## Tabs
 
@@ -235,7 +235,7 @@ webpilot profile --duration 5                       # → .cpuprofile (Chrome De
 ## Browser mode (`--browser`) — user's authenticated Chrome
 
 ```bash
-webpilot setup extension                            # extracts ext to ~/.local/share/webpilot/extension/
+webpilot setup extension                            # extracts the extension (path printed by the command)
 # load that path in chrome://extensions, copy the 32-char ID
 webpilot setup nm-host --extension-id <32-char-id>  # registers the Native Messaging host
 webpilot --browser status

@@ -34,29 +34,57 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
         })
         .await?;
 
-    // Tile-stitched full-page screenshot is delivered as `screenshot_tiles` on
-    // the wire. The current `IpcTransport` deserializes into `ResponseData`,
-    // which does not surface that field — full-page mode in browser path is
-    // a future deliverable. For now, we handle the typed Capture response.
+    // The CLI is the single file writer. Headless transports return paths
+    // directly; browser mode returns bytes inline (`pdf_b64`,
+    // `screenshot_tiles`, the accessibility JSON) for the CLI to persist.
     match result {
         ResponseData::Capture {
             dom,
             screenshot_path,
             screenshot_error,
             pdf_path,
+            pdf_b64,
+            screenshot_tiles,
             ..
         } => {
-            // Persist accessibility tree to a file when present. Transport
-            // delivers the JSON inline; the CLI is the single writer.
+            let dir = webpilot::dirs::artifacts_dir();
+
+            // Persist accessibility tree to a file when present.
             let mut ax_path: Option<String> = None;
             if let Some(ref snapshot) = dom
                 && let Some(ref ax_tree) = snapshot.accessibility_tree
             {
-                let dir = webpilot::dirs::artifacts_dir();
                 let path = dir.join(format!("accessibility_{}.json", epoch_ms()));
                 std::fs::write(&path, ax_tree).context("Cannot save accessibility tree")?;
                 ax_path = Some(path.to_string_lossy().into_owned());
             }
+
+            // Browser-mode full-page screenshot arrives as tiles; stitch them.
+            let stitched = if !screenshot_tiles.is_empty() {
+                Some(
+                    crate::stitch::stitch_tiles(&screenshot_tiles, &dir)?
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            } else {
+                None
+            };
+            let screenshot_path = screenshot_path.or(stitched);
+
+            // Browser-mode PDF arrives base64-encoded; decode and write it.
+            let pdf_written = if let Some(b64) = pdf_b64 {
+                let bytes = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b64.as_bytes(),
+                )
+                .context("Cannot decode PDF bytes")?;
+                let path = dir.join(format!("capture_{}.pdf", epoch_ms()));
+                std::fs::write(&path, bytes).context("Cannot save PDF")?;
+                Some(path.to_string_lossy().into_owned())
+            } else {
+                None
+            };
+            let pdf_path = pdf_path.or(pdf_written);
 
             let mut extra = serde_json::Map::new();
             for (key, value) in [

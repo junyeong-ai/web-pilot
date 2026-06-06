@@ -172,6 +172,12 @@ pub enum ResponseData {
         screenshot_error: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pdf_path: Option<String>,
+        // Browser mode delivers raw bytes inline (the extension can't write
+        // files); the CLI is the single writer and persists these to a path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pdf_b64: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        screenshot_tiles: Vec<serde_json::Value>,
         page_url: String,
         page_title: String,
     },

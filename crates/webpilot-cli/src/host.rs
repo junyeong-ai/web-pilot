@@ -8,6 +8,7 @@
 //!   3. IPC listener     — accepts CLI requests, forwards them, awaits replies.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -32,10 +33,15 @@ pub async fn run_host() -> anyhow::Result<()> {
 
     let nm_writer_handle = spawn_nm_writer(nm_rx);
     let nm_reader_handle = spawn_nm_reader(pending.clone(), nm_tx.clone());
+    // The host owns the id space facing Chrome: each forwarded request gets a
+    // host-unique id, so concurrent CLI processes (which each start their own
+    // counter) can never collide in `pending`.
+    let ids = Arc::new(AtomicU32::new(1));
     let ipc_handle = tokio::spawn(handle_ipc_connections(
         ipc_listener,
         nm_tx.clone(),
         pending.clone(),
+        ids,
     ));
 
     tracing::info!("Host ready");
@@ -180,14 +186,16 @@ async fn handle_ipc_connections(
     listener: UnixListener,
     nm_tx: mpsc::Sender<serde_json::Value>,
     pending: Arc<Mutex<Pending>>,
+    ids: Arc<AtomicU32>,
 ) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let nm_tx = nm_tx.clone();
                 let pending = pending.clone();
+                let ids = ids.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_one_cli_request(stream, nm_tx, pending).await {
+                    if let Err(e) = handle_one_cli_request(stream, nm_tx, pending, ids).await {
                         tracing::debug!("IPC request failed: {e}");
                     }
                 });
@@ -204,49 +212,43 @@ async fn handle_one_cli_request(
     stream: tokio::net::UnixStream,
     nm_tx: mpsc::Sender<serde_json::Value>,
     pending: Arc<Mutex<Pending>>,
+    ids: Arc<AtomicU32>,
 ) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
     let mut line = String::new();
     reader.read_line(&mut line).await?;
-    let request: serde_json::Value = serde_json::from_str(line.trim())?;
+    let mut request: serde_json::Value = serde_json::from_str(line.trim())?;
 
-    let id = request
-        .get("id")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| anyhow::anyhow!("CLI request missing 'id'"))? as u32;
+    // The CLI's own id only correlates this one socket's request/response, so we
+    // restore it on the way back; over the multiplexed NM channel we use a
+    // host-unique id that can't clash with another concurrent CLI process.
+    let cli_id = request.get("id").cloned();
+    let host_id = ids.fetch_add(1, Ordering::Relaxed);
+    request["id"] = host_id.into();
 
     let (resp_tx, resp_rx) = oneshot::channel();
-    {
-        let mut g = pending.lock().await;
-        if g.contains_key(&id) {
-            let err = serde_json::json!({
-                "id": id,
-                "result": {"type": "Error", "code": "InvalidArgument", "message": "Duplicate request id"}
-            });
-            let mut payload = serde_json::to_vec(&err)?;
-            payload.push(b'\n');
-            writer.write_all(&payload).await?;
-            return Ok(());
-        }
-        g.insert(id, resp_tx);
-    }
+    pending.lock().await.insert(host_id, resp_tx);
 
     nm_tx.send(request).await?;
 
     let timeout = crate::timeouts::ipc_response();
-    let response = match tokio::time::timeout(timeout, resp_rx).await {
+    let mut response = match tokio::time::timeout(timeout, resp_rx).await {
         Ok(Ok(v)) => v,
         Ok(Err(_)) => {
-            pending.lock().await.remove(&id);
+            pending.lock().await.remove(&host_id);
             anyhow::bail!("response channel closed");
         }
         Err(_) => {
-            pending.lock().await.remove(&id);
+            pending.lock().await.remove(&host_id);
             anyhow::bail!("response timeout after {}s", timeout.as_secs());
         }
     };
+
+    if let Some(id) = cli_id {
+        response["id"] = id;
+    }
 
     let mut payload = serde_json::to_vec(&response)?;
     payload.push(b'\n');
