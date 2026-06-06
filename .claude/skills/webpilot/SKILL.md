@@ -282,7 +282,7 @@ Errors carry typed data: `ElementNotFound { requested, available }`, `SelectorNo
 | API call with auth | `fetch URL --method POST --body '…'` |
 | debugging a failed click | `network start` → action → `network read`; same with `console` |
 | mobile layout | `device preset iphone-15` then capture |
-| logged-in site | `webpilot --browser …` (after `install`) |
+| logged-in site | `webpilot --browser …` (after `setup`) |
 | parallel agents on same Chrome | `--context agent-1`, `--context agent-2` |
 
 ## Error recovery

@@ -139,30 +139,30 @@ async function injectNetworkMonitoring(tabId) {
           throw err;
         });
       };
-      const OrigXHR = window.XMLHttpRequest;
-      window.XMLHttpRequest = function () {
-        const xhr = new OrigXHR();
-        let method = "GET", url = "";
-        const origOpen = xhr.open;
-        xhr.open = function (m, u, ...a) { method = m; url = u; return origOpen.apply(this, [m, u, ...a]); };
-        const origSend = xhr.send;
-        xhr.send = function (...a) {
-          const t0 = performance.now();
-          xhr.addEventListener("loadend", () => {
-            window.__webpilot_network.push({
-              type: "xhr", url, method,
-              status: xhr.status || undefined,
-              error: xhr.status === 0 ? "Network error" : undefined,
-              duration_ms: Math.round(performance.now() - t0),
-              timestamp: Date.now(),
-            });
-            if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
-          });
-          return origSend.apply(this, a);
-        };
-        return xhr;
+      // Patch the prototype in place: keeps XMLHttpRequest's static constants
+      // (UNSENT…DONE) intact, and a once-listener per send records each request
+      // exactly once even when an instance is reused.
+      const xhrProto = XMLHttpRequest.prototype;
+      const origOpen = xhrProto.open;
+      const origSend = xhrProto.send;
+      xhrProto.open = function (m, u, ...a) {
+        this.__wp_method = m; this.__wp_url = String(u);
+        return origOpen.apply(this, [m, u, ...a]);
       };
-      window.XMLHttpRequest.prototype = OrigXHR.prototype;
+      xhrProto.send = function (...a) {
+        const t0 = performance.now();
+        this.addEventListener("loadend", () => {
+          window.__webpilot_network.push({
+            type: "xhr", url: this.__wp_url || "", method: this.__wp_method || "GET",
+            status: this.status || undefined,
+            error: this.status === 0 ? "Network error" : undefined,
+            duration_ms: Math.round(performance.now() - t0),
+            timestamp: Date.now(),
+          });
+          if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+        }, { once: true });
+        return origSend.apply(this, a);
+      };
     },
   });
 }
@@ -402,6 +402,13 @@ async function handleCapture(command) {
         .filter((f) => f.url?.startsWith("http"))
         .filter((f) => activeFrameId === 0 || f.frameId === activeFrameId);
 
+      // A scoped capture whose target frame has since gone is a not-found
+      // error, not an empty success — mirror the headless FrameNotFound.
+      if (activeFrameId !== 0 && httpFrames.length === 0) {
+        const sel = `frame ${activeFrameId}`;
+        return topErr(err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel }));
+      }
+
       await ensureBridge(tabId, 0);
 
       const frameResults = await Promise.allSettled(
@@ -427,8 +434,11 @@ async function handleCapture(command) {
         }
       }
 
-      if (allElements.length > 0) {
-        const base = mainDom || frameResults.find((r) => r.status === "fulfilled")?.value?.dom || {};
+      // Build the snapshot whenever a frame extracted, even with zero
+      // interactive elements — an empty page is an empty DOM, not a missing
+      // one (headless returns the same empty snapshot).
+      const base = mainDom || frameResults.find((r) => r.status === "fulfilled")?.value?.dom;
+      if (base) {
         result.dom = {
           elements: allElements,
           total_nodes: base.total_nodes || 0,
@@ -619,6 +629,9 @@ async function handleActionCommand(command) {
       await chrome.tabs.update(tab.id, { url: action.url, active: true });
       await waitForTabReady(tab.id, 15000);
       await sleep(500);
+      // A new document invalidates any switched-to frame — reset to main, as
+      // the headless transport does on navigation.
+      setActiveFrameId(0);
       const landed = await chrome.tabs.get(tab.id).catch(() => null);
       result = { type: "Action", success: true, url_changed: landed?.url || action.url };
       break;
@@ -627,23 +640,30 @@ async function handleActionCommand(command) {
     case "back":
       await chrome.tabs.goBack(tab.id);
       await sleep(500);
+      setActiveFrameId(0);
       result = { type: "Action", success: true };
       break;
 
     case "forward":
       await chrome.tabs.goForward(tab.id);
       await sleep(500);
+      setActiveFrameId(0);
       result = { type: "Action", success: true };
       break;
 
     case "reload":
       await chrome.tabs.reload(tab.id);
       await waitForTabReady(tab.id, 15000);
+      setActiveFrameId(0);
       result = { type: "Action", success: true };
       break;
 
     case "upload":
       result = await handleUpload(tab.id, action);
+      break;
+
+    case "drag":
+      result = await handleDrag(tab.id, action);
       break;
 
     default:
@@ -681,6 +701,8 @@ async function dispatchActionToPage(tab, action) {
     if (newTabs.length > 0) {
       const newTab = newTabs[0];
       await chrome.tabs.update(newTab.id, { active: true });
+      // Focus moved to a freshly opened tab — its frame tree is its own.
+      setActiveFrameId(0);
       result.new_tab = {
         id: String(newTab.id),
         url: newTab.url || "",
@@ -705,18 +727,62 @@ async function handleUpload(tabId, action) {
     await ensureBridge(tabId, activeFrameId);
     await sendToContent(tabId, { type: "tagElement", index: action.index, attr: "data-wp-upload" }, activeFrameId);
 
-    await withCdp(tabId, async (tid) => {
-      const { root } = await cdpSend(tid, "DOM.getDocument");
-      const { nodeId } = await cdpSend(tid, "DOM.querySelector", {
-        nodeId: root.nodeId,
-        selector: "[data-wp-upload]",
+    try {
+      await withCdp(tabId, async (tid) => {
+        const { root } = await cdpSend(tid, "DOM.getDocument");
+        const { nodeId } = await cdpSend(tid, "DOM.querySelector", {
+          nodeId: root.nodeId,
+          selector: "[data-wp-upload]",
+        });
+        if (!nodeId) throw new Error("File input element not found via CDP");
+        await cdpSend(tid, "DOM.setFileInputFiles", { nodeId, files: [action.path] });
       });
-      if (!nodeId) throw new Error("File input element not found via CDP");
-      await cdpSend(tid, "DOM.setFileInputFiles", { nodeId, files: [action.path] });
-    });
+    } finally {
+      // Strip the marker whether or not the assignment succeeded, so a failed
+      // upload never leaves a stale attribute on the input.
+      await sendToContent(tabId, { type: "untagElement", attr: "data-wp-upload" }, activeFrameId, 3000)
+        .catch(() => {});
+    }
 
-    await sendToContent(tabId, { type: "untagElement", attr: "data-wp-upload" }, activeFrameId, 3000)
-      .catch(() => {});
+    return { type: "Action", success: true };
+  } catch (e) {
+    return { type: "Action", success: false, error: exceptionErr(e) };
+  }
+}
+
+async function handleDrag(tabId, action) {
+  try {
+    await ensureBridge(tabId, activeFrameId);
+    // The bridge resolves both element centres in one call (it knows the index
+    // map); the service worker then drives the pointer over CDP exactly as the
+    // headless path does.
+    const coords = await sendToContent(
+      tabId,
+      { type: "getElementCoords", source: action.source, target: action.target },
+      activeFrameId,
+    );
+    if (!coords || coords.error) {
+      return { type: "Action", success: false, error: coords?.error || otherErr("drag: no coordinates") };
+    }
+
+    const { sx, sy, tx, ty } = coords;
+    const steps = Math.max(action.steps || 1, 1);
+    await withCdp(tabId, async (tid) => {
+      await cdpSend(tid, "Input.dispatchMouseEvent", {
+        type: "mousePressed", x: sx, y: sy, button: "left", clickCount: 1,
+      });
+      await sleep(50);
+      for (let i = 1; i <= steps; i++) {
+        const r = i / steps;
+        await cdpSend(tid, "Input.dispatchMouseEvent", {
+          type: "mouseMoved", x: sx + (tx - sx) * r, y: sy + (ty - sy) * r, button: "left",
+        });
+        await sleep(20);
+      }
+      await cdpSend(tid, "Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: tx, y: ty, button: "left", clickCount: 1,
+      });
+    });
 
     return { type: "Action", success: true };
   } catch (e) {
@@ -734,6 +800,8 @@ async function handleTabSwitch(tabId) {
     if (tab.windowId != null) {
       await chrome.windows.update(tab.windowId, { focused: true });
     }
+    // A different tab has its own frame tree — drop any frame scope.
+    setActiveFrameId(0);
     return { type: "Action", success: true };
   } catch (e) {
     return { type: "Action", success: false, error: err("TabNotFound", e.message, { tab_id: tabId }) };
@@ -1073,6 +1141,12 @@ function toCookieInfo(c) {
   };
 }
 
+// Inverse of the wire mapping in `toCookieInfo`: the wire carries SameSite=None
+// as "none", but Chrome's cookies API expects "no_restriction".
+function chromeSameSite(wire) {
+  return wire === "none" ? "no_restriction" : wire || "unspecified";
+}
+
 // ── Console / network log ──────────────────────────────────────────────────
 
 async function handleConsoleStart() {
@@ -1199,7 +1273,7 @@ async function handleSessionImport(rawData) {
           url: `http${c.secure ? "s" : ""}://${c.domain.replace(/^\./, "")}${c.path}`,
           name: c.name, value: c.value, domain: c.domain, path: c.path,
           secure: c.secure, httpOnly: c.http_only,
-          sameSite: c.same_site || "unspecified",
+          sameSite: chromeSameSite(c.same_site),
           expirationDate: c.expiration || undefined,
         });
         cookies++;

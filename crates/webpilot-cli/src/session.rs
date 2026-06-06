@@ -215,9 +215,16 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
 
+    // Record the running process atomically. If persistence fails, the Chrome
+    // we just launched would be unmanaged — kill it before surfacing the error
+    // rather than leaking an orphan.
     ensure_runtime();
-    atomic_write(&pid_path(), &pid.to_string())?;
-    atomic_write(&ws_url_path(), &ws_url)?;
+    if let Err(e) = atomic_write(&pid_path(), &pid.to_string())
+        .and_then(|_| atomic_write(&ws_url_path(), &ws_url))
+    {
+        let _ = send_signal(pid as i32, libc::SIGTERM);
+        return Err(e.into());
+    }
 
     tracing::info!("Headless Chrome ready (pid {pid})");
     Ok((pid, ws_url))
@@ -317,11 +324,12 @@ pub async fn quit_session() -> Result<()> {
         }
     }
 
-    // Context state files
+    // Context state files (leave the `.lock` coordination files in place).
     let contexts = dirs::contexts_dir();
     if let Ok(entries) = std::fs::read_dir(&contexts) {
         for entry in entries.filter_map(|e| e.ok()) {
-            if entry.file_name().to_string_lossy().starts_with("ctx-") {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("ctx-") && name.ends_with(".json") {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
@@ -333,8 +341,10 @@ pub async fn quit_session() -> Result<()> {
         let _ = std::fs::remove_dir_all(&profile_dir);
     }
 
-    // Launch lock
-    let _ = std::fs::remove_file(dirs::launch_lock_file());
+    // The launch lock file is a coordination primitive, not session state:
+    // a concurrent agent may hold an `flock` on it right now. Unlinking it
+    // would let the next launcher create a fresh inode and lock past us,
+    // defeating the mutex — so it is intentionally left in place.
 
     tracing::info!("Headless session stopped.");
     Ok(())

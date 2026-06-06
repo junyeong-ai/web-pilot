@@ -141,7 +141,17 @@ fn process_nm_message(
                     obj.remove("screenshot_b64");
                 }
             }
-            Err(e) => tracing::error!("Screenshot save failed: {e}"),
+            Err(e) => {
+                tracing::error!("Screenshot save failed: {e}");
+                // Surface the failure on the response instead of letting the
+                // capture deserialize as a silent success with no image.
+                if let Some(result) = msg.get_mut("result")
+                    && let Some(obj) = result.as_object_mut()
+                {
+                    obj.insert("screenshot_error".into(), serde_json::json!(e.to_string()));
+                    obj.remove("screenshot_b64");
+                }
+            }
         }
     }
 
@@ -231,7 +241,12 @@ async fn handle_one_cli_request(
     let (resp_tx, resp_rx) = oneshot::channel();
     pending.lock().await.insert(host_id, resp_tx);
 
-    nm_tx.send(request).await?;
+    // If the message can't be handed to the writer, drop the pending slot we
+    // just reserved — otherwise a failed send leaks an entry forever.
+    if let Err(e) = nm_tx.send(request).await {
+        pending.lock().await.remove(&host_id);
+        return Err(e.into());
+    }
 
     let timeout = crate::timeouts::ipc_response();
     let mut response = match tokio::time::timeout(timeout, resp_rx).await {

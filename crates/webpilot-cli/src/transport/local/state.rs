@@ -466,6 +466,27 @@ if (!window.__webpilot_network_active) {
             throw err;
         });
     };
+    const xhrProto = XMLHttpRequest.prototype;
+    const origOpen = xhrProto.open;
+    const origSend = xhrProto.send;
+    xhrProto.open = function(m, u, ...a) {
+        this.__wp_method = m; this.__wp_url = String(u);
+        return origOpen.apply(this, [m, u, ...a]);
+    };
+    xhrProto.send = function(...a) {
+        const t0 = performance.now();
+        this.addEventListener("loadend", () => {
+            window.__webpilot_network.push({
+                type: "xhr", url: this.__wp_url || "", method: this.__wp_method || "GET",
+                status: this.status || undefined,
+                error: this.status === 0 ? "Network error" : undefined,
+                duration_ms: Math.round(performance.now() - t0),
+                timestamp: Date.now(),
+            });
+            if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+        }, { once: true });
+        return origSend.apply(this, a);
+    };
 }
 true
 "#;

@@ -45,6 +45,8 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             pdf_path,
             pdf_b64,
             screenshot_tiles,
+            tile_viewport_height,
+            tile_total_height,
             ..
         } => {
             let dir = webpilot::dirs::artifacts_dir();
@@ -62,9 +64,14 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             // Browser-mode full-page screenshot arrives as tiles; stitch them.
             let stitched = if !screenshot_tiles.is_empty() {
                 Some(
-                    crate::stitch::stitch_tiles(&screenshot_tiles, &dir)?
-                        .to_string_lossy()
-                        .into_owned(),
+                    crate::stitch::stitch_tiles(
+                        &screenshot_tiles,
+                        tile_viewport_height,
+                        tile_total_height,
+                        &dir,
+                    )?
+                    .to_string_lossy()
+                    .into_owned(),
                 )
             } else {
                 None

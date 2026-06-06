@@ -12,9 +12,9 @@
 
 (() => {
   // ── New-element baseline ──────────────────────────────────────────────────
-  // Reset whenever the URL changes — otherwise a fresh page would mark every
-  // element as "new", which is misleading. Within the same URL, "new" means
-  // appeared since the previous capture (e.g., a modal opened).
+  // "new" means an element appeared since the previous capture (e.g. a modal
+  // opened). The baseline is reset on URL change — see `syncBaselineUrl`, which
+  // runs on every extraction so SPA route changes (no re-injection) are caught.
   if (!window.__webpilot_state) {
     window.__webpilot_state = {
       lastUrl: location.href,
@@ -22,10 +22,6 @@
     };
   }
   const state = window.__webpilot_state;
-  if (state.lastUrl !== location.href) {
-    state.previousKeys = new Set();
-    state.lastUrl = location.href;
-  }
 
   // ── Error helpers ─────────────────────────────────────────────────────────
   const err = (code, message, data) => ({
@@ -190,8 +186,19 @@
     return undefined;
   }
 
+  // Reset the new-element baseline when the page identity changed since the
+  // last extraction. Covers SPA navigations where the content script is never
+  // re-injected, so the top-level init alone would leave a stale baseline.
+  function syncBaselineUrl() {
+    if (state.lastUrl !== location.href) {
+      state.previousKeys = new Set();
+      state.lastUrl = location.href;
+    }
+  }
+
   function extractDOM(options) {
     try {
+      syncBaselineUrl();
       const start = performance.now();
       const all = collectInteractiveElements();
       const totalNodes = document.querySelectorAll("*").length;
@@ -503,8 +510,9 @@
         case "forward": history.forward(); return { success: true };
         case "reload": location.reload(); return { success: true };
 
-        // navigate / upload / drag are handled in Rust (CDP-side); they will
-        // not arrive here. If they do, surface the mismatch.
+        // navigate / upload / drag are dispatched via CDP (headless: Rust;
+        // browser: the service worker), never through the bridge. If one
+        // arrives here it is a routing mismatch.
         case "navigate":
         case "upload":
         case "drag":

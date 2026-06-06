@@ -29,15 +29,15 @@ pub struct RecordArgs {
 }
 
 pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<CommandOutput> {
+    if args.interval == 0 {
+        return Err(webpilot::WebPilotError::InvalidArgument {
+            detail: "--interval must be greater than 0".into(),
+        }
+        .into());
+    }
+
     if let Some(url) = args.url {
-        use webpilot::Action;
-        use webpilot::protocol::Command;
-        local
-            .send(Command::Action {
-                action: Action::Navigate { url },
-                capture: false,
-            })
-            .await?;
+        crate::transport::navigate_to(local, url).await?;
     }
 
     let frame_count = match (args.frames, args.duration) {

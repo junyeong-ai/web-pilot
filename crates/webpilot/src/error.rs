@@ -34,7 +34,7 @@ pub enum WebPilotError {
     #[error("No web page open. Navigate: webpilot action navigate URL")]
     NoPage,
 
-    #[error("Frame not found: {selector}. List frames: webpilot frames list")]
+    #[error("Frame not found: {selector}. List frames: webpilot frame")]
     FrameNotFound { selector: String },
 
     #[error("Invalid argument: {detail}")]
@@ -52,7 +52,7 @@ pub enum WebPilotError {
     #[error("CSP blocks script injection. Use: webpilot dom get-text SELECTOR")]
     CspViolation,
 
-    #[error("Tab not found: {tab_id}. List: webpilot tabs list")]
+    #[error("Tab not found: {tab_id}. List: webpilot tab")]
     TabNotFound { tab_id: String },
 
     #[error("Context not found: {name}. List: webpilot context list")]

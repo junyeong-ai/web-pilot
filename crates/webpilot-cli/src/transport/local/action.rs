@@ -51,19 +51,26 @@ impl LocalTransport {
                 });
             }
             Action::Back => {
-                self.page.evaluate("history.back()").await?;
+                // The navigation back is the goal: it tears down the calling
+                // execution context, so the evaluate's own response racing with
+                // that teardown ("target navigated") is the success signal, not
+                // an error. Confirm via the navigation event instead.
+                let _ = self.page.evaluate("history.back()").await;
                 self.page
                     .wait_for_event("Page.frameNavigated", crate::timeouts::back_forward())
                     .await
                     .ok();
+                // The document changed — a switched-to frame is now stale.
+                self.clear_active_frame().await;
                 return Ok(action_success(None));
             }
             Action::Forward => {
-                self.page.evaluate("history.forward()").await?;
+                let _ = self.page.evaluate("history.forward()").await;
                 self.page
                     .wait_for_event("Page.frameNavigated", crate::timeouts::back_forward())
                     .await
                     .ok();
+                self.clear_active_frame().await;
                 return Ok(action_success(None));
             }
             Action::Reload => {
@@ -72,6 +79,7 @@ impl LocalTransport {
                     .wait_for_event("Page.loadEventFired", crate::timeouts::reload_wait())
                     .await
                     .ok();
+                self.clear_active_frame().await;
                 return Ok(action_success(None));
             }
             Action::Drag {
@@ -158,7 +166,8 @@ impl LocalTransport {
             .into());
         };
 
-        self.page
+        let set = self
+            .page
             .send(
                 "DOM.setFileInputFiles",
                 Some(json!({
@@ -166,11 +175,14 @@ impl LocalTransport {
                     "files": [path.to_string_lossy()],
                 })),
             )
-            .await?;
+            .await;
 
+        // Remove the marker whether or not the file assignment succeeded, so a
+        // failed upload never leaves a stale attribute on the input.
         let _ = self
             .invoke_bridge(&json!({"type": "untagElement", "attr": "data-wp-upload"}))
             .await;
+        set?;
         Ok(())
     }
 

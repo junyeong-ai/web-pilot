@@ -41,6 +41,24 @@ pub fn lift_error<T>(success: bool, error: Option<WebPilotError>, payload: T) ->
     Ok(payload)
 }
 
+/// Navigate before another command runs, surfacing navigation failures
+/// (`NavigationFailed`/`Timeout`) rather than swallowing them — a pre-step
+/// that lands on the wrong page must fail loudly, not profile/record silently.
+pub async fn navigate_to<T: Transport>(transport: &mut T, url: String) -> Result<()> {
+    use webpilot::Action;
+    match transport
+        .send(Command::Action {
+            action: Action::Navigate { url },
+            capture: false,
+        })
+        .await?
+    {
+        ResponseData::Action { success, error, .. } => lift_error(success, error, ()),
+        ResponseData::Error { error } => Err(error.into()),
+        other => Err(anyhow::anyhow!("unexpected navigate response: {other:?}")),
+    }
+}
+
 /// Monotonic ID generator shared by transport implementations.
 #[derive(Default)]
 pub(crate) struct IdGen(AtomicU32);

@@ -86,18 +86,18 @@ impl LocalTransport {
             } else {
                 self.page.screenshot().await
             };
+            // Always strip annotations once the shot is taken — a capture error
+            // must not leave overlays in the live page for the next command.
+            if opts.annotate {
+                let _ = self
+                    .invoke_bridge(&json!({"type": "removeAnnotations"}))
+                    .await;
+            }
             match shot {
-                Ok(b64) => {
-                    if opts.annotate {
-                        let _ = self
-                            .invoke_bridge(&json!({"type": "removeAnnotations"}))
-                            .await;
-                    }
-                    match save_screenshot(&b64) {
-                        Ok(p) => screenshot_path = Some(p),
-                        Err(e) => screenshot_error = Some(e.to_string()),
-                    }
-                }
+                Ok(b64) => match save_screenshot(&b64) {
+                    Ok(p) => screenshot_path = Some(p),
+                    Err(e) => screenshot_error = Some(e.to_string()),
+                },
                 Err(e) => screenshot_error = Some(e.to_string()),
             }
         }
@@ -174,6 +174,8 @@ impl LocalTransport {
             // Headless writes files directly; the inline-bytes path is browser-only.
             pdf_b64: None,
             screenshot_tiles: Vec::new(),
+            tile_viewport_height: None,
+            tile_total_height: None,
             page_url,
             page_title,
         })

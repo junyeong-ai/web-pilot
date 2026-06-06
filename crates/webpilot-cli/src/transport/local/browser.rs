@@ -45,7 +45,33 @@ impl LocalTransport {
         Ok(ResponseData::Tabs { tabs })
     }
 
+    /// Typed `TabNotFound` if no page target *in this browser context* carries
+    /// the id — guards tab operations so an unknown id surfaces exit 4 instead
+    /// of a raw CDP error, and so a context-scoped agent can never reach a tab
+    /// belonging to another context.
+    async fn ensure_tab_exists(&self, tab_id: &str) -> Result<Option<ResponseData>> {
+        let ctx = self.browser_context_id.as_deref();
+        let targets = self.browser.get_targets().await?;
+        let exists = targets.iter().any(|t| {
+            t.get("targetId").and_then(|v| v.as_str()) == Some(tab_id)
+                && t.get("type").and_then(|v| v.as_str()) == Some("page")
+                && match ctx {
+                    Some(id) => t.get("browserContextId").and_then(|v| v.as_str()) == Some(id),
+                    None => true,
+                }
+        });
+        Ok((!exists).then(|| ResponseData::Error {
+            error: WebPilotError::TabNotFound {
+                tab_id: tab_id.to_string(),
+            },
+        }))
+    }
+
     pub(super) async fn do_tab_switch(&mut self, tab_id: &str) -> Result<ResponseData> {
+        if let Some(not_found) = self.ensure_tab_exists(tab_id).await? {
+            return Ok(not_found);
+        }
+
         self.browser
             .send("Target.activateTarget", Some(json!({"targetId": tab_id})))
             .await?;
@@ -92,6 +118,10 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_tab_close(&self, tab_id: &str) -> Result<ResponseData> {
+        if let Some(not_found) = self.ensure_tab_exists(tab_id).await? {
+            return Ok(not_found);
+        }
+
         self.browser
             .send("Target.closeTarget", Some(json!({"targetId": tab_id})))
             .await?;

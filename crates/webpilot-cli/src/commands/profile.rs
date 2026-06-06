@@ -18,16 +18,7 @@ pub struct ProfileArgs {
 
 pub async fn run(local: &mut LocalTransport, args: ProfileArgs) -> Result<CommandOutput> {
     if let Some(url) = args.url {
-        // Reuse the navigate logic by issuing a Navigate action via Transport.
-        use crate::transport::Transport;
-        use webpilot::Action;
-        use webpilot::protocol::Command;
-        local
-            .send(Command::Action {
-                action: Action::Navigate { url },
-                capture: false,
-            })
-            .await?;
+        crate::transport::navigate_to(local, url).await?;
     }
 
     let cdp = local.page();

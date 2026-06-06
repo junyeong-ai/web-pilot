@@ -32,6 +32,30 @@ pub(crate) fn context_file_path(name: &str) -> std::path::PathBuf {
     dirs::contexts_dir().join(format!("ctx-{}.json", context_hash(name)))
 }
 
+/// Serialize resolution of one context name across processes. Without this two
+/// agents racing on the same name would each create a CDP browser context and
+/// only the last would be recorded, leaking the other until Chrome exits. The
+/// returned file handle holds an exclusive `flock` until it is dropped.
+fn lock_context(name: &str) -> Result<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+    let dir = dirs::contexts_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("ctx-{}.lock", context_hash(name)));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)?;
+    // SAFETY: flock() is a POSIX advisory lock; no memory-safety implications.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        anyhow::bail!(
+            "failed to lock context '{name}': {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    Ok(file)
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -43,6 +67,11 @@ fn now_secs() -> u64 {
 /// if missing; revives the page if it was closed; surfaces a structured
 /// error if the cap is reached.
 pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> Result<String> {
+    // Held for the whole resolution so concurrent same-name callers can't both
+    // create a context (double-checked: the existing-entry path below re-reads
+    // under the lock).
+    let _lock = lock_context(name)?;
+
     let file_path = context_file_path(name);
     let now = now_secs();
     let chrome_pid = crate::session::read_pid();
@@ -83,7 +112,10 @@ pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> R
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok())
-                .filter(|e| e.file_name().to_string_lossy().starts_with("ctx-"))
+                .filter(|e| {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    n.starts_with("ctx-") && n.ends_with(".json")
+                })
                 .count()
         })
         .unwrap_or(0);
