@@ -95,11 +95,11 @@ jobs:
             echo "checksum=${archive}.sha256"
           } >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ steps.package.outputs.archive }}
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: webpilot-${{ matrix.target }}
           path: |
@@ -125,7 +125,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
