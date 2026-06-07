@@ -120,10 +120,13 @@ webpilot eval 'console.log("x"); 7'                # multi-statement (returns 7)
 
 webpilot dom get-text "h1"
 webpilot dom get-html ".card"
-webpilot dom get-attr "input" "value"
+webpilot dom get-attr "a.download" "href"   # reads the HTML attribute
 webpilot dom set-text "h1" "New title"
 webpilot dom set-html "td" "<p>cell</p>"
 webpilot dom set-attr "input" "value" "x"
+# get-attr reads the HTML *attribute*, not the live DOM *property*. A value
+# the user typed lives on the `.value` property, so `get-attr input value`
+# returns null — read a typed value with `eval 'el.value'` or `--include dom`.
 ```
 
 ## Frames (iframes)
