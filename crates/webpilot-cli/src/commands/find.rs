@@ -20,8 +20,10 @@ pub struct FindArgs {
     pub placeholder: Option<String>,
     #[arg(long)]
     pub tag: Option<String>,
-    #[arg(long)]
+    /// Click the first match. Mutually exclusive with --fill.
+    #[arg(long, conflicts_with = "fill")]
     pub click: bool,
+    /// Type into the first match. Mutually exclusive with --click.
     #[arg(long)]
     pub fill: Option<String>,
 }

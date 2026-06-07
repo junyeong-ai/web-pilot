@@ -64,13 +64,35 @@ async fn execute(plan: Plan) -> Result<CommandOutput> {
         ("skill", plan.skill.as_deref()),
         ("extension", plan.extension.as_deref()),
         ("nm_host", plan.nm_host.as_deref()),
-        ("cache_root", plan.cache_root.as_deref()),
     ] {
         if let Some(p) = path {
             match remove_path(p) {
                 Ok(()) => removed.push(label),
                 Err(e) => warnings.push(format!("{label} at {} ({e})", p.display())),
             }
+        }
+    }
+
+    // The cache root is wherever WEBPILOT_HOME (or the platform default)
+    // points. Only the subdirectories WebPilot itself creates are deleted —
+    // never a blanket recursive delete of an env-derived path, which a
+    // mispointed WEBPILOT_HOME would turn into destroying a directory we do
+    // not own. The root itself goes only once it is empty.
+    if let Some(root) = plan.cache_root.as_deref() {
+        let mut clean = true;
+        for sub in ["runtime", "contexts", "artifacts", "chrome-profile"] {
+            let p = root.join(sub);
+            if !p.exists() {
+                continue;
+            }
+            if let Err(e) = remove_path(&p) {
+                clean = false;
+                warnings.push(format!("cache {sub} at {} ({e})", p.display()));
+            }
+        }
+        purge_if_empty(root);
+        if clean {
+            removed.push("cache_root");
         }
     }
 

@@ -51,7 +51,9 @@ impl CdpClient {
         let next_id = Arc::new(AtomicU64::new(1));
         let alive = Arc::new(AtomicBool::new(true));
 
-        let buffer_size = webpilot::settings::get().cdp.event_buffer;
+        // `settings::init` rejects 0 loudly; the max(1) covers only the lazy
+        // library/test path that bypasses init (broadcast panics on 0).
+        let buffer_size = webpilot::settings::get().cdp.event_buffer.max(1);
         let (events_tx, _) = broadcast::channel::<Value>(buffer_size);
 
         // Reader: route id-bearing responses to pending channels; broadcast events.

@@ -67,10 +67,12 @@ pub fn process_and_save(
     // Save to file
     std::fs::create_dir_all(output_dir).map_err(|e| ScreenshotError::Save(e.to_string()))?;
 
+    // Nanosecond stamp: two captures in the same millisecond (parallel
+    // contexts) must not share a filename and silently overwrite each other.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis();
+        .as_nanos();
     let filename = format!("capture_{ts}.png");
     let path = output_dir.join(&filename);
 

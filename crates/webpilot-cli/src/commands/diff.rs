@@ -4,6 +4,12 @@ use std::path::PathBuf;
 
 use crate::output::CommandOutput;
 
+/// Per-pixel Euclidean RGB distance above which a pixel counts as changed.
+/// Coarse by design — anti-aliasing and JPEG artifacts sit just below typical
+/// edge deltas, so small thresholds drown real diffs in rendering noise. This
+/// is a reporting aid, not a gate; treat `changed_percent` as approximate.
+const PIXEL_DIFF_THRESHOLD: f64 = 30.0;
+
 #[derive(Args)]
 pub struct DiffArgs {
     /// Diff two DOM snapshots (JSON files)
@@ -105,7 +111,7 @@ fn diff_screenshot(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
                 + (pa[2] as i32 - pb[2] as i32).pow(2)) as f64;
             let dist = dist.sqrt();
 
-            if dist > 30.0 {
+            if dist > PIXEL_DIFF_THRESHOLD {
                 diff_count += 1;
                 diff_img.put_pixel(x, y, image::Rgba([255, 0, 0, 200]));
             } else {
@@ -121,8 +127,16 @@ fn diff_screenshot(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
         0.0
     };
 
-    // Save diff image
-    let diff_path = a.with_file_name("diff.png");
+    // The diff is an artifact like any other capture output: timestamped under
+    // artifacts/, never written into the input's directory under a fixed name
+    // where two diffs would silently clobber each other.
+    let diff_path = webpilot::dirs::artifacts_dir().join(format!(
+        "diff_{}.png",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
     diff_img
         .save(&diff_path)
         .context("Cannot save diff image")?;

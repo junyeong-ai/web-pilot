@@ -35,6 +35,12 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
         }
         .into());
     }
+    if args.frames == Some(0) {
+        return Err(webpilot::WebPilotError::InvalidArgument {
+            detail: "--frames must be greater than 0".into(),
+        }
+        .into());
+    }
 
     if let Some(url) = args.url {
         crate::transport::navigate_to(local, url).await?;

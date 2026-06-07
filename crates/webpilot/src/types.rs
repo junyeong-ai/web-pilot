@@ -495,8 +495,26 @@ impl InteractiveElement {
 
 // ── Human-readable serialization ─────────────────────────────────────────────
 
+/// Collapse ASCII control characters (newlines included) to spaces. The agent
+/// view is line-oriented: a page-controlled string that could embed `\n` would
+/// let a hostile page fabricate element rows or forge `--- Page ---` footers
+/// inside the snapshot the agent trusts. This is the one sink where strings
+/// become lines, so it is the one place that guarantee lives.
+fn line_safe(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.chars().any(char::is_control) {
+        std::borrow::Cow::Owned(
+            s.chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect(),
+        )
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 impl DomSnapshot {
-    /// Serialize to LLM-friendly text format.
+    /// Serialize to LLM-friendly text format. Every page-controlled string
+    /// passes through [`line_safe`].
     pub fn to_text(&self) -> String {
         let mut out = String::with_capacity(self.elements.len() * 80);
 
@@ -508,7 +526,7 @@ impl DomSnapshot {
             };
 
             let tag_id = match &el.id {
-                Some(id) => format!("{}#{id}", el.tag),
+                Some(id) => format!("{}#{}", el.tag, line_safe(id)),
                 None => el.tag.clone(),
             };
             out.push_str(&format!("{new_marker}[{}] {tag_id} ", el.index));
@@ -516,41 +534,41 @@ impl DomSnapshot {
             if let Some(ref role) = el.role
                 && role != &el.tag
             {
-                out.push_str(&format!("role={role} "));
+                out.push_str(&format!("role={} ", line_safe(role)));
             }
 
             if !el.text.is_empty() {
-                out.push_str(&format!("\"{}\" ", el.text));
+                out.push_str(&format!("\"{}\" ", line_safe(&el.text)));
             } else if let Some(ref name) = el.semantics.name {
-                out.push_str(&format!("\"{name}\" "));
+                out.push_str(&format!("\"{}\" ", line_safe(name)));
             }
 
             if let Some(ref label) = el.semantics.label {
-                out.push_str(&format!("label=\"{label}\" "));
+                out.push_str(&format!("label=\"{}\" ", line_safe(label)));
             }
             if let Some(ref ph) = el.semantics.placeholder
                 && ph != &el.text
             {
-                out.push_str(&format!("placeholder=\"{ph}\" "));
+                out.push_str(&format!("placeholder=\"{}\" ", line_safe(ph)));
             }
             if let Some(ref href) = el.semantics.href {
                 let trimmed: String = href.chars().take(50).collect();
                 if href.chars().count() > 50 {
-                    out.push_str(&format!("href=\"{trimmed}...\" "));
+                    out.push_str(&format!("href=\"{}...\" ", line_safe(&trimmed)));
                 } else {
-                    out.push_str(&format!("href=\"{href}\" "));
+                    out.push_str(&format!("href=\"{}\" ", line_safe(href)));
                 }
             }
             if let Some(ref val) = el.state.value
                 && !val.is_empty()
             {
-                out.push_str(&format!("value=\"{val}\" "));
+                out.push_str(&format!("value=\"{}\" ", line_safe(val)));
             }
             if let Some(ref it) = el.semantics.input_type {
-                out.push_str(&format!("type={it} "));
+                out.push_str(&format!("type={} ", line_safe(it)));
             }
             if let Some(ref ac) = el.semantics.autocomplete {
-                out.push_str(&format!("autocomplete={ac} "));
+                out.push_str(&format!("autocomplete={} ", line_safe(ac)));
             }
             if el.state.checked == Some(true) {
                 out.push_str("[checked] ");
@@ -579,7 +597,11 @@ impl DomSnapshot {
                     .find(|o| o.selected)
                     .map(|o| o.text.as_str())
                     .unwrap_or("");
-                out.push_str(&format!("options({}) selected=\"{sel}\" ", opts.len()));
+                out.push_str(&format!(
+                    "options({}) selected=\"{}\" ",
+                    opts.len(),
+                    line_safe(sel)
+                ));
             }
             if el.spatial.occluded == Some(true) {
                 out.push_str("[occluded] ");
@@ -588,13 +610,13 @@ impl DomSnapshot {
                 out.push_str("[offscreen] ");
             }
             if let Some(ref desc) = el.semantics.description {
-                out.push_str(&format!("description=\"{desc}\" "));
+                out.push_str(&format!("description=\"{}\" ", line_safe(desc)));
             }
             if let Some(ref form) = el.semantics.form_id {
-                out.push_str(&format!("form={form} "));
+                out.push_str(&format!("form={} ", line_safe(form)));
             }
             if let Some(ref lm) = el.spatial.landmark {
-                out.push_str(&format!("@{lm} "));
+                out.push_str(&format!("@{} ", line_safe(lm)));
             }
 
             out.push('\n');
@@ -602,7 +624,8 @@ impl DomSnapshot {
 
         out.push_str(&format!(
             "--- Page: {} ({}) ---\n",
-            self.page_title, self.page_url
+            line_safe(&self.page_title),
+            line_safe(&self.page_url)
         ));
 
         let above = self.scroll.pages_above();

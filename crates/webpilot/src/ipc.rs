@@ -77,7 +77,17 @@ pub async fn start_server() -> Result<UnixListener, IpcError> {
         }
     }
 
-    if path.exists() {
+    // Clear a stale socket — and ONLY a socket. The path derives from the
+    // (env-overridable) runtime root, so unlinking whatever sits there would
+    // let a mispointed WEBPILOT_HOME delete a file we do not own.
+    if let Ok(meta) = std::fs::symlink_metadata(&path) {
+        use std::os::unix::fs::FileTypeExt;
+        if !meta.file_type().is_socket() {
+            return Err(IpcError::Io(std::io::Error::other(format!(
+                "refusing to replace non-socket file at {}",
+                path.display()
+            ))));
+        }
         let _ = std::fs::remove_file(&path);
     }
 

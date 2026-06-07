@@ -83,7 +83,13 @@ pub struct Cdp {
 /// of running with settings the operator believes are in effect but aren't.
 pub fn init() -> std::result::Result<(), String> {
     let file = read_config()?;
-    let _ = SETTINGS.set(Settings::resolve(file));
+    let settings = Settings::resolve(file);
+    // Values that downstream APIs reject with a panic are rejected here with
+    // a message instead (`broadcast::channel` requires capacity >= 1).
+    if settings.cdp.event_buffer == 0 {
+        return Err("cdp.event_buffer must be greater than 0".into());
+    }
+    let _ = SETTINGS.set(settings);
     Ok(())
 }
 

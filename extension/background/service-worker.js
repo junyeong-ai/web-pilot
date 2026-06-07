@@ -991,12 +991,14 @@ async function handleEval(command) {
         func: async (code) => {
           // CSP preflight: if the policy forbids dynamic evaluation, this empty
           // constructor throws before any user code runs — so the security
-          // classification can never be confused by user-thrown errors or a
-          // page that shadowed the realm's EvalError.
+          // classification can never be confused by user-thrown errors. The
+          // message check guards the other direction: a page that shadowed
+          // `Function` with a throwing fake must not masquerade as CSP either.
           try {
             new Function("");
           } catch (e) {
-            return { thrown: e?.message || String(e), csp: true };
+            const msg = e?.message || String(e);
+            return { thrown: msg, csp: /Content Security Policy|unsafe-eval/i.test(msg) };
           }
           try {
             let v;

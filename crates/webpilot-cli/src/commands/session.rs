@@ -36,7 +36,13 @@ pub async fn run<T: Transport>(transport: &mut T, args: SessionArgs) -> Result<C
                         std::fs::rename(&path, &dest)
                             .or_else(|_| std::fs::copy(&path, &dest).map(|_| ()))
                             .context("Cannot move session file to --output")?;
-                        let _ = std::fs::remove_file(&path);
+                        // The artifact copy holds session secrets — a failed
+                        // cleanup must be visible, never silent.
+                        if std::path::Path::new(&path).exists()
+                            && let Err(e) = std::fs::remove_file(&path)
+                        {
+                            tracing::warn!("session artifact left at {path}: {e}");
+                        }
                         dest.to_string_lossy().into_owned()
                     } else {
                         path

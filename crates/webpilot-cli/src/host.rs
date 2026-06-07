@@ -228,7 +228,17 @@ fn process_nm_message(
                     obj.remove("session_data");
                 }
             }
-            Err(e) => tracing::error!("Session save failed: {e}"),
+            Err(e) => {
+                // An export the host could not persist is a failure, not a
+                // success with a missing file — surface it typed.
+                msg["result"] = serde_json::json!({
+                    "type": "Error",
+                    "error": {
+                        "code": "Other",
+                        "message": format!("Session save failed at {}: {e}", path.display()),
+                    },
+                });
+            }
         }
     }
 

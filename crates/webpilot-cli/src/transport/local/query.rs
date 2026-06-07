@@ -33,13 +33,21 @@ impl LocalTransport {
                 result: Some(serde_json::to_string(&v).unwrap_or_else(|_| "null".into())),
                 error: None,
             }),
-            Err(e) => Ok(ResponseData::Eval {
-                success: false,
-                result: None,
-                error: Some(WebPilotError::Other {
-                    detail: e.to_string(),
-                }),
-            }),
+            Err(e) => {
+                // Keep a typed error typed (e.g. FrameNotFound from a vanished
+                // switched frame → exit 4); only wrap genuinely unknown ones.
+                let error = match e.downcast::<WebPilotError>() {
+                    Ok(typed) => typed,
+                    Err(e) => WebPilotError::Other {
+                        detail: e.to_string(),
+                    },
+                };
+                Ok(ResponseData::Eval {
+                    success: false,
+                    result: None,
+                    error: Some(error),
+                })
+            }
         }
     }
 
