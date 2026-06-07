@@ -25,8 +25,18 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # A tag publishes only what has passed the exact CI suite (fmt, clippy, doc,
+  # workspace tests incl. browser parity, both e2e suites) against the exact
+  # commit being released — reusing ci.yml so the gate cannot drift from CI.
+  gate:
+    name: Gate
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+
   build:
     name: Build (${{ matrix.target }})
+    needs: gate
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     permissions:

@@ -102,6 +102,15 @@ pub struct Capture {
 pub fn init() -> std::result::Result<(), String> {
     let file = read_config()?;
     let settings = Settings::resolve(file);
+    validate(&settings)?;
+    let _ = SETTINGS.set(settings);
+    Ok(())
+}
+
+/// Invariants every resolved settings instance must satisfy — enforced on both
+/// the startup [`init`] path and the lazy [`get`] fallback, so no path can run
+/// with values one of them would have rejected.
+fn validate(settings: &Settings) -> std::result::Result<(), String> {
     // Values that downstream APIs reject with a panic are rejected here with
     // a message instead (`broadcast::channel` requires capacity >= 1).
     if settings.cdp.event_buffer == 0 {
@@ -117,15 +126,22 @@ pub fn init() -> std::result::Result<(), String> {
     if settings.timeouts.navigation.is_zero() {
         return Err("timeouts.navigation_ms must be greater than 0".into());
     }
-    let _ = SETTINGS.set(settings);
     Ok(())
 }
 
 /// Process-wide resolved settings. `init` populates this at startup; the lazy
 /// fallback (library/test use without `init`) reads the same file and, only for
-/// that path, tolerates an absent/unreadable file as defaults.
+/// that path, tolerates an absent/unreadable file as defaults. Invariants still
+/// hold: with no error channel here, an invalid value panics rather than
+/// running with settings `init` would have refused.
 pub fn get() -> &'static Settings {
-    SETTINGS.get_or_init(|| Settings::resolve(read_config().unwrap_or_default()))
+    SETTINGS.get_or_init(|| {
+        let settings = Settings::resolve(read_config().unwrap_or_default());
+        if let Err(message) = validate(&settings) {
+            panic!("invalid settings: {message}");
+        }
+        settings
+    })
 }
 
 /// Shorthand for `get().timeouts`.
