@@ -179,7 +179,14 @@ fn kill_profile_orphans() {
         return;
     }
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if !line.contains(&marker) {
+        // Require BOTH our profile marker AND the `--remote-debugging-port` flag
+        // launch_chrome always passes: the marker alone is an argv substring an
+        // unrelated process (a grep, an editor, a script naming the path) could
+        // carry, and this SIGKILLs blind. The pair identifies the Chrome main
+        // process we launched — killing it releases the profile's SingletonLock
+        // (a fresh launch reclaims the now-dead lock), and its helpers exit on
+        // the broken IPC. Both flags together make a false positive implausible.
+        if !line.contains(&marker) || !line.contains("--remote-debugging-port") {
             continue;
         }
         if let Some(pid) = line
