@@ -22,6 +22,10 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWriter = futures_util::stream::SplitSink<WsStream, Message>;
 
 const HEARTBEAT_TIMEOUT_S: u64 = 5;
+/// Consecutive unanswered heartbeats before declaring the connection dead. A
+/// single miss is tolerated because a large response can head-of-line block the
+/// shared reader past one beat without the socket being dead.
+const HEARTBEAT_MAX_MISSES: u32 = 3;
 const PARSE_PREVIEW_CHARS: usize = 200;
 
 pub struct CdpClient {
@@ -97,6 +101,7 @@ impl CdpClient {
             let alive = alive.clone();
             let interval = webpilot::settings::timeouts().heartbeat;
             Arc::new(Mutex::new(Some(tokio::spawn(async move {
+                let mut consecutive_misses: u32 = 0;
                 loop {
                     tokio::time::sleep(interval).await;
                     if !alive.load(Ordering::Acquire) {
@@ -133,12 +138,26 @@ impl CdpClient {
 
                     let timeout = std::time::Duration::from_secs(HEARTBEAT_TIMEOUT_S);
                     match tokio::time::timeout(timeout, rx).await {
-                        Ok(Ok(_)) => {} // healthy
+                        Ok(Ok(_)) => consecutive_misses = 0, // healthy
                         _ => {
-                            tracing::warn!("CDP heartbeat failed — marking connection dead");
-                            alive.store(false, Ordering::Release);
-                            pending.lock().await.drain();
-                            break;
+                            // A single late reply is usually head-of-line
+                            // blocking: the shared reader is busy parsing a large
+                            // response (full AX tree, full-page screenshot) and
+                            // hasn't reached our pong yet — the connection is fine
+                            // and the big request is about to complete. Drop our
+                            // own stale entry, but never drain unrelated in-flight
+                            // requests on one miss. Only sustained silence across
+                            // several beats means the socket is genuinely dead.
+                            pending.lock().await.remove(&id);
+                            consecutive_misses += 1;
+                            if consecutive_misses >= HEARTBEAT_MAX_MISSES {
+                                tracing::warn!(
+                                    "CDP heartbeat unanswered {consecutive_misses}× — marking connection dead"
+                                );
+                                alive.store(false, Ordering::Release);
+                                pending.lock().await.drain();
+                                break;
+                            }
                         }
                     }
                 }

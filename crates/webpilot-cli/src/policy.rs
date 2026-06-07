@@ -120,7 +120,14 @@ fn write(store: &HashMap<PolicyKey, PolicyVerdict>) -> Result<()> {
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    std::fs::write(policy_file(), serde_json::to_string_pretty(&raw)?)?;
+    let data = serde_json::to_string_pretty(&raw)?;
+    // Write to a per-process temp file then rename: a concurrent reader (the
+    // enforcement path) never observes a torn file, so it cannot fail-closed on
+    // a half-written store, and concurrent setters can't interleave bytes.
+    let path = policy_file();
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, &path)?;
     Ok(())
 }
 

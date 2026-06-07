@@ -32,6 +32,13 @@ pub enum DomCommand {
 }
 
 pub async fn run<T: Transport>(transport: &mut T, args: DomArgs) -> Result<CommandOutput> {
+    // A get returns a value (possibly absent); a set returns only success.
+    // They must render differently — an absent attribute is an empty result,
+    // not the "OK" of a completed write.
+    let is_get = matches!(
+        args.command,
+        DomCommand::GetHtml { .. } | DomCommand::GetText { .. } | DomCommand::GetAttr { .. }
+    );
     let cmd = match args.command {
         DomCommand::SetHtml { selector, value } => Command::DomSet {
             selector,
@@ -79,12 +86,19 @@ pub async fn run<T: Transport>(transport: &mut T, args: DomArgs) -> Result<Comma
                     stdout: val.clone(),
                     json: serde_json::json!({"success": true, "value": val}),
                 })
-            } else if success {
-                Ok(CommandOutput::Ok("OK".into()))
-            } else {
+            } else if !success {
                 Err(error
                     .map(anyhow::Error::from)
                     .unwrap_or_else(|| anyhow::anyhow!("DOM operation failed")))
+            } else if is_get {
+                // Get succeeded but the property/attribute is absent: an empty,
+                // explicitly-null result — distinct from a write's "OK".
+                Ok(CommandOutput::Content {
+                    stdout: String::new(),
+                    json: serde_json::json!({"success": true, "value": null}),
+                })
+            } else {
+                Ok(CommandOutput::Ok("OK".into()))
             }
         }
         ResponseData::Error { error } => Err(error.into()),
