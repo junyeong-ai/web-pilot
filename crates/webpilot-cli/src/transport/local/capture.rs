@@ -26,6 +26,15 @@ impl LocalTransport {
             self.navigate_reconnect(&url).await?;
         }
 
+        // Annotation overlays use page-viewport coordinates, so they only line
+        // up on the main frame. Refuse `--annotate` while an iframe is active
+        // rather than drawing boxes at frame-relative coordinates onto a
+        // viewport screenshot — browser mode skips them silently; both now
+        // fail loud, identically.
+        if opts.annotate {
+            self.require_main_frame("capture --annotate").await?;
+        }
+
         let want = |f: CaptureField| include.contains(&f);
         let want_dom = want(CaptureField::Dom) || opts.annotate;
         let want_text = want(CaptureField::Text);

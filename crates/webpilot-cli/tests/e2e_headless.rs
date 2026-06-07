@@ -301,6 +301,18 @@ fn headless_behavioral_flow() {
         "click inside the iframe must resolve via the subframe bridge: {}",
         stdout(&frame_click)
     );
+    // 2h. While scoped to a frame, `--annotate` must fail loud: overlay
+    //     coordinates are page-viewport relative, meaningful only on the main
+    //     frame — drawing them here would misalign boxes onto a viewport
+    //     screenshot. (Browser mode skips silently without this guard; both now
+    //     return InvalidArgument.)
+    let annotate_in_frame = fx.run(&["capture", "--include", "screenshot", "--annotate"]);
+    assert_eq!(
+        code(&annotate_in_frame), 7,
+        "capture --annotate while an iframe is active must fail InvalidArgument (7): {}",
+        stdout(&annotate_in_frame)
+    );
+
     let back = fx.run(&["frame", "main"]);
     assert_eq!(code(&back), 0, "frame main failed: {}", stdout(&back));
 

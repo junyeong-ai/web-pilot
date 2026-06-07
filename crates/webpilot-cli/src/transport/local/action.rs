@@ -271,7 +271,7 @@ impl LocalTransport {
     /// main-document node lookup) cannot target an iframe. Inside a switched
     /// frame these would silently act on the wrong position — fail loudly
     /// instead.
-    async fn require_main_frame(&self, kind: &str) -> Result<()> {
+    pub(super) async fn require_main_frame(&self, kind: &str) -> Result<()> {
         if self.active_frame_id.lock().await.is_some() {
             return Err(WebPilotError::InvalidArgument {
                 detail: format!(

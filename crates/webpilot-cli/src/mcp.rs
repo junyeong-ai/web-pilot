@@ -286,14 +286,10 @@ async fn call_tool<T: Transport>(
                     detail: format!("invalid wait condition: {e}"),
                 }
             })?;
-            wait::run(
-                transport,
-                wait::WaitArgs {
-                    condition,
-                    timeout: timeout_ms.div_ceil(1000).max(1),
-                },
-            )
-            .await
+            // Pass the millisecond timeout straight through — routing it through
+            // the seconds-based `WaitArgs` would round a sub-second request up to
+            // a whole second.
+            wait::dispatch(transport, condition, timeout_ms).await
         }
         other => {
             return Err(WebPilotError::InvalidArgument {

@@ -205,11 +205,13 @@ impl CdpClient {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
 
-        // Bound the WRITE path by the same deadline, not just the response
-        // wait: acquiring the writer lock (held by a concurrent send whose
-        // socket write has stalled) or the `send` itself (a full kernel buffer
-        // behind a wedged peer) can otherwise hang indefinitely, defeating the
-        // caller's timeout.
+        // Bound the WHOLE operation by ONE absolute deadline spanning both the
+        // write and the response wait — not a fresh `timeout` for each phase,
+        // which would let total wall time reach `2 * timeout`. The write path is
+        // bounded too: acquiring the writer lock (held by a concurrent send
+        // whose socket write has stalled) or the `send` itself (a full kernel
+        // buffer behind a wedged peer) can otherwise hang indefinitely.
+        let deadline = tokio::time::Instant::now() + timeout;
         let text = serde_json::to_string(&msg)?;
         let write = async {
             let mut guard = self.writer.lock().await;
@@ -222,7 +224,7 @@ impl CdpClient {
             }
             Some(guard.send(Message::Text(text.into())).await)
         };
-        match tokio::time::timeout(timeout, write).await {
+        match tokio::time::timeout_at(deadline, write).await {
             Ok(Some(Ok(()))) => {}
             Ok(Some(Err(_))) => {
                 // A write error means the socket is broken — as fatal as a
@@ -259,7 +261,7 @@ impl CdpClient {
             }
         }
 
-        let response = match tokio::time::timeout(timeout, rx).await {
+        let response = match tokio::time::timeout_at(deadline, rx).await {
             Ok(Ok(v)) => v,
             Ok(Err(_)) => {
                 self.pending.lock().await.remove(&id);

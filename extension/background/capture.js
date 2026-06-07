@@ -45,6 +45,14 @@ async function handleCapture(command) {
     return topErr(err("NavigationFailed", e.message, { url: command.url || "", reason: e.message }));
   }
 
+  // Annotation overlays use page-viewport coordinates, so they only line up on
+  // the main frame. Refuse `--annotate` while an iframe is active rather than
+  // returning an unannotated screenshot with no signal — headless parity
+  // (`require_main_frame`); both fail loud, identically.
+  if (opts.annotate && activeFrameId !== 0) {
+    return topErr(err("InvalidArgument", "'capture --annotate' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
+  }
+
   const result = {
     type: "Capture",
     dom: null,
