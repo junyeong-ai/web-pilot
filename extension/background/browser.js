@@ -57,13 +57,18 @@ async function handleTabSwitch(tabId) {
 
 async function handleTabList() {
   const tabs = await chrome.tabs.query({});
+  // `active` marks the WebPilot-PINNED tab — the one commands act on — to match
+  // headless, where `active` is the bound CDP target. Chrome's own UI-foreground
+  // flag (`t.active`) is irrelevant: the agent does not control it and commands
+  // do not target it. Read the pinned id directly (no resolveActiveTab, which
+  // would pin a tab or throw on a vanished pin — a list must do neither).
   return {
     type: "Tabs",
     tabs: tabs.map((t) => ({
       id: String(t.id),
       url: t.url || "",
       title: t.title || "",
-      active: t.active,
+      active: t.id === activeTabId,
     })),
   };
 }

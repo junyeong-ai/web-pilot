@@ -646,6 +646,10 @@ impl LocalTransport {
             .into());
         }
 
+        // Subscribe before issuing the traversal so the new document's parse
+        // event is buffered for `await_document_ready` below — the same
+        // before-the-action ordering `do_action` uses.
+        let mut events = self.page.subscribe_events();
         if let Err(e) = self.page.evaluate(expression).await
             && matches!(
                 e.downcast_ref::<WebPilotError>(),
@@ -661,6 +665,11 @@ impl LocalTransport {
             )
             .await
             .ok();
+        // Wait — best-effort — for the traversed-to document to parse, so a
+        // following capture reads a ready page, not a committed-but-empty one
+        // (browser mode waits the same readyState bar). The immediate readyState
+        // check makes a same-document/bfcache traversal return without delay.
+        self.await_document_ready(&mut events).await;
         self.clear_active_frame().await;
         // A history traversal that built a new document wiped the monitor
         // hooks; for a same-document traversal the re-install is an idempotent

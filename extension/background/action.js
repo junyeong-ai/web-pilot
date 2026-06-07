@@ -107,7 +107,12 @@ async function handleAction(command) {
         },
         args: [dir],
       });
-      await waitNavigationSettled(tab.id, tab.url || "", watch, `history.${dir}()`);
+      // Best-effort settle: the traversal was issued (the no-history case above
+      // is the real NavigationFailed), so a slow page that doesn't settle in
+      // time is not a failure of the action — wait for the new document, but
+      // don't turn a still-loading page into an error. Matches headless, which
+      // settles best-effort on history/reload.
+      await waitNavigationSettled(tab.id, tab.url || "", watch, `history.${dir}()`).catch(() => {});
       setActiveFrameId(0);
       result = { type: "Action", success: true };
       break;
@@ -115,10 +120,11 @@ async function handleAction(command) {
 
     case "reload": {
       // The URL never moves on a reload, so commitment is the observed
-      // main-frame commit — the headless loaderId case.
+      // main-frame commit — the headless loaderId case. Best-effort settle: a
+      // reload always issues, so a slow load is not a failure (headless parity).
       const watch = watchMainFrameCommit(tab.id);
       await chrome.tabs.reload(tab.id);
-      await waitNavigationSettled(tab.id, tab.url || "", watch, "reload");
+      await waitNavigationSettled(tab.id, tab.url || "", watch, "reload").catch(() => {});
       setActiveFrameId(0);
       result = { type: "Action", success: true };
       break;
