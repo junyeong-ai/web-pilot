@@ -84,19 +84,40 @@ fn command_wire_tags() -> BTreeSet<String> {
     tags
 }
 
-/// Every `case "Tag":` the service worker handles. The command router cases are
-/// PascalCase wire tags; lowercase bridge-style cases live in bridge.js, not
-/// here, so an uppercase-initial filter isolates the router.
+/// Every `case "Tag":` inside the command router's `switch (command.type)`
+/// body — and ONLY there. Scoping to that one switch (located by its
+/// discriminant, brace-matched to its close) keeps a future unrelated switch
+/// from inflating the registered set and masking a genuinely missing arm.
 fn service_worker_cases() -> BTreeSet<String> {
     let source = service_worker_source();
-    let mut cases = BTreeSet::new();
-    for (i, _) in source.match_indices("case \"") {
-        let rest = &source[i + 6..];
-        if let Some(end) = rest.find('"') {
-            let name = &rest[..end];
-            if name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-                cases.insert(name.to_string());
+    let anchor = "switch (command.type)";
+    let start = source
+        .find(anchor)
+        .expect("the command router's `switch (command.type)` exists");
+    let block = &source[start..];
+    let open = block.find('{').expect("switch body opens");
+    let mut depth = 0usize;
+    let mut close = open;
+    for (i, b) in block[open..].bytes().enumerate() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = open + i;
+                    break;
+                }
             }
+            _ => {}
+        }
+    }
+    let body = &block[open..close];
+
+    let mut cases = BTreeSet::new();
+    for (i, _) in body.match_indices("case \"") {
+        let rest = &body[i + 6..];
+        if let Some(end) = rest.find('"') {
+            cases.insert(rest[..end].to_string());
         }
     }
     cases

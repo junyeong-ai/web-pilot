@@ -25,7 +25,10 @@ async function frameMainContextId(tid, tabId, frameId) {
     }
   };
   chrome.debugger.onEvent.addListener(onEvent);
+  // Both the property KEY and its value are unique per probe: a fixed key
+  // would clobber (and on cleanup, delete) a page's own property of that name.
   const nonce = `wp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const key = `__wp_probe_${nonce}`;
   try {
     // Toggle the domain so existing contexts re-announce into our listener.
     await cdpSend(tid, "Runtime.disable", {});
@@ -33,8 +36,8 @@ async function frameMainContextId(tid, tabId, frameId) {
     await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
       world: "MAIN",
-      func: (n) => { window.__wp_frame_nonce = n; },
-      args: [nonce],
+      func: (k, n) => { window[k] = n; },
+      args: [key, nonce],
     });
     const deadline = Date.now() + 2000;
     const probed = new Set();
@@ -43,7 +46,7 @@ async function frameMainContextId(tid, tabId, frameId) {
         if (probed.has(c.id) || c.auxData?.type !== "default") continue;
         probed.add(c.id);
         const r = await cdpSend(tid, "Runtime.evaluate", {
-          expression: "window.__wp_frame_nonce",
+          expression: `window[${JSON.stringify(key)}]`,
           contextId: c.id,
           returnByValue: true,
         }).catch(() => null);
@@ -57,7 +60,8 @@ async function frameMainContextId(tid, tabId, frameId) {
     chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
       world: "MAIN",
-      func: () => { delete window.__wp_frame_nonce; },
+      func: (k) => { delete window[k]; },
+      args: [key],
     }).catch(() => {});
   }
 }

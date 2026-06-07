@@ -110,6 +110,13 @@ pub fn init() -> std::result::Result<(), String> {
     if settings.capture.screenshot_max_long_edge == 0 {
         return Err("capture.screenshot_max_long_edge must be greater than 0".into());
     }
+    // A zero navigation timeout would fail every navigation instantly — and
+    // worse, inconsistently: the browser extension (which receives this value
+    // over the Config handshake) guards against non-positive values, so the
+    // two modes would silently diverge. Reject the misconfiguration loudly.
+    if settings.timeouts.navigation.is_zero() {
+        return Err("timeouts.navigation_ms must be greater than 0".into());
+    }
     let _ = SETTINGS.set(settings);
     Ok(())
 }

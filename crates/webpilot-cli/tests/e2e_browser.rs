@@ -313,6 +313,28 @@ fn browser_behavioral_flow() {
     let clear = fx.run(&["policy", "clear"]);
     assert_eq!(code(&clear), 0);
 
+    // 4b. State-keeping commands (the state.js module): a console monitor
+    //     records entries the agent produces, and a cookie set is readable
+    //     back — covering the monitor-injection and cookie paths end to end.
+    let started = fx.run(&["console", "start"]);
+    assert_eq!(code(&started), 0, "console start failed: {}", stdout(&started));
+    let logged = fx.run(&["eval", "console.log('e2e-browser-console-marker')"]);
+    assert_eq!(code(&logged), 0);
+    let logs = fx.run(&["console", "read"]);
+    assert!(
+        stdout(&logs).contains("e2e-browser-console-marker"),
+        "console monitor must record entries: {}",
+        stdout(&logs)
+    );
+    let cset = fx.run(&["cookie", "set", &base, "wp_e2e", "v1"]);
+    assert_eq!(code(&cset), 0, "cookie set failed: {}", stdout(&cset));
+    let clist = fx.run(&["cookie", "list", &base]);
+    assert!(
+        stdout(&clist).contains("wp_e2e"),
+        "cookie list must show the set cookie: {}",
+        stdout(&clist)
+    );
+
     // 5. Deterministic tab binding: commands act on the pinned tab, and a
     //    vanished pin is a typed TabNotFound — never a silent retarget to
     //    whatever tab happens to be focused. `tab new` re-pins.

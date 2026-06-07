@@ -172,6 +172,9 @@ async function handleFrameSwitch(selector) {
     // by the NM host before the command is forwarded here. It runs through the
     // same debugger-routed evaluation as `eval`, so a frame's CSP cannot block
     // it (headless parity) — one withCdp session probes every candidate frame.
+    // Per-frame failures degrade to "didn't match" (the inner guards); a
+    // failure of the SESSION itself — the debugger attach — propagates typed
+    // through the router, never disguised as FrameNotFound.
     matched = await withCdp(tab.id, async (tid) => {
       await cdpSend(tid, "Runtime.enable", {});
       for (const f of httpFrames) {
@@ -181,7 +184,7 @@ async function handleFrameSwitch(selector) {
         if (r?.success && r.result && JSON.parse(r.result) === true) return f;
       }
       return null;
-    }).catch(() => null);
+    });
   }
 
   if (matched) {
