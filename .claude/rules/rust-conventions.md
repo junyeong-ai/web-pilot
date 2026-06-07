@@ -40,7 +40,7 @@ Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`
 - `LocalTransport` — direct CDP WebSocket → bridge.js (headless mode). Holds `browser`/`page` `CdpClient`s, `ws_url`, optional `browser_context_id`, `target_id`. Owns navigation reconnect logic. Calls `policy::enforce` first — it is the headless privileged sink.
 
 ## Policy
-- `webpilot::protocol::Command::policy_key()` maps a command to its gated `PolicyKey` (read-only commands → `None`). `webpilot-cli::policy` owns the single file store (`artifacts/policies.json`) and `enforce`. `webpilot policy` is a local file command — no wire variant, no browser round-trip.
+- `webpilot::protocol::Command::policy_key()` maps a command to its gated `PolicyKey` via an **exhaustive match** (read-only commands return `None` explicitly, no wildcard) — so a new privileged command cannot compile without declaring its gate, and can never default to ungated. `webpilot-cli::policy` owns the single file store (`artifacts/policies.json`) and `enforce`; writes are atomic and a torn/unreadable store fails closed. `webpilot policy` is a local file command — no wire variant, no browser round-trip.
 - Enforcement runs at the process that actually reaches a browser, never at a mere pipe: `LocalTransport::send` (headless) and the **NM host** request loop (browser). Enforcing only in the CLI-side `IpcTransport` would be bypassable by writing the socket directly.
 
 ## Settings

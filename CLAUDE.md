@@ -1,6 +1,9 @@
 # WebPilot
 
-AI agent용 Chrome 브라우저 제어 CLI. 단일 Rust 바이너리, headless(기본) / browser 두 모드.
+Chrome browser-control tool for AI agents. Single Rust binary, two modes:
+headless (default) and browser. The same engine is also exposed as an **MCP
+server** (`webpilot mcp`, stdio JSON-RPC), reusing the same `Transport` and
+command handlers.
 
 ## Build & Run
 
@@ -11,26 +14,43 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 webpilot capture --include dom --url "https://example.com"   # headless (default)
 webpilot --browser capture --include dom                     # browser mode (SSO Chrome)
-webpilot --context agent-1 capture --include dom             # multi-agent 격리
+webpilot --context agent-1 capture --include dom             # multi-agent isolation
+webpilot mcp            # MCP server (stdio); honors --browser / --context
 webpilot status / webpilot quit
 ```
 
 ## Architecture
 
 ```
-                       ┌─ IpcTransport ──→ Unix socket → NM Host → Extension → bridge.js
-   commands/<X>.rs ──→ │
-   (single source)     └─ LocalTransport ─→ CDP WebSocket → bridge.js (injected)
+   commands/<X>.rs ─┐                ┌─ IpcTransport ──→ Unix socket → NM Host → Extension → bridge.js
+   (CLI surface)    ├─→ Transport ──→│
+   mcp.rs tools ────┘                └─ LocalTransport ─→ CDP WebSocket → bridge.js (injected)
+   (MCP surface; reuses the same handlers)
 ```
 
-명령 핸들러는 `run<T: Transport>`로 **한 번만** 작성되고, `Transport` trait 의 두 구현이 모드를 결정한다. 헤드리스는 NM Host + Extension 인프라를 전부 in-process Rust 로 흡수한다.
+Command handlers are written **once** as `run<T: Transport>`; the two `Transport`
+implementations decide the mode. Headless absorbs the NM Host + Extension infra
+into in-process Rust. `webpilot mcp` layers a stdio JSON-RPC (MCP) adapter over
+the same `Transport`: each tool builds a typed `Command`/`Action` and runs it
+through the same handler, inheriting rendering, policy, and mode — no second
+implementation.
 
-- `crates/webpilot/` — wire types + protocol (상세: 해당 디렉터리 `CLAUDE.md`)
-- `crates/webpilot-cli/` — 단일 바이너리 (상세: 해당 디렉터리 `CLAUDE.md`)
-- `extension/` — browser 모드 Chrome 확장 (`bridge.js` 규약: `.claude/rules/extension.md`)
-- Rust 규약: `.claude/rules/rust-conventions.md`
+- `crates/webpilot/` — wire types + protocol (see that directory's `CLAUDE.md`)
+- `crates/webpilot-cli/` — the single binary (see that directory's `CLAUDE.md`)
+- `extension/` — browser-mode Chrome extension (`bridge.js` contract: `.claude/rules/extension.md`)
+- Rust conventions: `.claude/rules/rust-conventions.md`
 
-**명령 추가 = 5 지점 수정** (두 모드 동시 지원): `protocol::Command` enum + `commands/<x>.rs` 핸들러 + `cli.rs::Cmd::execution()` 분류 + `LocalTransport::send` 한 arm (headless) + `service-worker.js` 의 command 라우터 case (browser). 새 content-script 동작이 필요할 때만 `bridge.js` 에 case 추가. 정책 게이트가 필요하면 `protocol::Command::policy_key()` 에 한 arm 추가(enforcement 는 각 privileged sink 에서 자동).
+**Adding a command** (both modes at once) — the Rust edits are all **exhaustive
+matches, so the compiler forces every one**: a `protocol::Command` variant +
+`commands/mod.rs` (`pub mod` + enum variant) + a `commands/<x>.rs` handler +
+`cli.rs::Cmd::execution()` classification + a `cli.rs::dispatch_via_transport`
+arm + a `LocalTransport::send` arm and its `do_*` body (headless). The browser
+side adds a `service-worker.js` router case (JS — not compiler-checked; covered
+by tests). Add a `bridge.js` case only when new content-script behavior is
+needed. Gate a command by adding an arm to `protocol::Command::policy_key()` —
+that match is exhaustive too, so a new command **must declare its gate** and
+cannot leak ungated (enforcement runs automatically at each privileged sink).
+MCP exposes a curated subset of commands — adding a command is not an MCP change.
 
 ## DOM Output Format
 
@@ -42,31 +62,42 @@ webpilot status / webpilot quit
 --- 1 iframe(s) not shown — list: webpilot frame, enter: webpilot frame switch ---
 ```
 
-`[index]` = `action click N` 의 인자. **인덱스는 직전 `capture` 의 스냅샷에 바인딩**된다 — bridge.js 가 capture 시점의 요소 참조를 저장하고, 인덱스 액션은 그 목록으로 해석한다. 스냅샷이 없거나(캡처 전) 요소가 DOM 에서 사라지면 라이브 DOM 재해석이 아니라 타입드 `StaleSnapshot` 오류(exit 4). `*` = 직전 capture 이후 새로 등장 (URL 변경 시 baseline 자동 리셋). `@landmark` = 의미 컨텍스트. `--- N iframe(s) not shown ---` = active-frame 밖 HTTP iframe 수(`DomSnapshot.subframes`) — `frame switch` 로 진입.
+`[index]` is the argument to `action click N`. **Indices are bound to the last
+`capture` snapshot**: bridge.js stores the element references seen at capture
+time, and index actions resolve against that list. If there is no snapshot (no
+capture yet) or the element has left the DOM, the result is a typed
+`StaleSnapshot` error (exit 4), never a re-resolution against the live DOM.
+`*` marks an element new since the last capture — detected by **node identity**
+against the previous snapshot, suppressed on the first capture after a URL
+change (a fresh page is not "all new"). `@landmark` is semantic context.
+`--- N iframe(s) not shown ---` is the count of HTTP iframes outside the active
+frame (`DomSnapshot.subframes`); enter one with `frame switch`.
 
 ## Wire Protocol
 
-| 영역 | 규칙 |
+| Area | Rule |
 |---|---|
-| Action | `{"kind": "click", "index": 7}` — 단일 정의 (clap+serde, snake_case) |
-| ActionKind | snake_case 와이어로 `Action.kind` 와 정확히 일치 |
-| PolicyKey | 정책 enforcement 키 — **효과(effect) 기준**. `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`}. `navigate` 는 URL 로드 효과를 모두 게이트 — `navigate` 액션 + `capture --url` + `tab new URL`. `eval` 은 MAIN-world JS 주입 전부 — `eval` + `frame find` predicate + `console start`/`network start`(모니터 훅 주입). `cookie_list` 는 쿠키 값(세션 토큰) 읽기라 read-only 라도 게이트. `Command::policy_key()` 가 명령→키 매핑(비밀 아닌 읽기는 `None`). enforcement(`policy::parse_and_enforce`)는 **브라우저에 닿는 privileged sink 에서** — headless 는 `LocalTransport::send`, browser 는 **NM Host**(CLI-side `IpcTransport` 아님; host 는 와이어 값을 `Command` 로 파싱 검증 후 enforce — 파싱 실패는 `InvalidArgument` 로 거부해 "Rust 거부 / JS 수용" 강제변환 우회 차단). 저장소는 `artifacts/policies.json` 단일 파일(양 모드 공유), `webpilot policy` 는 로컬 파일 명령(브라우저 왕복 없음) |
-| Wait | `{"until": "selector", "value": ".loading"}` — `selector`/`text`/`navigation`/`idle` 중 하나 |
+| Action | `{"kind": "click", "index": 7}` — one definition (clap + serde, snake_case) |
+| ActionKind | snake_case wire tag, matching `Action.kind` exactly |
+| PolicyKey | Policy-enforcement key, keyed by **effect**: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`}. `navigate` gates every URL-load effect — the `navigate` action + `capture --url` + `tab new URL`. `eval` gates all MAIN-world JS injection — `eval` + the `frame find` predicate + `console start`/`network start` (monitor-hook injection). `cookie_list` is gated even though read-only because it reads cookie values (session tokens). `Command::policy_key()` maps command → key (non-secret reads → `None`); the match is exhaustive so a new command must declare its gate. Enforcement (`policy::parse_and_enforce`) runs **at the privileged sink that reaches the browser** — `LocalTransport::send` (headless) and the **NM Host** (browser), never the CLI-side `IpcTransport`. The host parses the wire value into a typed `Command` before enforcing — a parse failure is rejected as `InvalidArgument`, blocking a "Rust rejects / JS coerces" bypass. Store is a single `artifacts/policies.json` shared by both modes; `webpilot policy` is a local file command (no browser round-trip). |
+| Wait | `{"until": "selector", "value": ".loading"}` — one of `selector`/`text`/`navigation`/`idle` |
 | Capture | `{"include": ["dom","screenshot"], "opts": {...}}` |
-| Status | `{connected, mode: "headless"\|"browser", chrome_version, extension_version}` — 모드별 의미 분리 |
+| Status | `{connected, mode: "headless"\|"browser", chrome_version, extension_version}` — per-mode semantics |
 | Errors | `{"code": "ElementNotFound", "message": "...", "requested": 5, "available": 3}` |
-| FrameSelector | `{"by": "url", "pattern": "/auth/"}` — 헤드리스도 Name/Url/Predicate 모두 지원 (execution context 라우팅) |
-| DomProperty | `{"kind": "html"}` 또는 `{"kind": "attr", "name": "href"}` |
+| FrameSelector | `{"by": "url", "pattern": "/auth/"}` — headless supports Name/Url/Predicate too (execution-context routing) |
+| DomProperty | `{"kind": "html"}` or `{"kind": "attr", "name": "href"}` |
 
-snake_case 단일 enum 의 Display/FromStr 은 `serde_plain` 으로 파생 — 손으로 쓴 match 테이블 없음.
+Display/FromStr for single snake_case enums are derived via `serde_plain` — no
+hand-written match tables.
 
 ## Output Modes
 
 - **Terminal**: human → stderr, content → stdout
-- **Piped**: stdout 이 TTY 가 아니면 자동 JSON
-- **Forced**: `--json` 플래그
+- **Piped**: stdout not a TTY → JSON automatically
+- **Forced**: `--json` flag
 
-`CommandOutput` enum → `output::render()` 단일 변환.
+`CommandOutput` enum → `output::render()`, a single conversion.
+`CommandOutput::to_agent_text()` reuses the same renderers for MCP tool results.
 
 ## Error Handling
 
@@ -81,19 +112,28 @@ snake_case 단일 enum 의 Display/FromStr 은 `serde_plain` 으로 파생 — �
 | 7 | `InvalidArgument` | user error |
 | 8 | `NavigationFailed`, `NoPage` | navigation |
 
-`StaleSnapshot` = 인덱스가 가리키던 요소가 capture 이후 DOM 에서 사라짐(재캡처 필요). `VersionMismatch` = 설치된 extension 버전 ≠ 바이너리 번들 버전(`webpilot setup extension` 후 reload).
+`StaleSnapshot` = an index's element left the DOM since capture (re-capture
+needed). `VersionMismatch` = installed extension version ≠ bundled version
+(`webpilot setup extension`, then reload).
 
-가이던스 텍스트는 `WebPilotError::Display` 가 데이터로부터 직접 생성. 메시지 파싱·substring 매칭 없음. 외부 크레이트 에러는 `main::into_webpilot_error` 경계에서 `Other` 로 래핑.
+Guidance text is produced directly from data by `WebPilotError::Display` — no
+message parsing or substring matching. External crate errors are wrapped into
+`Other` at the `main::into_webpilot_error` boundary.
 
 ## Runtime Paths
 
 ```
-$WEBPILOT_HOME              명시적 override
+$WEBPILOT_HOME              explicit override
 $XDG_RUNTIME_DIR/webpilot   Linux/BSD (tmpfs, mode 0700)
 ~/Library/Caches/webpilot   macOS
 ~/.cache/webpilot           Linux fallback
 ```
 
-서브디렉토리: `runtime/` (sockets, PIDs, locks), `contexts/` (멀티 에이전트), `artifacts/` (screenshots, PDFs, sessions, `policies.json`), `chrome-profile/`.
+Subdirectories: `runtime/` (sockets, PIDs, locks), `contexts/` (multi-agent),
+`artifacts/` (screenshots, PDFs, sessions, `policies.json`), `chrome-profile/`.
 
-설정은 `webpilot::settings` 단일 레이어로 해석: **기본값 < `config.toml` < env var**. `config.toml`(루트 직하, `WEBPILOT_CONFIG` 로 override)의 `[timeouts]`/`[chrome]`/`[context]`/`[cdp]` 섹션, 또는 `WEBPILOT_*` env(예: `WEBPILOT_NAVIGATION_TIMEOUT_MS`)로 튜닝. 경로 해석만 env/플랫폼 전용(`dirs`, 순환 방지).
+Settings resolve through one layer, `webpilot::settings`: **defaults <
+`config.toml` < env var**. Tune via `config.toml` (repo root, override with
+`WEBPILOT_CONFIG`) sections `[timeouts]`/`[chrome]`/`[context]`/`[cdp]`, or
+`WEBPILOT_*` env vars (e.g. `WEBPILOT_NAVIGATION_TIMEOUT_MS`). Only path
+resolution is env/platform-specific (`dirs`, to avoid cycles).
