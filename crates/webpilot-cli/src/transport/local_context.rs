@@ -67,6 +67,30 @@ fn flock_file(filename: &str, what: &str) -> Result<std::fs::File> {
     Ok(file)
 }
 
+/// Non-blocking exclusive lock on a context. `Some` = acquired (the context is
+/// idle — no other process, and no concurrent resolve, holds it). `None` =
+/// would-block (a process is actively resolving/using it). GC uses this to
+/// never dispose a context that is in use: it holds `lock_store` then probes
+/// each context lock **without waiting**, so the store→name order it takes here
+/// (the reverse of resolve's name→store) cannot deadlock — a non-blocking probe
+/// never waits on a held name lock, it just skips it.
+fn try_lock_context(name: &str) -> Option<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+    let dir = dirs::contexts_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join(format!("ctx-{}.lock", context_hash(name))))
+        .ok()?;
+    // SAFETY: flock() is a POSIX advisory lock; no memory-safety implications.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return None; // EWOULDBLOCK: actively in use — leave it alone.
+    }
+    Some(file)
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -192,6 +216,17 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
             continue;
         }
         if now.saturating_sub(ctx.last_used) > ttl {
+            // Never dispose a context that is actively in use: `last_used` only
+            // bounds *idle* time, but a process re-using a long-idle context
+            // (or running a command longer than the TTL) refreshes it only at
+            // the resolve, so a concurrent sweep could otherwise read a stale
+            // timestamp and dispose a live context out from under it. The held
+            // per-name lock is the liveness signal; if we can't take it without
+            // waiting, the context is in use — skip it this sweep. Held through
+            // disposal so a resolve can't start mid-dispose.
+            let Some(_held) = try_lock_context(&ctx.name) else {
+                continue;
+            };
             // Deleting the metadata is only safe once the CDP context is
             // actually gone — otherwise a live context would be orphaned in
             // Chrome with no record left to close it through.

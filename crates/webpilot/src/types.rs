@@ -363,6 +363,12 @@ pub struct DomSnapshot {
     /// cannot see cross-origin frames).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub subframes: u32,
+    /// The shadow-DOM walk hit its per-host budget and stopped descending, so
+    /// controls inside shadow roots past the budget are absent from `elements`.
+    /// Set by the bridge; surfaced in the footer so the agent knows the index
+    /// is incomplete rather than silently acting on a short list.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub shadow_truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -371,6 +377,10 @@ pub struct DomSnapshot {
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -646,6 +656,12 @@ impl DomSnapshot {
             ));
         }
 
+        if self.shadow_truncated {
+            out.push_str(
+                "--- shadow DOM clipped (host budget exceeded) — some controls may be omitted ---\n",
+            );
+        }
+
         out.push_str(&format!(
             "--- {} elements (from {} nodes, {}ms) ---\n",
             self.elements.len(),
@@ -699,6 +715,7 @@ mod tests {
             scroll_percent: 0,
             extraction_ms: 0,
             subframes: 0,
+            shadow_truncated: false,
             text_content: None,
             accessibility_tree: None,
         };
@@ -716,10 +733,16 @@ mod tests {
             scroll_percent: 0,
             extraction_ms: 0,
             subframes: 0,
+            shadow_truncated: false,
             text_content: None,
             accessibility_tree: None,
         };
         assert!(!snap.to_text().contains("iframe"));
+        // The shadow-clip footer must likewise be absent until it actually clips.
+        assert!(!snap.to_text().contains("shadow DOM clipped"));
+
+        snap.shadow_truncated = true;
+        assert!(snap.to_text().contains("shadow DOM clipped (host budget exceeded)"));
 
         snap.subframes = 2;
         let text = snap.to_text();

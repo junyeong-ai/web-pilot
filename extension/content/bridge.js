@@ -483,6 +483,10 @@
         },
         scroll_percent: sh > vh ? Math.round((sy / (sh - vh)) * 100) : 0,
         extraction_ms: Math.round(performance.now() - start),
+        // Surface the shadow-host budget clip to the agent — a page-console
+        // warn alone is invisible to it, and a silently short index leads to
+        // index actions that can't resolve a control that was never emitted.
+        shadow_truncated: shadowTruncated,
       };
     } catch (e) {
       // A genuine extraction failure must surface as a typed error, not a
