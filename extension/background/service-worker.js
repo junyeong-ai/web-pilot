@@ -15,17 +15,24 @@ let nmPort = null;
 let keepaliveTimer = null;
 let connectionRetries = 0;
 let activeFrameId = 0;
+let activeTabId = null;
 const monitoringState = { console: new Set(), network: new Set() };
 
 // An MV3 service worker is killed when idle and restarted on the next event,
-// losing in-memory state. `activeFrameId` and the monitoring sets are persisted
-// to session storage and reloaded here. `RESTORED` resolves once both are back;
-// `processCommand` awaits it so a command can never run against un-restored
-// state — otherwise the first command after a restart would silently target the
-// main frame instead of the iframe the agent had switched to.
+// losing in-memory state. `activeTabId`, `activeFrameId` and the monitoring
+// sets are persisted to session storage and reloaded here. `RESTORED` resolves
+// once all are back; `processCommand` awaits it so a command can never run
+// against un-restored state — otherwise the first command after a restart
+// would silently target the wrong tab or the main frame instead of the iframe
+// the agent had switched to.
 const RESTORED = (async () => {
   try {
-    const data = await chrome.storage.session?.get(["activeFrameId", "monitoringTabs"]);
+    const data = await chrome.storage.session?.get([
+      "activeTabId",
+      "activeFrameId",
+      "monitoringTabs",
+    ]);
+    if (data?.activeTabId != null) activeTabId = data.activeTabId;
     if (data?.activeFrameId != null) activeFrameId = data.activeFrameId;
     if (data?.monitoringTabs) {
       (data.monitoringTabs.console || []).forEach((id) => monitoringState.console.add(id));
@@ -37,6 +44,11 @@ const RESTORED = (async () => {
 function setActiveFrameId(id) {
   activeFrameId = id;
   chrome.storage.session?.set({ activeFrameId: id });
+}
+
+function setActiveTabId(id) {
+  activeTabId = id;
+  chrome.storage.session?.set({ activeTabId: id });
 }
 
 function saveMonitoringState() {
@@ -55,8 +67,10 @@ function err(code, message, data) {
 }
 const otherErr = (msg) => err("Other", msg);
 // Preserve a thrown error's typed `code` (e.g. BridgeUnavailable → exit 3)
-// instead of collapsing every exception to Other (exit 1).
-const exceptionErr = (e) => (e?.code ? err(e.code, e.message || String(e)) : otherErr(e?.message || String(e)));
+// and its wire fields (`e.data`, e.g. TabNotFound's tab_id) instead of
+// collapsing every exception to Other (exit 1).
+const exceptionErr = (e) =>
+  e?.code ? err(e.code, e.message || String(e), e.data) : otherErr(e?.message || String(e));
 const timeoutErr = (kind, elapsed_ms) => err("Timeout", `${kind} timed out`, { kind, elapsed_ms });
 const noPageErr = () => err("NoPage", "No web page open");
 
@@ -268,10 +282,13 @@ async function processCommand(id, command, port) {
         result = await handleTabSwitch(command.tab_id);
         break;
 
-      case "TabNew":
-        await chrome.tabs.create({ url: command.url, active: true });
+      case "TabNew": {
+        const created = await chrome.tabs.create({ url: command.url, active: true });
+        setActiveTabId(created.id);
+        setActiveFrameId(0);
         result = { type: "Action", success: true };
         break;
+      }
 
       case "TabClose":
         try {
@@ -377,22 +394,28 @@ async function handleCapture(command) {
 
   try {
     if (command.url) {
-      const existing = await findHttpTab();
+      // Navigate the pinned tab (or pin a fresh one) — never whatever tab the
+      // user happens to be looking at.
+      const existing = await resolveActiveTab();
       if (existing) {
         tabId = existing.id;
         await chrome.tabs.update(tabId, { url: command.url, active: true });
       } else {
         const t = await chrome.tabs.create({ url: command.url, active: true });
         tabId = t.id;
+        setActiveTabId(tabId);
       }
       await waitForTabReady(tabId, 20000);
       await sleep(500);
     } else {
-      const t = await findHttpTab();
+      const t = await resolveActiveTab();
       if (!t) return topErr(noPageErr());
       tabId = t.id;
     }
   } catch (e) {
+    // A typed failure (e.g. TabNotFound for a vanished pin) keeps its code;
+    // only a raw navigation error becomes NavigationFailed.
+    if (e?.code) return topErr(exceptionErr(e));
     return topErr(err("NavigationFailed", e.message, { url: command.url || "", reason: e.message }));
   }
 
@@ -612,7 +635,7 @@ async function handleAction(command) {
   // is sent, so the service worker never re-checks it.
 
   // Inject dialog override before any action runs in the page.
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) {
     return { type: "Action", success: false, error: noPageErr() };
   }
@@ -699,7 +722,7 @@ async function handleAction(command) {
   if (command.capture && result?.success) {
     await sleep(500);
     try {
-      const t = await findHttpTab();
+      const t = await resolveActiveTab();
       if (t) {
         await ensureBridge(t.id, activeFrameId);
         const dom = await sendToContent(t.id, { type: "extractDom", options: {} }, activeFrameId, 5000);
@@ -839,6 +862,8 @@ async function handleTabSwitch(tabId) {
     if (tab.windowId != null) {
       await chrome.windows.update(tab.windowId, { focused: true });
     }
+    // The explicit re-pin: commands follow this tab from here on.
+    setActiveTabId(target);
     // A different tab has its own frame tree — drop any frame scope.
     setActiveFrameId(0);
     return { type: "Action", success: true };
@@ -863,9 +888,16 @@ async function handleTabList() {
 // ── Status ─────────────────────────────────────────────────────────────────
 
 async function handleStatus() {
-  // Scope to the focused window so multi-window users don't accidentally see
-  // a tab from a different window.
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  // Report the pinned tab when one is set — that is the tab commands will act
+  // on. Status is read-only, so it never pins as a side effect; without a pin
+  // it shows the focused window's active tab (what a first command would pin).
+  let tab = null;
+  if (activeTabId != null) {
+    tab = await chrome.tabs.get(activeTabId).catch(() => null);
+  }
+  if (!tab) {
+    [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  }
   // Chrome version derives from the user agent (no direct API in MV3 SW).
   const ua = navigator.userAgent || "";
   const m = ua.match(/Chrome\/(\S+)/);
@@ -883,7 +915,7 @@ async function handleStatus() {
 // ── Eval ───────────────────────────────────────────────────────────────────
 
 async function handleEval(command) {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "Eval", success: false, error: noPageErr() };
 
   try {
@@ -907,7 +939,7 @@ async function handleEval(command) {
 // ── Wait ───────────────────────────────────────────────────────────────────
 
 async function handleWait(command) {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "Wait", success: false, error: noPageErr() };
 
   const cond = command.condition || { until: "idle" };
@@ -971,7 +1003,7 @@ function bridgeMessageForDom(action /* "set"|"get" */, command) {
 }
 
 async function handleDomSet(command) {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "CommandResult", success: false, error: noPageErr() };
   const msg = bridgeMessageForDom("set", command);
   if (!msg) return { type: "CommandResult", success: false, error: otherErr("Invalid property") };
@@ -985,7 +1017,7 @@ async function handleDomSet(command) {
 }
 
 async function handleDomGet(command) {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "CommandResult", success: false, error: noPageErr() };
   const msg = bridgeMessageForDom("get", command);
   if (!msg) return { type: "CommandResult", success: false, error: otherErr("Invalid property") };
@@ -1006,7 +1038,7 @@ async function handleDomGet(command) {
 // ── Fetch ──────────────────────────────────────────────────────────────────
 
 async function handleFetch(command) {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "FetchResult", success: false, error: noPageErr() };
   try {
     const r = await withCdp(tab.id, async (tid) => {
@@ -1039,7 +1071,7 @@ function activeFrameIdWire() {
 }
 
 async function handleFrameList() {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "Frames", frames: [], active_frame_id: null };
 
   const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => []);
@@ -1070,7 +1102,7 @@ async function handleFrameSwitch(selector) {
     return { type: "FrameSwitched", success: true, frame_id: null, name: "main", url: null };
   }
 
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) {
     return { type: "FrameSwitched", success: false, frame_id: activeFrameIdWire(), error: noPageErr() };
   }
@@ -1181,7 +1213,7 @@ function chromeSameSite(wire) {
 // ── Console / network log ──────────────────────────────────────────────────
 
 async function handleConsoleStart() {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "CommandResult", success: false, error: noPageErr() };
   try {
     await injectConsoleMonitoring(tab.id);
@@ -1194,7 +1226,7 @@ async function handleConsoleStart() {
 }
 
 async function handleConsoleRead() {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "ConsoleEntries", entries: [] };
   try {
     const r = await chrome.scripting.executeScript({
@@ -1209,7 +1241,7 @@ async function handleConsoleRead() {
 }
 
 async function handleConsoleClear() {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (tab) {
     try {
       await chrome.scripting.executeScript({
@@ -1223,7 +1255,7 @@ async function handleConsoleClear() {
 }
 
 async function handleNetworkStart() {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "CommandResult", success: false, error: noPageErr() };
   try {
     await injectNetworkMonitoring(tab.id);
@@ -1236,7 +1268,7 @@ async function handleNetworkStart() {
 }
 
 async function handleNetworkRead(since) {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (!tab) return { type: "NetworkEntries", entries: [] };
   try {
     const r = await chrome.scripting.executeScript({
@@ -1255,7 +1287,7 @@ async function handleNetworkRead(since) {
 }
 
 async function handleNetworkClear() {
-  const tab = await findHttpTab();
+  const tab = await resolveActiveTab();
   if (tab) {
     try {
       await chrome.scripting.executeScript({
@@ -1273,7 +1305,7 @@ async function handleNetworkClear() {
 async function handleSessionExport() {
   try {
     const all = await chrome.cookies.getAll({});
-    const tab = await findHttpTab();
+    const tab = await resolveActiveTab();
     let storage = { localStorage: {}, sessionStorage: {} };
     if (tab) {
       try {
@@ -1310,7 +1342,7 @@ async function handleSessionImport(rawData) {
         cookies++;
       } catch {}
     }
-    const tab = await findHttpTab();
+    const tab = await resolveActiveTab();
     if (tab && (data.local_storage || data.session_storage)) {
       try {
         await ensureBridge(tab.id, activeFrameId);
@@ -1352,10 +1384,27 @@ function waitForTabReady(tabId, timeoutMs = 15000) {
   });
 }
 
-async function findHttpTab() {
-  const all = await chrome.tabs.query({});
-  return all.find((t) => t.active && t.url?.startsWith("http"))
-    || all.find((t) => t.url?.startsWith("http"));
+// ── Active tab ──────────────────────────────────────────────────────────────
+// Browser mode binds every command to ONE tab, exactly as headless binds to
+// one target: pinned on first use (the focused window's active http tab),
+// moved only by an explicit `tab switch` / `tab new`. A vanished pin is a
+// typed TabNotFound — never a silent retarget to whatever tab happens to be
+// focused, which would route the agent's actions to a page it has not seen.
+// One pin per extension by design: multi-agent isolation is a headless
+// `--context` feature.
+async function resolveActiveTab() {
+  if (activeTabId != null) {
+    const tab = await chrome.tabs.get(activeTabId).catch(() => null);
+    if (tab) return tab;
+    const e = new Error(`Tab not found: ${activeTabId}. List: webpilot tab`);
+    e.code = "TabNotFound";
+    e.data = { tab_id: String(activeTabId) };
+    throw e;
+  }
+  const [focused] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!focused?.url?.startsWith("http")) return null;
+  setActiveTabId(focused.id);
+  return focused;
 }
 
 async function ensureBridge(tabId, frameId = 0) {

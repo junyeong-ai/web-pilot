@@ -290,5 +290,37 @@ fn browser_behavioral_flow() {
     let clear = fx.run(&["policy", "clear"]);
     assert_eq!(code(&clear), 0);
 
+    // 5. Deterministic tab binding: commands act on the pinned tab, and a
+    //    vanished pin is a typed TabNotFound — never a silent retarget to
+    //    whatever tab happens to be focused. `tab new` re-pins.
+    let tabs = fx.run(&["tab"]);
+    assert_eq!(code(&tabs), 0, "tab list failed: {}", stdout(&tabs));
+    let tabs_json: serde_json::Value = serde_json::from_str(&stdout(&tabs)).expect("tabs json");
+    let fixture_tab = tabs_json
+        .as_array()
+        .expect("tabs array")
+        .iter()
+        .find(|t| t["url"].as_str().is_some_and(|u| u.starts_with(&base)))
+        .and_then(|t| t["id"].as_str().map(str::to_string).or_else(|| t["id"].as_u64().map(|n| n.to_string())))
+        .expect("fixture tab id");
+    let closed = fx.run(&["tab", "close", &fixture_tab]);
+    assert_eq!(code(&closed), 0, "tab close failed: {}", stdout(&closed));
+    let orphaned = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(
+        code(&orphaned),
+        4,
+        "a command against a closed pin must be typed TabNotFound, not retargeted: {}",
+        stdout(&orphaned)
+    );
+    assert!(
+        stdout(&orphaned).contains("TabNotFound"),
+        "{}",
+        stdout(&orphaned)
+    );
+    let repin = fx.run(&["tab", "new", &base]);
+    assert_eq!(code(&repin), 0, "re-pin failed: {}", stdout(&repin));
+    let recap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&recap), 0, "capture after re-pin failed: {}", stdout(&recap));
+
     drop(fx);
 }
