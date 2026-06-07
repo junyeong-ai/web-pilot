@@ -142,7 +142,7 @@ impl LocalTransport {
         }
 
         // Restore the active frame across CLI invocations. CLI calls are
-        // separate processes, so without persistence `frames switch` would
+        // separate processes, so without persistence `frame switch` would
         // be a no-op — the next `eval` would lose the active frame and
         // silently fall back to the main world.
         let persisted = read_persisted_active_frame(browser_context_id.as_deref());
@@ -589,7 +589,7 @@ fn active_frame_file(browser_context_id: Option<&str>) -> PathBuf {
     dirs::runtime_dir().join(format!("active_frame_{key}.json"))
 }
 
-pub(super) fn read_persisted_active_frame(browser_context_id: Option<&str>) -> Option<String> {
+fn read_persisted_active_frame(browser_context_id: Option<&str>) -> Option<String> {
     let path = active_frame_file(browser_context_id);
     let raw = std::fs::read_to_string(&path).ok()?;
     serde_json::from_str::<String>(&raw).ok()
@@ -676,7 +676,7 @@ fn device_state_file(browser_context_id: Option<&str>) -> PathBuf {
     dirs::runtime_dir().join(format!("device_{key}.json"))
 }
 
-pub(crate) fn read_persisted_device(browser_context_id: Option<&str>) -> Option<DeviceState> {
+fn read_persisted_device(browser_context_id: Option<&str>) -> Option<DeviceState> {
     let raw = std::fs::read_to_string(device_state_file(browser_context_id)).ok()?;
     serde_json::from_str(&raw).ok()
 }
@@ -723,7 +723,7 @@ fn monitor_marker(kind: Monitor, browser_context_id: Option<&str>) -> PathBuf {
     dirs::runtime_dir().join(format!("monitor_{}_{key}", kind.name()))
 }
 
-pub(super) fn read_persisted_monitors(browser_context_id: Option<&str>) -> (bool, bool) {
+fn read_persisted_monitors(browser_context_id: Option<&str>) -> (bool, bool) {
     (
         monitor_marker(Monitor::Console, browser_context_id).exists(),
         monitor_marker(Monitor::Network, browser_context_id).exists(),
@@ -775,7 +775,7 @@ async fn resolve_target(
 ) -> Result<(CdpClient, Option<String>, String)> {
     if let Some(ctx_name) = context {
         // Context mode anchors on the context-entry's target id, but a
-        // user-issued `tabs switch` may have moved the active tab to a
+        // user-issued `tab switch` may have moved the active tab to a
         // sibling page within the same browser context. Honour the
         // persisted active_tab first when it points to a still-live page.
         let initial = local_context::resolve_context_target(browser, ctx_name).await?;

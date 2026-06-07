@@ -211,4 +211,4 @@ async function handleFrameSwitch(selector) {
   };
 }
 
-export { handleFrameList, handleFrameSwitch, handleStatus, handleTabClose, handleTabList, handleTabNew, handleTabSwitch, readFrameName };
+export { handleFrameList, handleFrameSwitch, handleStatus, handleTabClose, handleTabList, handleTabNew, handleTabSwitch };

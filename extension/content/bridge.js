@@ -85,7 +85,7 @@
   // Run several selectors over the document AND every open shadow root in a
   // SINGLE host walk, returning one match array per selector (parallel to the
   // input). One traversal and one shared budget for all selectors — running
-  // each selector through its own `queryAllDeep` would walk the shadow-host
+  // each selector through its own `queryAllDeepMulti` would walk the shadow-host
   // tree once per selector and split the budget unevenly.
   function queryAllDeepMulti(selectors, root, budget) {
     const results = selectors.map(() => []);

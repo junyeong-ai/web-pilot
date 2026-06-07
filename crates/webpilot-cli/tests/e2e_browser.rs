@@ -260,6 +260,16 @@ fn browser_behavioral_flow() {
         "button must be indexed: {}",
         stdout(&cap)
     );
+    assert!(
+        elements.iter().any(|e| e["tag"] == "input"),
+        "input must be indexed: {}",
+        stdout(&cap)
+    );
+    assert_eq!(
+        snapshot["subframes"], 1,
+        "the one http iframe must be reported as a subframe: {}",
+        stdout(&cap)
+    );
     let button_index = elements
         .iter()
         .find(|e| e["tag"] == "button")
@@ -519,8 +529,10 @@ fn browser_behavioral_flow() {
     let main = fx.run(&["frame", "main"]);
     assert_eq!(code(&main), 0);
     let href_main = fx.run(&["eval", "location.href"]);
+    assert_eq!(code(&href_main), 0, "main-frame eval failed: {}", stdout(&href_main));
+    let hmj: serde_json::Value = serde_json::from_str(&stdout(&href_main)).expect("eval json");
     assert!(
-        !stdout(&href_main).contains("/frame"),
+        !hmj["result"].as_str().unwrap_or_default().contains("/frame"),
         "after frame main, eval must run in the main frame again: {}",
         stdout(&href_main)
     );

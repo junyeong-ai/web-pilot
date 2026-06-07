@@ -83,6 +83,10 @@ fn headless_behavioral_flow() {
         elements.iter().any(|e| e["tag"] == "button"),
         "button must be indexed: {dom}"
     );
+    assert!(
+        elements.iter().any(|e| e["tag"] == "input"),
+        "input must be indexed: {dom}"
+    );
     assert_eq!(
         snapshot["subframes"], 1,
         "the one http iframe must be reported as a subframe: {dom}"
@@ -104,7 +108,7 @@ fn headless_behavioral_flow() {
         stdout(&title)
     );
 
-    // 2a2. A same-URL reload rebuilds the document, clearing the old execution
+    // 2a. A same-URL reload rebuilds the document, clearing the old execution
     //      contexts. The bridge re-injects into the fresh isolated world on its
     //      own (the persistent addScriptToEvaluateOnNewDocument), and the open-
     //      time listener — still bound to this unswapped session — repopulates
@@ -133,16 +137,23 @@ fn headless_behavioral_flow() {
     //     and the browser must natively delete a character. A synthetic
     //     KeyboardEvent cannot edit a field — this would fail under the old
     //     dispatch, locking in the native-input behaviour.
-    let _ = fx.run(&[
+    let seed = fx.run(&[
         "eval",
         "const i=document.getElementById('q'); i.value='ab'; i.focus(); i.setSelectionRange(2,2); 'ok'",
     ]);
+    assert_eq!(code(&seed), 0, "seed eval failed: {}", stdout(&seed));
     let bksp = fx.run(&["action", "key-press", "Backspace"]);
     assert_eq!(code(&bksp), 0, "key-press failed: {}", stdout(&bksp));
-    let val = fx.run(&["eval", "document.getElementById('q').value"]);
-    assert!(
-        stdout(&val).contains('a') && !stdout(&val).contains("ab"),
-        "Backspace must natively delete a char (ab -> a): {}",
+    // Assert the EXACT result via a boolean eval: a failed eval would print an
+    // error (which can itself contain 'a' and not "ab"), passing a naive
+    // string-contains check without proving the field became "a".
+    let val = fx.run(&["eval", "document.getElementById('q').value === 'a'"]);
+    assert_eq!(code(&val), 0, "value eval failed: {}", stdout(&val));
+    let vj: serde_json::Value = serde_json::from_str(&stdout(&val)).expect("eval json");
+    assert_eq!(
+        vj["result"].as_str(),
+        Some("true"),
+        "Backspace must natively delete exactly one char (ab -> a): {}",
         stdout(&val)
     );
 
@@ -215,10 +226,18 @@ fn headless_behavioral_flow() {
     //     an index resolves. Tamper in MAIN, then capture + click and confirm
     //     both still hit the real elements — the snapshot-integrity guarantee
     //     the isolated bridge buys, locked against a hostile page.
-    let _ = fx.run(&[
+    let tamper = fx.run(&[
         "eval",
-        "window.__webpilot_handle=()=>({success:true,elements:[]}); window.__webpilot_state={snapshot:[]}; 'ok'",
+        "window.__webpilot_handle=()=>({success:true,elements:[]}); window.__webpilot_state={snapshot:[]}; 'tampered'",
     ]);
+    assert_eq!(code(&tamper), 0, "tamper eval failed: {}", stdout(&tamper));
+    let tj: serde_json::Value = serde_json::from_str(&stdout(&tamper)).expect("eval json");
+    assert_eq!(
+        tj["result"].as_str(),
+        Some("\"tampered\""),
+        "the MAIN-world tamper must actually apply, else isolation is untested: {}",
+        stdout(&tamper)
+    );
     let cap_t = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&cap_t), 0, "capture must survive MAIN tampering: {}", stdout(&cap_t));
     let tampered: serde_json::Value = serde_json::from_str(&stdout(&cap_t)).expect("capture json");
@@ -330,7 +349,15 @@ fn headless_behavioral_flow() {
     let cap = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&cap), 0);
     let go_index = index_of(&cap, "go");
-    let _ = fx.run(&["eval", "history.pushState({}, '', '/changed')"]);
+    let pushed = fx.run(&["eval", "history.pushState({}, '', '/changed'); location.pathname"]);
+    assert_eq!(code(&pushed), 0, "pushState eval failed: {}", stdout(&pushed));
+    let pj: serde_json::Value = serde_json::from_str(&stdout(&pushed)).expect("eval json");
+    assert_eq!(
+        pj["result"].as_str(),
+        Some("\"/changed\""),
+        "pushState must change the URL so the same-document guard is exercised: {}",
+        stdout(&pushed)
+    );
     let after_nav = fx.run(&["action", "click", &go_index]);
     assert_eq!(
         code(&after_nav),
@@ -497,8 +524,10 @@ fn headless_behavioral_flow() {
     let dreset = fx.run(&["device", "reset"]);
     assert_eq!(code(&dreset), 0, "device reset failed: {}", stdout(&dreset));
     let ua2 = fx.run(&["eval", "navigator.userAgent"]);
+    assert_eq!(code(&ua2), 0, "UA eval failed: {}", stdout(&ua2));
+    let ua2j: serde_json::Value = serde_json::from_str(&stdout(&ua2)).expect("eval json");
     assert!(
-        !stdout(&ua2).contains("WP-E2E-UA/1"),
+        !ua2j["result"].as_str().unwrap_or_default().contains("WP-E2E-UA/1"),
         "device reset must clear the persisted UA override: {}",
         stdout(&ua2)
     );
