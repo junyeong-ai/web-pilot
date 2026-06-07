@@ -53,6 +53,13 @@ pub struct CookieInfo {
     pub same_site: SameSite,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiration: Option<f64>,
+    /// Host-only scope: the cookie applies to exactly its host, never
+    /// subdomains. Carried through session export/import so a round-trip can't
+    /// silently widen a host-only auth cookie to its parent domain. Default
+    /// false keeps an older session file (without the field) importing as a
+    /// domain cookie, unchanged.
+    #[serde(default)]
+    pub host_only: bool,
 }
 
 // ── Policy ───────────────────────────────────────────────────────────────────

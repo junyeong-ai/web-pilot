@@ -289,11 +289,19 @@ fn cookie_info_to_cdp(c: &CookieInfo) -> Value {
     let mut params = json!({
         "name": c.name,
         "value": c.value,
-        "domain": c.domain,
         "path": c.path,
         "secure": c.secure,
         "httpOnly": c.http_only,
     });
+    if c.host_only {
+        // Host-only: set by URL with no `domain`, so Chrome scopes the cookie to
+        // exactly its host and a round-trip can't widen it to subdomains.
+        let scheme = if c.secure { "https" } else { "http" };
+        let host = c.domain.trim_start_matches('.');
+        params["url"] = format!("{scheme}://{host}{}", c.path).into();
+    } else {
+        params["domain"] = c.domain.clone().into();
+    }
     if !same_site.is_empty() {
         params["sameSite"] = same_site.into();
     }
@@ -310,6 +318,11 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
         Some("None") | Some("none") | Some("no_restriction") => SameSite::None,
         _ => SameSite::Unspecified,
     };
+    let domain = c
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
     CookieInfo {
         name: c
             .get("name")
@@ -321,11 +334,11 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        domain: c
-            .get("domain")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
+        // A leading dot is CDP's marker for a domain-scoped cookie; its absence
+        // means host-only (the exact host, no subdomains) — the RFC 6265 shape
+        // CDP and chrome.cookies agree on.
+        host_only: !domain.starts_with('.'),
+        domain,
         path: c
             .get("path")
             .and_then(|v| v.as_str())
@@ -433,6 +446,7 @@ mod tests {
             http_only: true,
             same_site: SameSite::Lax,
             expiration: None,
+            host_only: false,
         }
     }
 
@@ -483,15 +497,19 @@ mod tests {
     fn parse_cdp_cookie_round_trip() {
         // A cookie exported via cookie_info_to_cdp and re-parsed via
         // parse_cdp_cookie must preserve every flag.
+        // A DOMAIN cookie carries its scope in the `domain` param, so the
+        // synthetic param→param round-trip preserves it (a host-only cookie
+        // travels by `url` and recovers its domain only through real Chrome).
         let original = CookieInfo {
             name: "x".into(),
             value: "y".into(),
-            domain: "a.b".into(),
+            domain: ".a.b".into(),
             path: "/p".into(),
             secure: false,
             http_only: true,
             same_site: SameSite::Strict,
             expiration: Some(1_700_000_000.0),
+            host_only: false,
         };
         let mut raw = cookie_info_to_cdp(&original);
         raw["expires"] = original.expiration.unwrap().into();
@@ -500,10 +518,22 @@ mod tests {
         assert_eq!(recovered.name, original.name);
         assert_eq!(recovered.value, original.value);
         assert_eq!(recovered.domain, original.domain);
+        assert_eq!(recovered.host_only, original.host_only);
         assert_eq!(recovered.path, original.path);
         assert_eq!(recovered.secure, original.secure);
         assert_eq!(recovered.http_only, original.http_only);
         assert_eq!(recovered.same_site, original.same_site);
         assert_eq!(recovered.expiration, original.expiration);
+    }
+
+    #[test]
+    fn cookie_info_to_cdp_host_only_uses_url_not_domain() {
+        let mut c = base();
+        c.host_only = true;
+        c.domain = "app.example.com".into();
+        c.path = "/".into();
+        let v = cookie_info_to_cdp(&c);
+        assert!(v.get("domain").is_none(), "host-only cookie must omit domain");
+        assert_eq!(v["url"], "https://app.example.com/");
     }
 }

@@ -134,6 +134,9 @@ function toCookieInfo(c) {
     name: c.name, value: c.value, domain: c.domain, path: c.path,
     secure: c.secure, http_only: c.httpOnly,
     same_site: c.sameSite === "no_restriction" ? "none" : (c.sameSite || "unspecified").toLowerCase(),
+    // Carry host-only scope so a round-trip can't widen the cookie to
+    // subdomains. chrome.cookies exposes it directly (unlike CDP).
+    host_only: c.hostOnly === true,
   };
   // Omit `expiration` for a session cookie rather than writing null, so an
   // exported session file is byte-identical across modes (headless's
@@ -311,7 +314,11 @@ async function handleSessionImport(rawData) {
       try {
         await chrome.cookies.set({
           url: `http${c.secure ? "s" : ""}://${c.domain.replace(/^\./, "")}${c.path}`,
-          name: c.name, value: c.value, domain: c.domain, path: c.path,
+          name: c.name, value: c.value, path: c.path,
+          // A host-only cookie is set by URL with no `domain`, so Chrome scopes
+          // it to exactly its host and the round-trip can't widen it to
+          // subdomains. A domain cookie keeps its explicit `domain`.
+          ...(c.host_only ? {} : { domain: c.domain }),
           secure: c.secure, httpOnly: c.http_only,
           sameSite: chromeSameSite(c.same_site),
           expirationDate: c.expiration || undefined,
