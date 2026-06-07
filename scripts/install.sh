@@ -16,6 +16,9 @@
 #   bash scripts/install.sh                       # from a checkout, prompts source vs prebuilt
 #   WEBPILOT_BUILD=source bash scripts/install.sh # force a source build
 #
+# Uninstall (symmetric one-shot — delegates to `webpilot uninstall`):
+#   curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/uninstall.sh | bash
+#
 # Environment:
 #   WEBPILOT_BUILD         "prebuilt" (default) or "source".
 #   WEBPILOT_VERSION       Pin a release tag (prebuilt only). Default: latest.

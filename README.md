@@ -172,6 +172,9 @@ webpilot self update           # self-update to the latest release (atomic, sha2
 webpilot self update --version 0.3.0   # pin a version
 
 webpilot uninstall             # quit Chrome + remove everything the binary created
+
+# Or uninstall the same way you installed — a one-shot that delegates to the above
+curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/uninstall.sh | bash
 ```
 
 The skill and extension are embedded in the binary at compile time: version

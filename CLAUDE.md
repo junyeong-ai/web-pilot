@@ -8,6 +8,7 @@ command handlers.
 ## Build & Run
 
 ```bash
+cargo fmt --all -- --check     # CI gates on this — run it in every local pass too
 cargo build --workspace --release
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
