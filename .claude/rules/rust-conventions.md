@@ -55,7 +55,7 @@ Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`
 - All persistent state under `webpilot::dirs::root()` (per-user, mode 0700). Subdirs: `runtime/`, `contexts/`, `artifacts/`, `chrome-profile/`. **Never** use `/tmp/...` or `webpilot::OUTPUT_DIR` constants.
 
 ## Bridge calls
-- `invoke_bridge(cdp, &serde_json::Value)` — pass a `Value`, not a string.
+- `self.invoke_bridge(&Value)` (a `LocalTransport` method) — pass a `Value`, not a string. It targets the bridge's isolated-world context, not the page.
 - `parse_bridge_response(raw)` extracts typed `WebPilotError` from `{success: false, error: ...}` responses.
 
 ## Forbidden

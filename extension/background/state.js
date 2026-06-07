@@ -267,10 +267,11 @@ async function handleSessionExport() {
 async function handleSessionImport(rawData) {
   try {
     const data = JSON.parse(rawData);
-    // `cookies`, when present, must be an array — a string would otherwise
-    // iterate character by character into a spray of failures. Reject loudly,
-    // matching headless do_session_import.
-    if (data.cookies != null && !Array.isArray(data.cookies)) {
+    // `cookies`, when present, must be an array — a string would iterate
+    // character by character, and a null is a malformed present value. Use
+    // `hasOwn` (not `!= null`) so a present `null` is rejected too, exactly as
+    // headless do_session_import treats `Some(Null)`.
+    if (Object.hasOwn(data, "cookies") && !Array.isArray(data.cookies)) {
       return { type: "SessionResult", success: false, error: err("InvalidArgument", "session `cookies` must be an array") };
     }
     let cookiesTotal = 0;

@@ -126,8 +126,8 @@ webpilot policy list                                     # inspect
 
 ```
 Headless (default):
-  webpilot CLI → CDP WebSocket → Chrome for Testing (headless)
-               → bridge.js (injected via Runtime.evaluate)
+  webpilot CLI → CDP WebSocket → headless Chrome
+               → bridge.js (its own isolated world, auto-loaded per document)
 
 Browser (--browser):
   webpilot CLI → Unix socket → NM Host → Chrome extension
