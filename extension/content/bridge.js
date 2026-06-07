@@ -594,23 +594,6 @@
           return { success: true };
         }
 
-        case "hover": {
-          const r = resolveTarget(action);
-          if (r.error) return r.error;
-          r.target.scrollIntoView({ block: "center", behavior: "instant" });
-          const rect = r.target.getBoundingClientRect();
-          const opts = {
-            bubbles: true,
-            clientX: rect.left + rect.width / 2,
-            clientY: rect.top + rect.height / 2,
-          };
-          r.target.dispatchEvent(new PointerEvent("pointerover", opts));
-          r.target.dispatchEvent(new MouseEvent("mouseover", opts));
-          r.target.dispatchEvent(new PointerEvent("pointerenter", { ...opts, bubbles: false }));
-          r.target.dispatchEvent(new MouseEvent("mouseenter", { ...opts, bubbles: false }));
-          return { success: true };
-        }
-
         case "focus": {
           const r = resolveTarget(action);
           if (r.error) return r.error;
@@ -622,13 +605,14 @@
         case "forward": history.forward(); return { success: true };
         case "reload": location.reload(); return { success: true };
 
-        // navigate / upload / drag / key_press are dispatched via CDP
+        // navigate / upload / drag / hover / key_press are dispatched via CDP
         // (headless: Rust; browser: the service worker) for native input
         // fidelity, never through the bridge. If one arrives here it is a
         // routing mismatch.
         case "navigate":
         case "upload":
         case "drag":
+        case "hover":
         case "key_press":
           return err("InvalidArgument", `Action '${action.kind}' is dispatched via CDP, not bridge`);
 

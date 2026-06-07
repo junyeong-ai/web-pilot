@@ -311,21 +311,12 @@ async function processCommand(id, command, port) {
         result = await handleTabSwitch(command.tab_id);
         break;
 
-      case "TabNew": {
-        const created = await chrome.tabs.create({ url: command.url, active: true });
-        setActiveTabId(created.id);
-        setActiveFrameId(0);
-        result = { type: "Action", success: true };
+      case "TabNew":
+        result = await handleTabNew(command.url);
         break;
-      }
 
       case "TabClose":
-        try {
-          await chrome.tabs.remove(parseInt(command.tab_id, 10));
-          result = { type: "Action", success: true };
-        } catch (e) {
-          result = { type: "Action", success: false, error: exceptionErr(e) };
-        }
+        result = await handleTabClose(command.tab_id);
         break;
 
       case "Eval":
@@ -633,8 +624,11 @@ function emptyDom() {
 async function handleAction(command) {
   const { action } = command;
 
-  // Policy is enforced CLI-side at the transport boundary before the command
-  // is sent, so the service worker never re-checks it.
+  // Policy is enforced by the NM host (`policy::parse_and_enforce`) — the
+  // browser-mode privileged sink — before the command is forwarded here, so
+  // the service worker never re-checks it. (The CLI-side IpcTransport is only
+  // a socket writer and is deliberately NOT a gate; writing the socket
+  // directly would bypass it, which is why the host re-validates.)
 
   // Inject dialog override before any action runs in the page.
   const tab = await resolveActiveTab();
@@ -747,6 +741,10 @@ async function handleAction(command) {
 
     case "drag":
       result = await handleDrag(tab.id, action);
+      break;
+
+    case "hover":
+      result = await handleHover(tab.id, action);
       break;
 
     default:
@@ -1003,6 +1001,32 @@ async function handleUpload(tabId, action) {
   }
 }
 
+async function handleHover(tabId, action) {
+  try {
+    await ensureBridge(tabId, activeFrameId);
+    // Resolve the element centre through the bridge (it owns the index map),
+    // then move the real cursor there over CDP — a synthetic mouseover only
+    // fires JS listeners, never the browser's internal :hover state, so this
+    // mirrors headless `do_hover` for true CSS-hover fidelity.
+    const coords = await sendToContent(
+      tabId,
+      { type: "getElementCoords", source: action.index, target: action.index },
+      activeFrameId,
+    );
+    if (!coords || coords.error) {
+      return { type: "Action", success: false, error: coords?.error || otherErr("hover: no coordinates") };
+    }
+    await withCdp(tabId, async (tid) => {
+      await cdpSend(tid, "Input.dispatchMouseEvent", {
+        type: "mouseMoved", x: coords.sx, y: coords.sy,
+      });
+    });
+    return { type: "Action", success: true };
+  } catch (e) {
+    return { type: "Action", success: false, error: exceptionErr(e) };
+  }
+}
+
 async function handleDrag(tabId, action) {
   try {
     await ensureBridge(tabId, activeFrameId);
@@ -1044,6 +1068,34 @@ async function handleDrag(tabId, action) {
 }
 
 // ── Tabs ───────────────────────────────────────────────────────────────────
+
+async function handleTabNew(url) {
+  const created = await chrome.tabs.create({ url, active: true });
+  setActiveTabId(created.id);
+  // A fresh tab has its own frame tree — drop any frame scope.
+  setActiveFrameId(0);
+  return {
+    type: "Action",
+    success: true,
+    new_tab: {
+      id: String(created.id),
+      url: created.url || url,
+      title: created.title || "",
+      active: true,
+    },
+  };
+}
+
+async function handleTabClose(tabId) {
+  try {
+    await chrome.tabs.remove(parseInt(tabId, 10));
+    return { type: "Action", success: true };
+  } catch (e) {
+    // A bad or already-closed id is a not-found — typed to match headless
+    // (`do_tab_close` → `TabNotFound`, exit 4) instead of a generic exception.
+    return { type: "Action", success: false, error: err("TabNotFound", e.message, { tab_id: tabId }) };
+  }
+}
 
 async function handleTabSwitch(tabId) {
   try {
@@ -1421,7 +1473,7 @@ async function handleFrameSwitch(selector) {
     matched = httpFrames.find((f) => f.url?.includes(needle));
   } else if (selector.by === "predicate") {
     // A predicate is arbitrary caller JS, gated by the `eval` key — enforced
-    // CLI-side before the command is sent.
+    // by the NM host before the command is forwarded here.
     for (const f of httpFrames) {
       try {
         const r = await sendToContent(tab.id, { type: "eval", code: selector.js }, f.frameId, 2000);

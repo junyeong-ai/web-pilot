@@ -277,6 +277,12 @@ fn browser_behavioral_flow() {
         stdout(&title)
     );
 
+    // 2b. Hover rides the CDP input path in this mode too (bridge resolves the
+    //     element centre, the worker moves the real cursor) — exercising the
+    //     coordinate handoff end-to-end, same as headless `do_hover`.
+    let hover = fx.run(&["action", "hover", &button_index]);
+    assert_eq!(code(&hover), 0, "hover failed: {}", stdout(&hover));
+
     // 3. Stale-snapshot guard (the bridge is shared, so the typed error must
     //    hold in this mode too).
     let recap = fx.run(&["capture", "--include", "dom"]);
