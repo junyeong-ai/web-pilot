@@ -430,20 +430,25 @@ async function handleCapture(command) {
         activeFrameId,
         5000,
       );
-      if (dom?.elements) {
-        if (activeFrameId === 0) {
-          dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
-        }
-        result.dom = dom;
-        result.page_url = dom.page_url || "";
-        result.page_title = dom.page_title || "";
+      // A failed extraction is a typed error, never a fabricated empty page —
+      // an agent that reads "0 interactive elements" on a populated page makes
+      // catastrophically wrong decisions. Mirrors the headless transport,
+      // which propagates the same bridge error.
+      if (dom?.success === false && dom.error) return topErr(dom.error);
+      if (!dom?.elements) return topErr(otherErr("DOM extraction returned no snapshot"));
+      if (activeFrameId === 0) {
+        dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
       }
+      result.dom = dom;
+      result.page_url = dom.page_url || "";
+      result.page_title = dom.page_title || "";
     } catch (e) {
-      console.error("[WebPilot] DOM error:", e.message);
+      return topErr(exceptionErr(e));
     }
   }
 
-  // Text extraction.
+  // Text extraction. A bridge failure is fatal (headless parity); a response
+  // without text is merely a page with none.
   if (include.has("text")) {
     try {
       await ensureBridge(tabId, activeFrameId);
@@ -455,11 +460,11 @@ async function handleCapture(command) {
         result.page_title = r.title || result.page_title;
       }
     } catch (e) {
-      console.error("[WebPilot] Text error:", e.message);
+      return topErr(exceptionErr(e));
     }
   }
 
-  // Accessibility tree (CDP).
+  // Accessibility tree (CDP). Fatal on failure (headless parity).
   if (include.has("accessibility")) {
     try {
       const ax = await withCdp(tabId, async (tid) => {
@@ -469,12 +474,14 @@ async function handleCapture(command) {
       result.dom = result.dom || emptyDom();
       result.dom.accessibility_tree = JSON.stringify(ax);
     } catch (e) {
-      console.error("[WebPilot] AX error:", e.message);
+      return topErr(exceptionErr(e));
     }
   }
 
   // Annotated overlay before screenshot. Overlay coordinates are page-viewport
   // relative, so they only line up when capture is scoped to the main frame.
+  // Fatal on failure (headless parity); the overlay is stripped right after
+  // the shot below, so an error past this point cannot leave it in the page.
   if (opts.annotate && activeFrameId === 0 && result.dom?.elements) {
     try {
       const annotations = result.dom.elements
@@ -486,7 +493,7 @@ async function handleCapture(command) {
         await sleep(300);
       }
     } catch (e) {
-      console.error("[WebPilot] Annotate error:", e.message);
+      return topErr(exceptionErr(e));
     }
   }
 
@@ -504,32 +511,49 @@ async function handleCapture(command) {
         result.screenshot_b64 = await captureWithRetry(tabInfo.windowId, 80);
       }
     } catch (e) {
-      console.error("[WebPilot] Screenshot failed:", e.message);
+      // Screenshot failure degrades explicitly (headless parity): the DOM is
+      // still useful, and the error rides along in `screenshot_error`.
       result.screenshot_error = e.message;
     }
   }
 
-  // PDF.
+  // Strip the overlay as soon as the shot is taken — before anything that can
+  // fail below — so a capture error never leaves annotations in the live page
+  // for the next command (headless parity).
+  if (opts.annotate) {
+    try {
+      await sendToContent(tabId, { type: "removeAnnotations" }, 0, 3000);
+    } catch {}
+  }
+
+  // PDF. Fatal on failure (headless parity). The base64 bytes ride the wire;
+  // the CLI is the single writer and persists them to a file.
   if (include.has("pdf")) {
     try {
-      const pdf = await withCdp(tabId, async (tid) => {
+      result.pdf_b64 = await withCdp(tabId, async (tid) => {
         const r = await cdpSend(tid, "Page.printToPDF", {
           landscape: false, printBackground: true, preferCSSPageSize: true,
         });
         return r.data;
       });
-      // Forward the base64 PDF back; host would save to a file. For simplicity
-      // here we drop the bytes — full PDF support in browser mode would require
-      // host-side persistence.
-      result.pdf_b64 = pdf;
     } catch (e) {
-      console.error("[WebPilot] PDF failed:", e.message);
+      return topErr(exceptionErr(e));
     }
   }
 
-  if (opts.annotate) {
+  // A capture with no DOM (screenshot/pdf-only) still reports where it ran:
+  // the active frame's URL and the tab title (headless fills these via
+  // active-frame evals; the frames list serves the same scope here).
+  if (!result.page_url) {
     try {
-      await sendToContent(tabId, { type: "removeAnnotations" }, 0, 3000);
+      const tab = await chrome.tabs.get(tabId);
+      if (activeFrameId !== 0) {
+        const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
+        result.page_url = frames.find((f) => f.frameId === activeFrameId)?.url || tab.url || "";
+      } else {
+        result.page_url = tab.url || "";
+      }
+      result.page_title = result.page_title || tab.title || "";
     } catch {}
   }
 
