@@ -21,6 +21,7 @@ pub enum CookieCommand {
     Set {
         url: String,
         name: String,
+        #[arg(allow_hyphen_values = true)]
         value: String,
         #[arg(long)]
         httponly: bool,

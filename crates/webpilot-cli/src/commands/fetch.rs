@@ -13,7 +13,7 @@ pub struct FetchArgs {
     #[arg(long, default_value = "GET")]
     pub method: String,
 
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub body: Option<String>,
 }
 

@@ -14,13 +14,22 @@ pub struct DomArgs {
 #[derive(Subcommand)]
 pub enum DomCommand {
     #[command(name = "set-html")]
-    SetHtml { selector: String, value: String },
+    SetHtml {
+        selector: String,
+        #[arg(allow_hyphen_values = true)]
+        value: String,
+    },
     #[command(name = "set-text")]
-    SetText { selector: String, value: String },
+    SetText {
+        selector: String,
+        #[arg(allow_hyphen_values = true)]
+        value: String,
+    },
     #[command(name = "set-attr")]
     SetAttr {
         selector: String,
         attr: String,
+        #[arg(allow_hyphen_values = true)]
         value: String,
     },
     #[command(name = "get-html")]

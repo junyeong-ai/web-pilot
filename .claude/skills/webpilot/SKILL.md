@@ -115,6 +115,7 @@ webpilot wait idle                  --timeout 10   # 500ms DOM-mutation idle
 webpilot eval 'document.title'                     # expression
 webpilot eval '({a:1, b:2})'                       # object literal works
 webpilot eval 'console.log("x"); 7'                # multi-statement (returns 7)
+webpilot eval '-7 * 6'                             # a leading `-` is fine (so is `type N -- "-1"` style isn't needed)
 # `result` is JSON-encoded: a string comes back quoted ("\"Title\""). To just
 # read the current page title, `webpilot status` → `tab_title` is plain text.
 

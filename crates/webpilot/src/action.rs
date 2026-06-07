@@ -19,6 +19,9 @@ pub enum Action {
     /// Type text into an element.
     Type {
         index: ElementIndex,
+        // Typed text legitimately starts with `-` (e.g. a negative number) —
+        // accept it as the value, not a flag. `--clear` still parses after it.
+        #[arg(allow_hyphen_values = true)]
         text: String,
         /// Replace existing value instead of appending.
         #[arg(long)]
@@ -65,7 +68,11 @@ pub enum Action {
     Focus { index: ElementIndex },
 
     /// Select an option from a `<select>` element.
-    Select { index: ElementIndex, value: String },
+    Select {
+        index: ElementIndex,
+        #[arg(allow_hyphen_values = true)]
+        value: String,
+    },
 
     /// Upload a file to an `<input type=file>` element.
     Upload {

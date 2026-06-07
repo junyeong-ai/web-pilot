@@ -8,6 +8,9 @@ use crate::transport::{Transport, lift_error};
 #[derive(Args)]
 pub struct EvalArgs {
     /// JavaScript code to evaluate in the page context.
+    // Free-text JS legitimately starts with `-` (a negative literal, unary
+    // minus, prefix decrement) — accept it as the value, not a flag.
+    #[arg(allow_hyphen_values = true)]
     pub code: String,
 }
 

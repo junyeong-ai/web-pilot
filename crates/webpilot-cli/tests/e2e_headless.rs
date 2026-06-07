@@ -108,6 +108,26 @@ fn headless_behavioral_flow() {
         stdout(&title)
     );
 
+    // 2a1. Free-text values that start with `-` are values, not flags
+    //      (allow_hyphen_values): an agent evaluating a negative expression or
+    //      typing a negative number must not hit a clap usage error — and a
+    //      trailing flag after such a value must still parse.
+    let neg = fx.run(&["eval", "-7 * 6"]);
+    assert_eq!(code(&neg), 0, "leading-dash eval must not be a clap error: {}", stdout(&neg));
+    let nj: serde_json::Value = serde_json::from_str(&stdout(&neg)).expect("eval json");
+    assert_eq!(nj["result"].as_str(), Some("-42"), "leading-dash eval must evaluate: {}", stdout(&neg));
+    let q_index = index_of(&cap, "q");
+    let typed = fx.run(&["action", "type", &q_index, "-99", "--clear"]);
+    assert_eq!(code(&typed), 0, "type of a leading-dash value with --clear failed: {}", stdout(&typed));
+    let tv = fx.run(&["eval", "document.getElementById('q').value === '-99'"]);
+    let tvj: serde_json::Value = serde_json::from_str(&stdout(&tv)).expect("eval json");
+    assert_eq!(
+        tvj["result"].as_str(),
+        Some("true"),
+        "the leading-dash value must land exactly and --clear must still apply: {}",
+        stdout(&tv)
+    );
+
     // 2a. A same-URL reload rebuilds the document, clearing the old execution
     //      contexts. The bridge re-injects into the fresh isolated world on its
     //      own (the persistent addScriptToEvaluateOnNewDocument), and the open-

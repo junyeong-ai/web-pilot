@@ -12,11 +12,14 @@ use crate::transport::{Transport, lift_error};
 pub struct FindArgs {
     #[arg(long)]
     pub role: Option<String>,
-    #[arg(long)]
+    // text / label / placeholder are arbitrary page text that can start with
+    // `-` (e.g. searching for "-50%"); `fill` is typed text (e.g. a negative
+    // number). Accept a leading-dash value rather than read it as a flag.
+    #[arg(long, allow_hyphen_values = true)]
     pub text: Option<String>,
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub label: Option<String>,
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub placeholder: Option<String>,
     #[arg(long)]
     pub tag: Option<String>,
@@ -24,7 +27,7 @@ pub struct FindArgs {
     #[arg(long, conflicts_with = "fill")]
     pub click: bool,
     /// Type into the first match. Mutually exclusive with --click.
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub fill: Option<String>,
 }
 
