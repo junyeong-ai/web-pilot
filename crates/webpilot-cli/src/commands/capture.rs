@@ -53,7 +53,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             if let Some(ref snapshot) = dom
                 && let Some(ref ax_tree) = snapshot.accessibility_tree
             {
-                let path = dir.join(format!("accessibility_{}.json", epoch_ms()));
+                let path = dir.join(format!("accessibility_{}.json", epoch_nanos()));
                 std::fs::write(&path, ax_tree).context("Cannot save accessibility tree")?;
                 ax_path = Some(path.to_string_lossy().into_owned());
             }
@@ -65,7 +65,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
                     b64.as_bytes(),
                 )
                 .context("Cannot decode PDF bytes")?;
-                let path = dir.join(format!("capture_{}.pdf", epoch_ms()));
+                let path = dir.join(format!("capture_{}.pdf", epoch_nanos()));
                 std::fs::write(&path, bytes).context("Cannot save PDF")?;
                 Some(path.to_string_lossy().into_owned())
             } else {
@@ -101,9 +101,9 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
     }
 }
 
-fn epoch_ms() -> u128 {
+fn epoch_nanos() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
+        .map(|d| d.as_nanos())
         .unwrap_or(0)
 }

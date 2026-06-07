@@ -43,7 +43,7 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
         } => {
             // Reject what CDP would only fail on opaquely: a typed exit 7
             // beats a generic emulation error.
-            if width == 0 || height == 0 || scale.is_nan() || scale <= 0.0 {
+            if width == 0 || height == 0 || !scale.is_finite() || scale <= 0.0 {
                 return Err(webpilot::WebPilotError::InvalidArgument {
                     detail: format!(
                         "viewport must be positive (got {width}x{height}, scale {scale})"

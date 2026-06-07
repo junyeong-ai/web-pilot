@@ -194,6 +194,8 @@ impl LocalTransport {
                 detail: format!("session JSON parse error: {e}"),
             })?;
 
+        let mut cookies_failed = 0usize;
+        let mut cookies_total = 0usize;
         if let Some(arr) = parsed.get("cookies").and_then(|v| v.as_array()) {
             for v in arr {
                 // Tolerate both CookieInfo (CLI shape) and raw CDP rows. Bad
@@ -201,10 +203,15 @@ impl LocalTransport {
                 let Ok(info) = serde_json::from_value::<CookieInfo>(v.clone()) else {
                     continue;
                 };
-                let _ = self
+                cookies_total += 1;
+                if self
                     .page
                     .send("Network.setCookie", Some(cookie_info_to_cdp(&info)))
-                    .await;
+                    .await
+                    .is_err()
+                {
+                    cookies_failed += 1;
+                }
             }
         }
         let local_storage = parsed.get("local_storage");
@@ -216,6 +223,18 @@ impl LocalTransport {
                 "sessionStorage": session_storage.cloned().unwrap_or_else(|| json!({})),
             }))
             .await?;
+        }
+
+        // A well-formed cookie the browser refused to set is a partial
+        // failure the agent must see — never a success that silently
+        // imported less than the file contained.
+        if cookies_failed > 0 {
+            return Ok(ResponseData::SessionResult {
+                success: false,
+                error: Some(WebPilotError::Other {
+                    detail: format!("{cookies_failed} of {cookies_total} cookies failed to set"),
+                }),
+            });
         }
 
         Ok(ResponseData::SessionResult {

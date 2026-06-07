@@ -57,8 +57,38 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
     let target = detect_target()?;
     let current = env!("CARGO_PKG_VERSION").to_owned();
     let target_version = match args.version {
-        Some(v) => normalize_version(&v),
-        None => resolve_latest()?,
+        Some(v) => {
+            // The version lands in a URL and in filesystem paths — confine it
+            // to release-tag characters so it cannot reshape either.
+            let v = normalize_version(&v);
+            if v.is_empty()
+                || !v
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-'))
+            {
+                return Err(webpilot::WebPilotError::InvalidArgument {
+                    detail: format!("invalid version '{v}' (release tags are [0-9A-Za-z._+-])"),
+                }
+                .into());
+            }
+            v
+        }
+        None => {
+            let latest = resolve_latest()?;
+            // An implicit downgrade is refused: a rolled-back or yanked
+            // "latest" below the running version must be a deliberate pin,
+            // never a silent replacement with older code.
+            if version_components(&latest) < version_components(&current) {
+                return Err(webpilot::WebPilotError::InvalidArgument {
+                    detail: format!(
+                        "latest release v{latest} is older than the running v{current}; \
+                         pin it explicitly with --version {latest} if intended"
+                    ),
+                }
+                .into());
+            }
+            latest
+        }
     };
 
     if !args.force && current == target_version {
@@ -81,6 +111,10 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
     let archive = format!("webpilot-{target_version}-{target}.tar.gz");
     let url = format!("https://github.com/{REPO}/releases/download/v{target_version}/{archive}");
 
+    // Trust model: TLS to GitHub releases plus the sha256 sidecar from the
+    // same channel. That guards transport corruption and CDN tampering, not a
+    // compromised release channel itself — authenticating releases against a
+    // key pinned in the binary is the upgrade path if that ever changes.
     download(&url, &tmp.path().join(&archive))?;
     download(
         &format!("{url}.sha256"),
@@ -203,6 +237,15 @@ fn normalize_version(s: &str) -> String {
     s.trim().trim_start_matches('v').to_owned()
 }
 
+/// Dotted-numeric components for ordering release versions ("0.3.10" above
+/// "0.3.9", where a string compare would not).
+fn version_components(v: &str) -> Vec<u64> {
+    v.split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().unwrap_or(0))
+        .collect()
+}
+
 fn download(url: &str, dest: &Path) -> Result<()> {
     let status = Command::new("curl")
         .args([
@@ -273,11 +316,16 @@ fn atomic_replace(src: &Path, dest: &Path) -> Result<()> {
         .parent()
         .context("destination has no parent directory")?;
     let staged = parent.join(format!(".webpilot.new.{}", std::process::id()));
-    std::fs::copy(src, &staged).with_context(|| format!("copy to {}", staged.display()))?;
-    set_executable(&staged)?;
-    if let Err(e) = std::fs::rename(&staged, dest) {
+    // Every failure after the staged file may exist removes it — a partial
+    // copy must not linger next to the real binary.
+    let stage = || -> Result<()> {
+        std::fs::copy(src, &staged).with_context(|| format!("copy to {}", staged.display()))?;
+        set_executable(&staged)?;
+        std::fs::rename(&staged, dest).with_context(|| format!("rename -> {}", dest.display()))
+    };
+    if let Err(e) = stage() {
         let _ = std::fs::remove_file(&staged);
-        return Err(e).with_context(|| format!("rename -> {}", dest.display()));
+        return Err(e);
     }
     Ok(())
 }

@@ -6,7 +6,7 @@ chrome.runtime.sendMessage({ type: "status" }, (response) => {
   if (chrome.runtime.lastError || !response?.connected) {
     dot.className = "dot off";
     statusText.textContent = "Not connected";
-    info.innerHTML = '<p>Run <code>webpilot install --extension-id &lt;ID&gt;</code></p>';
+    info.innerHTML = '<p>Run <code>webpilot setup nm-host --extension-id &lt;ID&gt;</code></p>';
   } else {
     dot.className = "dot on";
     statusText.textContent = "Connected";

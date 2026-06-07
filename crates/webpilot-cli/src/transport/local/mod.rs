@@ -652,8 +652,13 @@ pub(super) fn action_success(dom: Option<DomSnapshot>) -> ResponseData {
 }
 
 pub(super) fn artifact_path(prefix: &str, ext: &str) -> PathBuf {
-    let dir = dirs::artifacts_dir();
-    dir.join(format!("{prefix}_{}.{ext}", epoch_ms()))
+    // Nanosecond stamp: parallel contexts minting artifacts in the same
+    // millisecond must not share a filename and silently overwrite.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    dirs::artifacts_dir().join(format!("{prefix}_{nanos}.{ext}"))
 }
 
 pub(super) fn epoch_ms() -> u128 {

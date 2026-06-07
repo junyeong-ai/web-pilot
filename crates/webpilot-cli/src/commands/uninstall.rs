@@ -91,8 +91,16 @@ async fn execute(plan: Plan) -> Result<CommandOutput> {
             }
         }
         purge_if_empty(root);
-        if clean {
+        // Only claim the root is gone when it is: non-WebPilot files (a
+        // user-authored config.toml, anything foreign) keep it alive, and the
+        // report must say so rather than print a success line that lies.
+        if clean && !root.exists() {
             removed.push("cache_root");
+        } else if clean {
+            warnings.push(format!(
+                "cache root kept — non-WebPilot files remain: {}",
+                root.display()
+            ));
         }
     }
 

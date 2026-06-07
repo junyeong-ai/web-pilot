@@ -217,7 +217,7 @@ fn process_nm_message(
         .map(str::to_string)
     {
         let dir = dirs::artifacts_dir();
-        let ts = epoch_ms();
+        let ts = epoch_nanos();
         let path = dir.join(format!("session_{ts}.json"));
         match std::fs::write(&path, &data) {
             Ok(_) => {
@@ -407,9 +407,11 @@ async fn reply_error<W: AsyncWriteExt + Unpin>(
     Ok(())
 }
 
-fn epoch_ms() -> u128 {
+/// Nanosecond stamp for artifact filenames: same-millisecond writers must not
+/// share a name and silently overwrite each other.
+fn epoch_nanos() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
+        .map(|d| d.as_nanos())
         .unwrap_or(0)
 }

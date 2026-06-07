@@ -241,6 +241,19 @@ enum Owner {
 }
 
 fn materialise(p: PathBuf, owner: Owner) -> PathBuf {
+    // The builder's mode applies to every directory it creates, so ancestors
+    // are born 0700 instead of umask-default — they never exist, even
+    // briefly, wider than the leaf. Failures stay best-effort here: the file
+    // operation that follows surfaces them with real context.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let _ = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&p);
+    }
+    #[cfg(not(unix))]
     let _ = std::fs::create_dir_all(&p);
     apply_mode(&p, owner);
     p
