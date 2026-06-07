@@ -348,8 +348,8 @@ if (!Array.isArray(window.__webpilot_console)) {
 }
 if (!window.__webpilot_console_patched) {
     window.__webpilot_console_patched = true;
-    const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info };
-    ["log", "error", "warn", "info"].forEach(m => {
+    const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
+    ["log", "error", "warn", "info", "debug"].forEach(m => {
         console[m] = (...args) => {
             window.__webpilot_console.push({
                 level: m,
@@ -388,6 +388,7 @@ if (!window.__webpilot_network_active) {
                 duration_ms: Math.round(performance.now() - t0),
                 timestamp: Date.now(),
             });
+            if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
             throw err;
         });
     };

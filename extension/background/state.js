@@ -19,8 +19,8 @@ async function injectConsoleMonitoring(tabId) {
       if (!Array.isArray(window.__webpilot_console)) window.__webpilot_console = [];
       if (window.__webpilot_console_patched) return;
       window.__webpilot_console_patched = true;
-      const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info };
-      ["log", "error", "warn", "info"].forEach((m) => {
+      const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
+      ["log", "error", "warn", "info", "debug"].forEach((m) => {
         console[m] = (...args) => {
           window.__webpilot_console.push({
             level: m,
@@ -130,12 +130,16 @@ async function handleCookieDelete(command) {
 }
 
 function toCookieInfo(c) {
-  return {
+  const info = {
     name: c.name, value: c.value, domain: c.domain, path: c.path,
     secure: c.secure, http_only: c.httpOnly,
     same_site: c.sameSite === "no_restriction" ? "none" : (c.sameSite || "unspecified").toLowerCase(),
-    expiration: c.expirationDate || null,
   };
+  // Omit `expiration` for a session cookie rather than writing null, so an
+  // exported session file is byte-identical across modes (headless's
+  // CookieInfo skips the field when absent).
+  if (c.expirationDate != null) info.expiration = c.expirationDate;
+  return info;
 }
 
 // Inverse of the wire mapping in `toCookieInfo`: the wire carries SameSite=None

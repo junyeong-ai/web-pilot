@@ -255,10 +255,10 @@ const FETCH_MAX_BODY_BYTES = 10 * 1024 * 1024;
 function fetchExpression(command) {
   return `(async () => {
     const r = await fetch(${JSON.stringify(command.url)}, {
-      method: ${JSON.stringify(command.method || "GET")},
+      method: ${JSON.stringify(command.method ?? "GET")},
       headers: {"Content-Type": "application/json"},
       credentials: "include",
-      ${command.body ? `body: ${JSON.stringify(command.body)},` : ""}
+      ${command.body != null ? `body: ${JSON.stringify(command.body)},` : ""}
     });
     const MAX = ${FETCH_MAX_BODY_BYTES};
     const reader = r.body && r.body.getReader();
