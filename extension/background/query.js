@@ -44,8 +44,12 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
     const deadline = Date.now() + 2000;
     const probed = new Set();
     while (Date.now() < deadline) {
+      const matches = [];
       for (const c of contexts) {
-        if (probed.has(c.uniqueId)) continue;
+        // A context with no string uniqueId can't be addressed unambiguously
+        // (omitting it would silently target the default context), so skip it —
+        // the headless listener applies the same guard before mapping.
+        if (typeof c.uniqueId !== "string" || probed.has(c.uniqueId)) continue;
         probed.add(c.uniqueId);
         const r = await cdpSend(tid, "Runtime.evaluate", {
           expression: `window[${JSON.stringify(key)}]`,
@@ -55,8 +59,14 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
         // Return the uniqueContextId, not the reusable integer id: it stays
         // valid across a renderer swap and can never resolve to a different
         // context that reused the integer.
-        if (r?.result?.value === nonce) return c.uniqueId;
+        if (r?.result?.value === nonce) matches.push(c.uniqueId);
       }
+      // Exactly one context must carry the nonce. The stamp is written only in
+      // the targeted frame+world, so a second match means a same-origin page
+      // copied the probe global across windows to spoof the target — refuse to
+      // guess which is real rather than returning the wrong frame's context.
+      if (matches.length === 1) return matches[0];
+      if (matches.length > 1) return null;
       await sleep(25);
     }
     return null;

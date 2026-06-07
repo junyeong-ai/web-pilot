@@ -251,30 +251,22 @@ impl LocalTransport {
                 candidates.iter().find(|f| f.url.contains(&needle)).copied()
             }
             FrameSelector::Predicate { js } => {
+                // The predicate rides the SAME form decision as `eval` — compile
+                // to detect expression vs statements, then evaluate — so a
+                // statement-form predicate (`const ok = …; ok`) behaves the same
+                // here as in `eval` and as in browser mode's `cdpEval`.
+                let form = self.eval_form(js).await?;
                 let mut found = None;
                 for f in &candidates {
                     let Some(cid) = self.frame_contexts.lock().await.get(&f.frame_id).cloned()
                     else {
                         continue;
                     };
-                    let r = self
-                        .page
-                        .send(
-                            "Runtime.evaluate",
-                            Some(json!({
-                                "expression": format!("({js})"),
-                                "uniqueContextId": cid,
-                                "returnByValue": true,
-                                "awaitPromise": true,
-                            })),
-                        )
+                    let truthy = self
+                        .eval_in_context(&form, Some(&cid), true)
                         .await
-                        .ok();
-                    let truthy = r
-                        .as_ref()
-                        .and_then(|v| v.get("result"))
-                        .and_then(|v| v.get("value"))
-                        .and_then(|v| v.as_bool())
+                        .ok()
+                        .and_then(|v| v.get("value").and_then(|v| v.as_bool()))
                         == Some(true);
                     if truthy {
                         found = Some(*f);

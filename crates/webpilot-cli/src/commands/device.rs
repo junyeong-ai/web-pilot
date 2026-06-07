@@ -3,6 +3,9 @@ use clap::{Args, Subcommand};
 
 use crate::output::CommandOutput;
 use crate::transport::LocalTransport;
+use crate::transport::local::{
+    DeviceState, clear_persisted_device, write_persisted_device,
+};
 
 #[derive(Args)]
 pub struct DeviceArgs {
@@ -32,7 +35,7 @@ pub enum DeviceCommand {
 }
 
 pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<CommandOutput> {
-    let cdp = local.page();
+    let ctx = local.persisted_context_key().map(str::to_string);
     match args.command {
         DeviceCommand::Set {
             width,
@@ -51,25 +54,14 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
                 }
                 .into());
             }
-            cdp.send(
-                "Emulation.setDeviceMetricsOverride",
-                Some(serde_json::json!({
-                    "width": width,
-                    "height": height,
-                    "deviceScaleFactor": scale,
-                    "mobile": mobile,
-                })),
-            )
-            .await?;
-            if let Some(ua) = user_agent {
-                cdp.send(
-                    "Emulation.setUserAgentOverride",
-                    Some(serde_json::json!({"userAgent": ua})),
-                )
-                .await?;
-            }
+            let state = DeviceState { width, height, mobile, scale, user_agent };
+            state.apply(local.page()).await?;
+            // Persist so the override (UA especially) survives this process —
+            // re-applied by every later `open`, matching the metrics that
+            // already persist incidentally.
+            write_persisted_device(ctx.as_deref(), &state);
             Ok(CommandOutput::Data {
-                json: serde_json::json!({"success": true, "width": width, "height": height, "mobile": mobile}),
+                json: serde_json::json!({"success": true, "width": width, "height": height, "mobile": mobile, "user_agent": state.user_agent}),
                 human: format!("Device: {width}x{height} (mobile={mobile}, scale={scale})"),
             })
         }
@@ -81,27 +73,22 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
                     ),
                 }
             })?;
-            cdp.send(
-                "Emulation.setDeviceMetricsOverride",
-                Some(serde_json::json!({
-                    "width": w,
-                    "height": h,
-                    "deviceScaleFactor": scale,
-                    "mobile": mobile,
-                })),
-            )
-            .await?;
-            cdp.send(
-                "Emulation.setUserAgentOverride",
-                Some(serde_json::json!({"userAgent": ua})),
-            )
-            .await?;
+            let state = DeviceState {
+                width: w,
+                height: h,
+                mobile,
+                scale,
+                user_agent: Some(ua.to_string()),
+            };
+            state.apply(local.page()).await?;
+            write_persisted_device(ctx.as_deref(), &state);
             Ok(CommandOutput::Data {
                 json: serde_json::json!({"success": true, "preset": name, "width": w, "height": h}),
                 human: format!("Device: {name} ({w}x{h})"),
             })
         }
         DeviceCommand::Reset => {
+            let cdp = local.page();
             // Chrome's `clearDeviceMetricsOverride` removes the override flag
             // but does not trigger a layout pass on its own, so the page can
             // stay at the previously emulated dimensions. Snap the viewport
@@ -125,6 +112,8 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
                 Some(serde_json::json!({"userAgent": ""})),
             )
             .await?;
+            // Drop the persisted emulation so a later `open` doesn't re-apply it.
+            clear_persisted_device(ctx.as_deref());
             Ok(CommandOutput::Ok("Device emulation cleared".into()))
         }
     }

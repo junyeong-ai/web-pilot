@@ -525,6 +525,29 @@ fn browser_behavioral_flow() {
     let main = fx.run(&["frame", "main"]);
     assert_eq!(code(&main), 0);
 
+    // 7c. A STATEMENT-form predicate and a statement-form eval must work inside
+    //     the CSP frame too — cdpEval's compile-then-evaluate, the parity bar the
+    //     headless suite asserts against its shared eval_form.
+    let found_stmt = fx.run(&[
+        "frame",
+        "find",
+        "const t = document.title; t === 'cspframe'",
+    ]);
+    assert_eq!(
+        code(&found_stmt),
+        0,
+        "statement-form predicate must find the CSP frame: {}",
+        stdout(&found_stmt)
+    );
+    let stmt_eval = fx.run(&["eval", "const x = document.title; x"]);
+    assert!(
+        stdout(&stmt_eval).contains("cspframe"),
+        "statement-form eval must return a value inside a CSP frame: {}",
+        stdout(&stmt_eval)
+    );
+    let main = fx.run(&["frame", "main"]);
+    assert_eq!(code(&main), 0);
+
     // 8. Both screenshot paths ride CDP, not `captureVisibleTab`: they capture
     //    the tab's own surface through the debugger, so they need neither the
     //    window to be OS-foreground nor an `<all_urls>` grant. The viewport

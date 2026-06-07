@@ -35,15 +35,24 @@ impl LocalTransport {
         Ok(r.get("exceptionDetails").is_none())
     }
 
+    /// The evaluable form of `code`: the IIFE-wrapped expression when it
+    /// compiles as one (so `{a:1}` is an object literal and the value is
+    /// returned), else the statements verbatim. The single decision every eval
+    /// path shares — `eval`, `frame find` predicates, and both modes' bridge —
+    /// so a statement-form predicate behaves identically everywhere.
+    pub(super) async fn eval_form(&self, code: &str) -> Result<String> {
+        Ok(if self.parses_as_expression(code).await? {
+            format!("(()=>({code}))()")
+        } else {
+            code.to_string()
+        })
+    }
+
     pub(super) async fn do_eval(&self, code: &str) -> Result<ResponseData> {
         // Prefer the expression form whenever the code COMPILES as one (so
         // `{a: 1}` is read as an object literal, not a labeled statement);
         // everything else runs as a multi-statement script.
-        let val = if self.parses_as_expression(code).await? {
-            self.eval_in_active(&format!("(()=>({code}))()")).await
-        } else {
-            self.eval_in_active(code).await
-        };
+        let val = self.eval_in_active(&self.eval_form(code).await?).await;
         match val {
             Ok(v) => Ok(ResponseData::Eval {
                 success: true,

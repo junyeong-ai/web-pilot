@@ -734,6 +734,16 @@
     // exception — the agent learns it imported less than the file held.
     let total = 0;
     let failed = 0;
+    // A storage map must be a plain object of string→string. A string (e.g.
+    // `"abc"`) would otherwise iterate as character index keys (`0`→`"a"`),
+    // silently importing garbage; a non-object is rejected outright.
+    const isPlainObject = (o) => o != null && typeof o === "object" && !Array.isArray(o);
+    for (const store of ["localStorage", "sessionStorage"]) {
+      const o = msg[store];
+      if (o != null && !isPlainObject(o)) {
+        return err("InvalidArgument", `${store} must be an object of string keys and values`);
+      }
+    }
     const restore = (store, obj) => {
       for (const [k, v] of Object.entries(obj || {})) {
         total++;

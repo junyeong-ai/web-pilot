@@ -1,9 +1,17 @@
+use std::io::Read;
+
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, ResponseData};
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
+
+/// A session file is cookies + storage — kilobytes in practice. Cap the read so
+/// a fat-fingered or malicious path can't exhaust memory before the import is
+/// even parsed (the native-messaging host rejects oversized payloads downstream,
+/// but the CLI must not allocate gigabytes first).
+const MAX_SESSION_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Args)]
 pub struct SessionArgs {
@@ -57,7 +65,21 @@ pub async fn run<T: Transport>(transport: &mut T, args: SessionArgs) -> Result<C
             }
         }
         SessionCommand::Import { path } => {
-            let data = std::fs::read_to_string(&path).context("Cannot read session file")?;
+            let file = std::fs::File::open(&path).context("Cannot read session file")?;
+            let mut buf = Vec::new();
+            file.take(MAX_SESSION_BYTES + 1)
+                .read_to_end(&mut buf)
+                .context("Cannot read session file")?;
+            if buf.len() as u64 > MAX_SESSION_BYTES {
+                return Err(webpilot::WebPilotError::InvalidArgument {
+                    detail: format!("session file exceeds the {MAX_SESSION_BYTES}-byte limit"),
+                }
+                .into());
+            }
+            let data = String::from_utf8(buf)
+                .map_err(|_| webpilot::WebPilotError::InvalidArgument {
+                    detail: "session file is not valid UTF-8".into(),
+                })?;
             let result = transport.send(Command::SessionImport { data }).await?;
             match result {
                 ResponseData::SessionResult { success, error } => {

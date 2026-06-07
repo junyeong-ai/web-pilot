@@ -26,6 +26,7 @@ mod query;
 mod state;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -133,6 +134,13 @@ impl LocalTransport {
         let _ = page.send("Runtime.disable", None).await;
         let _ = page.send("Runtime.enable", None).await;
 
+        // Re-apply device emulation across CLI invocations: a UA override does
+        // not survive the prior process's CDP disconnect, so without this the
+        // `device set --user-agent` an agent issued would be silently gone.
+        if let Some(dev) = read_persisted_device(browser_context_id.as_deref()) {
+            let _ = dev.apply(&page).await;
+        }
+
         // Restore the active frame across CLI invocations. CLI calls are
         // separate processes, so without persistence `frames switch` would
         // be a no-op — the next `eval` would lose the active frame and
@@ -168,7 +176,7 @@ impl LocalTransport {
         })
     }
 
-    pub(super) fn persisted_context_key(&self) -> Option<&str> {
+    pub(crate) fn persisted_context_key(&self) -> Option<&str> {
         self.browser_context_id.as_deref()
     }
 
@@ -236,7 +244,7 @@ impl LocalTransport {
     /// `/result/objectId`. `uniqueContextId` (not the reusable integer id) means
     /// a context destroyed between map read and send fails cleanly instead of
     /// landing in a different context that reused the integer.
-    async fn eval_in_context(
+    pub(super) async fn eval_in_context(
         &self,
         expression: &str,
         context: Option<&str>,
@@ -620,6 +628,67 @@ pub(super) fn write_persisted_active_tab(browser_context_id: Option<&str>, targe
 
 pub(super) fn clear_persisted_active_tab(browser_context_id: Option<&str>) {
     let _ = std::fs::remove_file(active_tab_file(browser_context_id));
+}
+
+// ── Device-emulation persistence ──────────────────────────────────────────
+//
+// `Emulation.setDeviceMetricsOverride` survives a CDP client disconnect in
+// headless Chrome, but `Emulation.setUserAgentOverride` reverts the moment the
+// client that set it disconnects. Since every WebPilot CLI invocation is a fresh
+// client that re-attaches to the one persistent Chrome, a UA override set in one
+// process would silently vanish for the next — the asymmetry a field report
+// surfaced. So the full emulation record is persisted per context and re-applied
+// on every `open`, exactly like the armed monitors and the active frame: the
+// emulation an agent set in one command holds across the next, metrics AND UA.
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct DeviceState {
+    pub width: u32,
+    pub height: u32,
+    pub mobile: bool,
+    pub scale: f64,
+    pub user_agent: Option<String>,
+}
+
+impl DeviceState {
+    /// Apply this emulation to a page session: metrics always, UA only when set.
+    pub(crate) async fn apply(&self, page: &CdpClient) -> Result<()> {
+        page.send(
+            "Emulation.setDeviceMetricsOverride",
+            Some(json!({
+                "width": self.width,
+                "height": self.height,
+                "deviceScaleFactor": self.scale,
+                "mobile": self.mobile,
+            })),
+        )
+        .await?;
+        if let Some(ua) = &self.user_agent {
+            page.send("Emulation.setUserAgentOverride", Some(json!({"userAgent": ua})))
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+fn device_state_file(browser_context_id: Option<&str>) -> PathBuf {
+    let key = browser_context_id.unwrap_or("default");
+    dirs::runtime_dir().join(format!("device_{key}.json"))
+}
+
+pub(crate) fn read_persisted_device(browser_context_id: Option<&str>) -> Option<DeviceState> {
+    let raw = std::fs::read_to_string(device_state_file(browser_context_id)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+pub(crate) fn write_persisted_device(browser_context_id: Option<&str>, state: &DeviceState) {
+    if let Ok(s) = serde_json::to_string(state) {
+        let _ = std::fs::write(device_state_file(browser_context_id), s);
+    }
+}
+
+pub(crate) fn clear_persisted_device(browser_context_id: Option<&str>) {
+    let _ = std::fs::remove_file(device_state_file(browser_context_id));
 }
 
 // ── Armed-monitor persistence ─────────────────────────────────────────────

@@ -290,11 +290,12 @@ webpilot uninstall --yes                       # quit Chrome + remove binary, sk
 |------|---------|
 | 0 | success |
 | 1 | session error / unknown |
+| 2 | CLI usage error (clap: unknown flag, non-numeric index, missing arg) — fix the command line, not the page |
 | 3 | infrastructure (Chrome connection, bridge, `VersionMismatch`) |
 | 4 | not found (element / `StaleSnapshot` / selector / tab / context / frame) |
 | 5 | timeout |
 | 6 | security (`PolicyDenied`) |
-| 7 | invalid argument |
+| 7 | invalid argument (semantically wrong but well-formed) |
 | 8 | navigation failed / no page |
 
 Errors carry typed data: `ElementNotFound { requested, available }`, `StaleSnapshot { index }`, `SelectorNotFound { selector }`, `Timeout { kind, elapsed_ms }`, `NavigationFailed { url, reason }`, `PolicyDenied { operation }`, `VersionMismatch { extension, expected }`. Treat the `code` field as authoritative; the `message` is a human-readable rendering. `VersionMismatch` (browser mode) means the installed extension is stale — re-run `webpilot setup extension` and reload it at `chrome://extensions`.

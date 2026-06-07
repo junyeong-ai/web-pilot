@@ -446,6 +446,63 @@ fn headless_behavioral_flow() {
     let back_to_main = fx.run(&["frame", "main"]);
     assert_eq!(code(&back_to_main), 0);
 
+    // 7c. A STATEMENT-form predicate (not a bare expression) must find the frame
+    //     too: `frame find` shares `eval`'s compile-then-evaluate form decision,
+    //     so multi-statement predicates behave identically to browser mode's
+    //     cdpEval — the parity the shared `eval_form` guarantees.
+    let found_stmt = fx.run(&[
+        "frame",
+        "find",
+        "const t = document.title; t === 'cspframe'",
+    ]);
+    assert_eq!(
+        code(&found_stmt),
+        0,
+        "statement-form predicate must find the frame (eval_form parity): {}",
+        stdout(&found_stmt)
+    );
+    // And a statement-form eval runs inside the CSP frame, returning its value.
+    let stmt_eval = fx.run(&["eval", "const x = document.title; x"]);
+    assert!(
+        stdout(&stmt_eval).contains("cspframe"),
+        "statement-form eval must return a value inside a CSP frame: {}",
+        stdout(&stmt_eval)
+    );
+    let back_to_main = fx.run(&["frame", "main"]);
+    assert_eq!(code(&back_to_main), 0);
+
+    // 7d. Device emulation persists across CLI processes. A UA override does
+    //     NOT survive a CDP client disconnect on its own, so `device set` must
+    //     persist it and `open` must re-apply it — every WebPilot command is a
+    //     fresh process re-attaching to the one Chrome. Set, then read UA +
+    //     viewport in a SEPARATE invocation; reset must revert both.
+    let dev = fx.run(&[
+        "device", "set", "--width", "390", "--height", "844", "--user-agent", "WP-E2E-UA/1",
+    ]);
+    assert_eq!(code(&dev), 0, "device set failed: {}", stdout(&dev));
+    let ua = fx.run(&["eval", "navigator.userAgent"]);
+    assert!(
+        stdout(&ua).contains("WP-E2E-UA/1"),
+        "device UA override must survive into the next process: {}",
+        stdout(&ua)
+    );
+    let vw = fx.run(&["eval", "window.innerWidth"]);
+    let vwj: serde_json::Value = serde_json::from_str(&stdout(&vw)).expect("eval json");
+    assert_eq!(
+        vwj["result"].as_str(),
+        Some("390"),
+        "device metrics must persist into the next process: {}",
+        stdout(&vw)
+    );
+    let dreset = fx.run(&["device", "reset"]);
+    assert_eq!(code(&dreset), 0, "device reset failed: {}", stdout(&dreset));
+    let ua2 = fx.run(&["eval", "navigator.userAgent"]);
+    assert!(
+        !stdout(&ua2).contains("WP-E2E-UA/1"),
+        "device reset must clear the persisted UA override: {}",
+        stdout(&ua2)
+    );
+
     // 8. Context isolation: localStorage written in one context is invisible in
     //    another (separate CDP browser contexts = separate storage partitions).
     let a_url = base.clone();
