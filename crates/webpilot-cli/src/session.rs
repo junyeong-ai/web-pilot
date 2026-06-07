@@ -159,6 +159,39 @@ fn is_our_chrome(pid: i32) -> bool {
         .unwrap_or(false)
 }
 
+/// SIGKILL any Chrome still holding our profile dir that we have no live session
+/// for — an orphan from a crash in the window between spawn and writing the pid
+/// file (`is_our_chrome`'s pid-gated cleanup can't see a pid it never recorded).
+/// Such an orphan keeps the profile's SingletonLock and would wedge a fresh
+/// launch. Called only on the launch-fresh path (under the launch lock, once
+/// `get_existing_session` found nothing usable), so it never targets a Chrome a
+/// live session owns. The `--user-data-dir` marker is unique to this
+/// WEBPILOT_HOME, so the user's own Chrome and other contexts are untouched.
+fn kill_profile_orphans() {
+    let marker = format!("--user-data-dir={}", dirs::chrome_profile_dir().display());
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-ax", "-o", "pid=,command="])
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if !line.contains(&marker) {
+            continue;
+        }
+        if let Some(pid) = line
+            .split_whitespace()
+            .next()
+            .and_then(|p| p.parse::<i32>().ok())
+        {
+            let _ = send_signal(pid, libc::SIGKILL);
+        }
+    }
+}
+
 /// Acquire the cross-process launch lock (advisory `flock`). Held until the
 /// returned file is dropped. Serialises launch and session-invalidation so a
 /// relaunch can't interleave with another process tearing the session down.
@@ -354,6 +387,11 @@ pub async fn ensure_session() -> Result<String> {
     }
     let _ = std::fs::remove_file(pid_path());
     let _ = std::fs::remove_file(ws_url_path());
+
+    // Reap any Chrome still holding our profile that we have no session for — an
+    // orphan from a crash before the pid file was written. Left alive it keeps
+    // the profile's SingletonLock and would wedge the launch below.
+    kill_profile_orphans();
 
     let (_, ws_url) = launch_chrome().await?;
     Ok(ws_url)
