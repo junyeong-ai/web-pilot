@@ -16,7 +16,19 @@ pub struct ActionArgs {
     pub capture: bool,
 }
 
-pub async fn run<T: Transport>(transport: &mut T, args: ActionArgs) -> Result<CommandOutput> {
+pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Result<CommandOutput> {
+    // Resolve an upload path against the CLI's working directory and confirm it
+    // exists BEFORE it crosses the wire. Otherwise a relative path would be
+    // re-interpreted against Chrome's own cwd (browser mode runs a separate
+    // Chrome), and a missing file would surface as a raw CDP error instead of a
+    // typed InvalidArgument. `canonicalize` doubles as the existence check.
+    if let Action::Upload { path, .. } = &mut args.action {
+        *path = std::fs::canonicalize(&path).map_err(|e| {
+            webpilot::WebPilotError::InvalidArgument {
+                detail: format!("upload file not readable: {} ({e})", path.display()),
+            }
+        })?;
+    }
     let result = transport
         .send(Command::Action {
             action: args.action,

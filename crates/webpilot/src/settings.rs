@@ -126,6 +126,18 @@ fn validate(settings: &Settings) -> std::result::Result<(), String> {
     if settings.timeouts.navigation.is_zero() {
         return Err("timeouts.navigation_ms must be greater than 0".into());
     }
+    // A zero CDP-send timeout makes every request expire instantly; a zero poll
+    // interval or heartbeat turns the wait/poll loops into busy spins. Reject
+    // all of them up front rather than degrade to a broken session.
+    if settings.timeouts.cdp_send.is_zero() {
+        return Err("timeouts.cdp_send_ms must be greater than 0".into());
+    }
+    if settings.timeouts.poll_interval.is_zero() {
+        return Err("timeouts.poll_interval_ms must be greater than 0".into());
+    }
+    if settings.timeouts.heartbeat.is_zero() {
+        return Err("timeouts.heartbeat_ms must be greater than 0".into());
+    }
     Ok(())
 }
 

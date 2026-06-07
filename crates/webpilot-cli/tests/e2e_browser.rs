@@ -537,6 +537,17 @@ fn browser_behavioral_flow() {
         "eval must run in the switched frame: {}",
         stdout(&href)
     );
+    // A `--url` capture navigates to a fresh document, which drops the frame
+    // scope — so `--annotate` here must succeed on the new main frame, not
+    // false-fail against the stale switched-frame id. It also leaves us back on
+    // the main frame, which the rest of this step then re-confirms.
+    let reannotate = fx.run(&["capture", "--include", "screenshot", "--annotate", "--url", &base]);
+    assert_eq!(
+        code(&reannotate),
+        0,
+        "capture --annotate --url after a frame switch must reset to main and succeed: {}",
+        stdout(&reannotate)
+    );
     let main = fx.run(&["frame", "main"]);
     assert_eq!(code(&main), 0);
     let href_main = fx.run(&["eval", "location.href"]);

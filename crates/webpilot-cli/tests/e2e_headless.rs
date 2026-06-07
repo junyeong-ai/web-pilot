@@ -78,6 +78,17 @@ fn headless_behavioral_flow() {
     let home = std::env::temp_dir().join(format!("webpilot-e2e-{}", std::process::id()));
     let fx = Fixture { home: home.clone() };
 
+    // 0. A zero CDP-send timeout would make every request expire instantly —
+    //    settings validation must refuse it loudly at startup (InvalidArgument),
+    //    not degrade to a session that times out on the first command.
+    let bad_cfg = fx.run_env(&["status"], &[("WEBPILOT_CDP_SEND_TIMEOUT_MS", "0")]);
+    assert_eq!(
+        code(&bad_cfg),
+        7,
+        "a zero cdp_send timeout must be refused at startup: {}",
+        stdout(&bad_cfg)
+    );
+
     // 1. Capture the page: button + input are indexed, the iframe is surfaced
     //    as an out-of-scope subframe (capture is main-frame scoped).
     let cap = fx.run(&["capture", "--include", "dom", "--url", &base]);
@@ -210,6 +221,15 @@ fn headless_behavioral_flow() {
         7,
         "upload onto a non-file element must be InvalidArgument: {}",
         stdout(&bad)
+    );
+    // A missing upload file is resolved (and rejected) in the CLI before the
+    // wire, so it's a typed InvalidArgument — not a raw CDP error from Chrome.
+    let missing = fx.run(&["action", "upload", &file_index, "/no/such/upload/file.txt"]);
+    assert_eq!(
+        code(&missing),
+        7,
+        "a missing upload file must be a typed InvalidArgument: {}",
+        stdout(&missing)
     );
 
     // 2d. The object handoff reaches a file input inside an OPEN SHADOW ROOT —

@@ -2,7 +2,7 @@
 // // Mirrors transport/local/capture.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
-import { activeFrameId, resolveActiveTab, setActiveTabId, sleep } from "./session.js";
+import { activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
 import { waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
@@ -33,6 +33,11 @@ async function handleCapture(command) {
         watch = watchMainFrameCommit(tabId);
       }
       await waitNavigationSettled(tabId, beforeUrl, watch, command.url);
+      // A fresh document has a new frame tree — drop any stale frame scope, so
+      // a capture after `frame switch` + `--url` is main-frame-scoped (matches
+      // headless `navigate_reconnect`, and keeps the `--annotate` main-frame
+      // guard from firing on a frame id that no longer exists).
+      setActiveFrameId(0);
     } else {
       const t = await resolveActiveTab();
       if (!t) return topErr(noPageErr());

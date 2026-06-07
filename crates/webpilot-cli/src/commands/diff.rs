@@ -95,6 +95,21 @@ fn diff_dom(a: &Path, b: &Path) -> Result<CommandOutput> {
     let text_b = String::from_utf8(read_capped(b, "file B")?)
         .context("file B is not valid UTF-8")?;
 
+    // A `--dom` diff compares DOM snapshots, which are JSON. Parse both first so
+    // a truncated or non-snapshot file fails loud instead of producing a
+    // meaningless line diff, and re-emit canonically so two snapshots that
+    // differ only in whitespace or key order don't read as changed.
+    let canon = |text: &str, label: &str| -> Result<String> {
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+            webpilot::WebPilotError::InvalidArgument {
+                detail: format!("{label} is not a valid DOM snapshot (JSON): {e}"),
+            }
+        })?;
+        Ok(serde_json::to_string_pretty(&value).expect("re-serialize parsed json"))
+    };
+    let text_a = canon(&text_a, "file A")?;
+    let text_b = canon(&text_b, "file B")?;
+
     let diff = similar::TextDiff::from_lines(&text_a, &text_b);
 
     let mut added = 0u32;
@@ -218,4 +233,33 @@ fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
         }),
         human,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diff_dom_validates_json_inputs() {
+        let dir = std::env::temp_dir().join(format!("wp-diff-dom-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("good.json");
+        let bad = dir.join("bad.json");
+        std::fs::write(&good, br#"{"elements":[],"total_nodes":1}"#).unwrap();
+        std::fs::write(&bad, b"truncated{{{ not json").unwrap();
+
+        // Two valid snapshots diff without error.
+        assert!(diff_dom(&good, &good).is_ok());
+
+        // A malformed snapshot is rejected loudly, not line-diffed into garbage.
+        match diff_dom(&good, &bad) {
+            Ok(_) => panic!("malformed JSON must be rejected, not diffed"),
+            Err(e) => assert!(
+                e.to_string().contains("not a valid DOM snapshot"),
+                "expected a typed rejection of malformed JSON, got: {e}"
+            ),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
