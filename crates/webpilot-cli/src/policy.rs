@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use webpilot::WebPilotError;
 use webpilot::dirs;
 use webpilot::protocol::Command;
@@ -171,23 +171,12 @@ pub fn clear() -> Result<()> {
 /// reads through `atomic_write`'s temp+rename, so it only ever sees a complete
 /// old-or-new store, never a torn one.
 fn with_store_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
-    use std::os::unix::io::AsRawFd;
-    let dir = dirs::artifacts_dir();
-    std::fs::create_dir_all(&dir)?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(dir.join("policies.lock"))?;
-    // SAFETY: flock() is a POSIX advisory lock; no memory-safety implications.
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        anyhow::bail!(
-            "failed to lock policy store: {}",
-            std::io::Error::last_os_error()
-        );
-    }
+    let _lock =
+        crate::lockfile::flock_exclusive(&dirs::artifacts_dir().join("policies.lock"), false)
+            .context("lock policy store")?
+            .expect("a blocking flock returns Some");
     f()
-    // `lock` drops here, releasing the flock.
+    // `_lock` drops here, releasing the flock.
 }
 
 fn write(store: &PolicyStore) -> Result<()> {

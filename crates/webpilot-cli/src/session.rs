@@ -19,14 +19,6 @@ pub fn headless_viewport() -> (u32, u32) {
     (c.viewport_width, c.viewport_height)
 }
 
-/// Atomic write: write to a temp file, then rename.
-fn atomic_write(path: &std::path::Path, data: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
-}
-
 /// Locate a Chrome binary. Prefers Chrome for Testing.
 pub fn find_chrome() -> Result<PathBuf> {
     if let Some(path) = &webpilot::settings::get().chrome.binary {
@@ -203,21 +195,9 @@ fn kill_profile_orphans() {
 /// returned file is dropped. Serialises launch and session-invalidation so a
 /// relaunch can't interleave with another process tearing the session down.
 fn launch_lock_guard() -> Result<std::fs::File> {
-    use std::os::unix::io::AsRawFd;
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(dirs::launch_lock_file())
-        .context("Failed to create launch lock file")?;
-    // SAFETY: flock() is a POSIX advisory lock; no memory safety implications.
-    if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        anyhow::bail!(
-            "Failed to acquire launch lock: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-    Ok(lock_file)
+    let guard = crate::lockfile::flock_exclusive(&dirs::launch_lock_file(), false)
+        .context("acquire launch lock")?;
+    Ok(guard.expect("a blocking flock returns Some"))
 }
 
 /// Pure path accessors: locate the PID/WS files without materialising the
@@ -306,8 +286,10 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
     // we just launched would be unmanaged — kill it before surfacing the error
     // rather than leaking an orphan.
     ensure_runtime();
-    if let Err(e) = atomic_write(&pid_path(), &pid.to_string())
-        .and_then(|_| atomic_write(&ws_url_path(), &ws_url))
+    // The shared atomic write fsyncs before the rename, so a crash can't leave
+    // a torn pid/ws file that the next launch would misread.
+    if let Err(e) = dirs::atomic_write(&pid_path(), pid.to_string().as_bytes())
+        .and_then(|_| dirs::atomic_write(&ws_url_path(), ws_url.as_bytes()))
     {
         let _ = send_signal(pid as i32, libc::SIGTERM);
         return Err(e.into());

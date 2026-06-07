@@ -3,7 +3,7 @@
 //! context to a page target) and by the `context list/close` CLI command.
 
 use crate::cdp::CdpClient;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use webpilot::dirs;
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -36,10 +36,9 @@ pub(crate) fn context_file_path(name: &str) -> std::path::PathBuf {
 /// only the last would be recorded, leaking the other until Chrome exits. The
 /// returned file handle holds an exclusive `flock` until it is dropped.
 fn lock_context(name: &str) -> Result<std::fs::File> {
-    flock_file(
-        &format!("ctx-{}.lock", context_hash(name)),
-        &format!("context '{name}'"),
-    )
+    let guard = crate::lockfile::flock_exclusive(&context_lock_path(name), false)
+        .with_context(|| format!("lock context '{name}'"))?;
+    Ok(guard.expect("a blocking flock returns Some"))
 }
 
 /// Serialize store-wide mutations (GC + cap check + create) across processes.
@@ -48,23 +47,15 @@ fn lock_context(name: &str) -> Result<std::fs::File> {
 /// both pass the cap. Lock order is always name → store; nothing acquires
 /// them the other way, so the pair cannot deadlock.
 fn lock_store() -> Result<std::fs::File> {
-    flock_file("store.lock", "context store")
+    let guard = crate::lockfile::flock_exclusive(&dirs::contexts_dir().join("store.lock"), false)
+        .context("lock context store")?;
+    Ok(guard.expect("a blocking flock returns Some"))
 }
 
-fn flock_file(filename: &str, what: &str) -> Result<std::fs::File> {
-    use std::os::unix::io::AsRawFd;
-    let dir = dirs::contexts_dir();
-    std::fs::create_dir_all(&dir)?;
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(dir.join(filename))?;
-    // SAFETY: flock() is a POSIX advisory lock; no memory-safety implications.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        anyhow::bail!("failed to lock {what}: {}", std::io::Error::last_os_error());
-    }
-    Ok(file)
+/// The per-context advisory-lock file. Hashed so an arbitrary context name maps
+/// to a fixed, filesystem-safe path.
+fn context_lock_path(name: &str) -> std::path::PathBuf {
+    dirs::contexts_dir().join(format!("ctx-{}.lock", context_hash(name)))
 }
 
 /// Non-blocking exclusive lock on a context. `Some` = acquired (the context is
@@ -75,20 +66,11 @@ fn flock_file(filename: &str, what: &str) -> Result<std::fs::File> {
 /// (the reverse of resolve's name→store) cannot deadlock — a non-blocking probe
 /// never waits on a held name lock, it just skips it.
 fn try_lock_context(name: &str) -> Option<std::fs::File> {
-    use std::os::unix::io::AsRawFd;
-    let dir = dirs::contexts_dir();
-    std::fs::create_dir_all(&dir).ok()?;
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(dir.join(format!("ctx-{}.lock", context_hash(name))))
-        .ok()?;
-    // SAFETY: flock() is a POSIX advisory lock; no memory-safety implications.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return None; // EWOULDBLOCK: actively in use — leave it alone.
-    }
-    Some(file)
+    // `Err` (a real open/lock failure) and `Ok(None)` (held) both mean "don't
+    // touch it" for a best-effort GC probe, so flatten them together.
+    crate::lockfile::flock_exclusive(&context_lock_path(name), true)
+        .ok()
+        .flatten()
 }
 
 fn now_secs() -> u64 {

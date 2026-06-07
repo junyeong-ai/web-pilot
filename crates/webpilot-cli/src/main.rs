@@ -3,6 +3,7 @@ mod cdp;
 mod cli;
 mod commands;
 mod host;
+mod lockfile;
 mod mcp;
 mod output;
 mod policy;
