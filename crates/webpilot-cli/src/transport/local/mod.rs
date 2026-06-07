@@ -124,11 +124,27 @@ impl LocalTransport {
     // ── Frame routing ────────────────────────────────────────────────────
 
     /// Look up the active execution context id (None = main world).
-    async fn active_context_id(&self) -> Option<i64> {
-        let active = self.active_frame_id.lock().await;
-        match active.as_deref() {
-            Some(fid) => self.frame_contexts.lock().await.get(fid).copied(),
-            None => None,
+    /// The active frame's execution-context id: `None` means the main world
+    /// (no frame switched). A switched frame whose context has not announced
+    /// itself within the probe window — the listener repopulates the map
+    /// asynchronously after open/rebind — is a typed `FrameNotFound`, never a
+    /// silent fall-through to the main world: that would run the agent's code
+    /// in a frame it did not choose, reporting success.
+    async fn active_context_id(&self) -> Result<Option<i64>> {
+        let active = self.active_frame_id.lock().await.clone();
+        let Some(fid) = active else { return Ok(None) };
+        let deadline = std::time::Instant::now() + PROBE;
+        loop {
+            if let Some(cid) = self.frame_contexts.lock().await.get(&fid).copied() {
+                return Ok(Some(cid));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(WebPilotError::FrameNotFound {
+                    selector: format!("frame {fid}"),
+                }
+                .into());
+            }
+            tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
         }
     }
 
@@ -140,7 +156,7 @@ impl LocalTransport {
             "returnByValue": true,
             "awaitPromise": true,
         });
-        if let Some(cid) = self.active_context_id().await {
+        if let Some(cid) = self.active_context_id().await? {
             params["contextId"] = cid.into();
         }
         let result = self.page.send("Runtime.evaluate", Some(params)).await?;
@@ -170,7 +186,7 @@ impl LocalTransport {
                 "expression": BRIDGE_JS,
                 "returnByValue": true,
             });
-            if let Some(cid) = self.active_context_id().await {
+            if let Some(cid) = self.active_context_id().await? {
                 params["contextId"] = cid.into();
             }
             self.page.send("Runtime.evaluate", Some(params)).await?;

@@ -245,9 +245,18 @@ function connectToHost() {
 // the documented serial model an enforced one.
 let commandQueue = Promise.resolve();
 
+// Pure reads that touch no command state — answerable while a long command
+// (a 15s navigation) holds the queue. A health check must not report dead
+// because the worker is busy.
+const QUEUE_EXEMPT = new Set(["Status", "Ping"]);
+
 function handleHostMessage(request, port) {
   const { id, command } = request;
   if (!command) return;
+  if (QUEUE_EXEMPT.has(command.type)) {
+    processCommandWithKeepAlive(id, command, port);
+    return;
+  }
   commandQueue = commandQueue
     .then(() => processCommandWithKeepAlive(id, command, port))
     .catch(() => {});
@@ -775,17 +784,23 @@ async function handleAction(command) {
 }
 
 async function dispatchActionToPage(tab, action) {
-  // A click-opened tab is caught by the creation event itself, registered
-  // before the action runs — no detection window, no sleep, and reliable even
-  // for popups that are still about:blank at creation (which a snapshot diff
-  // taken after a fixed delay raced against). Only a tab OPENED BY the acted-on
-  // tab qualifies: an unrelated tab created during the action (the user, some
-  // other extension) must not capture the pin.
-  let openedTab = null;
+  // A click-opened tab is caught by its creation events, registered before the
+  // action runs — no detection window, no sleep, and reliable even for popups
+  // that are still about:blank at creation. Only a tab the ACTED-ON tab opened
+  // qualifies — an unrelated tab created during the action (the user, another
+  // extension) must not capture the pin. Two correlation signals, first wins:
+  // `openerTabId` (the tab relationship) and `onCreatedNavigationTarget`'s
+  // `sourceTabId` (the navigation initiator — present even for rel=noopener
+  // popups, which deliberately carry no opener).
+  let openedTabId = null;
   const onCreated = (t) => {
-    if (t.openerTabId === tab.id) openedTab = openedTab || t;
+    if (openedTabId == null && t.openerTabId === tab.id) openedTabId = t.id;
+  };
+  const onNavTarget = (d) => {
+    if (openedTabId == null && d.sourceTabId === tab.id) openedTabId = d.tabId;
   };
   chrome.tabs.onCreated.addListener(onCreated);
+  chrome.webNavigation.onCreatedNavigationTarget.addListener(onNavTarget);
   const urlBefore = tab.url;
 
   try {
@@ -793,8 +808,8 @@ async function dispatchActionToPage(tab, action) {
     const r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
     const result = { type: "Action", ...r };
 
-    if (openedTab?.id != null) {
-      const newTab = await chrome.tabs.get(openedTab.id).catch(() => null);
+    if (openedTabId != null) {
+      const newTab = await chrome.tabs.get(openedTabId).catch(() => null);
       if (newTab) {
         await chrome.tabs.update(newTab.id, { active: true });
         // The agent's working tab moved — re-pin so every later command
@@ -820,6 +835,7 @@ async function dispatchActionToPage(tab, action) {
     return { type: "Action", success: false, error: exceptionErr(e) };
   } finally {
     chrome.tabs.onCreated.removeListener(onCreated);
+    chrome.webNavigation.onCreatedNavigationTarget.removeListener(onNavTarget);
   }
 }
 
@@ -973,6 +989,15 @@ async function handleEval(command) {
         target: { tabId: tab.id, frameIds: [activeFrameId] },
         world: "MAIN",
         func: async (code) => {
+          // CSP preflight: if the policy forbids dynamic evaluation, this empty
+          // constructor throws before any user code runs — so the security
+          // classification can never be confused by user-thrown errors or a
+          // page that shadowed the realm's EvalError.
+          try {
+            new Function("");
+          } catch (e) {
+            return { thrown: e?.message || String(e), csp: true };
+          }
           try {
             let v;
             // Expression-first, statements on SyntaxError — the same contract
@@ -986,12 +1011,7 @@ async function handleEval(command) {
             if (v && typeof v.then === "function") v = await v;
             return { value: v };
           } catch (e) {
-            // Chrome reports a CSP eval refusal as an EvalError whose message
-            // names the policy; require both so user code throwing its own
-            // EvalError is not misclassified into a security exit code.
-            const csp =
-              e instanceof EvalError && /Content Security Policy|unsafe-eval/i.test(e?.message || "");
-            return { thrown: e?.message || String(e), csp };
+            return { thrown: e?.message || String(e), csp: false };
           }
         },
         args: [command.code],
