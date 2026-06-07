@@ -75,7 +75,9 @@ Take an action by element index from the most recent capture.
 ```bash
 webpilot action click N
 webpilot action type N "text" --clear              # --clear replaces existing value
-webpilot action key-press Enter --ctrl --shift      # also --alt --meta
+webpilot action key-press Enter --ctrl --shift      # also --alt --meta; real key event
+                                                    #   (Tab/Backspace/arrows/Enter-submit work;
+                                                    #   acts on the focused element — click/focus first)
 webpilot action navigate "https://…"               # cross-origin reconnect handled
 webpilot action scroll down --amount 600           # or `up`
 webpilot action scroll-to N                        # bring [N] into view

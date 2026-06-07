@@ -68,7 +68,19 @@ impl LocalTransport {
     /// page (creating the context on first call).
     pub async fn open(context_name: Option<&str>) -> Result<Self> {
         let ws_url = session::ensure_session().await?;
-        let browser = CdpClient::connect(&ws_url).await?;
+        // Chrome can exit between `ensure_session`'s liveness check and this
+        // connect, leaving a stale URL. A connect failure there means the
+        // session is dead, not that the command is impossible — discard it and
+        // relaunch once before giving up, so a transient teardown doesn't
+        // surface as a hard failure.
+        let browser = match CdpClient::connect(&ws_url).await {
+            Ok(browser) => browser,
+            Err(_) => {
+                session::invalidate_session();
+                let ws_url = session::ensure_session().await?;
+                CdpClient::connect(&ws_url).await?
+            }
+        };
 
         // Push-based target discovery: a click-opened popup is correlated by
         // the `Target.targetCreated` event captured during an action's bridge

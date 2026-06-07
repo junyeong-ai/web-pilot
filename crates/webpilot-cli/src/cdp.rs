@@ -205,19 +205,36 @@ impl CdpClient {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
 
-        if self
-            .writer
-            .lock()
-            .await
-            .send(Message::Text(serde_json::to_string(&msg)?.into()))
-            .await
-            .is_err()
-        {
-            self.pending.lock().await.remove(&id);
-            return Err(WebPilotError::ConnectionLost {
-                detail: format!("CDP socket write failed for {method}"),
+        // Bound the WRITE path by the same deadline, not just the response
+        // wait: acquiring the writer lock (held by a concurrent send whose
+        // socket write has stalled) or the `send` itself (a full kernel buffer
+        // behind a wedged peer) can otherwise hang indefinitely, defeating the
+        // caller's timeout.
+        let text = serde_json::to_string(&msg)?;
+        let write = async {
+            self.writer
+                .lock()
+                .await
+                .send(Message::Text(text.into()))
+                .await
+        };
+        match tokio::time::timeout(timeout, write).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                self.pending.lock().await.remove(&id);
+                return Err(WebPilotError::ConnectionLost {
+                    detail: format!("CDP socket write failed for {method}"),
+                }
+                .into());
             }
-            .into());
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                return Err(WebPilotError::Timeout {
+                    kind: method.to_string(),
+                    elapsed_ms: timeout.as_millis() as u64,
+                }
+                .into());
+            }
         }
 
         let response = match tokio::time::timeout(timeout, rx).await {

@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -90,10 +90,12 @@ fn spawn_nm_writer(mut rx: mpsc::Receiver<serde_json::Value>) -> tokio::task::Jo
             let mut stdout = std::io::stdout().lock();
             match native_messaging::write_message(&mut stdout, &msg) {
                 Ok(()) => {}
-                // An oversized payload is rejected before any byte reaches the
-                // stream, so the pipe is still intact — skip just this message
-                // and keep serving every later command. Only a real IO failure
-                // (broken pipe) ends the writer.
+                // Backstop only: forwarded commands are size-checked before
+                // enqueue (the CLI gets a typed error), so this fires only for
+                // a host-originated message that somehow exceeds the frame. The
+                // payload is rejected before any byte reaches the stream, so the
+                // pipe stays intact — skip it and keep serving. Only a real IO
+                // failure (broken pipe) ends the writer.
                 Err(e @ native_messaging::NmError::TooLarge(_)) => {
                     tracing::error!("dropping oversized NM message: {e}");
                 }
@@ -295,33 +297,79 @@ async fn handle_one_cli_request(
     version_gate: VersionGate,
 ) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
+    let reader = BufReader::new(reader);
 
+    // Bound the request read in BOTH size and time. The socket is 0600 (same
+    // user), so this is hygiene rather than a security boundary, but an
+    // unbounded `read_line` lets a client that never sends a newline — or
+    // streams without one — grow a single line without limit, and a client
+    // that connects and sends nothing pins the spawned task forever. `take`
+    // caps the bytes; the timeout caps the wait.
+    const MAX_REQUEST_BYTES: u64 = 8 * 1024 * 1024;
+    const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     let mut line = String::new();
-    reader.read_line(&mut line).await?;
+    let n = match tokio::time::timeout(
+        READ_TIMEOUT,
+        reader.take(MAX_REQUEST_BYTES + 1).read_line(&mut line),
+    )
+    .await
+    {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => return Err(e.into()),
+        Err(_) => anyhow::bail!("IPC request read timed out"),
+    };
+    if n == 0 {
+        return Ok(()); // client closed without sending a request
+    }
+    if line.len() as u64 > MAX_REQUEST_BYTES {
+        return reply_error(
+            &mut writer,
+            None,
+            WebPilotError::InvalidArgument {
+                detail: format!("request exceeds the {MAX_REQUEST_BYTES}-byte limit"),
+            },
+        )
+        .await;
+    }
     let mut request: serde_json::Value = serde_json::from_str(line.trim())?;
 
     let cli_id = request.get("id").cloned();
 
-    // Reject loudly when the installed extension's version doesn't match the
-    // one bundled into this binary — a skewed install can't speak the current
-    // protocol reliably. Caught here so every command (not just `status`) fails
-    // closed with actionable guidance.
-    if let GateState::Mismatch(extension) = current_gate(&version_gate) {
-        let reported = if extension.is_empty() {
-            "unknown".to_owned()
-        } else {
-            extension
-        };
-        return reply_error(
-            &mut writer,
-            cli_id,
-            WebPilotError::VersionMismatch {
-                extension: reported,
-                expected: assets::expected_extension_version().to_owned(),
-            },
-        )
-        .await;
+    // Gate every command on the version handshake. The extension Pings on
+    // connect, but a CLI request can race ahead of that first Ping; wait a
+    // brief bounded window for the gate to resolve rather than forwarding an
+    // unverified command. A skewed install is rejected loudly (every command,
+    // not just `status`); a gate still unresolved after the grace fails
+    // closed — a command must not reach an extension whose protocol version
+    // was never confirmed.
+    match resolve_gate(&version_gate).await {
+        GateState::Matched => {}
+        GateState::Mismatch(extension) => {
+            let reported = if extension.is_empty() {
+                "unknown".to_owned()
+            } else {
+                extension
+            };
+            return reply_error(
+                &mut writer,
+                cli_id,
+                WebPilotError::VersionMismatch {
+                    extension: reported,
+                    expected: assets::expected_extension_version().to_owned(),
+                },
+            )
+            .await;
+        }
+        GateState::Unknown => {
+            return reply_error(
+                &mut writer,
+                cli_id,
+                WebPilotError::ConnectionLost {
+                    detail: "extension has not completed its version handshake".into(),
+                },
+            )
+            .await;
+        }
     }
 
     // Enforce policy *here*, in the process that actually reaches the
@@ -348,6 +396,27 @@ async fn handle_one_cli_request(
     // host-unique id that can't clash with another concurrent CLI process.
     let host_id = ids.fetch_add(1, Ordering::Relaxed);
     request["id"] = host_id.into();
+
+    // Reject a command too large for the Native Messaging frame BEFORE
+    // enqueueing it: the writer would otherwise drop the oversized message and
+    // leave the CLI waiting out the full response timeout for a reply that can
+    // never come. A typed error now is the honest, immediate answer.
+    if let Ok(encoded) = serde_json::to_vec(&request)
+        && encoded.len() > native_messaging::MAX_WRITE_SIZE
+    {
+        return reply_error(
+            &mut writer,
+            cli_id,
+            WebPilotError::InvalidArgument {
+                detail: format!(
+                    "command is {} bytes, over the {}-byte Native Messaging limit",
+                    encoded.len(),
+                    native_messaging::MAX_WRITE_SIZE
+                ),
+            },
+        )
+        .await;
+    }
 
     let (resp_tx, resp_rx) = oneshot::channel();
     pending.lock().await.insert(host_id, resp_tx);
@@ -385,6 +454,22 @@ async fn handle_one_cli_request(
 
 fn current_gate(gate: &VersionGate) -> GateState {
     gate.lock().map(|g| g.clone()).unwrap_or(GateState::Unknown)
+}
+
+/// Resolve the version gate, waiting a brief bounded window for the connect-time
+/// Ping to land if it has not yet (a CLI request can race ahead of it). Returns
+/// the first non-`Unknown` state, or `Unknown` if the handshake never arrives.
+async fn resolve_gate(gate: &VersionGate) -> GateState {
+    const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+    const ATTEMPTS: u32 = 100; // ~2s; the Ping lands in milliseconds in practice.
+    for _ in 0..ATTEMPTS {
+        let state = current_gate(gate);
+        if !matches!(state, GateState::Unknown) {
+            return state;
+        }
+        tokio::time::sleep(POLL).await;
+    }
+    current_gate(gate)
 }
 
 /// Write a typed error back to the CLI as a `ResponseData::Error` envelope —

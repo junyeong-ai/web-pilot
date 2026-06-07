@@ -258,6 +258,21 @@ pub fn get_existing_session() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Tear down a session that proved unreachable — Chrome exited (or hung)
+/// between the liveness check and the CDP connect, so the recorded URL is
+/// stale. Kills a still-alive PID and removes the PID/WS files so the next
+/// `ensure_session` relaunches cleanly instead of handing back the dead URL.
+pub fn invalidate_session() {
+    if let Ok(pid_str) = std::fs::read_to_string(pid_path())
+        && let Ok(pid) = pid_str.trim().parse::<i32>()
+        && is_process_alive(pid)
+    {
+        let _ = send_signal(pid, libc::SIGKILL);
+    }
+    let _ = std::fs::remove_file(pid_path());
+    let _ = std::fs::remove_file(ws_url_path());
+}
+
 /// Ensure a headless session is running. Uses an advisory file lock so that
 /// concurrent agents do not race to launch Chrome.
 pub async fn ensure_session() -> Result<String> {

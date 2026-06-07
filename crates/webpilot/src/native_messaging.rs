@@ -19,7 +19,10 @@ pub enum NmError {
 // screenshot payloads and may be large. Host→Extension (write) is capped by
 // Chrome at 1 MB; enforcing it here turns silent truncation into a clear error.
 const MAX_READ_SIZE: usize = 100 * 1024 * 1024;
-const MAX_WRITE_SIZE: usize = 1024 * 1024;
+/// Chrome caps a single Host→Extension Native Messaging message at 1 MB.
+/// Exposed so the host can reject an oversized command up front with a typed
+/// error instead of letting the writer drop it and the caller time out.
+pub const MAX_WRITE_SIZE: usize = 1024 * 1024;
 
 /// Read one NM message from stdin (blocking).
 pub fn read_message<R: Read>(reader: &mut R) -> Result<serde_json::Value, NmError> {
