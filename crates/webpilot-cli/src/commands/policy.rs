@@ -60,7 +60,9 @@ pub fn run(args: PolicyArgs) -> Result<CommandOutput> {
                 operation
                     .parse()
                     .map_err(|_| WebPilotError::InvalidArgument {
-                        detail: format!("unknown operation '{operation}'"),
+                        detail: format!(
+                            "unknown operation '{operation}' (any action kind, or: eval, fetch, dom_set, tab_close, cookie_list, cookie_set, cookie_delete, session_export, session_import)"
+                        ),
                     })?;
             policy::set(operation, parse_verdict(&verdict)?)?;
             Ok(CommandOutput::Ok("OK".into()))

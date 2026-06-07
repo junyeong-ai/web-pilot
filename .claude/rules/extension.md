@@ -27,7 +27,7 @@ paths:
 - `isVisible` delegates to the platform's `el.checkVisibility({ contentVisibilityAuto, opacityProperty, visibilityProperty })` plus a non-zero rect, so `display:contents`, `visibility:collapse`, `content-visibility:auto`, and `opacity:0` are all handled. The same predicate gates extraction and action-time revalidation, so they can't drift.
 
 ## New-element semantics
-- `is_new` is detected by **node identity**: an element is new when its reference was absent from the previous snapshot (`state.snapshot`). Identity is collision-free and churn-free — a re-rendered-but-same node stays not-new; a remounted node is correctly new. On the first capture after a `location.href` change there is no meaningful prior set, so nothing is flagged (a fresh page is not "all new"). There is no content-hash key.
+- `is_new` is detected by **node identity**: an element is new when its reference was absent from the previous snapshot (`state.snapshot`). Identity is collision-free and survives re-renders that keep the node (a framework that *replaces* nodes will mark replacements new — that is the identity model's honest trade against content-hash collisions). With no usable baseline — the first capture in a document, or the first after a `location.href` change — nothing is flagged: a fresh page is not "all new". There is no content-hash key.
 
 ## Policy & versioning
 - The service worker does **not** enforce or store policy. Policy is enforced at the privileged sink that reaches the browser — `LocalTransport::send` (headless) or the NM host (browser) — never in the SW or the CLI-side `IpcTransport`; the SW just executes.

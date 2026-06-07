@@ -27,7 +27,6 @@ pub enum Action {
     },
 
     /// Press a key (with optional modifiers).
-    #[command(name = "keypress")]
     KeyPress {
         key: String,
         #[command(flatten)]

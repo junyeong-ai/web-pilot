@@ -237,10 +237,10 @@ mod tests {
         // Every non-action key added to PolicyKey must round-trip through the
         // on-disk store (Display/FromStr via serde_plain).
         let s = parse(
-            r#"{"rules":{"session_export":"deny","cookie_list":"deny","cookie_set":"deny","dom_set":"deny","tab_close":"deny","session_import":"allow"}}"#,
+            r#"{"rules":{"eval":"deny","fetch":"deny","session_export":"deny","cookie_list":"deny","cookie_set":"deny","cookie_delete":"deny","dom_set":"deny","tab_close":"deny","session_import":"allow"}}"#,
         )
         .unwrap();
-        assert_eq!(s.rules.len(), 6);
+        assert_eq!(s.rules.len(), 9);
     }
 
     // `parse_and_enforce` is the host's security gate for raw socket traffic.

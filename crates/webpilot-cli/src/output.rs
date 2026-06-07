@@ -73,16 +73,17 @@ impl CommandOutput {
     /// Mirrors the Human render but returns the text instead of splitting it
     /// across stdout/stderr, so the MCP surface and the CLI share one set of
     /// renderers (`DomSnapshot::to_text`, the handler-built `human` strings).
-    pub fn to_agent_text(&self) -> String {
+    pub(crate) fn to_agent_text(&self) -> String {
         match self {
             CommandOutput::Ok(msg) => msg.clone(),
             CommandOutput::Data { human, .. } => human.clone(),
             CommandOutput::Content { stdout, .. } => stdout.clone(),
             CommandOutput::Dom { snapshot, extra } => {
-                let mut lines: Vec<String> = Vec::new();
-                if !snapshot.elements.is_empty() {
-                    lines.push(snapshot.to_text());
-                }
+                // The snapshot text is included even with zero interactive
+                // elements: it carries the page header (title/URL/scroll),
+                // which is exactly what an agent needs after landing on a
+                // sparse page — an empty reply would hide where it is.
+                let mut lines = vec![snapshot.to_text().trim_end().to_string()];
                 lines.extend(dom_extra_lines(extra));
                 lines.join("\n")
             }

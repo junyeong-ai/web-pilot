@@ -63,7 +63,7 @@ webpilot find --role button --text "Submit" --click  # 시맨틱 검색 + 클릭
 webpilot find --label "Email" --fill "user@test.com" # 레이블 검색 + 입력
 webpilot action click 5                              # 인덱스로 클릭
 webpilot action type 3 "hello" --clear               # 텍스트 입력
-webpilot action keypress Enter                       # 키 입력
+webpilot action key-press Enter                       # 키 입력
 ```
 
 ### 디바이스 에뮬레이션

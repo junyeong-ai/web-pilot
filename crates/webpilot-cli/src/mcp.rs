@@ -5,8 +5,14 @@
 //! CLI drives. It is a thin adapter: each tool builds a typed `Command` /
 //! `Action` and runs it through the existing command handler over the shared
 //! `Transport`, so mode parity, policy enforcement, and the agent-facing DOM
-//! rendering are all inherited — never reimplemented. The transport opens once
-//! and is reused for the whole session, keeping the browser warm across calls.
+//! rendering are all inherited — never reimplemented.
+//!
+//! The transport opens lazily on the first tool call and is then reused for
+//! the whole session: `initialize` and `tools/list` must answer even when
+//! Chrome is slow or unavailable, and a failed launch belongs to the tool call
+//! that needed the browser, not to the server's lifetime.
+
+use std::future::Future;
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -14,13 +20,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use webpilot::WebPilotError;
 use webpilot::action::Action;
 use webpilot::capture::{CaptureField, CaptureOpts};
-use webpilot::protocol::{Command, ResponseData};
-use webpilot::wait::WaitCondition;
 
-use crate::commands::{action, capture, eval};
+use crate::commands::{action, capture, eval, wait};
+use crate::output::CommandOutput;
 use crate::transport::{IpcTransport, LocalTransport, Transport};
 
-/// Latest MCP protocol revision this server implements.
+/// The MCP protocol revision this server implements. Per the MCP lifecycle,
+/// `initialize` always answers with a version the server supports — the client
+/// decides whether to continue.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
 #[derive(clap::Args)]
@@ -30,21 +37,31 @@ pub struct McpArgs {}
 /// `--context` are honored by the caller).
 pub async fn serve(browser: bool, context: Option<String>) -> Result<()> {
     if browser {
-        run(&mut IpcTransport::new()).await
+        run(|| async { anyhow::Ok(IpcTransport::new()) }).await
     } else {
-        run(&mut LocalTransport::open(context.as_deref()).await?).await
+        run(move || {
+            let context = context.clone();
+            async move { LocalTransport::open(context.as_deref()).await }
+        })
+        .await
     }
 }
 
-async fn run<T: Transport>(transport: &mut T) -> Result<()> {
+async fn run<T, F, Fut>(connect: F) -> Result<()>
+where
+    T: Transport,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let mut transport: Option<T> = None;
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
         }
-        let Some(reply) = handle_line(transport, &line).await else {
-            continue; // notification or unaddressable input — no response
+        let Some(reply) = handle_line(&connect, &mut transport, &line).await else {
+            continue; // a notification — no response
         };
         let mut buf = serde_json::to_string(&reply).expect("JSON-RPC reply serializes");
         buf.push('\n');
@@ -54,19 +71,26 @@ async fn run<T: Transport>(transport: &mut T) -> Result<()> {
     Ok(())
 }
 
-/// Route one JSON-RPC message. Returns `None` for notifications (no `id`) and
-/// for input we can't address a reply to.
-async fn handle_line<T: Transport>(transport: &mut T, line: &str) -> Option<Value> {
-    let msg: Value = serde_json::from_str(line).ok()?;
+/// Route one JSON-RPC message. Returns `None` only for notifications (no `id`).
+async fn handle_line<T, F, Fut>(connect: &F, transport: &mut Option<T>, line: &str) -> Option<Value>
+where
+    T: Transport,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let Ok(msg) = serde_json::from_str::<Value>(line) else {
+        // JSON-RPC 2.0: a parse error is answered with a null id, never dropped.
+        return Some(error_reply(Value::Null, -32700, "parse error"));
+    };
     let id = msg.get("id").filter(|v| !v.is_null()).cloned()?;
     let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
 
     match method {
-        "initialize" => Some(ok_reply(id, initialize_result(&params))),
+        "initialize" => Some(ok_reply(id, initialize_result())),
         "ping" => Some(ok_reply(id, json!({}))),
         "tools/list" => Some(ok_reply(id, json!({ "tools": tool_specs() }))),
-        "tools/call" => Some(tool_call_reply(transport, id, &params).await),
+        "tools/call" => Some(tool_call_reply(connect, transport, id, &params).await),
         other => Some(error_reply(
             id,
             -32601,
@@ -83,15 +107,9 @@ fn error_reply(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-fn initialize_result(params: &Value) -> Value {
-    // Echo the client's requested protocol version when present (maximal
-    // compatibility); otherwise advertise ours.
-    let version = params
-        .get("protocolVersion")
-        .and_then(Value::as_str)
-        .unwrap_or(PROTOCOL_VERSION);
+fn initialize_result() -> Value {
     json!({
-        "protocolVersion": version,
+        "protocolVersion": PROTOCOL_VERSION,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "webpilot", "version": env!("CARGO_PKG_VERSION") },
     })
@@ -100,14 +118,30 @@ fn initialize_result(params: &Value) -> Value {
 /// A tool failure is reported as a successful JSON-RPC response carrying
 /// `isError: true`, so the model sees the message and can react, per the MCP
 /// tool-call contract. Only malformed requests use JSON-RPC-level errors.
-async fn tool_call_reply<T: Transport>(transport: &mut T, id: Value, params: &Value) -> Value {
+async fn tool_call_reply<T, F, Fut>(
+    connect: &F,
+    transport: &mut Option<T>,
+    id: Value,
+    params: &Value,
+) -> Value
+where
+    T: Transport,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
     let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-    let result = match call_tool(transport, name, &args).await {
-        Ok(text) => json!({
-            "content": [{ "type": "text", "text": text }],
-            "isError": false,
-        }),
+
+    let outcome = async {
+        if transport.is_none() {
+            *transport = Some(connect().await.map_err(crate::into_webpilot_error)?);
+        }
+        call_tool(transport.as_mut().expect("just connected"), name, &args).await
+    }
+    .await;
+
+    let result = match outcome {
+        Ok(content) => json!({ "content": content, "isError": false }),
         Err(e) => json!({
             "content": [{ "type": "text", "text": format!("{e}") }],
             "isError": true,
@@ -116,11 +150,12 @@ async fn tool_call_reply<T: Transport>(transport: &mut T, id: Value, params: &Va
     ok_reply(id, result)
 }
 
+/// Execute one tool and return its MCP content blocks.
 async fn call_tool<T: Transport>(
     transport: &mut T,
     name: &str,
     args: &Value,
-) -> std::result::Result<String, WebPilotError> {
+) -> std::result::Result<Vec<Value>, WebPilotError> {
     let output = match name {
         "browser_navigate" => {
             capture::run(
@@ -145,7 +180,7 @@ async fn call_tool<T: Transport>(
             .await
         }
         "browser_screenshot" => {
-            capture::run(
+            let output = capture::run(
                 transport,
                 capture::CaptureArgs {
                     include: vec![CaptureField::Screenshot],
@@ -154,6 +189,8 @@ async fn call_tool<T: Transport>(
                 },
             )
             .await
+            .map_err(crate::into_webpilot_error)?;
+            return screenshot_content(&output);
         }
         "browser_click" | "browser_type" | "browser_press_key" | "browser_scroll"
         | "browser_select" => {
@@ -176,16 +213,42 @@ async fn call_tool<T: Transport>(
             )
             .await
         }
-        "browser_wait" => return wait_tool(transport, args).await,
+        "browser_wait" => {
+            let timeout_ms = args
+                .get("timeout_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(10_000);
+            // Reuse WaitCondition's tagged deserialization; keep only its
+            // fields so the extra `timeout_ms` can't trip a stricter schema.
+            let mut cond = serde_json::Map::new();
+            if let Some(until) = args.get("until") {
+                cond.insert("until".into(), until.clone());
+            }
+            if let Some(value) = args.get("value") {
+                cond.insert("value".into(), value.clone());
+            }
+            let condition = serde_json::from_value(Value::Object(cond)).map_err(|e| {
+                WebPilotError::InvalidArgument {
+                    detail: format!("invalid wait condition: {e}"),
+                }
+            })?;
+            wait::run(
+                transport,
+                wait::WaitArgs {
+                    condition,
+                    timeout: timeout_ms.div_ceil(1000).max(1),
+                },
+            )
+            .await
+        }
         other => {
             return Err(WebPilotError::InvalidArgument {
                 detail: format!("unknown tool: {other}"),
             });
         }
     };
-    output
-        .map(|o| o.to_agent_text())
-        .map_err(crate::into_webpilot_error)
+    let output = output.map_err(crate::into_webpilot_error)?;
+    Ok(vec![json!({ "type": "text", "text": output.to_agent_text() })])
 }
 
 /// Build a typed `Action` from a tool's arguments by injecting the wire `kind`
@@ -208,45 +271,32 @@ fn build_action(tool: &str, args: &Value) -> std::result::Result<Action, WebPilo
     })
 }
 
-async fn wait_tool<T: Transport>(
-    transport: &mut T,
-    args: &Value,
-) -> std::result::Result<String, WebPilotError> {
-    let timeout_ms = args
-        .get("timeout_ms")
-        .and_then(Value::as_u64)
-        .unwrap_or(10_000);
-    // Reuse WaitCondition's tagged deserialization; keep only its fields so an
-    // extra `timeout_ms` can't trip a future stricter schema.
-    let mut cond = serde_json::Map::new();
-    if let Some(until) = args.get("until") {
-        cond.insert("until".into(), until.clone());
-    }
-    if let Some(value) = args.get("value") {
-        cond.insert("value".into(), value.clone());
-    }
-    let condition: WaitCondition =
-        serde_json::from_value(Value::Object(cond)).map_err(|e| WebPilotError::InvalidArgument {
-            detail: format!("invalid wait condition: {e}"),
-        })?;
-
-    let result = transport
-        .send(Command::Wait {
-            condition,
-            timeout_ms,
-        })
-        .await
-        .map_err(crate::into_webpilot_error)?;
-    match result {
-        ResponseData::Wait { success: true, .. } => Ok("OK".into()),
-        ResponseData::Wait { error, .. } => Err(error.unwrap_or(WebPilotError::Other {
-            detail: "wait failed".into(),
-        })),
-        ResponseData::Error { error } => Err(error),
-        _ => Err(WebPilotError::Other {
-            detail: "unexpected response to wait".into(),
-        }),
-    }
+/// An MCP image block (plus the saved path as text) from a screenshot capture.
+/// The host receives the actual pixels — a bare filesystem path would be
+/// useless to a remote or sandboxed client.
+fn screenshot_content(output: &CommandOutput) -> std::result::Result<Vec<Value>, WebPilotError> {
+    let CommandOutput::Data { json: data, .. } = output else {
+        return Err(WebPilotError::Other {
+            detail: "screenshot produced no artefact".into(),
+        });
+    };
+    let Some(path) = data.get("screenshot_path").and_then(Value::as_str) else {
+        let detail = data
+            .get("screenshot_error")
+            .and_then(Value::as_str)
+            .unwrap_or("screenshot produced no artefact");
+        return Err(WebPilotError::Other {
+            detail: detail.to_string(),
+        });
+    };
+    let bytes = std::fs::read(path).map_err(|e| WebPilotError::Other {
+        detail: format!("failed to read screenshot {path}: {e}"),
+    })?;
+    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+    Ok(vec![
+        json!({ "type": "image", "data": encoded, "mimeType": "image/png" }),
+        json!({ "type": "text", "text": format!("Screenshot: {path}") }),
+    ])
 }
 
 fn str_arg(args: &Value, key: &str) -> std::result::Result<String, WebPilotError> {
@@ -284,7 +334,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "browser_screenshot",
-            "description": "Capture a screenshot of the current page; returns the saved image path.",
+            "description": "Capture a screenshot of the current page; returns the image and its saved path.",
             "inputSchema": { "type": "object", "properties": {} },
         },
         {
@@ -384,17 +434,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initialize_echoes_client_protocol_version() {
-        let r = initialize_result(&json!({ "protocolVersion": "2024-11-05" }));
-        assert_eq!(r["protocolVersion"], "2024-11-05");
+    fn initialize_advertises_the_supported_protocol_version() {
+        // The server implements exactly one revision; per the MCP lifecycle it
+        // must answer with a version it supports (never echo an unknown one)
+        // and let the client decide.
+        let r = initialize_result();
+        assert_eq!(r["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(r["serverInfo"]["name"], "webpilot");
         assert!(r["capabilities"]["tools"].is_object());
-    }
-
-    #[test]
-    fn initialize_defaults_protocol_version_when_absent() {
-        let r = initialize_result(&json!({}));
-        assert_eq!(r["protocolVersion"], PROTOCOL_VERSION);
     }
 
     #[test]

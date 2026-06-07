@@ -105,11 +105,17 @@
       seen.add(el);
     };
 
+    // Degenerate-size floor for the HEURISTIC passes only (markers and
+    // cursor:pointer): 1px telemetry/spacer nodes — jsaction tracking pixels
+    // especially — must not mint phantom targets, while real small controls
+    // (8px icon buttons) still qualify. The semantic allowlist above has no
+    // size gate: a real <button> is interactive regardless of size.
+    const isDegenerate = (rect) => rect.width < 5 || rect.height < 5;
+
     // Explicit interaction markers. `tabindex` qualifies only when >= 0: a
     // tabindex of -1 is script-only focus (route announcers, modal roots,
     // headings) and is not a click affordance, so it must not mint a phantom
-    // target. Size is not a gate — an 8px icon button is still interactive;
-    // visibility (real layout, not display:none/collapse) is the gate.
+    // target.
     const markerSel = '[onclick],[data-action],[ng-click],' +
       '[v-on\\:click],[\\@click],[data-click],[jsaction]';
     const markers = new Set(document.querySelectorAll(markerSel));
@@ -121,6 +127,7 @@
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
       if (el.getAttribute("role")) continue;
+      if (isDegenerate(el.getBoundingClientRect())) continue;
       if (!isVisible(el)) continue;
       add(el);
     }
@@ -128,13 +135,21 @@
     // cursor:pointer signals a target only on the INNERMOST such element.
     // Cards, rows and banners set pointer on a wrapper that merely contains the
     // real control; surfacing the wrapper hands the agent a giant phantom
-    // overlapping the actual button. Skip any pointer element that wraps an
-    // already-collected interactive node.
-    for (const el of document.querySelectorAll("*")) {
+    // overlapping the actual button. Iterate in REVERSE document order so every
+    // descendant is visited before its ancestor — a pointer child is collected
+    // first, and the ancestor is then skipped for wrapping it. The scan is
+    // viewport-bounded before any style read: computing style for every node in
+    // a long document is a real cost, and off-screen pointer-only elements
+    // reappear in the next capture after the agent scrolls.
+    const everything = document.querySelectorAll("*");
+    for (let i = everything.length - 1; i >= 0; i--) {
+      const el = everything[i];
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
       if (el.getAttribute("role")) continue;
-      if (!isVisible(el)) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > innerHeight) continue;
+      if (isDegenerate(rect)) continue;
       let cursor;
       try {
         cursor = getComputedStyle(el).cursor;
@@ -142,6 +157,7 @@
         continue;
       }
       if (cursor !== "pointer") continue;
+      if (!isVisible(el)) continue;
       let wrapsCollected = false;
       for (const c of seen) {
         if (el.contains(c)) {
@@ -156,20 +172,24 @@
   }
 
   // Single visibility predicate shared by extraction and action-time
-  // revalidation, so the two can never drift apart. Delegates the CSS side to
-  // the platform's own computation, which correctly accounts for ancestor
-  // display:none/contents, visibility:hidden|collapse, opacity:0, and
-  // content-visibility:auto subtrees — cases a hand-rolled style read on the
-  // element alone silently misses. A zero-area box is never actionable, so
-  // real layout is still required.
+  // revalidation, so the two can never drift apart. `checkVisibility()` is
+  // called WITHOUT options: the option keys are newer than some installed
+  // Chromes and unknown dictionary keys are silently dropped, which would
+  // disable the very checks they name. The bare call covers display:none /
+  // display:contents ancestors and content-visibility:hidden; the explicit
+  // style reads cover visibility and the element's own opacity on every
+  // Chrome version. A zero-area box is never actionable, so real layout is
+  // still required.
   function isVisible(el) {
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return false;
-    return el.checkVisibility({
-      contentVisibilityAuto: true,
-      opacityProperty: true,
-      visibilityProperty: true,
-    });
+    if (!el.checkVisibility()) return false;
+    const style = getComputedStyle(el);
+    return (
+      style.visibility !== "hidden" &&
+      style.visibility !== "collapse" &&
+      parseFloat(style.opacity) > 0
+    );
   }
 
   // Resolve an element index against the stored snapshot.
@@ -299,14 +319,14 @@
       const start = performance.now();
       const urlChanged = state.lastUrl !== location.href;
       state.lastUrl = location.href;
-      // New-element baseline by node identity: the previous snapshot already
-      // holds the exact elements the agent last saw, so "new" means simply not
-      // present then. Identity is collision-free (no two elements share it) and
-      // churn-free (a re-rendered-but-same node stays not-new; a remounted node
-      // is correctly new). On the first capture of a freshly navigated page
-      // there is no meaningful prior set, so nothing is flagged — a new page is
-      // not "all new".
-      const prevNodes = urlChanged ? new Set() : new Set(state.snapshot || []);
+      // New-element baseline by node identity: the previous snapshot holds the
+      // exact elements the agent last saw, so "new" means absent from it.
+      // Identity is collision-free (no two elements share it) and survives
+      // re-renders that keep the node. With no usable baseline — the first
+      // capture in this document, or the first after the URL changed — nothing
+      // is flagged (`prevNodes = null`): a fresh page is not "all new".
+      const prevNodes =
+        !urlChanged && state.snapshot ? new Set(state.snapshot) : null;
       const { all, shadowTruncated } = collectInteractiveElements();
       if (shadowTruncated) {
         console.warn("[WebPilot] shadow-DOM traversal hit its host budget; some controls may be omitted");
@@ -396,7 +416,7 @@
           };
         }
 
-        entry.is_new = !prevNodes.has(el);
+        entry.is_new = prevNodes ? !prevNodes.has(el) : false;
 
         // Strip absent (undefined) fields, and `false` only where it is the
         // mere absence of a property. `checked` and `expanded` are genuine

@@ -40,7 +40,7 @@ fn action_scroll_uses_typed_direction() {
 }
 
 #[test]
-fn action_keypress_carries_modifiers() {
+fn action_key_press_carries_modifiers() {
     let a = Action::KeyPress {
         key: "Enter".into(),
         modifiers: Modifiers {

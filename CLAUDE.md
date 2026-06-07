@@ -120,6 +120,23 @@ Guidance text is produced directly from data by `WebPilotError::Display` — no
 message parsing or substring matching. External crate errors are wrapped into
 `Other` at the `main::into_webpilot_error` boundary.
 
+## Security Model — honest boundaries
+
+- Policy is a **guardrail against a steered agent, not a sandbox against a
+  malicious same-user process**: the store and `webpilot policy` belong to the
+  same user the agent runs as. Protect them externally if that matters.
+- `eval` is the master key: with `eval` allowed, narrower denies (navigate /
+  fetch / cookie_list / session_export) are advisory — page JS reproduces those
+  effects. Deny `eval` first; `policy default deny` + allowlist is the
+  least-privilege mode.
+- Headless CDP is a `127.0.0.1` WebSocket on a random TCP port. A same-user
+  local process can reach it directly, bypassing the in-process gate. Accepted:
+  Chrome's pipe alternative cannot serve the reconnect-across-processes model
+  (separate CLI invocations re-attach to one persistent Chrome), and a broker
+  daemon to close a same-user-only exposure adds more failure modes than it
+  removes. Browser mode does not share this: the only path to the authenticated
+  Chrome is the NM host behind a 0600 socket, which parses and enforces policy.
+
 ## Runtime Paths
 
 ```
