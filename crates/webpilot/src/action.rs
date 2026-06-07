@@ -108,12 +108,6 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
-impl Modifiers {
-    pub fn is_empty(&self) -> bool {
-        !self.ctrl && !self.shift && !self.alt && !self.meta
-    }
-}
-
 /// Categorical action kind for policy lookups and audit logging.
 ///
 /// Wire format matches `Action`'s `kind` discriminator exactly: snake_case.

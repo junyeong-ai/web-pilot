@@ -63,13 +63,6 @@ pub async fn send_request(request: &serde_json::Value) -> Result<serde_json::Val
     send_to(&socket_path(), request).await
 }
 
-pub async fn send_request_to(
-    path: &Path,
-    request: &serde_json::Value,
-) -> Result<serde_json::Value, IpcError> {
-    send_to(path, request).await
-}
-
 /// Bind the IPC server (Host side). Removes any stale socket file.
 pub async fn start_server() -> Result<UnixListener, IpcError> {
     let path = socket_path();

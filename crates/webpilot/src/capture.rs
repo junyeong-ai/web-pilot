@@ -54,8 +54,3 @@ impl CaptureOpts {
         Ok(())
     }
 }
-
-/// Convenience: turn a list of fields into a set-like check helper.
-pub fn includes(fields: &[CaptureField], target: CaptureField) -> bool {
-    fields.contains(&target)
-}
