@@ -11,6 +11,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <button id="go" onclick="document.title='clicked'">Go</button>
 <input id="q" type="text" placeholder="Search">
 <input id="file" type="file">
+<button id="slownav" onclick="location.href='/slow'">slow nav</button>
 <a id="nav" href="/second">go second</a>
 <a id="pop" href="/second" target="_blank" rel="noopener">open popup</a>
 <div id="shadowhost"></div>
@@ -33,36 +34,49 @@ pub const CSP_PAGE: &str = r#"<!doctype html><html><head><title>csp-outer</title
 pub const CSP_FRAME: &str = r#"<!doctype html><html><head><title>cspframe</title></head>
 <body><p id="m">csp inner</p></body></html>"#;
 
+/// The destination of `#slownav` — served with a deliberate delay so the
+/// navigation is still in flight when the action returns. A capture that
+/// settles on this page (title `slow-final`) proves the action waited for the
+/// click-triggered navigation rather than snapshotting the dying page.
+pub const SLOW: &str = r#"<!doctype html><html><head><title>slow-final</title></head>
+<body><h1 id="arrived">arrived</h1></body></html>"#;
+
 const CSP_HEADER: &str = "Content-Security-Policy: script-src 'self'\r\n";
 
-/// Minimal blocking HTTP server: serves the fixture page for `/`, the inner
-/// document for `/frame`, and a CSP-strict pair for `/csp` + `/cspframe`.
-/// Runs on a daemon thread for the test's lifetime.
+/// Minimal HTTP server: serves the fixture page for `/`, the inner document for
+/// `/frame`, a CSP-strict pair for `/csp` + `/cspframe`, and a deliberately
+/// delayed `/slow`. Each connection is handled on its own thread so the delayed
+/// route never blocks a concurrent request (e.g. the iframe load).
 pub fn spawn_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
-            let mut buf = [0u8; 1024];
-            let n = stream.read(&mut buf).unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..n]);
-            let (body, extra_headers) = if req.starts_with("GET /frame") {
-                (FRAME, "")
-            } else if req.starts_with("GET /cspframe") {
-                (CSP_FRAME, CSP_HEADER)
-            } else if req.starts_with("GET /csp") {
-                (CSP_PAGE, CSP_HEADER)
-            } else {
-                (PAGE, "")
-            };
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
-                body.len(),
-                extra_headers,
-                body
-            );
-            let _ = stream.write_all(resp.as_bytes());
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let (body, extra_headers) = if req.starts_with("GET /frame") {
+                    (FRAME, "")
+                } else if req.starts_with("GET /cspframe") {
+                    (CSP_FRAME, CSP_HEADER)
+                } else if req.starts_with("GET /csp") {
+                    (CSP_PAGE, CSP_HEADER)
+                } else if req.starts_with("GET /slow") {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    (SLOW, "")
+                } else {
+                    (PAGE, "")
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
+                    body.len(),
+                    extra_headers,
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            });
         }
     });
     format!("http://127.0.0.1:{port}")

@@ -359,6 +359,41 @@ fn browser_behavioral_flow() {
         stdout(&fetched)
     );
 
+    // 2f. A click that triggers a SAME-TAB navigation (here `location.href` to a
+    //     deliberately-slow `/slow`) must be detected and waited out: the action
+    //     registers a commit watch before dispatching, settles on the new
+    //     document, and `--capture` snapshots the destination — not the dying
+    //     pre-click page. Without the watch the immediate URL check would miss
+    //     the still-in-flight navigation and capture the stale page.
+    let recap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&recap), 0);
+    let slow_snapshot: serde_json::Value =
+        serde_json::from_str(&stdout(&recap)).expect("capture json");
+    let slow_index = slow_snapshot["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "slownav")
+        .and_then(|e| e["index"].as_u64())
+        .expect("slownav index")
+        .to_string();
+    let navd = fx.run(&["action", "click", &slow_index, "--capture"]);
+    assert_eq!(code(&navd), 0, "slow-nav click failed: {}", stdout(&navd));
+    let navd_json: serde_json::Value = serde_json::from_str(&stdout(&navd)).expect("action json");
+    assert!(
+        navd_json["url_changed"].as_str().is_some_and(|u| u.ends_with("/slow")),
+        "a click-triggered same-tab navigation must report url_changed=/slow: {}",
+        stdout(&navd)
+    );
+    assert_eq!(
+        navd_json["page_title"].as_str(),
+        Some("slow-final"),
+        "--capture must snapshot the settled destination, not the dying page: {}",
+        stdout(&navd)
+    );
+    let back_to_base = fx.run(&["action", "navigate", &base]);
+    assert_eq!(code(&back_to_base), 0, "re-navigate failed: {}", stdout(&back_to_base));
+
     // 3. Stale-snapshot guard (the bridge is shared, so the typed error must
     //    hold in this mode too).
     let recap = fx.run(&["capture", "--include", "dom"]);

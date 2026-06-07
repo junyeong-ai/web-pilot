@@ -5,7 +5,7 @@ import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
 import { activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
-import { adoptedDocumentReady, documentReady, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
+import { adoptedDocumentReady, documentReady, settledActionUrl, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
 
 // ── Action ─────────────────────────────────────────────────────────────────
@@ -258,6 +258,12 @@ async function dispatchActionToPage(tab, action) {
   chrome.tabs.onCreated.addListener(onCreated);
   chrome.webNavigation.onCreatedNavigationTarget.addListener(onNavTarget);
   const urlBefore = tab.url;
+  // Watch for a same-tab navigation the action itself triggers (a link click,
+  // a handler setting `location.href`, an Enter that submits) — registered
+  // BEFORE the action, mirroring headless `settled_action_url`. A single
+  // post-action `tabs.get` would miss a navigation still in flight and let the
+  // auto-capture snapshot the dying page.
+  const navWatch = watchMainFrameCommit(tab.id);
 
   try {
     // `key_press` dispatches a native CDP key event so Tab/Backspace/arrow/
@@ -290,15 +296,17 @@ async function dispatchActionToPage(tab, action) {
       }
     }
 
-    try {
-      const current = await chrome.tabs.get(tab.id);
-      if (current.url && current.url !== urlBefore) result.url_changed = current.url;
-    } catch {}
+    // Report the settled destination of a navigation the action triggered (the
+    // popup case is handled above via `new_tab`); a non-navigating action adds
+    // no url_changed and pays no wait.
+    const settledUrl = await settledActionUrl(tab.id, urlBefore, navWatch);
+    if (settledUrl && settledUrl !== urlBefore) result.url_changed = settledUrl;
 
     return result;
   } catch (e) {
     return { type: "Action", success: false, error: exceptionErr(e) };
   } finally {
+    navWatch.dispose();
     chrome.tabs.onCreated.removeListener(onCreated);
     chrome.webNavigation.onCreatedNavigationTarget.removeListener(onNavTarget);
   }

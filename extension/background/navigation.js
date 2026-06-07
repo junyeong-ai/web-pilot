@@ -12,7 +12,7 @@ import { navigationTimeoutMs, sleep } from "./session.js";
 // watch must be registered before the navigation is issued.
 
 function watchMainFrameCommit(tabId) {
-  const watch = { committed: false, documentId: null, dispose: () => {} };
+  const watch = { started: false, committed: false, documentId: null, dispose: () => {} };
   const listener = (d) => {
     if (d.tabId === tabId && d.frameId === 0) {
       watch.committed = true;
@@ -21,6 +21,13 @@ function watchMainFrameCommit(tabId) {
       // the document worth settling on.
       watch.documentId = d.documentId ?? null;
     }
+  };
+  // A main-frame navigation that has BEGUN but not yet committed — the headless
+  // `frameStartedLoading` signal. A click whose handler sets `location.href`
+  // fires this before any commit, so an action that triggered a navigation is
+  // recognised (and waited out) even when the commit is still in flight.
+  const startedListener = (d) => {
+    if (d.tabId === tabId && d.frameId === 0) watch.started = true;
   };
   // Same-document navigations (pushState history traversal, fragment jumps)
   // commit via their own events, never onCommitted — all three together make
@@ -31,6 +38,7 @@ function watchMainFrameCommit(tabId) {
     chrome.webNavigation.onReferenceFragmentUpdated,
   ];
   events.forEach((ev) => ev.addListener(listener));
+  chrome.webNavigation.onBeforeNavigate.addListener(startedListener);
   // Self-disposing and idempotent: callers register the watch BEFORE issuing
   // the navigation, so if that issuance throws, `waitNavigationSettled` (which
   // would dispose) is never reached. A backstop timer removes the listeners
@@ -43,8 +51,38 @@ function watchMainFrameCommit(tabId) {
     disposed = true;
     clearTimeout(timer);
     events.forEach((ev) => ev.removeListener(listener));
+    chrome.webNavigation.onBeforeNavigate.removeListener(startedListener);
   };
   return watch;
+}
+
+// The URL the main frame settled on after a page action — the browser twin of
+// headless `settled_action_url`. A non-navigating action (type, scroll, a click
+// that opens no document) returns `beforeUrl` with no wait; an action that began
+// a main-frame navigation (a link click, a handler setting `location.href`, an
+// Enter that submits a form) waits — bounded — for the new document to parse and
+// returns its URL, so a following auto-capture reads the destination, not the
+// dying page. Never throws: the action's side effect is already done. The watch
+// must be registered BEFORE the action so the start/commit it triggers is seen.
+async function settledActionUrl(tabId, beforeUrl, watch) {
+  // The `chrome.tabs.get` await also yields to the event loop, letting an
+  // onBeforeNavigate dispatched during the action be processed before the
+  // `watch.started` check — the browser equivalent of headless's pre-buffered
+  // `frameStartedLoading`.
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const urlNow = tab?.url || "";
+  if (!watch.started && !watch.committed && (!urlNow || urlNow === beforeUrl)) {
+    watch.dispose();
+    return beforeUrl; // nothing navigated — hot path, no settle wait
+  }
+  try {
+    await waitNavigationSettled(tabId, beforeUrl, watch, "action navigation");
+  } catch {
+    // Didn't settle within the deadline — report wherever the frame is now
+    // rather than failing the action whose side effect already happened.
+  }
+  const settled = await chrome.tabs.get(tabId).catch(() => null);
+  return settled?.url || beforeUrl;
 }
 
 async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
@@ -140,4 +178,4 @@ async function documentReady(tabId, timeoutMs) {
   }
 }
 
-export { adoptedDocumentReady, documentReady, waitNavigationSettled, watchMainFrameCommit };
+export { adoptedDocumentReady, documentReady, settledActionUrl, waitNavigationSettled, watchMainFrameCommit };
