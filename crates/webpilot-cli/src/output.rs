@@ -53,6 +53,21 @@ const DOM_EXTRA_LABELS: [(&str, &str); 4] = [
     ("accessibility_path", "Accessibility tree"),
 ];
 
+/// One `Label: value` line per present capture artefact, in a stable order.
+/// The single source for the CLI renderer, the MCP text block, and the capture
+/// handler's no-DOM path.
+pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    DOM_EXTRA_LABELS
+        .iter()
+        .filter_map(|(key, label)| {
+            extra
+                .get(*key)
+                .and_then(|v| v.as_str())
+                .map(|v| format!("{label}: {v}"))
+        })
+        .collect()
+}
+
 impl CommandOutput {
     /// Flatten to one agent-facing text block — the body of an MCP tool result.
     /// Mirrors the Human render but returns the text instead of splitting it
@@ -68,11 +83,7 @@ impl CommandOutput {
                 if !snapshot.elements.is_empty() {
                     lines.push(snapshot.to_text());
                 }
-                for (key, label) in DOM_EXTRA_LABELS {
-                    if let Some(p) = extra.get(key).and_then(|v| v.as_str()) {
-                        lines.push(format!("{label}: {p}"));
-                    }
-                }
+                lines.extend(dom_extra_lines(extra));
                 lines.join("\n")
             }
             CommandOutput::List {
@@ -102,10 +113,8 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
             if !snapshot.elements.is_empty() {
                 print!("{}", snapshot.to_text());
             }
-            for (key, label) in DOM_EXTRA_LABELS {
-                if let Some(p) = extra.get(key).and_then(|v| v.as_str()) {
-                    eprintln!("{label}: {p}");
-                }
+            for line in dom_extra_lines(&extra) {
+                eprintln!("{line}");
             }
         }
         (CommandOutput::Dom { snapshot, extra }, OutputMode::Json) => {

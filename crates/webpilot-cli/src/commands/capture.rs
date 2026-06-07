@@ -112,32 +112,13 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
                 Ok(CommandOutput::Ok("OK".into()))
             } else {
                 let json = serde_json::Value::Object(extra.clone());
-                let human = render_capture_extras(&extra);
+                let human = crate::output::dom_extra_lines(&extra).join("\n");
                 Ok(CommandOutput::Data { json, human })
             }
         }
         ResponseData::Error { error } => Err(error.into()),
         _ => anyhow::bail!("Unexpected response shape"),
     }
-}
-
-fn render_capture_extras(extra: &serde_json::Map<String, serde_json::Value>) -> String {
-    let labels = [
-        ("accessibility_path", "Accessibility tree"),
-        ("screenshot_path", "Screenshot"),
-        ("pdf_path", "PDF"),
-        ("screenshot_error", "Screenshot error"),
-    ];
-    labels
-        .iter()
-        .filter_map(|(key, label)| {
-            extra
-                .get(*key)
-                .and_then(|v| v.as_str())
-                .map(|v| format!("{label}: {v}"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn epoch_ms() -> u128 {
