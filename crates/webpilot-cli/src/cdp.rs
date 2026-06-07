@@ -281,6 +281,22 @@ impl CdpClient {
         };
 
         if let Some(error) = response.get("error") {
+            // CDP "invalid params" (-32602) means the request carried bad
+            // arguments — almost always agent input (a malformed URL, an
+            // out-of-range value). Surface CDP's own message as a typed
+            // InvalidArgument (exit 7) instead of a generic "CDP error" Other
+            // (exit 1) that buries what the caller actually needs to fix.
+            // Other codes are protocol/internal faults and stay Other.
+            if error.get("code").and_then(serde_json::Value::as_i64) == Some(-32602) {
+                let detail = error
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("invalid parameters");
+                return Err(WebPilotError::InvalidArgument {
+                    detail: detail.to_string(),
+                }
+                .into());
+            }
             anyhow::bail!("CDP error: {error}");
         }
 

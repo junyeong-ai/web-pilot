@@ -594,6 +594,16 @@ fn headless_behavioral_flow() {
     let cap_w = fx.run(&["capture", "--include", "dom", "--url", &base]);
     assert_eq!(code(&cap_w), 0, "wait-page capture failed: {}", stdout(&cap_w));
 
+    // A CDP "invalid params" rejection (here, a cookie URL with no scheme) is a
+    // typed InvalidArgument (exit 7), not a leaked "CDP error" Other (exit 1).
+    let bad_cookie = fx.run(&["cookie", "set", "not-a-url", "k", "v"]);
+    assert_eq!(
+        code(&bad_cookie),
+        7,
+        "a malformed cookie URL must be a typed InvalidArgument, not a leaked CDP error: {}",
+        stdout(&bad_cookie)
+    );
+
     // A `wait text` value starting with `-` is the value, not a flag
     // (allow_hyphen_values) — it must reach the bridge and time out, not be
     // rejected by clap (exit 2).
