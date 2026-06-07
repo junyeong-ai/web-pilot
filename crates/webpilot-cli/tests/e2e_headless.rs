@@ -11,22 +11,14 @@
 //! The whole flow runs as one test because it owns a single headless session
 //! (keyed by an isolated `WEBPILOT_HOME`) and tears it down at the end.
 
-use std::io::{Read, Write};
-use std::net::TcpListener;
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+use common::{code, spawn_server, stdout};
+
 const BIN: &str = env!("CARGO_BIN_EXE_webpilot");
-
-const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></head>
-<body>
-<button id="go" onclick="document.title='clicked'">Go</button>
-<input id="q" type="text" placeholder="Search">
-<iframe src="/frame"></iframe>
-</body></html>"#;
-
-const FRAME: &str = r##"<!doctype html><html><head><title>frame</title></head>
-<body><a id="link" href="#">inner link</a></body></html>"##;
 
 struct Fixture {
     home: PathBuf,
@@ -54,41 +46,6 @@ impl Fixture {
             .output()
             .expect("spawn webpilot")
     }
-}
-
-/// Minimal blocking HTTP server: serves the fixture page for `/` and the inner
-/// document for `/frame`. Runs on a daemon thread for the test's lifetime.
-fn spawn_server() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { continue };
-            let mut buf = [0u8; 1024];
-            let n = stream.read(&mut buf).unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..n]);
-            let body = if req.starts_with("GET /frame") {
-                FRAME
-            } else {
-                PAGE
-            };
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = stream.write_all(resp.as_bytes());
-        }
-    });
-    format!("http://127.0.0.1:{port}")
-}
-
-fn code(out: &Output) -> i32 {
-    out.status.code().unwrap_or(-1)
-}
-
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 #[test]
