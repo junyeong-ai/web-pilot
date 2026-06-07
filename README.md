@@ -171,7 +171,7 @@ webpilot setup nm-host --extension-id <ID>
 webpilot self update           # self-update to the latest release (atomic, sha256-verified)
 webpilot self update --version 0.3.0   # pin a version
 
-webpilot uninstall             # remove without trace (quit Chrome + clean every directory)
+webpilot uninstall             # quit Chrome + remove everything the binary created
 ```
 
 The skill and extension are embedded in the binary at compile time: version

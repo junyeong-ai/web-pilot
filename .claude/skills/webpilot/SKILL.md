@@ -1,7 +1,7 @@
 ---
 description: Drive a real Chrome from the command line — open a URL, click an element, type into a form, take a screenshot, run JavaScript, watch network/console traffic, manage cookies and tabs. Use whenever the user pastes a URL, says "open / check / browse / fill / submit / login / scrape / screenshot", asks about a website's contents, or needs to automate any browser flow. Headless Chrome launches automatically — no setup.
 argument-hint: "[url]"
-allowed-tools: Bash Read
+allowed-tools: Bash(webpilot *) Read
 ---
 
 # WebPilot
@@ -44,7 +44,7 @@ webpilot capture --include dom                                # 4. verify (check
 - `[N]` — the index used by `action click N`, `action type N "text"`, `action scroll-to N`
 - `*` — element appeared since the previous capture (page changed)
 - `#id` — element id
-- `@ctx` — landmark (`nav`, `main`, `form`, `search`, `header`, `footer`)
+- `@ctx` — landmark (`nav` `main` `header` `footer` `aside` `banner` `form` `dialog` `search`)
 - `autocomplete=…` — input semantic hint
 - text truncated at 300 chars
 
@@ -62,7 +62,7 @@ webpilot capture --include dom screenshot text               # multiple in one c
 webpilot capture --include screenshot --annotate             # numbered overlay on shot
 webpilot capture --include dom --bounds                      # adds bounds: {x,y,w,h}
 webpilot capture --include dom --occlusion                   # marks occluded:true elements
-webpilot capture --include screenshot --full-page            # entire scrollable area
+webpilot capture --include screenshot --full-page            # entire scrollable area (no --annotate: overlays are viewport-only)
 webpilot capture --include dom --url URL                     # navigate first, then capture
 ```
 
@@ -175,10 +175,13 @@ webpilot console clear
 ```
 
 The recorder is injected into the page and captures activity from `start`
-onward (load-time logs that fire before `start` are missed). In **headless** the
-buffer lives on the page, so a navigation/reload resets it — re-run `start`
-after navigating. In **`--browser`** mode the monitor is re-injected per tab on
-each navigation, so it keeps recording across page loads.
+onward (load-time entries that fire before the hooks attach are missed). The
+entry buffer lives on the page, so a navigation wipes it — `read` what you need
+before navigating away. Recording itself stays armed across navigations in both
+modes: the hooks are re-installed automatically after every WebPilot-driven
+page change (`navigate`, `back`/`forward`, `reload`, a click that lands on a
+new page, `tab switch`/`tab new`). Re-arming re-checks the policy store, so
+denying `eval` also stops armed monitors from injecting.
 
 ## Fetch with the page's session
 
@@ -215,9 +218,15 @@ Each context is a separate CDP browser context: cookies, localStorage, history a
 ```bash
 webpilot policy set --operation click  --verdict deny     # blocks all clicks
 webpilot policy set --operation type   --verdict allow
-webpilot policy list
-webpilot policy clear
+webpilot policy default deny                              # baseline for operations without a rule
+webpilot policy list                                      # default + all rules
+webpilot policy clear                                     # back to permissive default, no rules
 ```
+
+Least-privilege mode: `policy default deny`, then `policy set … --verdict allow`
+for exactly what the task needs. Deny `eval` first when locking down — with
+`eval` allowed, page JS can reproduce navigate/fetch/cookie effects, so
+narrower denies are advisory.
 
 `--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus the non-action operations that run code, mutate state, or move credentials: `eval`, `fetch`, `dom_set` (gate `dom set`), `tab_close`, `cookie_list` (gate `cookie list` **and** `cookie get` — both return live cookie values), `cookie_set` / `cookie_delete`, and `session_export` / `session_import`.
 
@@ -261,6 +270,17 @@ webpilot status                                # connected, mode, chrome_version
 ```
 
 `webpilot quit` (stop Chrome) and `webpilot context close NAME` (one context only) are documented under Lifecycle and Multi-agent contexts above.
+
+## Maintenance / integration
+
+```bash
+webpilot mcp                                   # serve the same engine as a stdio MCP server
+                                               # (honors --browser / --context; for MCP host config, not interactive use)
+webpilot setup skill                           # refresh this skill from the binary's embedded copy
+webpilot self update                           # atomic self-update to the latest release (sha256-verified)
+webpilot self update --version 0.3.1           # pin a version (required for downgrades)
+webpilot uninstall --yes                       # quit Chrome + remove binary, skill, extension, NM host, cache
+```
 
 ## Exit codes
 
