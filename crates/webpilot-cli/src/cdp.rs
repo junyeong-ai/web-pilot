@@ -225,7 +225,12 @@ impl CdpClient {
         match tokio::time::timeout(timeout, write).await {
             Ok(Some(Ok(()))) => {}
             Ok(Some(Err(_))) => {
-                self.pending.lock().await.remove(&id);
+                // A write error means the socket is broken — as fatal as a
+                // write timeout. Mark the connection dead and fail EVERY
+                // in-flight request, so other callers don't hang awaiting a
+                // reply that can never arrive over a dead sink.
+                self.alive.store(false, Ordering::Release);
+                self.pending.lock().await.drain();
                 return Err(WebPilotError::ConnectionLost {
                     detail: format!("CDP socket write failed for {method}"),
                 }

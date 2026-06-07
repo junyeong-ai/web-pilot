@@ -277,12 +277,15 @@ async function handleSessionImport(rawData) {
     let cookiesTotal = 0;
     let cookiesFailed = 0;
     for (const c of data.cookies || []) {
-      // Skip an entry missing the required cookie fields — headless drops the
-      // same shapes when they fail to deserialize into CookieInfo, so one
-      // malformed entry never fails an otherwise-good import (cookiesFailed is
-      // for well-formed cookies the browser actually refused).
+      // Skip an entry that headless would drop when deserializing CookieInfo,
+      // so one malformed entry never fails an otherwise-good import
+      // (cookiesFailed is for well-formed cookies the browser actually refused).
+      // CookieInfo requires name/value/domain/path strings AND a same_site that
+      // parses as the SameSite enum — match both, exactly.
+      const SAME_SITE = ["strict", "lax", "none", "no_restriction", "unspecified"];
       if (c == null || typeof c.name !== "string" || typeof c.value !== "string"
-          || typeof c.domain !== "string" || typeof c.path !== "string") {
+          || typeof c.domain !== "string" || typeof c.path !== "string"
+          || !SAME_SITE.includes(c.same_site)) {
         continue;
       }
       cookiesTotal++;

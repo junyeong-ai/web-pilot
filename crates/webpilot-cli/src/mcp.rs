@@ -178,6 +178,14 @@ where
     }
     .await;
 
+    // A dead transport (Chrome exited, socket dropped) must not poison the rest
+    // of a long-lived MCP session: drop it on an infra-level failure (exit 3 —
+    // ConnectionLost / BridgeUnavailable / VersionMismatch) so the next tool
+    // call reopens a fresh one. Re-detecting a version mismatch is harmless.
+    if outcome.as_ref().is_err_and(|e| e.exit_code() == 3) {
+        *transport = None;
+    }
+
     let result = match outcome {
         Ok(content) => json!({ "content": content, "isError": false }),
         Err(e) => json!({
