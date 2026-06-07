@@ -798,26 +798,31 @@
         };
       case "executeAction":
         return executeAction(msg.action);
-      case "eval": {
-        try {
-          let result;
+      case "eval":
+        // Used by frame list/find (per-frame name reads, predicates). A
+        // thenable result is awaited so an async predicate resolves to its
+        // value instead of serializing the Promise object as `{}`.
+        return (async () => {
           try {
-            result = new Function("return (" + msg.code + ")")();
-          } catch (syntaxErr) {
-            if (syntaxErr instanceof SyntaxError) {
-              result = new Function(msg.code)();
-            } else {
-              throw syntaxErr;
+            let result;
+            try {
+              result = new Function("return (" + msg.code + ")")();
+            } catch (syntaxErr) {
+              if (syntaxErr instanceof SyntaxError) {
+                result = new Function(msg.code)();
+              } else {
+                throw syntaxErr;
+              }
             }
+            if (result && typeof result.then === "function") result = await result;
+            return {
+              success: true,
+              result: result !== undefined ? JSON.stringify(result) : null,
+            };
+          } catch (e) {
+            return err("Other", e.message);
           }
-          return {
-            success: true,
-            result: result !== undefined ? JSON.stringify(result) : null,
-          };
-        } catch (e) {
-          return err("Other", e.message);
-        }
-      }
+        })();
       case "wait":
         return new Promise((resolve) => handleWait(msg, resolve));
       case "tagElement": {

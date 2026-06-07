@@ -11,6 +11,14 @@ use webpilot::{Action, WebPilotError};
 
 use super::{LocalTransport, action_success};
 
+/// History traversal direction — typed so the probe and the page expression
+/// derive from one discriminant instead of string inspection.
+#[derive(Clone, Copy)]
+enum HistoryNav {
+    Back,
+    Forward,
+}
+
 impl LocalTransport {
     // Policy is enforced once at the transport boundary (`Transport::send`),
     // so handlers run only after the command is permitted.
@@ -34,11 +42,11 @@ impl LocalTransport {
                 });
             }
             Action::Back => {
-                self.history_nav("history.back()").await?;
+                self.history_nav(HistoryNav::Back).await?;
                 return Ok(action_success(None));
             }
             Action::Forward => {
-                self.history_nav("history.forward()").await?;
+                self.history_nav(HistoryNav::Forward).await?;
                 return Ok(action_success(None));
             }
             Action::Reload => {
@@ -213,15 +221,16 @@ impl LocalTransport {
     /// failures (`ConnectionLost`/`Timeout`) are propagated; the navigation is
     /// then confirmed via the frame event and the active frame is reset, just
     /// as `navigate_reconnect` does.
-    async fn history_nav(&self, expression: &str) -> Result<()> {
+    async fn history_nav(&self, direction: HistoryNav) -> Result<()> {
+        let (probe, expression) = match direction {
+            HistoryNav::Back => ("navigation.canGoBack", "history.back()"),
+            HistoryNav::Forward => ("navigation.canGoForward", "history.forward()"),
+        };
         // The Navigation API makes a missing history entry an honest, immediate
         // typed failure — never a success that silently did nothing (browser
-        // mode applies the same check).
-        let probe = if expression.contains("back") {
-            "navigation.canGoBack"
-        } else {
-            "navigation.canGoForward"
-        };
+        // mode applies the same check). A probe that cannot resolve (the API
+        // absent) falls through to attempting the traversal: undeterminable is
+        // not the same as impossible.
         if let Ok(can) = self.page.evaluate(probe).await
             && can == serde_json::Value::Bool(false)
         {

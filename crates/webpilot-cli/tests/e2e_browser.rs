@@ -71,7 +71,18 @@ fn chrome_binary() -> PathBuf {
         .filter_map(Result::ok)
         .map(|e| e.path())
         .collect();
-    versions.sort();
+    // Natural version order, matching production `find_chrome`: lexicographic
+    // ranks "99" above "120".
+    versions.sort_by_key(|p| {
+        p.file_name()
+            .map(|n| {
+                n.to_string_lossy()
+                    .split('.')
+                    .map(|c| c.parse::<u64>().unwrap_or(0))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
     for dir in versions.into_iter().rev() {
         for rel in [
             "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
@@ -209,7 +220,13 @@ fn browser_behavioral_flow() {
     }
 
     let base = spawn_server();
-    let stamp = std::process::id();
+    // PID + nanos: a recycled PID must never resurrect a crashed run's profile
+    // (a stale DevToolsActivePort would mis-route the discovery probe).
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let stamp = format!("{}-{nanos}", std::process::id());
     let home = std::env::temp_dir().join(format!("webpilot-e2e-browser-{stamp}"));
     let user_data_dir = std::env::temp_dir().join(format!("webpilot-e2e-profile-{stamp}"));
     std::fs::create_dir_all(&home).expect("home");

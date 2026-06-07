@@ -237,10 +237,20 @@ function connectToHost() {
   }
 }
 
+// Commands execute strictly in arrival order. The worker's state — the pinned
+// tab, the active frame, every commit watch — is one set of globals by design
+// (browser mode is single-agent), so concurrency here would interleave that
+// state across commands: one command's navigation flipping another's commit
+// watch, a click's re-pin retargeting a sibling's auto-capture. The queue makes
+// the documented serial model an enforced one.
+let commandQueue = Promise.resolve();
+
 function handleHostMessage(request, port) {
   const { id, command } = request;
   if (!command) return;
-  processCommandWithKeepAlive(id, command, port);
+  commandQueue = commandQueue
+    .then(() => processCommandWithKeepAlive(id, command, port))
+    .catch(() => {});
 }
 
 async function processCommandWithKeepAlive(id, command, port) {
@@ -768,10 +778,12 @@ async function dispatchActionToPage(tab, action) {
   // A click-opened tab is caught by the creation event itself, registered
   // before the action runs — no detection window, no sleep, and reliable even
   // for popups that are still about:blank at creation (which a snapshot diff
-  // taken after a fixed delay raced against).
+  // taken after a fixed delay raced against). Only a tab OPENED BY the acted-on
+  // tab qualifies: an unrelated tab created during the action (the user, some
+  // other extension) must not capture the pin.
   let openedTab = null;
   const onCreated = (t) => {
-    openedTab = openedTab || t;
+    if (t.openerTabId === tab.id) openedTab = openedTab || t;
   };
   chrome.tabs.onCreated.addListener(onCreated);
   const urlBefore = tab.url;
@@ -974,7 +986,12 @@ async function handleEval(command) {
             if (v && typeof v.then === "function") v = await v;
             return { value: v };
           } catch (e) {
-            return { thrown: e?.message || String(e), csp: e instanceof EvalError };
+            // Chrome reports a CSP eval refusal as an EvalError whose message
+            // names the policy; require both so user code throwing its own
+            // EvalError is not misclassified into a security exit code.
+            const csp =
+              e instanceof EvalError && /Content Security Policy|unsafe-eval/i.test(e?.message || "");
+            return { thrown: e?.message || String(e), csp };
           }
         },
         args: [command.code],
@@ -1455,9 +1472,15 @@ function sleep(ms) {
 const NAVIGATION_TIMEOUT_MS = 15000;
 
 function watchMainFrameCommit(tabId) {
-  const watch = { committed: false, dispose: () => {} };
+  const watch = { committed: false, documentId: null, dispose: () => {} };
   const listener = (d) => {
-    if (d.tabId === tabId && d.frameId === 0) watch.committed = true;
+    if (d.tabId === tabId && d.frameId === 0) {
+      watch.committed = true;
+      // The committed document's identity — the equivalent of the headless
+      // loaderId. A redirect chain updates it to the latest commit, which is
+      // the document worth settling on.
+      watch.documentId = d.documentId ?? null;
+    }
   };
   // Same-document navigations (pushState history traversal, fragment jumps)
   // commit via their own events, never onCommitted — all three together make
@@ -1478,13 +1501,27 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
     while (Date.now() - start < NAVIGATION_TIMEOUT_MS) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (tab && (watch.committed || (tab.url && tab.url !== beforeUrl))) {
-        // Probe readiness; a probe failing mid renderer swap just retries on
-        // the next poll, exactly like the headless time-boxed PROBE.
-        const ready = await chrome.scripting
-          .executeScript({ target: { tabId, frameIds: [0] }, func: () => document.readyState })
-          .then((r) => r?.[0]?.result)
+        // Bind the readiness probe to the COMMITTED document, not just "the
+        // frame right now": on a same-URL reload the old document can still
+        // report readyState "complete" in the beat between commit and swap.
+        // The frame's live documentId must match the commit we observed (or,
+        // when the commit carried none, its URL must have left beforeUrl) —
+        // the same discrimination headless gets from its loaderId.
+        const frame = await chrome.webNavigation
+          .getFrame({ tabId, frameId: 0 })
           .catch(() => null);
-        if (ready === "interactive" || ready === "complete") return;
+        const documentMatches = watch.documentId
+          ? frame?.documentId === watch.documentId
+          : Boolean(frame?.url && frame.url !== beforeUrl);
+        if (documentMatches) {
+          // Probe readiness; a probe failing mid renderer swap just retries on
+          // the next poll, exactly like the headless time-boxed PROBE.
+          const ready = await chrome.scripting
+            .executeScript({ target: { tabId, frameIds: [0] }, func: () => document.readyState })
+            .then((r) => r?.[0]?.result)
+            .catch(() => null);
+          if (ready === "interactive" || ready === "complete") return;
+        }
       }
       await sleep(150);
     }
@@ -1500,11 +1537,14 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
 // ── Active tab ──────────────────────────────────────────────────────────────
 // Browser mode binds every command to ONE tab, exactly as headless binds to
 // one target: pinned on first use (the focused window's active http tab),
-// moved only by an explicit `tab switch` / `tab new`. A vanished pin is a
-// typed TabNotFound — never a silent retarget to whatever tab happens to be
-// focused, which would route the agent's actions to a page it has not seen.
-// One pin per extension by design: multi-agent isolation is a headless
-// `--context` feature.
+// moved only by an explicit `tab switch` / `tab new` / a tab the acted-on page
+// opened. A vanished pin is a typed TabNotFound — never a silent retarget to
+// whatever tab happens to be focused, which would route the agent's actions to
+// a page it has not seen. One pin per extension by design: multi-agent
+// isolation is a headless `--context` feature. The pin's lifetime is the
+// browser session (storage.session) on purpose — tab ids are meaningless
+// across a browser restart, so a fresh session re-pins on first use exactly
+// like a first run.
 async function resolveActiveTab() {
   if (activeTabId != null) {
     const tab = await chrome.tabs.get(activeTabId).catch(() => null);
