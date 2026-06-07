@@ -80,7 +80,7 @@ impl LocalTransport {
         *self.active_frame_id.lock().await = None;
         super::clear_persisted_active_frame(self.persisted_context_key());
         super::write_persisted_active_tab(self.persisted_context_key(), tab_id);
-        self.rebind_frame_listener().await;
+        self.rebind_page_world().await;
         // Armed monitors follow the agent's working tab: the freshly bound
         // page has no hooks yet (idempotent no-op when nothing is armed).
         self.reinstall_monitors().await;

@@ -26,8 +26,11 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
     host gates.
   - `local/` — `LocalTransport` (headless), **split by domain**. `send` calls
     `policy::enforce` first:
-    - `mod.rs` — struct, `open`, `Transport` impl, bridge injection, **navigation**
-      (`navigate_reconnect`), monitor re-install after navigation.
+    - `mod.rs` — struct, `open`, `Transport` impl, the **isolated-world bridge**
+      (`install_bridge_world` auto-loads `bridge.js` into the `webpilot_bridge`
+      world per document; `bridge_context_id` vs `active_context_id` route bridge
+      calls vs page expressions), **navigation** (`navigate_reconnect`), monitor
+      re-install after navigation.
     - `action.rs` — page-mutating (click/type/scroll/drag, `do_action`).
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
       active. `key_press` is a native CDP `Input.dispatchKeyEvent` (`do_key_press`)

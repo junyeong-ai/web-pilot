@@ -5,9 +5,12 @@
 //! browser-level and page-level CDP connections, plus the cached target id and
 //! optional browser-context id needed for multi-agent isolation.
 //!
-//! Bridge.js is injected lazily on first use of any `__webpilot_handle` call.
-//! Per-frame execution-context routing is set up in `open` and rebound on
-//! page swaps (navigation, tab switch).
+//! Bridge.js auto-loads into the `webpilot_bridge` CDP isolated world on every
+//! document (`install_bridge_world`) — the headless mirror of the browser
+//! content script. Per-frame routing splits in two: `bridge_contexts` (the
+//! isolated world, for `__webpilot_handle` calls) and `frame_contexts` (the
+//! MAIN world, for page expressions and monitors). Both are set up in `open`
+//! and rebound on page swaps (navigation, tab switch).
 //!
 //! The `do_*` command handlers are split across sibling modules by domain:
 //!   - `action`  — page-mutating actions (click/type/scroll/drag/navigate/...)
@@ -43,15 +46,30 @@ use super::local_context;
 
 const BRIDGE_JS: &str = include_str!("../../../../../extension/content/bridge.js");
 
+/// Name of the CDP isolated world the bridge runs in — the headless mirror of
+/// the browser-mode content-script world. DOM-manipulating bridge calls execute
+/// here, off the page's reach, so a hostile page cannot tamper with how an index
+/// resolves; page expressions (`eval`, `frame find`) and the console/network
+/// monitors stay in the MAIN world, where they belong.
+const BRIDGE_WORLD: &str = "webpilot_bridge";
+
 pub struct LocalTransport {
     pub(crate) browser: CdpClient,
     pub(crate) page: CdpClient,
     pub(crate) ws_url: String,
     pub(crate) browser_context_id: Option<String>,
     pub(crate) target_id: String,
-    /// frame_id (CDP string) → execution context id. Populated by the
-    /// background subscriber listening for `Runtime.executionContextCreated`.
+    /// Top frame id (CDP string), stable across navigations. Resolves the bridge
+    /// context for the main frame when no iframe is switched.
+    pub(crate) main_frame_id: String,
+    /// frame_id (CDP string) → MAIN-world execution context id, for page
+    /// expressions. Populated by the background subscriber from each frame's
+    /// default (`isDefault`) `Runtime.executionContextCreated`.
     pub(crate) frame_contexts: Arc<Mutex<HashMap<String, i64>>>,
+    /// frame_id (CDP string) → the bridge isolated-world execution context id.
+    /// Populated by the same subscriber from the `BRIDGE_WORLD`-named context
+    /// that `Page.addScriptToEvaluateOnNewDocument` creates per document.
+    pub(crate) bridge_contexts: Arc<Mutex<HashMap<String, i64>>>,
     /// Active frame for evaluation. `None` means the page's main world.
     pub(crate) active_frame_id: Arc<Mutex<Option<String>>>,
     /// Whether the console / network monitors are armed. Their hooks live on
@@ -98,12 +116,17 @@ impl LocalTransport {
         let (page, browser_context_id, target_id) =
             resolve_target(&browser, &ws_url, context_name).await?;
 
+        let main_frame_id = fetch_main_frame_id(&page).await?;
         let frame_contexts = Arc::new(Mutex::new(HashMap::new()));
-        spawn_frame_context_listener(&page, frame_contexts.clone());
-        // `connect_to_page` already enabled Runtime, but its initial
-        // `executionContextCreated` events were dispatched before the
-        // listener subscribed and so were dropped by the broadcast channel.
-        // Toggle the domain to force re-emission for every existing context.
+        let bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
+        spawn_frame_context_listener(&page, frame_contexts.clone(), bridge_contexts.clone());
+        // Register the bridge so it auto-loads into its isolated world on every
+        // document (current one included) — the headless equivalent of the
+        // browser content script, with no per-call injection. `connect_to_page`
+        // already enabled Runtime, but its initial `executionContextCreated`
+        // events (and the bridge world's) predate the listener's subscription,
+        // so toggle the domain to force re-emission for every existing context.
+        install_bridge_world(&page).await?;
         let _ = page.send("Runtime.disable", None).await;
         let _ = page.send("Runtime.enable", None).await;
 
@@ -133,7 +156,9 @@ impl LocalTransport {
             ws_url,
             browser_context_id,
             target_id,
+            main_frame_id,
             frame_contexts,
+            bridge_contexts,
             active_frame_id: Arc::new(Mutex::new(restored_active)),
             console_monitoring: Arc::new(AtomicBool::new(console_armed)),
             network_monitoring: Arc::new(AtomicBool::new(network_armed)),
@@ -154,20 +179,43 @@ impl LocalTransport {
 
     // ── Frame routing ────────────────────────────────────────────────────
 
-    /// Look up the active execution context id (None = main world).
-    /// The active frame's execution-context id: `None` means the main world
-    /// (no frame switched). A switched frame whose context has not announced
-    /// itself within the probe window — the listener repopulates the map
-    /// asynchronously after open/rebind — is a typed `FrameNotFound`, never a
-    /// silent fall-through to the main world: that would run the agent's code
-    /// in a frame it did not choose, reporting success.
+    /// The MAIN-world execution-context id `expression`s evaluate in: `None`
+    /// means the page's default world (no iframe switched). A switched frame
+    /// whose context has not announced itself within the probe window — the
+    /// listener repopulates the map asynchronously after open/rebind — is a
+    /// typed `FrameNotFound`, never a silent fall-through to the main world:
+    /// that would run the agent's code in a frame it did not choose.
     async fn active_context_id(&self) -> Result<Option<i64>> {
         let active = self.active_frame_id.lock().await.clone();
         let Some(fid) = active else { return Ok(None) };
+        Ok(Some(self.await_context(&self.frame_contexts, &fid).await?))
+    }
+
+    /// The bridge isolated-world context for the active frame (the switched
+    /// iframe, or the main frame when none is switched). Always explicit — the
+    /// bridge never runs in the page's default world — so it polls for the
+    /// `BRIDGE_WORLD` context the auto-injected script creates, surfacing a
+    /// typed `FrameNotFound` if it never appears rather than silently routing a
+    /// bridge call into the page's main world.
+    async fn bridge_context_id(&self) -> Result<i64> {
+        let active = self.active_frame_id.lock().await.clone();
+        let fid = active.unwrap_or_else(|| self.main_frame_id.clone());
+        self.await_context(&self.bridge_contexts, &fid).await
+    }
+
+    /// Poll `map` for frame `fid`'s context id until it appears or `PROBE`
+    /// elapses — the contexts populate asynchronously as the listener observes
+    /// `executionContextCreated`, so a just-navigated frame may not be mapped
+    /// the instant a command fires.
+    async fn await_context(
+        &self,
+        map: &Arc<Mutex<HashMap<String, i64>>>,
+        fid: &str,
+    ) -> Result<i64> {
         let deadline = std::time::Instant::now() + PROBE;
         loop {
-            if let Some(cid) = self.frame_contexts.lock().await.get(&fid).copied() {
-                return Ok(Some(cid));
+            if let Some(cid) = map.lock().await.get(fid).copied() {
+                return Ok(cid);
             }
             if std::time::Instant::now() >= deadline {
                 return Err(WebPilotError::FrameNotFound {
@@ -179,15 +227,21 @@ impl LocalTransport {
         }
     }
 
-    /// Evaluate `expression` in the active frame's execution context (or the
-    /// main world if no frame is active).
-    pub(super) async fn eval_in_active(&self, expression: &str) -> Result<Value> {
+    /// Evaluate `expression` in `context_id` (or the default world when `None`),
+    /// returning either its serialized value or — when `by_value` is false — the
+    /// `objectId` of the remote result under `/result/objectId`.
+    async fn eval_in_context(
+        &self,
+        expression: &str,
+        context_id: Option<i64>,
+        by_value: bool,
+    ) -> Result<Value> {
         let mut params = json!({
             "expression": expression,
-            "returnByValue": true,
+            "returnByValue": by_value,
             "awaitPromise": true,
         });
-        if let Some(cid) = self.active_context_id().await? {
+        if let Some(cid) = context_id {
             params["contextId"] = cid.into();
         }
         let result = self.page.send("Runtime.evaluate", Some(params)).await?;
@@ -199,68 +253,44 @@ impl LocalTransport {
                 .unwrap_or("JS exception");
             anyhow::bail!("{msg}");
         }
-        Ok(result
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .cloned()
-            .unwrap_or(Value::Null))
+        Ok(result.get("result").cloned().unwrap_or(Value::Null))
     }
 
-    /// Evaluate `expression` in the active frame's context and return the
-    /// `objectId` of the resulting remote object — a live handle CDP can act on
-    /// directly (e.g. `DOM.setFileInputFiles`). `None` when the result is not an
-    /// object (a primitive, `null`, or `undefined`), which the caller maps to
-    /// its own typed error. Unlike `eval_in_active` this keeps the object by
-    /// reference (`returnByValue: false`) so identity, not a serialized copy,
-    /// crosses to CDP.
+    /// Evaluate a page expression in the active MAIN-world context (`eval`,
+    /// `frame find`, readyState/title probes).
+    pub(super) async fn eval_in_active(&self, expression: &str) -> Result<Value> {
+        let cid = self.active_context_id().await?;
+        let result = self.eval_in_context(expression, cid, true).await?;
+        Ok(result.get("value").cloned().unwrap_or(Value::Null))
+    }
+
+    /// Resolve a bridge-owned reference (`window.__webpilot_state.…`) to a CDP
+    /// `objectId` — a live handle CDP can act on directly (e.g.
+    /// `DOM.setFileInputFiles`). Runs in the bridge isolated world, where that
+    /// state lives. `None` when the result is not an object (a primitive,
+    /// `null`, or `undefined`), which the caller maps to its own typed error;
+    /// keeping the object by reference (`returnByValue: false`) means identity,
+    /// not a serialized copy, crosses to CDP.
     pub(super) async fn eval_object_id(&self, expression: &str) -> Result<Option<String>> {
-        let mut params = json!({
-            "expression": expression,
-            "returnByValue": false,
-            "awaitPromise": true,
-        });
-        if let Some(cid) = self.active_context_id().await? {
-            params["contextId"] = cid.into();
-        }
-        let result = self.page.send("Runtime.evaluate", Some(params)).await?;
-        if let Some(exception) = result.get("exceptionDetails") {
-            let msg = exception
-                .pointer("/exception/description")
-                .or_else(|| exception.pointer("/text"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("JS exception");
-            anyhow::bail!("{msg}");
-        }
+        let cid = self.bridge_context_id().await?;
+        let result = self.eval_in_context(expression, Some(cid), false).await?;
         Ok(result
-            .pointer("/result/objectId")
+            .get("objectId")
             .and_then(|v| v.as_str())
             .map(String::from))
     }
 
     // ── Bridge invocation ────────────────────────────────────────────────
 
-    async fn ensure_bridge(&self) -> Result<()> {
-        let loaded = self
-            .eval_in_active("typeof __webpilot_handle === 'function'")
-            .await?;
-        if loaded.as_bool() != Some(true) {
-            let mut params = json!({
-                "expression": BRIDGE_JS,
-                "returnByValue": true,
-            });
-            if let Some(cid) = self.active_context_id().await? {
-                params["contextId"] = cid.into();
-            }
-            self.page.send("Runtime.evaluate", Some(params)).await?;
-        }
-        Ok(())
-    }
-
+    /// Call `__webpilot_handle(msg)` in the bridge isolated world. The bridge
+    /// auto-loads there on every document (`install_bridge_world`), so there is
+    /// no per-call injection — only the context to target.
     pub(super) async fn invoke_bridge(&self, msg: &Value) -> Result<Value> {
-        self.ensure_bridge().await?;
+        let cid = self.bridge_context_id().await?;
         let payload = msg.to_string();
         let js = format!("(async () => __webpilot_handle({payload}))()");
-        self.eval_in_active(&js).await
+        let result = self.eval_in_context(&js, Some(cid), true).await?;
+        Ok(result.get("value").cloned().unwrap_or(Value::Null))
     }
 
     pub(super) fn parse_bridge_response(val: Value) -> Result<Value> {
@@ -280,10 +310,15 @@ impl LocalTransport {
 
     // ── Navigation (with cross-origin renderer swap handling) ────────────
 
-    pub(super) async fn rebind_frame_listener(&mut self) {
+    /// Re-subscribe the context listener and re-register the bridge world on a
+    /// freshly bound page session (after a cross-origin renderer swap), then
+    /// re-emit existing contexts so both maps repopulate — the same priming
+    /// `open` does, for the new session.
+    pub(super) async fn rebind_page_world(&mut self) {
         self.frame_contexts = Arc::new(Mutex::new(HashMap::new()));
-        spawn_frame_context_listener(&self.page, self.frame_contexts.clone());
-        // Same race as `open`: re-emit existing executionContextCreated events.
+        self.bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
+        spawn_frame_context_listener(&self.page, self.frame_contexts.clone(), self.bridge_contexts.clone());
+        let _ = install_bridge_world(&self.page).await;
         let _ = self.page.send("Runtime.disable", None).await;
         let _ = self.page.send("Runtime.enable", None).await;
     }
@@ -363,7 +398,7 @@ impl LocalTransport {
                         self.page = new_page;
                         self.target_id = target_id;
                         self.clear_active_frame().await;
-                        self.rebind_frame_listener().await;
+                        self.rebind_page_world().await;
                         self.reinstall_monitors().await;
                         return Ok(());
                     }
@@ -779,11 +814,50 @@ pub(super) fn epoch_ms() -> u128 {
         .unwrap_or(0)
 }
 
-/// Subscribe to `Runtime.executionContextCreated`/`...Destroyed` on the given
-/// page CDP connection. Maintains the frame_id → context_id map shared with
-/// the owning `LocalTransport`. `Runtime.enable` is issued by `connect_to_page`
-/// before this listener spawns, so events flow from first connection.
-fn spawn_frame_context_listener(page: &CdpClient, map: Arc<Mutex<HashMap<String, i64>>>) {
+/// Resolve the page target's top frame id from `Page.getFrameTree`. Stable for
+/// the target's lifetime (a cross-origin navigation swaps the document, not the
+/// frame id), so the caller caches it once at open.
+async fn fetch_main_frame_id(page: &CdpClient) -> Result<String> {
+    let tree = page.send("Page.getFrameTree", None).await?;
+    tree.pointer("/frameTree/frame/id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            WebPilotError::Other {
+                detail: "Page.getFrameTree returned no main frame id".into(),
+            }
+            .into()
+        })
+}
+
+/// Register `bridge.js` to auto-load into the `BRIDGE_WORLD` isolated world on
+/// every document, the current one included (`runImmediately`). The browser
+/// content script's declarative injection, expressed for headless — so the
+/// bridge is always present in its own world without per-call injection.
+async fn install_bridge_world(page: &CdpClient) -> Result<()> {
+    page.send(
+        "Page.addScriptToEvaluateOnNewDocument",
+        Some(json!({
+            "source": BRIDGE_JS,
+            "worldName": BRIDGE_WORLD,
+            "runImmediately": true,
+        })),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Subscribe to `Runtime.executionContext*` on the given page connection and
+/// split each frame's contexts into the two maps the `LocalTransport` routes
+/// against: the frame's default (`isDefault`) context is its MAIN world (page
+/// expressions); the `BRIDGE_WORLD`-named context is where the bridge runs.
+/// `Runtime.enable` is issued by `connect_to_page` before this spawns, so events
+/// flow from first connection.
+fn spawn_frame_context_listener(
+    page: &CdpClient,
+    main: Arc<Mutex<HashMap<String, i64>>>,
+    bridge: Arc<Mutex<HashMap<String, i64>>>,
+) {
     let mut events = page.subscribe_events();
     tokio::spawn(async move {
         loop {
@@ -792,13 +866,26 @@ fn spawn_frame_context_listener(page: &CdpClient, map: Arc<Mutex<HashMap<String,
                     let method = event.get("method").and_then(|v| v.as_str()).unwrap_or("");
                     match method {
                         "Runtime.executionContextCreated" => {
-                            let frame_id = event
-                                .pointer("/params/context/auxData/frameId")
+                            let ctx = event.pointer("/params/context");
+                            let frame_id = ctx
+                                .and_then(|c| c.pointer("/auxData/frameId"))
                                 .and_then(|v| v.as_str())
                                 .map(str::to_string);
-                            let cid = event.pointer("/params/context/id").and_then(|v| v.as_i64());
+                            let cid = ctx.and_then(|c| c.get("id")).and_then(|v| v.as_i64());
+                            let is_default = ctx
+                                .and_then(|c| c.pointer("/auxData/isDefault"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let is_bridge = ctx
+                                .and_then(|c| c.get("name"))
+                                .and_then(|v| v.as_str())
+                                == Some(BRIDGE_WORLD);
                             if let (Some(fid), Some(c)) = (frame_id, cid) {
-                                map.lock().await.insert(fid, c);
+                                if is_default {
+                                    main.lock().await.insert(fid, c);
+                                } else if is_bridge {
+                                    bridge.lock().await.insert(fid, c);
+                                }
                             }
                         }
                         "Runtime.executionContextDestroyed" => {
@@ -806,11 +893,13 @@ fn spawn_frame_context_listener(page: &CdpClient, map: Arc<Mutex<HashMap<String,
                                 .pointer("/params/executionContextId")
                                 .and_then(|v| v.as_i64());
                             if let Some(c) = cid {
-                                map.lock().await.retain(|_, v| *v != c);
+                                main.lock().await.retain(|_, v| *v != c);
+                                bridge.lock().await.retain(|_, v| *v != c);
                             }
                         }
                         "Runtime.executionContextsCleared" => {
-                            map.lock().await.clear();
+                            main.lock().await.clear();
+                            bridge.lock().await.clear();
                         }
                         _ => {}
                     }

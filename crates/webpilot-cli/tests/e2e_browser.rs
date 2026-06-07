@@ -347,6 +347,18 @@ fn browser_behavioral_flow() {
         stdout(&scount)
     );
 
+    // 2e. `fetch` runs in the content-script (isolated) world and returns the
+    //     response body — a same-origin GET against the fixture server comes
+    //     back with the page markup, the parity bar the headless suite asserts
+    //     against its now-isolated bridge.
+    let fetched = fx.run(&["fetch", &base]);
+    assert_eq!(code(&fetched), 0, "fetch failed: {}", stdout(&fetched));
+    assert!(
+        stdout(&fetched).contains("shadowhost") || stdout(&fetched).contains("<button"),
+        "fetch must return the page body: {}",
+        stdout(&fetched)
+    );
+
     // 3. Stale-snapshot guard (the bridge is shared, so the typed error must
     //    hold in this mode too).
     let recap = fx.run(&["capture", "--include", "dom"]);

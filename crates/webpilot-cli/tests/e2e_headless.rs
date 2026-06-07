@@ -175,6 +175,47 @@ fn headless_behavioral_flow() {
         stdout(&scount)
     );
 
+    // 2e. `fetch` runs in the bridge's world and returns the response body — a
+    //     same-origin GET against the fixture server must come back with the
+    //     page markup, proving the isolated-world bridge keeps full network
+    //     access (parity with browser mode, whose bridge is also isolated).
+    let fetched = fx.run(&["fetch", &base]);
+    assert_eq!(code(&fetched), 0, "fetch failed: {}", stdout(&fetched));
+    assert!(
+        stdout(&fetched).contains("shadowhost") || stdout(&fetched).contains("<button"),
+        "fetch must return the page body: {}",
+        stdout(&fetched)
+    );
+
+    // 2f. The bridge runs in an isolated world, so page JS that overwrites the
+    //     MAIN-world `__webpilot_handle` / `__webpilot_state` cannot corrupt how
+    //     an index resolves. Tamper in MAIN, then capture + click and confirm
+    //     both still hit the real elements — the snapshot-integrity guarantee
+    //     the isolated bridge buys, locked against a hostile page.
+    let _ = fx.run(&[
+        "eval",
+        "window.__webpilot_handle=()=>({success:true,elements:[]}); window.__webpilot_state={snapshot:[]}; 'ok'",
+    ]);
+    let cap_t = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&cap_t), 0, "capture must survive MAIN tampering: {}", stdout(&cap_t));
+    let tampered: serde_json::Value = serde_json::from_str(&stdout(&cap_t)).expect("capture json");
+    assert!(
+        tampered["elements"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|e| e["tag"] == "button")),
+        "isolated bridge must capture real elements despite a hijacked MAIN __webpilot_state: {}",
+        stdout(&cap_t)
+    );
+    let go_idx = index_of(&cap_t, "go");
+    let clk = fx.run(&["action", "click", &go_idx]);
+    assert_eq!(code(&clk), 0, "click must survive MAIN tampering: {}", stdout(&clk));
+    let title = fx.run(&["eval", "document.title"]);
+    assert!(
+        stdout(&title).contains("clicked"),
+        "click must resolve via the isolated bridge, not the hijacked MAIN snapshot: {}",
+        stdout(&title)
+    );
+
     // 3. A link click that navigates reports `url_changed`, `--capture`
     //    returns the NEW document (settle: committed + parsed, never the dying
     //    page), and armed monitors keep recording across the navigation even

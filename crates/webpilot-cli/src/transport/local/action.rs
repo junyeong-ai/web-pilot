@@ -294,15 +294,18 @@ impl LocalTransport {
         // redirect the target between resolve and sink, and the direct object
         // reaches a file input inside an open shadow root that a document-root
         // selector never could.
-        let prep = self
-            .invoke_bridge(&json!({"type": "prepareUpload", "index": index}))
-            .await?;
-        Self::parse_bridge_response(prep)?;
+        let outcome = async {
+            let prep = self
+                .invoke_bridge(&json!({"type": "prepareUpload", "index": index}))
+                .await?;
+            Self::parse_bridge_response(prep)?;
+            self.set_upload_target_file(index, path).await
+        }
+        .await;
 
-        let outcome = self.set_upload_target_file(index, path).await;
-
-        // Release the stored reference whether or not the assignment succeeded,
-        // so a failed upload never pins a detached node in the bridge.
+        // Release the stored reference no matter how the attempt ended — even a
+        // transport failure after `prepareUpload` stashed the element — so a
+        // failed upload never pins a detached node in the bridge.
         let _ = self.invoke_bridge(&json!({"type": "clearUpload"})).await;
         outcome
     }

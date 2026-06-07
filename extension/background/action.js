@@ -314,12 +314,12 @@ async function handleUpload(tabId, action) {
     // marker attribute and no document-order re-query, so a page can neither
     // observe nor redirect the target between resolve and sink, and the direct
     // object reaches a file input inside an open shadow root. Parity: action.rs.
-    const prep = await sendToContent(tabId, { type: "prepareUpload", index: action.index }, activeFrameId);
-    if (prep && prep.success === false) {
-      return { type: "Action", success: false, error: prep.error };
-    }
-
     try {
+      const prep = await sendToContent(tabId, { type: "prepareUpload", index: action.index }, activeFrameId);
+      if (prep && prep.success === false) {
+        return { type: "Action", success: false, error: prep.error };
+      }
+
       const outcome = await withCdp(tabId, async (tid) => {
         const contextId = await frameWorldContextId(tid, tabId, activeFrameId, "ISOLATED");
         if (contextId == null) {
@@ -341,8 +341,8 @@ async function handleUpload(tabId, action) {
         return { type: "Action", success: false, error: outcome.error };
       }
     } finally {
-      // Release the stored reference whether or not the assignment succeeded,
-      // so a failed upload never pins a detached node in the bridge.
+      // Release the stored reference no matter how the attempt ended — even a
+      // failed prepare — so a failed upload never pins a detached node.
       await sendToContent(tabId, { type: "clearUpload" }, activeFrameId, 3000).catch(() => {});
     }
 

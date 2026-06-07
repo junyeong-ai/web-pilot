@@ -5,11 +5,11 @@ paths:
 
 # Chrome Extension & bridge.js
 
-`bridge.js` is the single content-side entry point shared by headless mode (Rust `include_str!` → `Runtime.evaluate`) and browser mode (manifest content script).
+`bridge.js` is the single content-side entry point shared by headless mode (Rust registers it via `Page.addScriptToEvaluateOnNewDocument` with a `worldName`) and browser mode (manifest content script).
 
-## World placement (an honest boundary)
-- Browser mode runs the bridge as a manifest content script in the extension's **ISOLATED** world: its globals (`__webpilot_handle`, `__webpilot_state`, the index snapshot) are unreachable from page JS, so the page cannot tamper with how an index resolves — only with the DOM it presents.
-- Headless mode injects the bridge into the page's **MAIN** world (a plain `Runtime.evaluate`), so a hostile target page *can* redefine `__webpilot_handle` or mutate `__webpilot_state`. This is consistent with headless's already-documented same-user CDP exposure, and it bounds the snapshot-index integrity guarantee to browser mode; the eval path is MAIN-world by necessity regardless. Moving the headless bridge into a CDP isolated world (closing this to reach full parity) is a tracked larger improvement, not a per-command concern.
+## World placement
+- Both modes run the bridge in an **ISOLATED** world — browser as a manifest content script, headless in the CDP isolated world `webpilot_bridge` that auto-loads on every document. Its globals (`__webpilot_handle`, `__webpilot_state`, the index snapshot, `uploadTarget`) are unreachable from page JS in either mode, so a hostile page can tamper with the DOM it *presents* but never with how an index resolves or where an action lands.
+- Page expressions (`eval`, `frame find`) and the console/network monitors deliberately stay in the **MAIN** world: the first must see page globals, and the monitors hook the *page's* `console`/`fetch`, which an isolated world would never observe. Headless routes each bridge call to the frame's `webpilot_bridge` context and each page expression to its default context; browser resolves the same split via `frameWorldContextId`.
 
 ## Public binding
 - `window.__webpilot_handle(msg)` — sole exported function. Returns a value or a Promise. Namespaced to avoid colliding with page globals.
@@ -23,7 +23,7 @@ paths:
   (`handleFrameSwitch`). The bridge has no `switchFrame` case.
 
 ## Index resolution (snapshot-bound)
-- `extractDom` stores the picked element references in `state.snapshot` (index order). Index-addressed messages (`executeAction`, `getElementCoords`, `prepareUpload`) resolve against that stored list via `resolveIndex`, so an index always targets the element the agent saw at capture time — never a freshly-collected element that may have shifted. `upload` is the one action that must hand a node to CDP (file inputs can't be filled by JS): `prepareUpload` stashes the resolved snapshot element on `state.uploadTarget` by **object identity**, and CDP resolves that stored reference to an `objectId` (headless: the active context; browser: the content-script's ISOLATED world via `frameWorldContextId`) and sets the file on that object. There is no marker attribute and no document-order re-query, so a page can neither observe nor redirect the target between resolve and sink — and the direct object reaches a file input inside an **open shadow root**, which a document-root selector lookup cannot.
+- `extractDom` stores the picked element references in `state.snapshot` (index order). Index-addressed messages (`executeAction`, `getElementCoords`, `prepareUpload`) resolve against that stored list via `resolveIndex`, so an index always targets the element the agent saw at capture time — never a freshly-collected element that may have shifted. `upload` is the one action that must hand a node to CDP (file inputs can't be filled by JS): `prepareUpload` stashes the resolved snapshot element on `state.uploadTarget` by **object identity**, and CDP resolves that stored reference (in the bridge's isolated world, both modes) to an `objectId` and sets the file on that object. There is no marker attribute and no document-order re-query, so a page can neither observe nor redirect the target between resolve and sink — and the direct object reaches a file input inside an **open shadow root**, which a document-root selector lookup cannot.
 - `resolveIndex` revalidates only liveness/visibility (`isConnected` + `isVisible`); a still-connected node whose content changed is legitimate. A missing snapshot (no capture yet) or a removed/hidden element returns `StaleSnapshot` (exit 4) — there is no silent re-resolution against the live DOM.
 
 ## Interactivity & visibility (principled, not heuristic)
