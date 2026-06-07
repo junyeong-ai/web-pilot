@@ -66,61 +66,111 @@ pub fn parse_and_enforce(
     Ok(command)
 }
 
+/// The policy store: a baseline `default` verdict plus per-operation overrides.
+/// Lock a tool down with `default = deny` and allowlist only what it needs; the
+/// permissive `default = allow` (also the absent-file state) leaves just the
+/// explicit denies in force.
+#[derive(Clone)]
+pub struct PolicyStore {
+    pub(crate) default: PolicyVerdict,
+    pub(crate) rules: HashMap<PolicyKey, PolicyVerdict>,
+}
+
+impl Default for PolicyStore {
+    fn default() -> Self {
+        Self {
+            default: PolicyVerdict::Allow,
+            rules: HashMap::new(),
+        }
+    }
+}
+
+impl PolicyStore {
+    /// The effective verdict for a key: its explicit rule, else the default.
+    fn verdict_for(&self, key: PolicyKey) -> PolicyVerdict {
+        self.rules.get(&key).copied().unwrap_or(self.default)
+    }
+}
+
 /// Enforcement predicate. Fails closed: an unreadable or unparseable store
 /// denies rather than allowing.
 pub fn denies(key: PolicyKey) -> bool {
     match load() {
-        Ok(store) => store.get(&key) == Some(&PolicyVerdict::Deny),
+        Ok(store) => store.verdict_for(key) == PolicyVerdict::Deny,
         Err(_) => true,
     }
 }
 
-/// Load the store. An absent file is the empty state; any other read failure or
-/// a parse failure is surfaced so enforcement and `list` fail closed rather
-/// than silently dropping a deny rule.
-pub fn load() -> std::io::Result<HashMap<PolicyKey, PolicyVerdict>> {
+/// Load the store. An absent file is the default (permissive) state; any other
+/// read failure or a parse failure is surfaced so enforcement and `list` fail
+/// closed rather than silently dropping a deny rule.
+pub fn load() -> std::io::Result<PolicyStore> {
     match std::fs::read_to_string(policy_file()) {
         Ok(text) => parse(&text),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(PolicyStore::default()),
         Err(e) => Err(e),
     }
 }
 
-/// Parse store JSON. All-or-nothing: an unknown operation or verdict makes the
-/// whole store untrusted (`Err`) so `denies()` fails closed, rather than
-/// silently dropping the bad entry and letting it through.
-fn parse(text: &str) -> std::io::Result<HashMap<PolicyKey, PolicyVerdict>> {
+/// Parse store JSON. All-or-nothing: an unknown field, operation, or verdict
+/// makes the whole store untrusted (`Err`) so `denies()` fails closed, rather
+/// than silently dropping the bad entry and letting it through.
+fn parse(text: &str) -> std::io::Result<PolicyStore> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Raw {
+        #[serde(default)]
+        default: Option<String>,
+        #[serde(default)]
+        rules: HashMap<String, String>,
+    }
     let invalid = |msg: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, msg.to_owned());
-    let raw: HashMap<String, String> = serde_json::from_str(text)
+    let raw: Raw = serde_json::from_str(text)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let mut store = HashMap::with_capacity(raw.len());
-    for (k, v) in raw {
+    let default = match raw.default {
+        Some(d) => d.parse().map_err(|_| invalid("unknown default verdict"))?,
+        None => PolicyVerdict::Allow,
+    };
+    let mut rules = HashMap::with_capacity(raw.rules.len());
+    for (k, v) in raw.rules {
         let key: PolicyKey = k.parse().map_err(|_| invalid("unknown operation"))?;
         let verdict: PolicyVerdict = v.parse().map_err(|_| invalid("unknown verdict"))?;
-        store.insert(key, verdict);
+        rules.insert(key, verdict);
     }
-    Ok(store)
+    Ok(PolicyStore { default, rules })
 }
 
-/// Set one operation's verdict, preserving the rest. A corrupt store is
-/// overwritten cleanly rather than written back as junk.
+/// Set one operation's verdict, preserving the rest. A corrupt store is an
+/// error (not silently reset), so a single `set` can never erase existing rules.
 pub fn set(operation: PolicyKey, verdict: PolicyVerdict) -> Result<()> {
-    let mut store = load().unwrap_or_default();
-    store.insert(operation, verdict);
+    let mut store = load()?;
+    store.rules.insert(operation, verdict);
     write(&store)
 }
 
-/// Clear every policy.
-pub fn clear() -> Result<()> {
-    write(&HashMap::new())
+/// Set the baseline verdict applied to every operation without an explicit rule.
+pub fn set_default(verdict: PolicyVerdict) -> Result<()> {
+    let mut store = load()?;
+    store.default = verdict;
+    write(&store)
 }
 
-fn write(store: &HashMap<PolicyKey, PolicyVerdict>) -> Result<()> {
-    let raw: HashMap<String, String> = store
+/// Reset to the permissive default with no rules.
+pub fn clear() -> Result<()> {
+    write(&PolicyStore::default())
+}
+
+fn write(store: &PolicyStore) -> Result<()> {
+    // BTreeMap for a stable, diff-friendly key order on disk.
+    let rules: std::collections::BTreeMap<String, String> = store
+        .rules
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    let data = serde_json::to_string_pretty(&raw)?;
+    let data = serde_json::to_string_pretty(&serde_json::json!({
+        "default": store.default.to_string(),
+        "rules": rules,
+    }))?;
     // Write to a per-process temp file then rename: a concurrent reader (the
     // enforcement path) never observes a torn file, so it cannot fail-closed on
     // a half-written store, and concurrent setters can't interleave bytes.
@@ -137,15 +187,23 @@ mod tests {
 
     #[test]
     fn valid_store_parses() {
-        assert_eq!(
-            parse(r#"{"click":"deny","eval":"allow"}"#).unwrap().len(),
-            2
-        );
+        let s = parse(r#"{"rules":{"click":"deny","eval":"allow"}}"#).unwrap();
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.default, PolicyVerdict::Allow);
     }
 
     #[test]
-    fn empty_store_is_ok() {
-        assert!(parse("{}").unwrap().is_empty());
+    fn empty_store_is_permissive() {
+        let s = parse("{}").unwrap();
+        assert!(s.rules.is_empty());
+        assert_eq!(s.default, PolicyVerdict::Allow);
+    }
+
+    #[test]
+    fn default_deny_denies_unset_operations_and_allowlists_explicit_ones() {
+        let s = parse(r#"{"default":"deny","rules":{"click":"allow"}}"#).unwrap();
+        assert_eq!(s.verdict_for(PolicyKey::Click), PolicyVerdict::Allow);
+        assert_eq!(s.verdict_for(PolicyKey::Eval), PolicyVerdict::Deny);
     }
 
     #[test]
@@ -155,12 +213,23 @@ mod tests {
 
     #[test]
     fn unknown_operation_is_error() {
-        assert!(parse(r#"{"teleport":"deny"}"#).is_err());
+        assert!(parse(r#"{"rules":{"teleport":"deny"}}"#).is_err());
     }
 
     #[test]
     fn unknown_verdict_is_error() {
-        assert!(parse(r#"{"click":"maybe"}"#).is_err());
+        assert!(parse(r#"{"rules":{"click":"maybe"}}"#).is_err());
+    }
+
+    #[test]
+    fn unknown_default_is_error() {
+        assert!(parse(r#"{"default":"maybe"}"#).is_err());
+    }
+
+    #[test]
+    fn unknown_top_level_field_is_rejected() {
+        // A tampered/garbled store must fail closed, not partially apply.
+        assert!(parse(r#"{"rules":{},"backdoor":true}"#).is_err());
     }
 
     #[test]
@@ -168,10 +237,10 @@ mod tests {
         // Every non-action key added to PolicyKey must round-trip through the
         // on-disk store (Display/FromStr via serde_plain).
         let s = parse(
-            r#"{"session_export":"deny","cookie_list":"deny","cookie_set":"deny","dom_set":"deny","tab_close":"deny","session_import":"allow"}"#,
+            r#"{"rules":{"session_export":"deny","cookie_list":"deny","cookie_set":"deny","dom_set":"deny","tab_close":"deny","session_import":"allow"}}"#,
         )
         .unwrap();
-        assert_eq!(s.len(), 6);
+        assert_eq!(s.rules.len(), 6);
     }
 
     // `parse_and_enforce` is the host's security gate for raw socket traffic.
