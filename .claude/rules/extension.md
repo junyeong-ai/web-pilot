@@ -19,7 +19,7 @@ paths:
   (`handleFrameSwitch`). The bridge has no `switchFrame` case.
 
 ## Index resolution (snapshot-bound)
-- `extractDom` stores the picked element references in `state.snapshot` (index order). Index-addressed messages (`executeAction`, `getElementCoords`, `tagElement`) resolve against that stored list via `resolveIndex`, so an index always targets the element the agent saw at capture time — never a freshly-collected element that may have shifted.
+- `extractDom` stores the picked element references in `state.snapshot` (index order). Index-addressed messages (`executeAction`, `getElementCoords`, `markElement`) resolve against that stored list via `resolveIndex`, so an index always targets the element the agent saw at capture time — never a freshly-collected element that may have shifted. `upload` is the one action that must hand a node to CDP (file inputs can't be filled by JS): the bridge marks the resolved snapshot element with a one-shot nonce attribute and CDP takes it by that **unique** match (zero → typed `StaleSnapshot`, duplicate → rejected), so a document-order re-query can never redirect the file onto a page-supplied decoy.
 - `resolveIndex` revalidates only liveness/visibility (`isConnected` + `isVisible`); a still-connected node whose content changed is legitimate. A missing snapshot (no capture yet) or a removed/hidden element returns `StaleSnapshot` (exit 4) — there is no silent re-resolution against the live DOM.
 
 ## Interactivity & visibility (principled, not heuristic)

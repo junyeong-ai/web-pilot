@@ -95,6 +95,18 @@ fn printable_key_text(key: &str) -> Option<String> {
     }
 }
 
+/// A one-shot attribute name used to mark an upload target. Per call (a
+/// process-wide counter + the pid), so a page cannot predict it and therefore
+/// cannot pre-stamp a decoy element to be selected in place of the real one.
+/// The charset is `[0-9a-f-]`, safe verbatim in both an HTML attribute name and
+/// a CSS attribute selector.
+fn upload_marker_attr() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("data-webpilot-upload-{:x}-{:x}", std::process::id(), n)
+}
+
 impl LocalTransport {
     // Policy is enforced once at the transport boundary (`Transport::send`),
     // so handlers run only after the command is permitted.
@@ -284,17 +296,34 @@ impl LocalTransport {
     }
 
     async fn do_upload(&self, index: u32, path: &std::path::Path) -> Result<()> {
-        // Bridge tags the chosen <input type=file>; CDP then sets the file
-        // by NodeId because file inputs cannot be filled by JS.
-        let tag = self
-            .invoke_bridge(&json!({
-                "type": "tagElement",
-                "index": index,
-                "attr": "data-wp-upload",
-            }))
+        // File inputs cannot be filled by page JS, so CDP must set the file by
+        // node — but the node has to be the EXACT element the index addressed.
+        // The bridge marks that snapshot element (by object identity, so a stale
+        // index is typed here) with a one-shot nonce attribute the page cannot
+        // predict; CDP then takes the input by that unique mark. A document-
+        // order re-query would let a page redirect the upload onto a different
+        // input by relocating a fixed marker; a unique nonce match cannot be.
+        let attr = upload_marker_attr();
+        let marked = self
+            .invoke_bridge(&json!({"type": "markElement", "index": index, "attr": attr}))
             .await?;
-        let _ = Self::parse_bridge_response(tag)?;
+        Self::parse_bridge_response(marked)?;
 
+        let outcome = self.set_marked_file(index, &attr, path).await;
+
+        // Remove the marker whether or not the assignment succeeded, so a failed
+        // upload never leaves a stale attribute on the input.
+        let _ = self
+            .invoke_bridge(&json!({"type": "unmarkElement", "attr": attr}))
+            .await;
+        outcome
+    }
+
+    /// Set `path` on the file input carrying `attr`, which the bridge placed on
+    /// exactly the snapshot element. The mark must resolve to a single live
+    /// node: zero means it left the DOM (typed `StaleSnapshot`); more than one
+    /// means the page duplicated the one-shot marker (rejected, never guessed).
+    async fn set_marked_file(&self, index: u32, attr: &str, path: &std::path::Path) -> Result<()> {
         let doc = self.page.send("DOM.getDocument", None).await?;
         let root = doc
             .pointer("/root/nodeId")
@@ -306,43 +335,36 @@ impl LocalTransport {
         let q = self
             .page
             .send(
-                "DOM.querySelector",
-                Some(json!({
-                    "nodeId": root,
-                    "selector": "[data-wp-upload]",
-                })),
+                "DOM.querySelectorAll",
+                Some(json!({"nodeId": root, "selector": format!("[{attr}]")})),
             )
             .await?;
-        let node_id = q.get("nodeId").and_then(|v| v.as_i64()).filter(|n| *n != 0);
-        let Some(node_id) = node_id else {
-            // Best-effort cleanup, then surface a typed error.
-            let _ = self
-                .invoke_bridge(&json!({"type": "untagElement", "attr": "data-wp-upload"}))
-                .await;
-            return Err(WebPilotError::ElementNotFound {
-                requested: index,
-                available: 0,
+        let nodes: Vec<i64> = q
+            .get("nodeIds")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|n| n.as_i64()).filter(|n| *n != 0).collect())
+            .unwrap_or_default();
+
+        let node_id = match nodes.as_slice() {
+            [one] => *one,
+            [] => return Err(WebPilotError::StaleSnapshot { index }.into()),
+            many => {
+                return Err(WebPilotError::Other {
+                    detail: format!(
+                        "upload target ambiguous: {} elements carry the one-shot marker — the page duplicated it",
+                        many.len()
+                    ),
+                }
+                .into());
             }
-            .into());
         };
 
-        let set = self
-            .page
+        self.page
             .send(
                 "DOM.setFileInputFiles",
-                Some(json!({
-                    "nodeId": node_id,
-                    "files": [path.to_string_lossy()],
-                })),
+                Some(json!({"nodeId": node_id, "files": [path.to_string_lossy()]})),
             )
-            .await;
-
-        // Remove the marker whether or not the file assignment succeeded, so a
-        // failed upload never leaves a stale attribute on the input.
-        let _ = self
-            .invoke_bridge(&json!({"type": "untagElement", "attr": "data-wp-upload"}))
-            .await;
-        set?;
+            .await?;
         Ok(())
     }
 

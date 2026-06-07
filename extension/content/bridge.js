@@ -788,15 +788,28 @@
         return executeAction(msg.action);
       case "wait":
         return new Promise((resolve) => handleWait(msg, resolve));
-      case "tagElement": {
+      case "markElement": {
+        // Mark the EXACT snapshot element (resolveIndex → object identity, so a
+        // stale index is a typed StaleSnapshot here) with a one-shot nonce
+        // attribute the caller chose. CDP then takes the input by that unique
+        // mark, never a document-order re-query that the page could redirect.
         const r = resolveIndex(msg.index);
         if (r.error) return r.error;
-        r.el.setAttribute(msg.attr, "1");
+        const el = r.el;
+        if (!(el instanceof HTMLInputElement) || el.type !== "file") {
+          return err(
+            "InvalidArgument",
+            `[${msg.index}] is not a file input — upload targets <input type=file>`,
+            { index: msg.index },
+          );
+        }
+        el.setAttribute(msg.attr, "1");
         return { success: true };
       }
-      case "untagElement": {
-        const tagged = document.querySelector(`[${msg.attr}]`);
-        if (tagged) tagged.removeAttribute(msg.attr);
+      case "unmarkElement": {
+        for (const e of document.querySelectorAll(`[${msg.attr}]`)) {
+          e.removeAttribute(msg.attr);
+        }
         return { success: true };
       }
       case "setHtml": {

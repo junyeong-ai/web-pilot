@@ -306,28 +306,41 @@ async function dispatchActionToPage(tab, action) {
 async function handleUpload(tabId, action) {
   try {
     await ensureBridge(tabId, activeFrameId);
-    // Tag the chosen element by index — this resolves through the bridge
-    // snapshot, so a stale index surfaces a typed `StaleSnapshot` here (exit 4
-    // parity with headless) instead of a generic "not found via CDP" later.
-    const tag = await sendToContent(tabId, { type: "tagElement", index: action.index, attr: "data-wp-upload" }, activeFrameId);
-    if (tag && tag.success === false) {
-      return { type: "Action", success: false, error: tag.error };
+    // Mark the EXACT snapshot element with a one-shot nonce attribute the page
+    // cannot predict (resolves through the bridge snapshot, so a stale index is
+    // a typed StaleSnapshot here; a non-file element is a typed InvalidArgument)
+    // and take the input by that unique mark — never a document-order re-query
+    // the page could redirect by relocating a fixed marker. Parity: action.rs.
+    const attr = `data-webpilot-upload-${uploadMarkerNonce()}`;
+    const marked = await sendToContent(tabId, { type: "markElement", index: action.index, attr }, activeFrameId);
+    if (marked && marked.success === false) {
+      return { type: "Action", success: false, error: marked.error };
     }
 
     try {
-      await withCdp(tabId, async (tid) => {
+      const outcome = await withCdp(tabId, async (tid) => {
         const { root } = await cdpSend(tid, "DOM.getDocument");
-        const { nodeId } = await cdpSend(tid, "DOM.querySelector", {
+        const { nodeIds } = await cdpSend(tid, "DOM.querySelectorAll", {
           nodeId: root.nodeId,
-          selector: "[data-wp-upload]",
+          selector: `[${attr}]`,
         });
-        if (!nodeId) throw new Error("File input element not found via CDP");
-        await cdpSend(tid, "DOM.setFileInputFiles", { nodeId, files: [action.path] });
+        const matches = (nodeIds || []).filter((n) => n);
+        if (matches.length === 0) {
+          return { success: false, error: err("StaleSnapshot", `[${action.index}] left the DOM before upload`, { index: action.index }) };
+        }
+        if (matches.length > 1) {
+          return { success: false, error: otherErr(`upload target ambiguous: ${matches.length} elements carry the one-shot marker — the page duplicated it`) };
+        }
+        await cdpSend(tid, "DOM.setFileInputFiles", { nodeId: matches[0], files: [action.path] });
+        return { success: true };
       });
+      if (outcome.success === false) {
+        return { type: "Action", success: false, error: outcome.error };
+      }
     } finally {
       // Strip the marker whether or not the assignment succeeded, so a failed
       // upload never leaves a stale attribute on the input.
-      await sendToContent(tabId, { type: "untagElement", attr: "data-wp-upload" }, activeFrameId, 3000)
+      await sendToContent(tabId, { type: "unmarkElement", attr }, activeFrameId, 3000)
         .catch(() => {});
     }
 
@@ -335,6 +348,13 @@ async function handleUpload(tabId, action) {
   } catch (e) {
     return { type: "Action", success: false, error: exceptionErr(e) };
   }
+}
+
+// A one-shot attribute suffix, unique per call so the page cannot predict it
+// and pre-stamp a decoy element. Charset is `[0-9a-z-]`, safe verbatim in an
+// HTML attribute name and a CSS attribute selector.
+function uploadMarkerNonce() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 async function handleHover(tabId, action) {

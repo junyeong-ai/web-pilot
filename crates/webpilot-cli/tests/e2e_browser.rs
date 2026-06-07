@@ -283,6 +283,43 @@ fn browser_behavioral_flow() {
     let hover = fx.run(&["action", "hover", &button_index]);
     assert_eq!(code(&hover), 0, "hover failed: {}", stdout(&hover));
 
+    // 2c. Upload sets a file on the input the index addressed — snapshot
+    //     identity via a one-shot nonce marker, parity with headless. Prove the
+    //     file landed on #file; uploading onto a non-file element is a typed
+    //     InvalidArgument (exit 7) caught at the bridge before any CDP sink.
+    let cap_up = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&cap_up), 0);
+    let up_snapshot: serde_json::Value =
+        serde_json::from_str(&stdout(&cap_up)).expect("capture json");
+    let file_index = up_snapshot["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "file")
+        .and_then(|e| e["index"].as_u64())
+        .expect("file index")
+        .to_string();
+    let upload_src = fx.home.join("upload-src.txt");
+    std::fs::write(&upload_src, b"payload").expect("write upload fixture");
+    let src = upload_src.to_str().unwrap();
+    let up = fx.run(&["action", "upload", &file_index, src]);
+    assert_eq!(code(&up), 0, "upload failed: {}", stdout(&up));
+    let fcount = fx.run(&["eval", "document.getElementById('file').files.length"]);
+    let fc: serde_json::Value = serde_json::from_str(&stdout(&fcount)).expect("eval json");
+    assert_eq!(
+        fc["result"].as_str(),
+        Some("1"),
+        "upload must place exactly one file on #file: {}",
+        stdout(&fcount)
+    );
+    let bad = fx.run(&["action", "upload", &button_index, src]);
+    assert_eq!(
+        code(&bad),
+        7,
+        "upload onto a non-file element must be InvalidArgument: {}",
+        stdout(&bad)
+    );
+
     // 3. Stale-snapshot guard (the bridge is shared, so the typed error must
     //    hold in this mode too).
     let recap = fx.run(&["capture", "--include", "dom"]);
