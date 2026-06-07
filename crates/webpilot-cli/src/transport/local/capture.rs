@@ -77,10 +77,22 @@ impl LocalTransport {
                     })
                     .collect();
                 if !annotations.is_empty() {
-                    self.invoke_bridge(&json!({
-                        "type": "addAnnotations", "elements": annotations,
-                    }))
-                    .await?;
+                    // The overlay is attached to the DOM by the bridge before
+                    // its response returns, so a transport failure here can
+                    // still have drawn it. Clean up before surfacing the error,
+                    // honouring the invariant below: no overlay outlives the
+                    // capture that drew it.
+                    if let Err(e) = self
+                        .invoke_bridge(&json!({
+                            "type": "addAnnotations", "elements": annotations,
+                        }))
+                        .await
+                    {
+                        let _ = self
+                            .invoke_bridge(&json!({"type": "removeAnnotations"}))
+                            .await;
+                        return Err(e);
+                    }
                     tokio::time::sleep(webpilot::settings::timeouts().annotation_paint).await;
                 }
             }

@@ -86,6 +86,7 @@ async fn close_contexts(
 
     if all {
         let mut count = 0;
+        let mut kept = 0;
         if let Ok(entries) = std::fs::read_dir(dirs::contexts_dir()) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let fname = entry.file_name().to_string_lossy().to_string();
@@ -95,14 +96,25 @@ async fn close_contexts(
                 if let Ok(data) = std::fs::read_to_string(entry.path())
                     && let Ok(ctx) = serde_json::from_str::<ContextEntry>(&data)
                 {
-                    dispose_if_live(browser, &ctx.browser_context_id).await?;
+                    // Best-effort across the whole set: one context that fails
+                    // to dispose must not abort the sweep, but its metadata is
+                    // kept (a live context with no record would be orphaned).
+                    if dispose_if_live(browser, &ctx.browser_context_id).await.is_err() {
+                        kept += 1;
+                        continue;
+                    }
                     crate::transport::local::clear_context_state(&ctx.browser_context_id);
                 }
                 let _ = std::fs::remove_file(entry.path());
                 count += 1;
             }
         }
-        return Ok(CommandOutput::Ok(format!("Closed {count} context(s)")));
+        let msg = if kept > 0 {
+            format!("Closed {count} context(s); {kept} kept (failed to dispose — retry)")
+        } else {
+            format!("Closed {count} context(s)")
+        };
+        return Ok(CommandOutput::Ok(msg));
     }
 
     let Some(name) = name else {

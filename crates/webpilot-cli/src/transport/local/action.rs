@@ -19,6 +19,12 @@ enum HistoryNav {
     Forward,
 }
 
+/// Whether a URL names a settled, capturable document rather than the initial
+/// empty page a tab carries before its first real navigation commits.
+fn is_real_document_url(url: &str) -> bool {
+    !url.is_empty() && url != "about:blank"
+}
+
 impl LocalTransport {
     // Policy is enforced once at the transport boundary (`Transport::send`),
     // so handlers run only after the command is permitted.
@@ -137,9 +143,12 @@ impl LocalTransport {
         let (dom, capture_error) = if capture {
             if new_tab.is_some() {
                 // Fresh subscription: readiness of the adopted tab, not the
-                // opener that `page_events` is bound to.
+                // opener that `page_events` is bound to. A popup often exists
+                // as `about:blank` (readyState complete) before its
+                // destination commits — wait past the blank document first so
+                // the snapshot is the page the click actually opened.
                 let mut popup_events = self.page.subscribe_events();
-                self.await_document_ready(&mut popup_events).await;
+                self.await_adopted_document(&mut popup_events).await;
             } else if url_changed.is_some() {
                 self.await_document_ready(&mut page_events).await;
             }
@@ -312,22 +321,24 @@ impl LocalTransport {
             return immediate;
         }
 
-        // Drain what the action already produced: a commit decides instantly;
-        // otherwise collect which frames started — and stopped — loading.
-        let mut committed: Option<String> = None;
-        let mut started: Vec<String> = Vec::new();
-        let mut stopped: Vec<String> = Vec::new();
+        // Drain the buffer into an ordered list of the events that bear on the
+        // main frame's load state. A non-navigating action produces none — the
+        // hot path returns here with no extra round-trip.
+        enum Ev {
+            Commit(String),
+            Started(String),
+            Stopped(String),
+        }
+        let mut seq: Vec<Ev> = Vec::new();
         loop {
             match events.try_recv() {
                 Ok(ev) => {
                     if let Some(u) = main_frame_url(&ev) {
-                        committed = Some(u.to_string());
-                    } else if let Some(id) =
-                        ev.pointer("/params/frameId").and_then(Value::as_str)
-                    {
+                        seq.push(Ev::Commit(u.to_string()));
+                    } else if let Some(id) = ev.pointer("/params/frameId").and_then(Value::as_str) {
                         match ev.get("method").and_then(Value::as_str) {
-                            Some("Page.frameStartedLoading") => started.push(id.to_string()),
-                            Some("Page.frameStoppedLoading") => stopped.push(id.to_string()),
+                            Some("Page.frameStartedLoading") => seq.push(Ev::Started(id.to_string())),
+                            Some("Page.frameStoppedLoading") => seq.push(Ev::Stopped(id.to_string())),
                             _ => {}
                         }
                     }
@@ -336,24 +347,42 @@ impl LocalTransport {
                 Err(_) => break,
             }
         }
-        if let Some(u) = committed {
-            return u;
-        }
-        if started.is_empty() {
+        if seq.is_empty() {
             return immediate;
         }
 
-        // Only a MAIN-frame start justifies waiting for the commit — an
-        // iframe the click lazy-loaded must not stall the action — and a
-        // main-frame load that already STOPPED without committing (cancelled,
-        // intercepted as a download) has nothing left to wait for.
+        // Something loaded — now learn the main frame id to interpret the
+        // sequence. A start/stop pair only settles the MAIN frame, and replay
+        // IN ORDER (not set membership) is what makes `[priorStop, ourStart]`
+        // resolve to "still loading" instead of short-circuiting on the stale
+        // stop. (Unreadable tree → don't wait.)
         let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
             return immediate;
         };
-        let Some(main) = tree.pointer("/frameTree/frame/id").and_then(Value::as_str) else {
+        let Some(main) = tree
+            .pointer("/frameTree/frame/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
             return immediate;
         };
-        if !started.iter().any(|f| f == main) || stopped.iter().any(|f| f == main) {
+        let mut committed: Option<String> = None;
+        let mut main_loading = false;
+        for e in seq {
+            match e {
+                Ev::Commit(u) => {
+                    committed = Some(u);
+                    main_loading = false;
+                }
+                Ev::Started(id) if id == main => main_loading = true,
+                Ev::Stopped(id) if id == main => main_loading = false,
+                _ => {}
+            }
+        }
+        if let Some(u) = committed {
+            return u;
+        }
+        if !main_loading {
             return immediate;
         }
 
@@ -418,6 +447,54 @@ impl LocalTransport {
                 Ok(Err(_)) | Err(_) => return,
             }
         }
+    }
+
+    /// Wait — bounded by `PROBE` — for a freshly adopted popup to settle on
+    /// the document the click actually opened. A click-opened target commonly
+    /// exists first as `about:blank` (readyState already `complete`) before
+    /// its destination commits; a plain `await_document_ready` would capture
+    /// that blank page. So: if the bound document is still `about:blank`, wait
+    /// for the main frame to commit to a real URL, then for it to parse. A
+    /// popup genuinely opened to `about:blank` settles at the deadline (its
+    /// real, blank result).
+    async fn await_adopted_document(&self, events: &mut tokio::sync::broadcast::Receiver<Value>) {
+        use tokio::sync::broadcast::error::RecvError;
+
+        fn main_committed_real_url(ev: &Value) -> bool {
+            if ev.get("method").and_then(Value::as_str) != Some("Page.frameNavigated") {
+                return false;
+            }
+            let Some(frame) = ev.pointer("/params/frame") else {
+                return false;
+            };
+            if frame.get("parentId").is_some() {
+                return false;
+            }
+            frame
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(is_real_document_url)
+        }
+
+        if is_real_document_url(&self.bound_target_url().await) {
+            self.await_document_ready(events).await;
+            return;
+        }
+
+        let deadline = tokio::time::Instant::now() + super::PROBE;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            match tokio::time::timeout(deadline - now, events.recv()).await {
+                Ok(Ok(ev)) if main_committed_real_url(&ev) => break,
+                Ok(Ok(_)) => continue,
+                Ok(Err(RecvError::Lagged(_))) => continue,
+                Ok(Err(_)) | Err(_) => return,
+            }
+        }
+        self.await_document_ready(events).await;
     }
 
     /// Drive a same-document history navigation (`history.back()`/`forward()`).

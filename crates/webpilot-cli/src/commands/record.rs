@@ -41,6 +41,14 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
         }
         .into());
     }
+    if let Some(secs) = args.duration
+        && (!secs.is_finite() || secs <= 0.0)
+    {
+        return Err(webpilot::WebPilotError::InvalidArgument {
+            detail: format!("--duration must be a positive number of seconds (got {secs})"),
+        }
+        .into());
+    }
 
     if let Some(url) = args.url {
         crate::transport::navigate_to(local, url).await?;
@@ -61,15 +69,21 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
     };
 
     let dir = dirs::artifacts_dir();
+    // Nanosecond stamp so two `--context` recordings minted in the same
+    // millisecond don't collide on `frame_<ts>_000.png` and overwrite.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
+        .map(|d| d.as_nanos())
         .unwrap_or(0);
 
     let mut interval =
         tokio::time::interval(std::time::Duration::from_millis(args.interval as u64));
 
-    let mut frames: Vec<String> = Vec::with_capacity(frame_count as usize);
+    // Cap the pre-allocation: `frame_count` is user-controlled (up to
+    // `u32::MAX` via `--frames`), and `with_capacity` on that raw value would
+    // try to reserve tens of GB and abort. The Vec still grows past the hint
+    // if a genuinely long recording runs.
+    let mut frames: Vec<String> = Vec::with_capacity((frame_count as usize).min(1024));
     let mut dom_files: Vec<String> = Vec::new();
 
     for i in 0..frame_count {

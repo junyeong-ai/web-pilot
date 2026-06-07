@@ -35,7 +35,7 @@ pub(crate) fn install(yes: bool) -> Result<StepOutcome> {
 }
 
 fn install_inner(yes: bool, force: bool) -> Result<StepOutcome> {
-    let dest = skill_dir();
+    let dest = skill_dir()?;
     let skill_md = dest.join("SKILL.md");
 
     let embedded = assets::SKILL
@@ -53,9 +53,13 @@ fn install_inner(yes: bool, force: bool) -> Result<StepOutcome> {
         (true, true, true) => Action::Reinstalled,
         (true, false, true) => Action::Updated,
         (true, false, false) => {
+            // Fail-closed default `false`: overwriting a hand-edited skill is
+            // destructive, so a non-interactive run (piped/CI, no `--yes`)
+            // keeps the local copy instead of silently clobbering it. Only an
+            // explicit `y` at the prompt, or `--yes`, replaces it.
             if !super::confirm(
                 "Skill differs from embedded version — overwrite?",
-                true,
+                false,
                 yes,
             ) {
                 return Ok(outcome("kept", &skill_md));
@@ -104,11 +108,15 @@ fn outcome(action: &str, skill_md: &std::path::Path) -> StepOutcome {
     }
 }
 
-fn skill_dir() -> PathBuf {
+/// Where Claude Code reads the skill from. Derived from `$HOME`: an unset
+/// home is an error, never a `/tmp` guess — installing to a path Claude will
+/// never read would report a broken install as success.
+fn skill_dir() -> Result<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".claude").join("skills").join("webpilot")
+        .filter(|h| !h.as_os_str().is_empty())
+        .context("HOME is not set — cannot locate ~/.claude/skills")?;
+    Ok(home.join(".claude").join("skills").join("webpilot"))
 }
 
 #[cfg(test)]

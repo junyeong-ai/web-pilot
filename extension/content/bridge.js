@@ -116,13 +116,20 @@
     // tabindex of -1 is script-only focus (route announcers, modal roots,
     // headings) and is not a click affordance, so it must not mint a phantom
     // target.
+    // Pierce open shadow roots for the marker pass too (its own budget — the
+    // host walk is idempotent, so a fresh allowance lets it reach the same
+    // depth the semantic pass did): a design-system custom element whose
+    // clickable part lives in its shadow root and carries `onclick`/`jsaction`
+    // rather than a semantic tag would otherwise be invisible to the agent.
     const markerSel = '[onclick],[data-action],[ng-click],' +
       '[v-on\\:click],[\\@click],[data-click],[jsaction]';
-    const markers = new Set(document.querySelectorAll(markerSel));
-    for (const el of document.querySelectorAll("[tabindex]")) {
+    const markerBudget = { hosts: SHADOW_HOST_BUDGET, truncated: false };
+    const markers = new Set(queryAllDeep(markerSel, document, markerBudget));
+    for (const el of queryAllDeep("[tabindex]", document, markerBudget)) {
       const ti = parseInt(el.getAttribute("tabindex"), 10);
       if (Number.isFinite(ti) && ti >= 0) markers.add(el);
     }
+    budget.truncated = budget.truncated || markerBudget.truncated;
     for (const el of markers) {
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
@@ -132,6 +139,12 @@
       add(el);
     }
 
+    // cursor:pointer discovery stays light-DOM only: `el.contains()` does not
+    // cross shadow boundaries, so the innermost/wrapping logic below cannot be
+    // computed correctly across a shadow root — and a cursor:pointer element
+    // carrying no marker, role, or semantic tag inside a shadow root is exotic.
+    // Semantic and marker controls in shadow DOM are already covered above.
+    //
     // cursor:pointer signals a target only on the INNERMOST such element.
     // Cards, rows and banners set pointer on a wrapper that merely contains the
     // real control; surfacing the wrapper hands the agent a giant phantom

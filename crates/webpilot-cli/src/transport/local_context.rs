@@ -110,7 +110,7 @@ pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> R
                 };
                 entry.target_id = tid.clone();
                 entry.last_used = now;
-                let _ = std::fs::write(&file_path, serde_json::to_string(&entry)?);
+                let _ = dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes());
                 return Ok(tid);
             } else {
                 super::local::clear_context_state(&entry.browser_context_id);
@@ -161,7 +161,9 @@ pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> R
         created_at: now,
         last_used: now,
     };
-    std::fs::write(&file_path, serde_json::to_string(&entry)?)?;
+    // Atomic: a crash mid-write must not leave a torn entry that the next
+    // resolve can't parse — that would orphan the live context just created.
+    dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes())?;
 
     Ok(tid)
 }

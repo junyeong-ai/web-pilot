@@ -232,6 +232,29 @@ fn current_user() -> String {
     std::env::var("USER").unwrap_or_else(|_| "default".into())
 }
 
+// --- Atomic writes -----------------------------------------------------------
+
+/// Write `contents` to `path` atomically: a reader (or a killed writer) never
+/// observes a torn file. The temp file is created in the SAME directory as the
+/// target so the final `rename` is a same-filesystem metadata swap, and it is
+/// removed on a mid-write failure so a crash leaves no `.tmp` litter.
+pub fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "tmp".into());
+    let tmp = dir.join(format!(".{file_name}.{}.tmp", std::process::id()));
+
+    let write = || -> std::io::Result<()> {
+        std::fs::write(&tmp, contents)?;
+        std::fs::rename(&tmp, path)
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
 // --- Materialisation --------------------------------------------------------
 
 #[derive(Copy, Clone)]

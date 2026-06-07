@@ -29,11 +29,21 @@ pub async fn run(local: &mut LocalTransport, args: ProfileArgs) -> Result<Comman
     let result = cdp.send("Profiler.stop", None).await?;
     cdp.send("Profiler.disable", None).await?;
 
-    let data = result.get("profile").cloned().unwrap_or_default();
+    // A stop with no `profile` field means the capture produced nothing —
+    // writing `null` to a `.cpuprofile` would report an unusable file as
+    // success, so surface it instead.
+    let data = result
+        .get("profile")
+        .cloned()
+        .ok_or_else(|| webpilot::WebPilotError::Other {
+            detail: "Profiler.stop returned no profile data".into(),
+        })?;
     let dir = dirs::artifacts_dir();
+    // Nanoseconds so two `--context` profiles in the same millisecond don't
+    // collide on the filename and overwrite.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
+        .map(|d| d.as_nanos())
         .unwrap_or(0);
     let path = dir.join(format!("profile_{ts}.cpuprofile"));
     std::fs::write(&path, serde_json::to_string(&data)?)?;

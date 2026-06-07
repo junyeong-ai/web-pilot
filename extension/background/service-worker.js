@@ -768,19 +768,30 @@ async function handleAction(command) {
     try {
       const t = await resolveActiveTab();
       if (t) {
-        if (result.url_changed || result.new_tab) await documentReady(t.id, 2000);
+        // A click-opened popup is often `about:blank` (already complete)
+        // before its destination commits — wait past it; a same-tab
+        // navigation just waits for the new document to parse.
+        if (result.new_tab) await adoptedDocumentReady(t.id, 2000);
+        else if (result.url_changed) await documentReady(t.id, 2000);
         await ensureBridge(t.id, activeFrameId);
         const dom = await sendToContent(t.id, { type: "extractDom", options: {} }, activeFrameId, 5000);
-        if (dom) {
+        // The bridge returns a snapshot (with an `elements` array) on success,
+        // or a typed `{success:false, error}` on failure. The latter is truthy
+        // — assigning it as `dom` would forward a non-snapshot the CLI can't
+        // deserialize, losing the successful action — so discriminate on the
+        // snapshot shape and surface a failure as `capture_error`.
+        if (dom && Array.isArray(dom.elements)) {
           // Mirror standalone capture: report out-of-scope http iframes so the
           // agent's subframe logic works the same after an action.
-          if (activeFrameId === 0 && dom.elements) {
+          if (activeFrameId === 0) {
             const frames = await chrome.webNavigation.getAllFrames({ tabId: t.id }).catch(() => []);
             dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
           }
           result.dom = dom;
+        } else if (dom && dom.error) {
+          result.capture_error = dom.error.message || JSON.stringify(dom.error);
         } else {
-          result.capture_error = "empty DOM snapshot from content script";
+          result.capture_error = "no DOM snapshot from content script";
         }
       }
     } catch (e) {
@@ -789,6 +800,31 @@ async function handleAction(command) {
   }
 
   return result;
+}
+
+// Wait — bounded — for a freshly adopted popup to settle on the document the
+// click actually opened. A click-opened tab commonly exists first as
+// `about:blank` (already `complete`); a bare readyState probe would capture
+// that blank page. Register the commit watch BEFORE checking the current URL
+// so a commit that fires in between is not missed.
+async function adoptedDocumentReady(tabId, timeoutMs) {
+  const isReal = (u) => u && u !== "about:blank";
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    const done = () => {
+      clearTimeout(timer);
+      chrome.webNavigation.onCommitted.removeListener(onCommitted);
+      resolve();
+    };
+    const onCommitted = (d) => {
+      if (d.tabId === tabId && d.frameId === 0 && isReal(d.url)) done();
+    };
+    chrome.webNavigation.onCommitted.addListener(onCommitted);
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab && isReal(tab.url)) done();
+    }).catch(() => {});
+  });
+  await documentReady(tabId, timeoutMs);
 }
 
 // Wait — bounded — until the tab's main-frame document has parsed, so a

@@ -171,13 +171,10 @@ fn write(store: &PolicyStore) -> Result<()> {
         "default": store.default.to_string(),
         "rules": rules,
     }))?;
-    // Write to a per-process temp file then rename: a concurrent reader (the
-    // enforcement path) never observes a torn file, so it cannot fail-closed on
-    // a half-written store, and concurrent setters can't interleave bytes.
-    let path = policy_file();
-    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, &path)?;
+    // Atomic temp+rename: a concurrent reader (the enforcement path) never
+    // observes a torn file, so it cannot fail-closed on a half-written store,
+    // and concurrent setters can't interleave bytes.
+    webpilot::dirs::atomic_write(&policy_file(), data.as_bytes())?;
     Ok(())
 }
 

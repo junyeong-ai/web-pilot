@@ -10,6 +10,30 @@ use crate::output::CommandOutput;
 /// is a reporting aid, not a gate; treat `changed_percent` as approximate.
 const PIXEL_DIFF_THRESHOLD: f64 = 30.0;
 
+/// Refuse to load a diff input larger than this. The inputs are arbitrary
+/// user-named files, and both the DOM diff (`read_to_string`) and the image
+/// decode pull the whole file into memory — a multi-GB path would OOM the
+/// process before any typed error could be returned. A snapshot or screenshot
+/// never approaches this; anything that does is not a WebPilot artifact.
+const MAX_DIFF_INPUT_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Reject an oversized (or unstat-able) diff input with a typed error before
+/// it is read into memory.
+fn guard_input_size(path: &std::path::Path, label: &str) -> Result<()> {
+    let len = std::fs::metadata(path)
+        .with_context(|| format!("Cannot stat {label}"))?
+        .len();
+    if len > MAX_DIFF_INPUT_BYTES {
+        return Err(webpilot::WebPilotError::InvalidArgument {
+            detail: format!(
+                "{label} is {len} bytes, over the {MAX_DIFF_INPUT_BYTES}-byte diff limit"
+            ),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 #[derive(Args)]
 pub struct DiffArgs {
     /// Diff two DOM snapshots (JSON files)
@@ -48,6 +72,8 @@ pub async fn run(args: DiffArgs) -> Result<CommandOutput> {
 }
 
 fn diff_dom(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
+    guard_input_size(a, "file A")?;
+    guard_input_size(b, "file B")?;
     let text_a = std::fs::read_to_string(a).context("Cannot read file A")?;
     let text_b = std::fs::read_to_string(b).context("Cannot read file B")?;
 
@@ -88,13 +114,20 @@ fn diff_dom(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
 }
 
 fn diff_screenshot(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
+    guard_input_size(a, "image A")?;
+    guard_input_size(b, "image B")?;
     let img_a = image::open(a).context("Cannot open image A")?;
     let img_b = image::open(b).context("Cannot open image B")?;
 
+    // When the two images differ in size, compare their overlapping region —
+    // but report it: a 100%-of-overlap match between mismatched canvases must
+    // not read as "identical" when one image is taller than the other.
     let (w, h) = (
         img_a.width().min(img_b.width()),
         img_a.height().min(img_b.height()),
     );
+    let dimensions_differ =
+        (img_a.width(), img_a.height()) != (img_b.width(), img_b.height());
     let rgba_a = img_a.to_rgba8();
     let rgba_b = img_b.to_rgba8();
 
@@ -141,17 +174,30 @@ fn diff_screenshot(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
         .save(&diff_path)
         .context("Cannot save diff image")?;
 
+    let mut human = format!(
+        "Changed: {:.1}% ({diff_count}/{total} pixels)\nDiff image: {}",
+        pct,
+        diff_path.display()
+    );
+    if dimensions_differ {
+        human.push_str(&format!(
+            "\nNote: images differ in size ({}x{} vs {}x{}); compared the {w}x{h} overlap",
+            img_a.width(),
+            img_a.height(),
+            img_b.width(),
+            img_b.height(),
+        ));
+    }
+
     Ok(CommandOutput::Data {
         json: serde_json::json!({
             "changed_percent": format!("{:.1}", pct),
             "changed_pixels": diff_count,
             "total_pixels": total,
             "diff_image": diff_path.to_string_lossy(),
+            "compared_region": { "width": w, "height": h },
+            "dimensions_differ": dimensions_differ,
         }),
-        human: format!(
-            "Changed: {:.1}% ({diff_count}/{total} pixels)\nDiff image: {}",
-            pct,
-            diff_path.display()
-        ),
+        human,
     })
 }

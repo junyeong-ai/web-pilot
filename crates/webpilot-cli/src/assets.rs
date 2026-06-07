@@ -69,7 +69,10 @@ pub fn write_dir(dir: &Dir<'_>, dest: &Path) -> io::Result<()> {
                 if let Some(parent) = target.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                std::fs::write(&target, f.contents())?;
+                // Atomic per file: an interrupted `setup` must not leave a
+                // truncated `manifest.json` / `bridge.js` that Chrome then
+                // fails to load — each file flips from old to new in one rename.
+                webpilot::dirs::atomic_write(&target, f.contents())?;
                 set_file_mode(&target);
             }
         }

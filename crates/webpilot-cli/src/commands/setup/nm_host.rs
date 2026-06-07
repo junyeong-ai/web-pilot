@@ -43,12 +43,14 @@ pub fn run(args: NmHostArgs) -> Result<CommandOutput> {
         "allowed_origins": [format!("chrome-extension://{ext_id}/")],
     });
 
-    let nm_dir = nm_dir();
+    let nm_dir = nm_dir()?;
     std::fs::create_dir_all(&nm_dir)?;
 
     let manifest_path = nm_dir.join("com.webpilot.host.json");
     let json = serde_json::to_string_pretty(&manifest).expect("manifest is a static-shape Value");
-    std::fs::write(&manifest_path, &json)?;
+    // Atomic: an interrupted write must not truncate a working manifest and
+    // leave browser mode unable to launch the host.
+    webpilot::dirs::atomic_write(&manifest_path, json.as_bytes())?;
 
     let human = format!(
         "✓ NM host registered\n  \
@@ -73,11 +75,16 @@ pub fn run(args: NmHostArgs) -> Result<CommandOutput> {
 }
 
 /// Native Messaging host manifest directory for Chrome on this platform.
-pub fn nm_dir() -> PathBuf {
+///
+/// Derived from `$HOME`: an unset home is an error, never a `/tmp` guess —
+/// writing the manifest somewhere Chrome will never read it would report a
+/// broken registration as success.
+pub fn nm_dir() -> Result<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    if cfg!(target_os = "macos") {
+        .filter(|h| !h.as_os_str().is_empty())
+        .context("HOME is not set — cannot locate Chrome's Native Messaging directory")?;
+    Ok(if cfg!(target_os = "macos") {
         home.join("Library")
             .join("Application Support")
             .join("Google")
@@ -87,7 +94,7 @@ pub fn nm_dir() -> PathBuf {
         home.join(".config")
             .join("google-chrome")
             .join("NativeMessagingHosts")
-    }
+    })
 }
 
 /// Chrome extension IDs are 32 characters, each in `[a-p]`.
