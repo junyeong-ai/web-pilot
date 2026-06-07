@@ -214,6 +214,24 @@ impl LocalTransport {
     /// then confirmed via the frame event and the active frame is reset, just
     /// as `navigate_reconnect` does.
     async fn history_nav(&self, expression: &str) -> Result<()> {
+        // The Navigation API makes a missing history entry an honest, immediate
+        // typed failure — never a success that silently did nothing (browser
+        // mode applies the same check).
+        let probe = if expression.contains("back") {
+            "navigation.canGoBack"
+        } else {
+            "navigation.canGoForward"
+        };
+        if let Ok(can) = self.page.evaluate(probe).await
+            && can == serde_json::Value::Bool(false)
+        {
+            return Err(WebPilotError::NavigationFailed {
+                url: expression.to_string(),
+                reason: "no history entry".into(),
+            }
+            .into());
+        }
+
         if let Err(e) = self.page.evaluate(expression).await
             && matches!(
                 e.downcast_ref::<WebPilotError>(),
