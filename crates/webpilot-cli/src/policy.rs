@@ -143,21 +143,51 @@ fn parse(text: &str) -> std::io::Result<PolicyStore> {
 /// Set one operation's verdict, preserving the rest. A corrupt store is an
 /// error (not silently reset), so a single `set` can never erase existing rules.
 pub fn set(operation: PolicyKey, verdict: PolicyVerdict) -> Result<()> {
-    let mut store = load()?;
-    store.rules.insert(operation, verdict);
-    write(&store)
+    with_store_lock(|| {
+        let mut store = load()?;
+        store.rules.insert(operation, verdict);
+        write(&store)
+    })
 }
 
 /// Set the baseline verdict applied to every operation without an explicit rule.
 pub fn set_default(verdict: PolicyVerdict) -> Result<()> {
-    let mut store = load()?;
-    store.default = verdict;
-    write(&store)
+    with_store_lock(|| {
+        let mut store = load()?;
+        store.default = verdict;
+        write(&store)
+    })
 }
 
 /// Reset to the permissive default with no rules.
 pub fn clear() -> Result<()> {
-    write(&PolicyStore::default())
+    with_store_lock(|| write(&PolicyStore::default()))
+}
+
+/// Run a load→mutate→write critical section under an exclusive advisory lock so
+/// two concurrent setters can't both read the same store, mutate different keys,
+/// and have the last writer silently drop the other's change — a lost `deny`
+/// would leave a gated effect open. The read/enforce path needs no lock: it
+/// reads through `atomic_write`'s temp+rename, so it only ever sees a complete
+/// old-or-new store, never a torn one.
+fn with_store_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    use std::os::unix::io::AsRawFd;
+    let dir = dirs::artifacts_dir();
+    std::fs::create_dir_all(&dir)?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join("policies.lock"))?;
+    // SAFETY: flock() is a POSIX advisory lock; no memory-safety implications.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        anyhow::bail!(
+            "failed to lock policy store: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    f()
+    // `lock` drops here, releasing the flock.
 }
 
 fn write(store: &PolicyStore) -> Result<()> {

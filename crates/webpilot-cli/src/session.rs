@@ -361,6 +361,11 @@ pub async fn ensure_session() -> Result<String> {
 
 /// Shut down the entire headless Chrome session. Idempotent.
 pub async fn quit_session() -> Result<()> {
+    // Serialize against a concurrent launch (`ensure_session` holds the same
+    // lock): without it, quit could delete the pid/ws files a racing launch is
+    // mid-write on, or SIGKILL a Chrome it just spawned before the opener has
+    // read its ws URL. A blocking acquire waits out any launch in flight.
+    let _lock = launch_lock_guard()?;
     let pid_file = pid_path();
     // Signal only a verifiably-our-Chrome pid: after a crash the recorded pid
     // can belong to an unrelated process that reused it.
