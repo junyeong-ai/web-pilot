@@ -250,10 +250,21 @@ fn browser_behavioral_flow() {
     // 1. Open the fixture and capture: same assertions as headless step 1.
     let tab = fx.run(&["tab", "new", &base]);
     assert_eq!(code(&tab), 0, "tab new failed: {}", stdout(&tab));
-    let cap = fx.run(&["capture", "--include", "dom"]);
-    assert_eq!(code(&cap), 0, "capture failed: {}", stdout(&cap));
-    let snapshot: serde_json::Value =
+    // The child iframe registers in webNavigation a beat after the main frame
+    // settles, so a capture right after `tab new` may not count it yet —
+    // re-capture until it appears, bounded. (Headless reads the CDP frame tree,
+    // populated synchronously, so it has no such lag.)
+    let mut cap = fx.run(&["capture", "--include", "dom"]);
+    let mut snapshot: serde_json::Value =
         serde_json::from_str(&stdout(&cap)).expect("capture json");
+    for _ in 0..15 {
+        if snapshot["subframes"] == 1 {
+            break;
+        }
+        cap = fx.run(&["capture", "--include", "dom"]);
+        snapshot = serde_json::from_str(&stdout(&cap)).expect("capture json");
+    }
+    assert_eq!(code(&cap), 0, "capture failed: {}", stdout(&cap));
     let elements = snapshot["elements"].as_array().expect("elements array");
     assert!(
         elements.iter().any(|e| e["tag"] == "button"),

@@ -105,12 +105,20 @@ impl LocalTransport {
             };
         }
 
+        // The bridge runs the poll loop in-page and resolves only at its own
+        // `timeout_ms`; give the CDP round-trip that long plus the normal
+        // `cdp_send` slack, so a long wait isn't truncated to a false Timeout.
+        let cdp_timeout = std::time::Duration::from_millis(timeout_ms)
+            .saturating_add(webpilot::settings::timeouts().cdp_send);
         let raw = self
-            .invoke_bridge(&json!({
-                "type": "wait",
-                "condition": condition,
-                "timeout_ms": timeout_ms,
-            }))
+            .invoke_bridge_with_timeout(
+                &json!({
+                    "type": "wait",
+                    "condition": condition,
+                    "timeout_ms": timeout_ms,
+                }),
+                cdp_timeout,
+            )
             .await?;
 
         match Self::parse_bridge_response(raw) {

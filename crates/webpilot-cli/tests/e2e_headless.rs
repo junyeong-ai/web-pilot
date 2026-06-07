@@ -51,13 +51,19 @@ impl Drop for Fixture {
 impl Fixture {
     /// Run `webpilot <args>` against this isolated session, capturing output.
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(BIN)
-            .args(args)
-            .env("WEBPILOT_HOME", &self.home)
-            // Force JSON regardless of how the test harness wires stdio.
-            .arg("--json")
-            .output()
-            .expect("spawn webpilot")
+        self.run_env(args, &[])
+    }
+
+    /// As `run`, but with extra environment variables — used to exercise
+    /// settings-dependent behaviour (e.g. a low CDP-send timeout) deterministically.
+    fn run_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let mut cmd = Command::new(BIN);
+        cmd.args(args).env("WEBPILOT_HOME", &self.home);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        // Force JSON regardless of how the test harness wires stdio.
+        cmd.arg("--json").output().expect("spawn webpilot")
     }
 }
 
@@ -550,6 +556,59 @@ fn headless_behavioral_flow() {
         !ua2j["result"].as_str().unwrap_or_default().contains("WP-E2E-UA/1"),
         "device reset must clear the persisted UA override: {}",
         stdout(&ua2)
+    );
+
+    // 7e. Wait + drag on a clean page.
+    let cap_w = fx.run(&["capture", "--include", "dom", "--url", &base]);
+    assert_eq!(code(&cap_w), 0, "wait-page capture failed: {}", stdout(&cap_w));
+
+    // A `wait text` value starting with `-` is the value, not a flag
+    // (allow_hyphen_values) — it must reach the bridge and time out, not be
+    // rejected by clap (exit 2).
+    let wt = fx.run(&["wait", "--timeout", "1", "text", "-nomatch-"]);
+    assert_eq!(
+        code(&wt), 5,
+        "leading-dash wait text must parse and time out (5), not clap-reject (2): {}",
+        stdout(&wt)
+    );
+
+    // A wait whose timeout exceeds the CDP-send timeout must run its full
+    // in-page loop, not be truncated to a false CDP-level error. With a 1s
+    // cdp-send and a 3s wait, the timeout that surfaces must be the bridge's
+    // own (`kind: "wait"`), proving the loop ran past the CDP-send bound — and
+    // the connection must survive (a response timeout must not kill it).
+    let lw = fx.run_env(
+        &["wait", "--timeout", "3", "selector", "#never-exists"],
+        &[("WEBPILOT_CDP_SEND_TIMEOUT_MS", "1000")],
+    );
+    assert_eq!(code(&lw), 5, "long wait must time out (5): {}", stdout(&lw));
+    let lwj: serde_json::Value = serde_json::from_str(&stdout(&lw)).expect("wait json");
+    assert_eq!(
+        lwj["error"]["kind"].as_str(),
+        Some("wait"),
+        "the wait must run its own loop past the CDP-send bound, not be cut by it: {}",
+        stdout(&lw)
+    );
+    let alive = fx.run(&["eval", "1+1"]);
+    assert_eq!(code(&alive), 0, "the CDP connection must survive a long wait: {}", stdout(&alive));
+
+    // Drag whose source and target can't share the viewport (far apart) fails
+    // loud (`InvalidArgument`) instead of releasing into empty space and
+    // reporting success.
+    let inject = fx.run(&[
+        "eval",
+        "document.body.insertAdjacentHTML('beforeend','<div id=dsrc onclick=\"\" style=\"width:50px;height:50px\">S</div><div style=\"height:4000px\"></div><div id=dtgt onclick=\"\" style=\"width:50px;height:50px\">T</div>'); 'ok'",
+    ]);
+    assert_eq!(code(&inject), 0, "drag-fixture inject failed: {}", stdout(&inject));
+    let cap_d = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&cap_d), 0, "drag capture failed: {}", stdout(&cap_d));
+    let dsrc = index_of(&cap_d, "dsrc");
+    let dtgt = index_of(&cap_d, "dtgt");
+    let drag = fx.run(&["action", "drag", &dsrc, &dtgt]);
+    assert_eq!(
+        code(&drag), 7,
+        "a drag whose endpoints can't share the viewport must fail InvalidArgument (7), not falsely succeed: {}",
+        stdout(&drag)
     );
 
     // 8. Context isolation: localStorage written in one context is invisible in

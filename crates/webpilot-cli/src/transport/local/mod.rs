@@ -250,6 +250,29 @@ impl LocalTransport {
         context: Option<&str>,
         by_value: bool,
     ) -> Result<Value> {
+        self.eval_in_context_with_timeout(
+            expression,
+            context,
+            by_value,
+            webpilot::settings::timeouts().cdp_send,
+        )
+        .await
+    }
+
+    /// As `eval_in_context`, but bounds the CDP round-trip by an explicit
+    /// deadline. A `wait` evaluates a polling loop *inside* the page that
+    /// resolves only once its own `timeout_ms` elapses, so the CDP send must
+    /// outlive that loop — under the default `cdp_send` a `wait --timeout 60`
+    /// would otherwise be cut to a false 30s `Timeout` while the page is still
+    /// legitimately waiting (the browser-mode twin runs on the extension's own
+    /// timer and waits the full duration; this keeps the two in parity).
+    pub(super) async fn eval_in_context_with_timeout(
+        &self,
+        expression: &str,
+        context: Option<&str>,
+        by_value: bool,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
         let mut params = json!({
             "expression": expression,
             "returnByValue": by_value,
@@ -258,7 +281,10 @@ impl LocalTransport {
         if let Some(cid) = context {
             params["uniqueContextId"] = cid.into();
         }
-        let result = self.page.send("Runtime.evaluate", Some(params)).await?;
+        let result = self
+            .page
+            .send_with_timeout("Runtime.evaluate", Some(params), timeout)
+            .await?;
         if let Some(exception) = result.get("exceptionDetails") {
             let msg = exception
                 .pointer("/exception/description")
@@ -304,6 +330,23 @@ impl LocalTransport {
         let payload = msg.to_string();
         let js = format!("(async () => __webpilot_handle({payload}))()");
         let result = self.eval_in_context(&js, Some(&cid), true).await?;
+        Ok(result.get("value").cloned().unwrap_or(Value::Null))
+    }
+
+    /// As `invoke_bridge`, but bounds the CDP round-trip by `timeout` instead of
+    /// the default `cdp_send`. Used by the `wait` path, whose in-page poll loop
+    /// resolves only at its own deadline.
+    pub(super) async fn invoke_bridge_with_timeout(
+        &self,
+        msg: &Value,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
+        let cid = self.bridge_context_id().await?;
+        let payload = msg.to_string();
+        let js = format!("(async () => __webpilot_handle({payload}))()");
+        let result = self
+            .eval_in_context_with_timeout(&js, Some(&cid), true, timeout)
+            .await?;
         Ok(result.get("value").cloned().unwrap_or(Value::Null))
     }
 

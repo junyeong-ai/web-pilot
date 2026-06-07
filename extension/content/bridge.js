@@ -783,15 +783,30 @@
     if (src.error) return src.error;
     const tgt = resolveIndex(msg.target);
     if (tgt.error) return tgt.error;
+    // Bring BOTH endpoints into view — scrolling only the source would leave a
+    // far-down or differently-scrolled target off-screen, and the CDP release
+    // would then land in empty space while the command still "succeeded".
+    // Scroll the target last (it's where the drop must register), then read
+    // both rects in the final scroll position.
     src.el.scrollIntoView({ block: "center", behavior: "instant" });
+    tgt.el.scrollIntoView({ block: "center", behavior: "instant" });
     const sr = src.el.getBoundingClientRect();
     const tr = tgt.el.getBoundingClientRect();
-    return {
-      sx: sr.left + sr.width / 2,
-      sy: sr.top + sr.height / 2,
-      tx: tr.left + tr.width / 2,
-      ty: tr.top + tr.height / 2,
-    };
+    const sx = sr.left + sr.width / 2;
+    const sy = sr.top + sr.height / 2;
+    const tx = tr.left + tr.width / 2;
+    const ty = tr.top + tr.height / 2;
+    // If the two centres can't share the viewport (different scroll containers,
+    // or too far apart for one gesture), a coordinate drag would miss. Fail
+    // loud instead of reporting a success that did nothing.
+    const inView = (x, y) => x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight;
+    if (!inView(sx, sy) || !inView(tx, ty)) {
+      return err(
+        "InvalidArgument",
+        "drag source and target can't share the viewport — they are in different scroll containers or too far apart to drag in one gesture",
+      );
+    }
+    return { sx, sy, tx, ty };
   }
 
   // ── Dispatcher ───────────────────────────────────────────────────────────

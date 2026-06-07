@@ -275,8 +275,17 @@ async function handleSessionExport() {
 }
 
 async function handleSessionImport(rawData) {
+  let data;
   try {
-    const data = JSON.parse(rawData);
+    data = JSON.parse(rawData);
+  } catch (e) {
+    // A malformed session file is bad input, not an internal fault — return
+    // InvalidArgument so the code matches headless do_session_import (a serde
+    // parse error maps to InvalidArgument, exit 7); an agent keys its retry off
+    // the one code. Without this the outer catch would mislabel it `Other`.
+    return { type: "SessionResult", success: false, error: err("InvalidArgument", `session JSON parse error: ${e.message}`) };
+  }
+  try {
     // `cookies`, when present, must be an array — a string would iterate
     // character by character, and a null is a malformed present value. Use
     // `hasOwn` (not `!= null`) so a present `null` is rejected too, exactly as
