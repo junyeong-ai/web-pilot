@@ -60,7 +60,6 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   `Execution::Mcp` puts it in the compiler-checked topology.
 - `assets.rs` — compile-time embedded skill + extension (`include_dir!`);
   `expected_extension_version()`.
-- `stitch.rs` — full-page tile stitching.
 
 Timeouts are read directly via `webpilot::settings::timeouts().<field>` (one
 pattern across both crates, no separate facade).

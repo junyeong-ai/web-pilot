@@ -9,7 +9,6 @@ mod policy;
 pub mod session;
 #[cfg(test)]
 mod test_support;
-pub mod stitch;
 mod transport;
 
 /// WebPilot: Browser control tool for AI agents.

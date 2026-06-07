@@ -35,8 +35,8 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
         .await?;
 
     // The CLI is the single file writer. Headless transports return paths
-    // directly; browser mode returns bytes inline (`pdf_b64`,
-    // `screenshot_tiles`, the accessibility JSON) for the CLI to persist.
+    // directly; browser mode returns bytes inline (`pdf_b64`, the
+    // accessibility JSON) for the CLI to persist.
     match result {
         ResponseData::Capture {
             dom,
@@ -44,9 +44,6 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             screenshot_error,
             pdf_path,
             pdf_b64,
-            screenshot_tiles,
-            tile_viewport_height,
-            tile_total_height,
             ..
         } => {
             let dir = webpilot::dirs::artifacts_dir();
@@ -60,23 +57,6 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
                 std::fs::write(&path, ax_tree).context("Cannot save accessibility tree")?;
                 ax_path = Some(path.to_string_lossy().into_owned());
             }
-
-            // Browser-mode full-page screenshot arrives as tiles; stitch them.
-            let stitched = if !screenshot_tiles.is_empty() {
-                Some(
-                    crate::stitch::stitch_tiles(
-                        &screenshot_tiles,
-                        tile_viewport_height,
-                        tile_total_height,
-                        &dir,
-                    )?
-                    .to_string_lossy()
-                    .into_owned(),
-                )
-            } else {
-                None
-            };
-            let screenshot_path = screenshot_path.or(stitched);
 
             // Browser-mode PDF arrives base64-encoded; decode and write it.
             let pdf_written = if let Some(b64) = pdf_b64 {

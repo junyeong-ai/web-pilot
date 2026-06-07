@@ -829,16 +829,6 @@
         if (tagged) tagged.removeAttribute(msg.attr);
         return { success: true };
       }
-      case "getPageDims":
-        return {
-          scrollHeight: document.documentElement.scrollHeight,
-          viewportHeight: window.innerHeight,
-          scrollX: window.scrollX,
-          scrollY: window.scrollY,
-        };
-      case "scrollTo":
-        window.scrollTo(msg.x ?? 0, msg.y ?? 0);
-        return { success: true };
       case "setHtml": {
         const r = querySelectorOrErr(msg.selector);
         if (r.error) return r.error;

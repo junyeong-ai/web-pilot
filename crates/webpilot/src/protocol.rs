@@ -226,14 +226,6 @@ pub enum ResponseData {
         // files); the CLI is the single writer and persists these to a path.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pdf_b64: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        screenshot_tiles: Vec<serde_json::Value>,
-        // CSS heights the extension reports alongside full-page tiles, so the
-        // stitcher can crop the clamped final tile to the true page height.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tile_viewport_height: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tile_total_height: Option<f64>,
         page_url: String,
         page_title: String,
     },

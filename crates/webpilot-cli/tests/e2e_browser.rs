@@ -369,5 +369,15 @@ fn browser_behavioral_flow() {
         stdout(&href_main)
     );
 
+    // 8. Full-page screenshot rides the CDP captureBeyondViewport path and the
+    //    host persists the bytes to a file.
+    let shot = fx.run(&["capture", "--include", "screenshot", "--full-page"]);
+    assert_eq!(code(&shot), 0, "full-page screenshot failed: {}", stdout(&shot));
+    assert!(
+        stdout(&shot).contains("screenshot_path"),
+        "full-page screenshot must be persisted to a path: {}",
+        stdout(&shot)
+    );
+
     drop(fx);
 }

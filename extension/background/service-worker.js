@@ -527,14 +527,23 @@ async function handleCapture(command) {
   // Screenshot.
   if (include.has("screenshot")) {
     try {
-      const tabInfo = await chrome.tabs.get(tabId);
-      await chrome.tabs.update(tabId, { active: true });
-      await chrome.windows.update(tabInfo.windowId, { focused: true });
-      await sleep(200);
-
       if (opts.full_page) {
-        await captureFullPage(tabId, tabInfo.windowId, result);
+        // One CDP shot of the entire page, exactly like headless — no tiling,
+        // no scroll choreography, no per-tile settle guesses, and
+        // fixed-position elements render once instead of repeating per tile.
+        result.screenshot_b64 = await withCdp(tabId, async (tid) => {
+          const r = await cdpSend(tid, "Page.captureScreenshot", {
+            format: "png",
+            captureBeyondViewport: true,
+          });
+          return r.data;
+        });
       } else {
+        // captureVisibleTab really does need a visible, focused tab.
+        const tabInfo = await chrome.tabs.get(tabId);
+        await chrome.tabs.update(tabId, { active: true });
+        await chrome.windows.update(tabInfo.windowId, { focused: true });
+        await sleep(200);
         result.screenshot_b64 = await captureWithRetry(tabInfo.windowId, 80);
       }
     } catch (e) {
@@ -585,41 +594,6 @@ async function handleCapture(command) {
   }
 
   return result;
-}
-
-async function captureFullPage(tabId, windowId, result) {
-  await ensureBridge(tabId, 0);
-  const dims = await sendToContent(tabId, { type: "getPageDims" }, 0, 5000).catch(() => null);
-  if (!dims) return;
-
-  const scrollHeight = dims.scrollHeight || 0;
-  const viewportHeight = dims.viewportHeight || 0;
-  const origSY = dims.scrollY || 0;
-  if (scrollHeight <= 0 || viewportHeight <= 0) return;
-
-  const tileCount = Math.min(Math.ceil(scrollHeight / viewportHeight), 20);
-  const tiles = [];
-  const captureDelay = 750;
-
-  await sendToContent(tabId, { type: "scrollTo", x: 0, y: 0 }, 0, 3000).catch(() => {});
-  await sleep(300);
-
-  for (let i = 0; i < tileCount; i++) {
-    if (i > 0) {
-      await sendToContent(tabId, { type: "scrollTo", x: 0, y: i * viewportHeight }, 0, 3000).catch(() => {});
-    }
-    await sleep(captureDelay);
-    try {
-      tiles.push(await captureWithRetry(windowId, 60));
-    } catch (e) {
-      console.error("[WebPilot] Tile", i + 1, "failed:", e.message);
-    }
-  }
-
-  await sendToContent(tabId, { type: "scrollTo", x: 0, y: origSY }, 0, 3000).catch(() => {});
-  result.screenshot_tiles = tiles;
-  result.tile_viewport_height = viewportHeight;
-  result.tile_total_height = scrollHeight;
 }
 
 function emptyDom() {
