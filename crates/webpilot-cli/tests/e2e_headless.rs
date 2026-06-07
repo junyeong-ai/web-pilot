@@ -2,8 +2,9 @@
 //! local fixture server in headless mode, asserting on exit codes and output.
 //!
 //! These launch a real Chrome, so they are opt-in: set `WEBPILOT_E2E=1` to run
-//! them (CI provisions Chrome and sets it; a plain `cargo test` skips them so it
-//! stays green on machines without a browser).
+//! them. CI's `e2e` job provisions Chrome (via `WEBPILOT_CHROME`) and sets the
+//! flag; a plain `cargo test` skips them so it stays green on machines without
+//! a browser.
 //!
 //!   WEBPILOT_E2E=1 cargo test -p webpilot-cli --test e2e_headless -- --nocapture
 //!
