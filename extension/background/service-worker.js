@@ -556,25 +556,20 @@ async function handleCapture(command) {
   // Screenshot.
   if (include.has("screenshot")) {
     try {
-      if (opts.full_page) {
-        // One CDP shot of the entire page, exactly like headless — no tiling,
-        // no scroll choreography, no per-tile settle guesses, and
-        // fixed-position elements render once instead of repeating per tile.
-        result.screenshot_b64 = await withCdp(tabId, async (tid) => {
-          const r = await cdpSend(tid, "Page.captureScreenshot", {
-            format: "png",
-            captureBeyondViewport: true,
-          });
-          return r.data;
-        });
-      } else {
-        // captureVisibleTab really does need a visible, focused tab.
-        const tabInfo = await chrome.tabs.get(tabId);
-        await chrome.tabs.update(tabId, { active: true });
-        await chrome.windows.update(tabInfo.windowId, { focused: true });
-        await sleep(200);
-        result.screenshot_b64 = await captureWithRetry(tabInfo.windowId, 80);
-      }
+      // CDP captures the target's own surface, so a screenshot never depends
+      // on the tab being the active tab of a foreground window. That is what
+      // lets a backgrounded workbench tab be captured while the user looks at
+      // another window or app — `chrome.tabs.captureVisibleTab` would grab
+      // whatever is visible (or fail), and on macOS raising the window can't
+      // be forced anyway. It also needs no `<all_urls>` host grant, only the
+      // debugger this path already holds. Viewport and full-page differ only
+      // by `captureBeyondViewport`; headless takes the identical two shots.
+      result.screenshot_b64 = await withCdp(tabId, async (tid) => {
+        const params = { format: "png" };
+        if (opts.full_page) params.captureBeyondViewport = true;
+        const r = await cdpSend(tid, "Page.captureScreenshot", params);
+        return r.data;
+      });
     } catch (e) {
       // Screenshot failure degrades explicitly (headless parity): the DOM is
       // still useful, and the error rides along in `screenshot_error`.
@@ -810,7 +805,10 @@ async function handleAction(command) {
 async function adoptedDocumentReady(tabId, timeoutMs) {
   const isReal = (u) => u && u !== "about:blank";
   await new Promise((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs);
+    // Every settle path — commit, already-real, AND timeout — routes through
+    // `done()` so the listener is always removed; a bare `setTimeout(resolve)`
+    // would leak `onCommitted` on the timeout path (a popup that stays blank).
+    let timer;
     const done = () => {
       clearTimeout(timer);
       chrome.webNavigation.onCommitted.removeListener(onCommitted);
@@ -819,6 +817,7 @@ async function adoptedDocumentReady(tabId, timeoutMs) {
     const onCommitted = (d) => {
       if (d.tabId === tabId && d.frameId === 0 && isReal(d.url)) done();
     };
+    timer = setTimeout(done, timeoutMs);
     chrome.webNavigation.onCommitted.addListener(onCommitted);
     chrome.tabs.get(tabId).then((tab) => {
       if (tab && isReal(tab.url)) done();
@@ -851,6 +850,60 @@ async function documentReady(tabId, timeoutMs) {
   }
 }
 
+// The DOM `code` and Windows virtual-key code for a key, so CDP
+// `Input.dispatchKeyEvent` fires native behaviour (Tab traversal, Backspace
+// deletion, arrow nav) a synthetic KeyboardEvent cannot. Mirrors the headless
+// `key_descriptor`. Unknown keys carry no code (0).
+function keyDescriptor(key) {
+  const named = {
+    Enter: ["Enter", 13], Tab: ["Tab", 9], Escape: ["Escape", 27],
+    Backspace: ["Backspace", 8], Delete: ["Delete", 46],
+    ArrowUp: ["ArrowUp", 38], ArrowDown: ["ArrowDown", 40],
+    ArrowLeft: ["ArrowLeft", 37], ArrowRight: ["ArrowRight", 39],
+    Home: ["Home", 36], End: ["End", 35], PageUp: ["PageUp", 33], PageDown: ["PageDown", 34],
+    Insert: ["Insert", 45], CapsLock: ["CapsLock", 20], " ": ["Space", 32], Space: ["Space", 32],
+  };
+  if (named[key]) return { code: named[key][0], vk: named[key][1] };
+  const fn = /^F([1-9]|1[0-2])$/.exec(key);
+  if (fn) return { code: key, vk: 111 + Number(fn[1]) };
+  if (key.length === 1) {
+    if (/[a-zA-Z]/.test(key)) return { code: `Key${key.toUpperCase()}`, vk: key.toUpperCase().charCodeAt(0) };
+    if (/[0-9]/.test(key)) return { code: `Digit${key}`, vk: key.charCodeAt(0) };
+  }
+  return { code: "", vk: 0 };
+}
+
+// The text a key contributes to its keyDown, or null for a key that produces
+// none. `Enter` carries a carriage return — the signal Chromium's implicit
+// form submission keys on, without which key-press Enter never submits. Other
+// named keys (Tab, arrows) produce no text so they act, not type.
+function printableKeyText(key) {
+  if (key === "Enter") return "\r";
+  if (key === "Space") return " ";
+  if (key.length === 1 && key.charCodeAt(0) >= 0x20) return key;
+  return null;
+}
+
+// Dispatch a key as a native CDP input event through the tab's debugger.
+async function dispatchKeyPress(tabId, action) {
+  return withCdp(tabId, async (tid) => {
+    const m = action.modifiers || {};
+    const modifiers = (m.alt ? 1 : 0) | (m.ctrl ? 2 : 0) | (m.meta ? 4 : 0) | (m.shift ? 8 : 0);
+    const { code, vk } = keyDescriptor(action.key);
+    const text = (!m.ctrl && !m.alt && !m.meta) ? printableKeyText(action.key) : null;
+    // `nativeVirtualKeyCode` is omitted on purpose: it is platform-native
+    // (macOS != Windows), and sending the Windows code on macOS mis-maps the
+    // key to an unrelated browser accelerator. `windowsVirtualKeyCode` + key +
+    // code is the portable set Chrome resolves from everywhere.
+    const base = { modifiers, key: action.key, code, windowsVirtualKeyCode: vk };
+    await cdpSend(tid, "Input.dispatchKeyEvent", text != null
+      ? { ...base, type: "keyDown", text }
+      : { ...base, type: "keyDown" });
+    await cdpSend(tid, "Input.dispatchKeyEvent", { ...base, type: "keyUp" });
+    return { success: true };
+  });
+}
+
 async function dispatchActionToPage(tab, action) {
   // A click-opened tab is caught by its creation events, registered before the
   // action runs — no detection window, no sleep, and reliable even for popups
@@ -872,8 +925,17 @@ async function dispatchActionToPage(tab, action) {
   const urlBefore = tab.url;
 
   try {
-    await ensureBridge(tab.id, activeFrameId);
-    const r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
+    // `key_press` dispatches a native CDP key event so Tab/Backspace/arrow/
+    // text behaviour actually fires (a synthetic KeyboardEvent only notifies
+    // JS listeners); it still flows through this popup/navigation wrapper
+    // because Enter can submit a form. Every other action runs in the page.
+    let r;
+    if (action.kind === "key_press") {
+      r = await dispatchKeyPress(tab.id, action);
+    } else {
+      await ensureBridge(tab.id, activeFrameId);
+      r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
+    }
     const result = { type: "Action", ...r };
 
     if (openedTabId != null) {
@@ -986,12 +1048,12 @@ async function handleDrag(tabId, action) {
 async function handleTabSwitch(tabId) {
   try {
     const target = parseInt(tabId, 10);
+    // Make it the active tab within its own window so a user looking at that
+    // window sees what the agent drives — but never raise the window to the
+    // OS foreground: that steals focus from whatever app the user is in, and
+    // capture/eval/actions all reach the tab through CDP regardless of which
+    // window is frontmost. The pin below, not OS focus, is what commands follow.
     await chrome.tabs.update(target, { active: true });
-    const tab = await chrome.tabs.get(target);
-    if (tab.windowId != null) {
-      await chrome.windows.update(tab.windowId, { focused: true });
-    }
-    // The explicit re-pin: commands follow this tab from here on.
     setActiveTabId(target);
     // A different tab has its own frame tree — drop any frame scope.
     setActiveFrameId(0);
@@ -1507,10 +1569,15 @@ async function handleSessionExport() {
     const tab = await resolveActiveTab();
     let storage = { localStorage: {}, sessionStorage: {} };
     if (tab) {
-      try {
-        await ensureBridge(tab.id, activeFrameId);
-        storage = await sendToContent(tab.id, { type: "exportStorage" }, activeFrameId);
-      } catch {}
+      // A storage read that fails or comes back as a typed bridge error must
+      // fail the export (headless parity): writing empty storage would import
+      // back as silent data loss. A valid read carries a `localStorage` object.
+      await ensureBridge(tab.id, activeFrameId);
+      const s = await sendToContent(tab.id, { type: "exportStorage" }, activeFrameId);
+      if (!s || s.success === false || !s.localStorage) {
+        return topErr(s && s.error ? s.error : otherErr("storage export failed"));
+      }
+      storage = s;
     }
     const data = {
       version: 1,
@@ -1528,8 +1595,10 @@ async function handleSessionExport() {
 async function handleSessionImport(rawData) {
   try {
     const data = JSON.parse(rawData);
-    let cookies = 0;
+    let cookiesTotal = 0;
+    let cookiesFailed = 0;
     for (const c of data.cookies || []) {
+      cookiesTotal++;
       try {
         await chrome.cookies.set({
           url: `http${c.secure ? "s" : ""}://${c.domain.replace(/^\./, "")}${c.path}`,
@@ -1538,19 +1607,32 @@ async function handleSessionImport(rawData) {
           sameSite: chromeSameSite(c.same_site),
           expirationDate: c.expiration || undefined,
         });
-        cookies++;
-      } catch {}
+      } catch {
+        cookiesFailed++;
+      }
     }
     const tab = await resolveActiveTab();
     if (tab && (data.local_storage || data.session_storage)) {
-      try {
-        await ensureBridge(tab.id, activeFrameId);
-        await sendToContent(tab.id, {
-          type: "importStorage",
-          localStorage: data.local_storage || {},
-          sessionStorage: data.session_storage || {},
-        }, activeFrameId);
-      } catch {}
+      // A storage import failure is propagated, not swallowed (headless
+      // parity): the caller asked to restore it and must know it didn't.
+      await ensureBridge(tab.id, activeFrameId);
+      const r = await sendToContent(tab.id, {
+        type: "importStorage",
+        localStorage: data.local_storage || {},
+        sessionStorage: data.session_storage || {},
+      }, activeFrameId);
+      if (r && r.success === false) {
+        return { type: "SessionResult", success: false, error: r.error || otherErr("storage import failed") };
+      }
+    }
+    // A well-formed cookie the browser refused to set is a partial failure the
+    // agent must see — never a success that imported less than the file held.
+    if (cookiesFailed > 0) {
+      return {
+        type: "SessionResult",
+        success: false,
+        error: otherErr(`${cookiesFailed} of ${cookiesTotal} cookies failed to set`),
+      };
     }
     return { type: "SessionResult", success: true };
   } catch (e) {
@@ -1714,24 +1796,6 @@ async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
       return await sendOnce();
     }
     throw firstError;
-  }
-}
-
-async function captureWithRetry(windowId, quality = 80, maxAttempts = 3) {
-  let delay = 500;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      if (attempt > 0) await sleep(delay);
-      const dataUrl = await Promise.race([
-        chrome.tabs.captureVisibleTab(windowId, { format: "jpeg", quality }),
-        new Promise((_, r) => setTimeout(() => r(new Error("capture timeout")), 10000)),
-      ]);
-      return dataUrl.replace(/^data:image\/\w+;base64,/, "");
-    } catch (e) {
-      console.warn(`[WebPilot] Capture attempt ${attempt + 1} failed: ${e.message}`);
-      delay *= 2;
-      if (attempt === maxAttempts - 1) throw e;
-    }
   }
 }
 

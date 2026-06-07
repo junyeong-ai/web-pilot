@@ -346,33 +346,20 @@ impl CdpClient {
     pub async fn get_all_cookies(&self, browser_context_id: Option<&str>) -> Result<Vec<Value>> {
         let params = browser_context_id.map(|id| serde_json::json!({"browserContextId": id}));
         let result = self.send("Storage.getCookies", params).await?;
-        Ok(result
-            .get("cookies")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default())
+        Ok(require_array(&result, "cookies", "Storage.getCookies")?.clone())
     }
 
     pub async fn get_targets(&self) -> Result<Vec<Value>> {
         let result = self.send("Target.getTargets", None).await?;
-        Ok(result
-            .get("targetInfos")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default())
+        Ok(require_array(&result, "targetInfos", "Target.getTargets")?.clone())
     }
 
     pub async fn get_browser_contexts(&self) -> Result<Vec<String>> {
         let result = self.send("Target.getBrowserContexts", None).await?;
-        Ok(result
-            .get("browserContextIds")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default())
+        Ok(require_array(&result, "browserContextIds", "Target.getBrowserContexts")?
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect())
     }
 
     pub async fn create_browser_context(&self) -> Result<String> {
@@ -418,6 +405,19 @@ impl CdpClient {
             .map(str::to_string)
             .ok_or_else(|| anyhow!("No targetId in response"))
     }
+}
+
+/// Borrow a required array field from a CDP response. These methods always
+/// carry the field on success, so a missing or wrong-typed one is a malformed
+/// response — never silently an empty list. Reading it as empty would let a
+/// caller act on a lie: dispose a live context whose listing came back blank,
+/// or export a session reporting zero cookies as success. An array that is
+/// present but empty is valid (genuinely none).
+fn require_array<'a>(value: &'a Value, field: &str, method: &str) -> Result<&'a Vec<Value>> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("malformed {method} response: missing '{field}' array"))
 }
 
 impl Drop for CdpClient {

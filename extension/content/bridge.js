@@ -82,23 +82,50 @@
   // host budget bounds only a pathological tree and records when it clipped.
   const SHADOW_HOST_BUDGET = 5000;
 
-  function queryAllDeep(selector, root, budget) {
-    const results = [...root.querySelectorAll(selector)];
-    for (const host of root.querySelectorAll("*")) {
-      if (!host.shadowRoot) continue;
-      if (budget.hosts <= 0) {
-        budget.truncated = true;
-        break;
+  // Run several selectors over the document AND every open shadow root in a
+  // SINGLE host walk, returning one match array per selector (parallel to the
+  // input). One traversal and one shared budget for all selectors — running
+  // each selector through its own `queryAllDeep` would walk the shadow-host
+  // tree once per selector and split the budget unevenly.
+  function queryAllDeepMulti(selectors, root, budget) {
+    const results = selectors.map(() => []);
+    const visit = (r) => {
+      selectors.forEach((sel, i) => {
+        for (const el of r.querySelectorAll(sel)) results[i].push(el);
+      });
+      for (const host of r.querySelectorAll("*")) {
+        if (!host.shadowRoot) continue;
+        if (budget.hosts <= 0) {
+          budget.truncated = true;
+          return;
+        }
+        budget.hosts -= 1;
+        visit(host.shadowRoot);
       }
-      budget.hosts -= 1;
-      results.push(...queryAllDeep(selector, host.shadowRoot, budget));
-    }
+    };
+    visit(root);
     return results;
   }
 
   function collectInteractiveElements() {
     const budget = { hosts: SHADOW_HOST_BUDGET, truncated: false };
-    const all = queryAllDeep(INTERACTIVE_SELECTOR, document, budget);
+
+    // Explicit interaction markers. `tabindex` qualifies only when >= 0: a
+    // tabindex of -1 is script-only focus (route announcers, modal roots,
+    // headings) and is not a click affordance, so it must not mint a phantom
+    // target. The marker and tabindex passes pierce open shadow roots like the
+    // semantic pass — a design-system custom element whose clickable part
+    // lives in its shadow root and carries `onclick`/`jsaction` rather than a
+    // semantic tag would otherwise be invisible to the agent.
+    const markerSel = '[onclick],[data-action],[ng-click],' +
+      '[v-on\\:click],[\\@click],[data-click],[jsaction]';
+
+    // One shadow-DOM walk gathers all three candidate sets under one budget.
+    const [all, markerEls, tabindexEls] = queryAllDeepMulti(
+      [INTERACTIVE_SELECTOR, markerSel, "[tabindex]"],
+      document,
+      budget,
+    );
     const seen = new Set(all);
     const add = (el) => {
       all.push(el);
@@ -112,24 +139,11 @@
     // size gate: a real <button> is interactive regardless of size.
     const isDegenerate = (rect) => rect.width < 5 || rect.height < 5;
 
-    // Explicit interaction markers. `tabindex` qualifies only when >= 0: a
-    // tabindex of -1 is script-only focus (route announcers, modal roots,
-    // headings) and is not a click affordance, so it must not mint a phantom
-    // target.
-    // Pierce open shadow roots for the marker pass too (its own budget — the
-    // host walk is idempotent, so a fresh allowance lets it reach the same
-    // depth the semantic pass did): a design-system custom element whose
-    // clickable part lives in its shadow root and carries `onclick`/`jsaction`
-    // rather than a semantic tag would otherwise be invisible to the agent.
-    const markerSel = '[onclick],[data-action],[ng-click],' +
-      '[v-on\\:click],[\\@click],[data-click],[jsaction]';
-    const markerBudget = { hosts: SHADOW_HOST_BUDGET, truncated: false };
-    const markers = new Set(queryAllDeep(markerSel, document, markerBudget));
-    for (const el of queryAllDeep("[tabindex]", document, markerBudget)) {
+    const markers = new Set(markerEls);
+    for (const el of tabindexEls) {
       const ti = parseInt(el.getAttribute("tabindex"), 10);
       if (Number.isFinite(ti) && ti >= 0) markers.add(el);
     }
-    budget.truncated = budget.truncated || markerBudget.truncated;
     for (const el of markers) {
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
@@ -529,25 +543,6 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  function keyToCode(key) {
-    const map = {
-      Enter: "Enter", Tab: "Tab", Escape: "Escape",
-      Backspace: "Backspace", Delete: "Delete",
-      ArrowUp: "ArrowUp", ArrowDown: "ArrowDown",
-      ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
-      Home: "Home", End: "End",
-      PageUp: "PageUp", PageDown: "PageDown",
-      " ": "Space", Space: "Space",
-      Insert: "Insert", CapsLock: "CapsLock",
-      F1: "F1", F2: "F2", F3: "F3", F4: "F4", F5: "F5", F6: "F6",
-      F7: "F7", F8: "F8", F9: "F9", F10: "F10", F11: "F11", F12: "F12",
-    };
-    if (map[key]) return map[key];
-    if (key.length === 1 && /[a-zA-Z]/.test(key)) return `Key${key.toUpperCase()}`;
-    if (key.length === 1 && /[0-9]/.test(key)) return `Digit${key}`;
-    return key;
-  }
-
   function executeAction(action) {
     try {
       switch (action.kind) {
@@ -562,34 +557,6 @@
           const r = resolveTarget(action);
           if (r.error) return r.error;
           reliableType(r.target, action.text, action.clear);
-          return { success: true };
-        }
-
-        case "key_press": {
-          const m = action.modifiers || {};
-          const opts = {
-            key: action.key,
-            code: keyToCode(action.key),
-            bubbles: true,
-            cancelable: true,
-            ctrlKey: !!m.ctrl,
-            shiftKey: !!m.shift,
-            altKey: !!m.alt,
-            metaKey: !!m.meta,
-          };
-          const el = document.activeElement || document.body;
-          el.dispatchEvent(new KeyboardEvent("keydown", opts));
-          el.dispatchEvent(new KeyboardEvent("keypress", opts));
-          el.dispatchEvent(new KeyboardEvent("keyup", opts));
-          if (action.key === "Enter" && el.form) {
-            // requestSubmit() fires native validation and the submit handler
-            // (so a preventDefault-based AJAX form stays put); submit() bypasses
-            // both and force-navigates. They are alternatives, never both — the
-            // old `requestSubmit?.() || submit()` ran submit() every time
-            // because requestSubmit returns undefined, double-submitting.
-            if (el.form.requestSubmit) el.form.requestSubmit();
-            else el.form.submit();
-          }
           return { success: true };
         }
 
@@ -610,6 +577,18 @@
         case "select": {
           const r = resolveTarget(action);
           if (r.error) return r.error;
+          // Setting `.value` to a value no <option> carries silently leaves a
+          // <select> at "" (selectedIndex -1). Firing `change` and returning
+          // success then would report a selection that did not happen — so
+          // verify the option exists and fail typed instead.
+          const opts = r.target.options ? [...r.target.options] : [];
+          if (!opts.some((o) => o.value === action.value)) {
+            return err(
+              "InvalidArgument",
+              `No <option> with value "${action.value}" in this <select>`,
+              { value: action.value, available: opts.map((o) => o.value) },
+            );
+          }
           r.target.value = action.value;
           r.target.dispatchEvent(new Event("change", { bubbles: true }));
           return { success: true };
@@ -643,12 +622,14 @@
         case "forward": history.forward(); return { success: true };
         case "reload": location.reload(); return { success: true };
 
-        // navigate / upload / drag are dispatched via CDP (headless: Rust;
-        // browser: the service worker), never through the bridge. If one
-        // arrives here it is a routing mismatch.
+        // navigate / upload / drag / key_press are dispatched via CDP
+        // (headless: Rust; browser: the service worker) for native input
+        // fidelity, never through the bridge. If one arrives here it is a
+        // routing mismatch.
         case "navigate":
         case "upload":
         case "drag":
+        case "key_press":
           return err("InvalidArgument", `Action '${action.kind}' is dispatched via CDP, not bridge`);
 
         default:
@@ -764,15 +745,25 @@
   }
 
   function importStorage(msg) {
-    if (msg.localStorage) {
-      for (const [k, v] of Object.entries(msg.localStorage)) {
-        localStorage.setItem(k, v);
+    // setItem throws on a full quota; count the rejects and report them typed
+    // rather than letting one throw abort the rest and surface as a generic
+    // exception — the agent learns it imported less than the file held.
+    let total = 0;
+    let failed = 0;
+    const restore = (store, obj) => {
+      for (const [k, v] of Object.entries(obj || {})) {
+        total++;
+        try {
+          store.setItem(k, v);
+        } catch {
+          failed++;
+        }
       }
-    }
-    if (msg.sessionStorage) {
-      for (const [k, v] of Object.entries(msg.sessionStorage)) {
-        sessionStorage.setItem(k, v);
-      }
+    };
+    restore(localStorage, msg.localStorage);
+    restore(sessionStorage, msg.sessionStorage);
+    if (failed > 0) {
+      return err("Other", `${failed} of ${total} storage entries failed to set (quota?)`);
     }
     return { success: true };
   }
@@ -817,16 +808,18 @@
         // value instead of serializing the Promise object as `{}`.
         return (async () => {
           try {
-            let result;
+            // Decide the form by CONSTRUCTING the function (which parses but
+            // does not run it), never by executing and retrying: a predicate
+            // that throws a runtime SyntaxError from valid code must not run
+            // twice. Same contract as the headless/CDP eval paths.
+            let fn;
             try {
-              result = new Function("return (" + msg.code + ")")();
+              fn = new Function("return (" + msg.code + ")");
             } catch (syntaxErr) {
-              if (syntaxErr instanceof SyntaxError) {
-                result = new Function(msg.code)();
-              } else {
-                throw syntaxErr;
-              }
+              if (syntaxErr instanceof SyntaxError) fn = new Function(msg.code);
+              else throw syntaxErr;
             }
+            let result = fn();
             if (result && typeof result.then === "function") result = await result;
             return {
               success: true,

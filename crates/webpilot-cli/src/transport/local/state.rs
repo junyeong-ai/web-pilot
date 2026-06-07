@@ -227,12 +227,17 @@ impl LocalTransport {
         let local_storage = parsed.get("local_storage");
         let session_storage = parsed.get("session_storage");
         if local_storage.is_some() || session_storage.is_some() {
-            self.invoke_bridge(&json!({
-                "type": "importStorage",
-                "localStorage": local_storage.cloned().unwrap_or_else(|| json!({})),
-                "sessionStorage": session_storage.cloned().unwrap_or_else(|| json!({})),
-            }))
-            .await?;
+            // A storage write the page rejected (quota) is surfaced by the
+            // bridge as a typed error — parse it rather than treating any
+            // non-throwing reply as success.
+            let resp = self
+                .invoke_bridge(&json!({
+                    "type": "importStorage",
+                    "localStorage": local_storage.cloned().unwrap_or_else(|| json!({})),
+                    "sessionStorage": session_storage.cloned().unwrap_or_else(|| json!({})),
+                }))
+                .await?;
+            Self::parse_bridge_response(resp)?;
         }
 
         // A well-formed cookie the browser refused to set is a partial

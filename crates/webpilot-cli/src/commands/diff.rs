@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::output::CommandOutput;
 
@@ -11,27 +11,30 @@ use crate::output::CommandOutput;
 const PIXEL_DIFF_THRESHOLD: f64 = 30.0;
 
 /// Refuse to load a diff input larger than this. The inputs are arbitrary
-/// user-named files, and both the DOM diff (`read_to_string`) and the image
-/// decode pull the whole file into memory — a multi-GB path would OOM the
-/// process before any typed error could be returned. A snapshot or screenshot
-/// never approaches this; anything that does is not a WebPilot artifact.
+/// user-named files, and both the DOM diff and the image decode pull the whole
+/// file into memory — a multi-GB path would OOM the process before any typed
+/// error could be returned. A snapshot or screenshot never approaches this;
+/// anything that does is not a WebPilot artifact.
 const MAX_DIFF_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Reject an oversized (or unstat-able) diff input with a typed error before
-/// it is read into memory.
-fn guard_input_size(path: &std::path::Path, label: &str) -> Result<()> {
-    let len = std::fs::metadata(path)
-        .with_context(|| format!("Cannot stat {label}"))?
-        .len();
-    if len > MAX_DIFF_INPUT_BYTES {
+/// Read a diff input fully, but never more than the cap. The read is bounded by
+/// the OPENED handle (`take`), not a prior `stat`, so a file that grows between
+/// a size check and the read can't slip past — the read itself stops at the
+/// limit and fails typed.
+fn read_capped(path: &std::path::Path, label: &str) -> Result<Vec<u8>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).with_context(|| format!("Cannot open {label}"))?;
+    let mut buf = Vec::new();
+    file.take(MAX_DIFF_INPUT_BYTES + 1)
+        .read_to_end(&mut buf)
+        .with_context(|| format!("Cannot read {label}"))?;
+    if buf.len() as u64 > MAX_DIFF_INPUT_BYTES {
         return Err(webpilot::WebPilotError::InvalidArgument {
-            detail: format!(
-                "{label} is {len} bytes, over the {MAX_DIFF_INPUT_BYTES}-byte diff limit"
-            ),
+            detail: format!("{label} exceeds the {MAX_DIFF_INPUT_BYTES}-byte diff limit"),
         }
         .into());
     }
-    Ok(())
+    Ok(buf)
 }
 
 #[derive(Args)]
@@ -71,11 +74,11 @@ pub async fn run(args: DiffArgs) -> Result<CommandOutput> {
     }
 }
 
-fn diff_dom(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
-    guard_input_size(a, "file A")?;
-    guard_input_size(b, "file B")?;
-    let text_a = std::fs::read_to_string(a).context("Cannot read file A")?;
-    let text_b = std::fs::read_to_string(b).context("Cannot read file B")?;
+fn diff_dom(a: &Path, b: &Path) -> Result<CommandOutput> {
+    let text_a = String::from_utf8(read_capped(a, "file A")?)
+        .context("file A is not valid UTF-8")?;
+    let text_b = String::from_utf8(read_capped(b, "file B")?)
+        .context("file B is not valid UTF-8")?;
 
     let diff = similar::TextDiff::from_lines(&text_a, &text_b);
 
@@ -113,11 +116,11 @@ fn diff_dom(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
     Ok(CommandOutput::Content { stdout, json })
 }
 
-fn diff_screenshot(a: &PathBuf, b: &PathBuf) -> Result<CommandOutput> {
-    guard_input_size(a, "image A")?;
-    guard_input_size(b, "image B")?;
-    let img_a = image::open(a).context("Cannot open image A")?;
-    let img_b = image::open(b).context("Cannot open image B")?;
+fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
+    let img_a = image::load_from_memory(&read_capped(a, "image A")?)
+        .context("Cannot decode image A")?;
+    let img_b = image::load_from_memory(&read_capped(b, "image B")?)
+        .context("Cannot decode image B")?;
 
     // When the two images differ in size, compare their overlapping region —
     // but report it: a 100%-of-overlap match between mismatched canvases must

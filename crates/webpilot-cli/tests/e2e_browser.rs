@@ -386,14 +386,23 @@ fn browser_behavioral_flow() {
         stdout(&href_main)
     );
 
-    // 8. Full-page screenshot rides the CDP captureBeyondViewport path and the
-    //    host persists the bytes to a file.
-    let shot = fx.run(&["capture", "--include", "screenshot", "--full-page"]);
-    assert_eq!(code(&shot), 0, "full-page screenshot failed: {}", stdout(&shot));
+    // 8. Both screenshot paths ride CDP, not `captureVisibleTab`: they capture
+    //    the tab's own surface through the debugger, so they need neither the
+    //    window to be OS-foreground nor an `<all_urls>` grant. The viewport
+    //    shot is the common case; the full-page shot adds captureBeyondViewport.
+    let shot = fx.run(&["capture", "--include", "screenshot"]);
+    assert_eq!(code(&shot), 0, "viewport screenshot failed: {}", stdout(&shot));
     assert!(
         stdout(&shot).contains("screenshot_path"),
-        "full-page screenshot must be persisted to a path: {}",
+        "viewport screenshot must be persisted to a path: {}",
         stdout(&shot)
+    );
+    let full = fx.run(&["capture", "--include", "screenshot", "--full-page"]);
+    assert_eq!(code(&full), 0, "full-page screenshot failed: {}", stdout(&full));
+    assert!(
+        stdout(&full).contains("screenshot_path"),
+        "full-page screenshot must be persisted to a path: {}",
+        stdout(&full)
     );
 
     drop(fx);

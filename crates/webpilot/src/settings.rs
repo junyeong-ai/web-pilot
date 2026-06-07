@@ -84,6 +84,11 @@ pub struct Capture {
     /// pixels. The default (1568) is the largest size Claude's vision ingests
     /// without server-side resizing — bigger only costs tokens and latency.
     pub screenshot_max_long_edge: u32,
+    /// Upper bound on frames a single `record` run captures. A recording for
+    /// AI analysis is a short clip, not an open-ended capture; bounding it
+    /// turns a fat-fingered `--frames 4000000000` into a typed rejection
+    /// instead of an hours-long, disk-filling loop.
+    pub max_record_frames: u32,
 }
 
 /// Validate `config.toml` and cache the resolved settings. Call once at startup
@@ -157,6 +162,11 @@ impl Settings {
                     "WEBPILOT_SCREENSHOT_MAX_LONG_EDGE",
                     file.capture.screenshot_max_long_edge,
                     1568,
+                ),
+                max_record_frames: u32_var(
+                    "WEBPILOT_MAX_RECORD_FRAMES",
+                    file.capture.max_record_frames,
+                    3600,
                 ),
             },
         }
@@ -244,6 +254,7 @@ struct FileCdp {
 #[serde(default, deny_unknown_fields)]
 struct FileCapture {
     screenshot_max_long_edge: Option<u32>,
+    max_record_frames: Option<u32>,
 }
 
 /// Read and parse `config.toml`. An absent file is the empty (all-default)

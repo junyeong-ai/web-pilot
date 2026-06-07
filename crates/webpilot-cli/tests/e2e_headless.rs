@@ -104,6 +104,24 @@ fn headless_behavioral_flow() {
         stdout(&title)
     );
 
+    // 2b. `key-press` is a real CDP input event, not a synthetic one: focus the
+    //     text input, seed a value with the caret at the end, press Backspace,
+    //     and the browser must natively delete a character. A synthetic
+    //     KeyboardEvent cannot edit a field — this would fail under the old
+    //     dispatch, locking in the native-input behaviour.
+    let _ = fx.run(&[
+        "eval",
+        "const i=document.getElementById('q'); i.value='ab'; i.focus(); i.setSelectionRange(2,2); 'ok'",
+    ]);
+    let bksp = fx.run(&["action", "key-press", "Backspace"]);
+    assert_eq!(code(&bksp), 0, "key-press failed: {}", stdout(&bksp));
+    let val = fx.run(&["eval", "document.getElementById('q').value"]);
+    assert!(
+        stdout(&val).contains('a') && !stdout(&val).contains("ab"),
+        "Backspace must natively delete a char (ab -> a): {}",
+        stdout(&val)
+    );
+
     // 3. A link click that navigates reports `url_changed`, `--capture`
     //    returns the NEW document (settle: committed + parsed, never the dying
     //    page), and armed monitors keep recording across the navigation even

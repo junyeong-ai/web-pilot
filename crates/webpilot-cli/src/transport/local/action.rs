@@ -25,6 +25,76 @@ fn is_real_document_url(url: &str) -> bool {
     !url.is_empty() && url != "about:blank"
 }
 
+/// CDP modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8).
+fn modifier_mask(m: &webpilot::action::Modifiers) -> u32 {
+    (m.alt as u32) | ((m.ctrl as u32) << 1) | ((m.meta as u32) << 2) | ((m.shift as u32) << 3)
+}
+
+/// The DOM `code` and Windows virtual-key code for a key, so `Input.dispatchKeyEvent`
+/// fires real native behaviour (Tab traversal, Backspace deletion, arrow nav)
+/// that a synthetic `KeyboardEvent` cannot. Unknown keys carry no code (0).
+fn key_descriptor(key: &str) -> (String, u32) {
+    let named: Option<(&str, u32)> = match key {
+        "Enter" => Some(("Enter", 13)),
+        "Tab" => Some(("Tab", 9)),
+        "Escape" => Some(("Escape", 27)),
+        "Backspace" => Some(("Backspace", 8)),
+        "Delete" => Some(("Delete", 46)),
+        "ArrowUp" => Some(("ArrowUp", 38)),
+        "ArrowDown" => Some(("ArrowDown", 40)),
+        "ArrowLeft" => Some(("ArrowLeft", 37)),
+        "ArrowRight" => Some(("ArrowRight", 39)),
+        "Home" => Some(("Home", 36)),
+        "End" => Some(("End", 35)),
+        "PageUp" => Some(("PageUp", 33)),
+        "PageDown" => Some(("PageDown", 34)),
+        "Insert" => Some(("Insert", 45)),
+        "CapsLock" => Some(("CapsLock", 20)),
+        " " | "Space" => Some(("Space", 32)),
+        _ => None,
+    };
+    if let Some((code, vk)) = named {
+        return (code.to_string(), vk);
+    }
+    if let Some(n) = key.strip_prefix('F').and_then(|d| d.parse::<u32>().ok())
+        && (1..=12).contains(&n)
+    {
+        return (format!("F{n}"), 111 + n);
+    }
+    let mut chars = key.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        if c.is_ascii_alphabetic() {
+            let up = c.to_ascii_uppercase();
+            return (format!("Key{up}"), up as u32);
+        }
+        if c.is_ascii_digit() {
+            return (format!("Digit{c}"), c as u32);
+        }
+    }
+    (String::new(), 0)
+}
+
+/// The text a key contributes to its `keyDown`, or `None` for a key that
+/// produces none. A single printable character and Space insert that
+/// character; `Enter` carries a carriage return — the signal Chromium's
+/// implicit form submission keys on, without which `key-press Enter` fires
+/// listeners but never submits. Other named keys (Tab, arrows, Backspace)
+/// produce no text: their effect is the keypress itself, and a stray "\t"
+/// would type a tab instead of traversing focus.
+fn printable_key_text(key: &str) -> Option<String> {
+    match key {
+        "Enter" => Some("\r".to_string()),
+        "Space" => Some(" ".to_string()),
+        _ => {
+            let mut chars = key.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) if !c.is_control() => Some(c.to_string()),
+                _ => None,
+            }
+        }
+    }
+}
+
 impl LocalTransport {
     // Policy is enforced once at the transport boundary (`Transport::send`),
     // so handlers run only after the command is permitted.
@@ -105,11 +175,22 @@ impl LocalTransport {
         let mut target_events = self.browser.subscribe_events();
         let mut page_events = self.page.subscribe_events();
 
-        let action_json = serde_json::to_value(&action)?;
-        let raw = self
-            .invoke_bridge(&json!({"type": "executeAction", "action": action_json}))
-            .await?;
-        let _ = Self::parse_bridge_response(raw)?;
+        // `key_press` dispatches a native CDP key event (real Tab/Backspace/
+        // arrow/text behaviour), but still flows through the navigation +
+        // popup detection below because Enter can submit a form. Every other
+        // page-mutating action runs in the page via the bridge.
+        match &action {
+            Action::KeyPress { key, modifiers } => {
+                self.do_key_press(key, modifiers).await?;
+            }
+            _ => {
+                let action_json = serde_json::to_value(&action)?;
+                let raw = self
+                    .invoke_bridge(&json!({"type": "executeAction", "action": action_json}))
+                    .await?;
+                let _ = Self::parse_bridge_response(raw)?;
+            }
+        }
 
         // Sample the acted-on page before any pin move, so `url_changed`
         // reports this tab's navigation, never the popup's URL.
@@ -347,6 +428,15 @@ impl LocalTransport {
                 Err(_) => break,
             }
         }
+        // No load event buffered → this action started no navigation. This is
+        // sound, not merely a fast path: a synchronous navigation (a link
+        // click, a form submit via Enter) emits `frameStartedLoading` DURING
+        // the action's own CDP call, and CDP delivers an event that precedes a
+        // command response before that response — so it is already buffered
+        // when this drain runs, after the action returned. Only a navigation
+        // deferred to a later task (a click handler that calls `location=` from
+        // a timer/await) can arrive after the drain; that is inherently racy
+        // and is the agent's `wait` to resolve, in both modes.
         if seq.is_empty() {
             return immediate;
         }
@@ -495,6 +585,54 @@ impl LocalTransport {
             }
         }
         self.await_document_ready(events).await;
+    }
+
+    /// Dispatch a key as a real browser input event via CDP, so native
+    /// behaviour (Tab focus traversal, Backspace deletion, arrow navigation,
+    /// printable text insertion, Enter submitting a form) actually fires —
+    /// a synthetic `KeyboardEvent` only notifies JS listeners. Printable text
+    /// is inserted only without a chord modifier (Ctrl/Alt/Meta make the key a
+    /// shortcut, not input).
+    async fn do_key_press(
+        &self,
+        key: &str,
+        mods: &webpilot::action::Modifiers,
+    ) -> Result<()> {
+        let modifiers = modifier_mask(mods);
+        let (code, vk) = key_descriptor(key);
+        let text = (!mods.ctrl && !mods.alt && !mods.meta)
+            .then(|| printable_key_text(key))
+            .flatten();
+
+        // `nativeVirtualKeyCode` is deliberately omitted: it is the
+        // platform-native scan code (different on macOS vs Windows), and
+        // sending the Windows code on macOS makes Chrome mis-map the key to an
+        // unrelated browser accelerator. `windowsVirtualKeyCode` + `key` +
+        // `code` is the portable set Chrome resolves from on every platform.
+        let mut down = json!({
+            "type": "keyDown",
+            "modifiers": modifiers,
+            "key": key,
+            "code": code,
+            "windowsVirtualKeyCode": vk,
+        });
+        if let Some(t) = &text {
+            down["text"] = json!(t);
+        }
+        self.page.send("Input.dispatchKeyEvent", Some(down)).await?;
+        self.page
+            .send(
+                "Input.dispatchKeyEvent",
+                Some(json!({
+                    "type": "keyUp",
+                    "modifiers": modifiers,
+                    "key": key,
+                    "code": code,
+                    "windowsVirtualKeyCode": vk,
+                })),
+            )
+            .await?;
+        Ok(())
     }
 
     /// Drive a same-document history navigation (`history.back()`/`forward()`).

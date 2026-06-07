@@ -238,16 +238,32 @@ fn current_user() -> String {
 /// observes a torn file. The temp file is created in the SAME directory as the
 /// target so the final `rename` is a same-filesystem metadata swap, and it is
 /// removed on a mid-write failure so a crash leaves no `.tmp` litter.
+///
+/// The temp name carries the pid AND a process-unique counter, and is opened
+/// `create_new` (O_EXCL): two concurrent writers — even same-pid async tasks
+/// targeting the same path — never share a temp file, so one can't rename the
+/// other's bytes out from under it.
 pub fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "tmp".into());
-    let tmp = dir.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    let nonce = SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{file_name}.{}.{nonce}.tmp", std::process::id()));
 
     let write = || -> std::io::Result<()> {
-        std::fs::write(&tmp, contents)?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(contents)?;
+        f.sync_all()?;
+        drop(f);
         std::fs::rename(&tmp, path)
     };
     write().inspect_err(|_| {

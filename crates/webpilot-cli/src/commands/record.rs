@@ -68,6 +68,20 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
         }
     };
 
+    // Bound the run: the loop screenshots once per frame, so an unbounded
+    // count (a fat-fingered `--frames`, or a huge `--duration`/`--interval`
+    // ratio) would otherwise capture for hours and fill the disk.
+    let max_frames = webpilot::settings::get().capture.max_record_frames;
+    if frame_count > max_frames {
+        return Err(webpilot::WebPilotError::InvalidArgument {
+            detail: format!(
+                "recording of {frame_count} frames exceeds the {max_frames}-frame limit \
+                 (raise [capture] max_record_frames to override)"
+            ),
+        }
+        .into());
+    }
+
     let dir = dirs::artifacts_dir();
     // Nanosecond stamp so two `--context` recordings minted in the same
     // millisecond don't collide on `frame_<ts>_000.png` and overwrite.
