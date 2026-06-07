@@ -4,7 +4,7 @@
 import { err, noPageErr } from "./errors.js";
 import { activeFrameId, activeTabId, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
-import { cdpEval, frameMainContextId } from "./query.js";
+import { cdpEval, frameWorldContextId } from "./query.js";
 import { isHostConnected } from "./host.js";
 
 // ── Tabs ───────────────────────────────────────────────────────────────────
@@ -178,7 +178,7 @@ async function handleFrameSwitch(selector) {
     matched = await withCdp(tab.id, async (tid) => {
       await cdpSend(tid, "Runtime.enable", {});
       for (const f of httpFrames) {
-        const contextId = await frameMainContextId(tid, tab.id, f.frameId);
+        const contextId = await frameWorldContextId(tid, tab.id, f.frameId, "MAIN");
         if (contextId == null) continue;
         const r = await cdpEval(tid, selector.js, contextId).catch(() => null);
         if (r?.success && r.result && JSON.parse(r.result) === true) return f;

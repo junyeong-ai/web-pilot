@@ -8,16 +8,18 @@ import { ensureBridge, sendToContent } from "./content.js";
 
 // ── Eval ───────────────────────────────────────────────────────────────────
 
-// Resolve the MAIN-world CDP execution context of a webNavigation frame, inside
-// an attached debugger session. Extension frame ids are integers; CDP contexts
-// carry opaque frame GUIDs — the bridge between the two id spaces is a one-shot
-// nonce: a PRECOMPILED function (no dynamic code, so page CSP cannot block it)
-// stamps the frame's window, and the default context whose global carries the
-// stamp is the frame's context. URL matching would be ambiguous for same-URL
-// sibling frames; the nonce never is. A cross-origin out-of-process iframe has
-// no context in the tab's session and resolves to null — the same boundary the
-// headless per-page context map has.
-async function frameMainContextId(tid, tabId, frameId) {
+// Resolve the CDP execution context of a webNavigation frame's `world`
+// ("MAIN" for page eval, "ISOLATED" for the extension's content-script world),
+// inside an attached debugger session. Extension frame ids are integers; CDP
+// contexts carry opaque frame GUIDs — the bridge between the two id spaces is a
+// one-shot nonce: a PRECOMPILED function (no dynamic code, so page CSP cannot
+// block it) stamps the chosen world's window, and the context whose global
+// carries the stamp is that world's context. URL matching would be ambiguous
+// for same-URL sibling frames; the nonce never is, and because the stamp is
+// written only in `world`, the matching context is unambiguously that world's
+// (no auxData-type guess). A cross-origin out-of-process iframe has no context
+// in the tab's session and resolves to null — the same boundary headless has.
+async function frameWorldContextId(tid, tabId, frameId, world) {
   const contexts = [];
   const onEvent = (source, method, params) => {
     if (source.tabId === tabId && method === "Runtime.executionContextCreated") {
@@ -35,7 +37,7 @@ async function frameMainContextId(tid, tabId, frameId) {
     await cdpSend(tid, "Runtime.enable", {});
     await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
-      world: "MAIN",
+      world,
       func: (k, n) => { window[k] = n; },
       args: [key, nonce],
     });
@@ -43,7 +45,7 @@ async function frameMainContextId(tid, tabId, frameId) {
     const probed = new Set();
     while (Date.now() < deadline) {
       for (const c of contexts) {
-        if (probed.has(c.id) || c.auxData?.type !== "default") continue;
+        if (probed.has(c.id)) continue;
         probed.add(c.id);
         const r = await cdpSend(tid, "Runtime.evaluate", {
           expression: `window[${JSON.stringify(key)}]`,
@@ -59,7 +61,7 @@ async function frameMainContextId(tid, tabId, frameId) {
     chrome.debugger.onEvent.removeListener(onEvent);
     chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
-      world: "MAIN",
+      world,
       func: (k) => { delete window[k]; },
       args: [key],
     }).catch(() => {});
@@ -105,7 +107,7 @@ async function handleEval(command) {
       await cdpSend(tid, "Runtime.enable", {});
       let contextId;
       if (activeFrameId !== 0) {
-        contextId = await frameMainContextId(tid, tab.id, activeFrameId);
+        contextId = await frameWorldContextId(tid, tab.id, activeFrameId, "MAIN");
         if (contextId == null) {
           return {
             success: false,
@@ -283,4 +285,4 @@ async function handleFetch(command) {
   }
 }
 
-export { cdpEval, frameMainContextId, handleDomGet, handleDomSet, handleEval, handleFetch, handleWait };
+export { cdpEval, frameWorldContextId, handleDomGet, handleDomSet, handleEval, handleFetch, handleWait };

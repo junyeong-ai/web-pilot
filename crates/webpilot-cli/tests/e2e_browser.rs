@@ -284,21 +284,25 @@ fn browser_behavioral_flow() {
     assert_eq!(code(&hover), 0, "hover failed: {}", stdout(&hover));
 
     // 2c. Upload sets a file on the input the index addressed — snapshot
-    //     identity via a one-shot nonce marker, parity with headless. Prove the
-    //     file landed on #file; uploading onto a non-file element is a typed
+    //     identity handed to CDP as an object reference (the objectId resolved
+    //     in the content-script's ISOLATED world), parity with headless. Prove
+    //     the file landed on #file; uploading onto a non-file element is a typed
     //     InvalidArgument (exit 7) caught at the bridge before any CDP sink.
     let cap_up = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&cap_up), 0);
     let up_snapshot: serde_json::Value =
         serde_json::from_str(&stdout(&cap_up)).expect("capture json");
-    let file_index = up_snapshot["elements"]
-        .as_array()
-        .expect("elements")
-        .iter()
-        .find(|e| e["id"] == "file")
-        .and_then(|e| e["index"].as_u64())
-        .expect("file index")
-        .to_string();
+    let index_by_id = |id: &str| -> String {
+        up_snapshot["elements"]
+            .as_array()
+            .expect("elements")
+            .iter()
+            .find(|e| e["id"] == id)
+            .and_then(|e| e["index"].as_u64())
+            .unwrap_or_else(|| panic!("element #{id} not captured: {}", stdout(&cap_up)))
+            .to_string()
+    };
+    let file_index = index_by_id("file");
     let upload_src = fx.home.join("upload-src.txt");
     std::fs::write(&upload_src, b"payload").expect("write upload fixture");
     let src = upload_src.to_str().unwrap();
@@ -318,6 +322,29 @@ fn browser_behavioral_flow() {
         7,
         "upload onto a non-file element must be InvalidArgument: {}",
         stdout(&bad)
+    );
+
+    // 2d. The object handoff reaches a file input inside an OPEN SHADOW ROOT —
+    //     the snapshot pierces shadow and the ISOLATED-world objectId crosses
+    //     the boundary a document-root selector cannot. Parity with headless.
+    let shadow_index = index_by_id("shadowfile");
+    let up_shadow = fx.run(&["action", "upload", &shadow_index, src]);
+    assert_eq!(
+        code(&up_shadow),
+        0,
+        "shadow-root upload failed: {}",
+        stdout(&up_shadow)
+    );
+    let scount = fx.run(&[
+        "eval",
+        "document.getElementById('shadowhost').shadowRoot.getElementById('shadowfile').files.length",
+    ]);
+    let sc: serde_json::Value = serde_json::from_str(&stdout(&scount)).expect("eval json");
+    assert_eq!(
+        sc["result"].as_str(),
+        Some("1"),
+        "object-handoff upload must reach a shadow-root file input: {}",
+        stdout(&scount)
     );
 
     // 3. Stale-snapshot guard (the bridge is shared, so the typed error must

@@ -788,11 +788,13 @@
         return executeAction(msg.action);
       case "wait":
         return new Promise((resolve) => handleWait(msg, resolve));
-      case "markElement": {
-        // Mark the EXACT snapshot element (resolveIndex → object identity, so a
-        // stale index is a typed StaleSnapshot here) with a one-shot nonce
-        // attribute the caller chose. CDP then takes the input by that unique
-        // mark, never a document-order re-query that the page could redirect.
+      case "prepareUpload": {
+        // Stash the EXACT snapshot element (resolveIndex → object identity, so a
+        // stale index is a typed StaleSnapshot here) for a CDP objectId handoff.
+        // No DOM-visible marker and no document-order re-query, so a page can
+        // neither observe nor redirect the target between resolve and the
+        // file-set sink; the direct reference also reaches a file input inside
+        // an open shadow root, which a document-root selector cannot.
         const r = resolveIndex(msg.index);
         if (r.error) return r.error;
         const el = r.el;
@@ -803,13 +805,11 @@
             { index: msg.index },
           );
         }
-        el.setAttribute(msg.attr, "1");
+        state.uploadTarget = el;
         return { success: true };
       }
-      case "unmarkElement": {
-        for (const e of document.querySelectorAll(`[${msg.attr}]`)) {
-          e.removeAttribute(msg.attr);
-        }
+      case "clearUpload": {
+        state.uploadTarget = null;
         return { success: true };
       }
       case "setHtml": {

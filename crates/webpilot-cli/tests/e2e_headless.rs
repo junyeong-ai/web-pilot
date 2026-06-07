@@ -123,9 +123,9 @@ fn headless_behavioral_flow() {
     );
 
     // 2c. `upload` sets a file on the input the index addressed — resolved by
-    //     snapshot identity through a one-shot nonce marker, never a live
-    //     document-order re-query a page could redirect. Prove the file landed
-    //     on #file; uploading onto a non-file element is a typed
+    //     snapshot identity and handed to CDP as an object reference, never a
+    //     live document-order re-query a page could redirect. Prove the file
+    //     landed on #file; uploading onto a non-file element is a typed
     //     InvalidArgument (exit 7), caught at the bridge before any CDP sink.
     let cap_up = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&cap_up), 0);
@@ -149,6 +149,30 @@ fn headless_behavioral_flow() {
         7,
         "upload onto a non-file element must be InvalidArgument: {}",
         stdout(&bad)
+    );
+
+    // 2d. The object handoff reaches a file input inside an OPEN SHADOW ROOT —
+    //     the snapshot pierces shadow, and an object reference (unlike a
+    //     document-root selector) crosses the boundary the CDP node lookup
+    //     can't. Capture indexes it; upload lands the file on the shadow input.
+    let shadow_index = index_of(&cap_up, "shadowfile");
+    let up_shadow = fx.run(&["action", "upload", &shadow_index, src]);
+    assert_eq!(
+        code(&up_shadow),
+        0,
+        "shadow-root upload failed: {}",
+        stdout(&up_shadow)
+    );
+    let scount = fx.run(&[
+        "eval",
+        "document.getElementById('shadowhost').shadowRoot.getElementById('shadowfile').files.length",
+    ]);
+    let sc: serde_json::Value = serde_json::from_str(&stdout(&scount)).expect("eval json");
+    assert_eq!(
+        sc["result"].as_str(),
+        Some("1"),
+        "object-handoff upload must reach a shadow-root file input: {}",
+        stdout(&scount)
     );
 
     // 3. A link click that navigates reports `url_changed`, `--capture`

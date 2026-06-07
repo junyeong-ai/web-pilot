@@ -6,6 +6,7 @@ import { activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, slee
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
+import { frameWorldContextId } from "./query.js";
 
 // ── Action ─────────────────────────────────────────────────────────────────
 
@@ -306,55 +307,49 @@ async function dispatchActionToPage(tab, action) {
 async function handleUpload(tabId, action) {
   try {
     await ensureBridge(tabId, activeFrameId);
-    // Mark the EXACT snapshot element with a one-shot nonce attribute the page
-    // cannot predict (resolves through the bridge snapshot, so a stale index is
-    // a typed StaleSnapshot here; a non-file element is a typed InvalidArgument)
-    // and take the input by that unique mark — never a document-order re-query
-    // the page could redirect by relocating a fixed marker. Parity: action.rs.
-    const attr = `data-webpilot-upload-${uploadMarkerNonce()}`;
-    const marked = await sendToContent(tabId, { type: "markElement", index: action.index, attr }, activeFrameId);
-    if (marked && marked.success === false) {
-      return { type: "Action", success: false, error: marked.error };
+    // Stash the EXACT snapshot element in the content script (object identity;
+    // a stale index is a typed StaleSnapshot here, a non-file element a typed
+    // InvalidArgument), then resolve that stored reference to a CDP objectId in
+    // the content script's ISOLATED world and set the file on THAT object. No
+    // marker attribute and no document-order re-query, so a page can neither
+    // observe nor redirect the target between resolve and sink, and the direct
+    // object reaches a file input inside an open shadow root. Parity: action.rs.
+    const prep = await sendToContent(tabId, { type: "prepareUpload", index: action.index }, activeFrameId);
+    if (prep && prep.success === false) {
+      return { type: "Action", success: false, error: prep.error };
     }
 
     try {
       const outcome = await withCdp(tabId, async (tid) => {
-        const { root } = await cdpSend(tid, "DOM.getDocument");
-        const { nodeIds } = await cdpSend(tid, "DOM.querySelectorAll", {
-          nodeId: root.nodeId,
-          selector: `[${attr}]`,
+        const contextId = await frameWorldContextId(tid, tabId, activeFrameId, "ISOLATED");
+        if (contextId == null) {
+          return { success: false, error: otherErr("upload: could not reach the content-script context") };
+        }
+        const ev = await cdpSend(tid, "Runtime.evaluate", {
+          expression: "window.__webpilot_state.uploadTarget",
+          contextId,
+          returnByValue: false,
         });
-        const matches = (nodeIds || []).filter((n) => n);
-        if (matches.length === 0) {
+        const objectId = ev?.result?.objectId;
+        if (!objectId) {
           return { success: false, error: err("StaleSnapshot", `[${action.index}] left the DOM before upload`, { index: action.index }) };
         }
-        if (matches.length > 1) {
-          return { success: false, error: otherErr(`upload target ambiguous: ${matches.length} elements carry the one-shot marker — the page duplicated it`) };
-        }
-        await cdpSend(tid, "DOM.setFileInputFiles", { nodeId: matches[0], files: [action.path] });
+        await cdpSend(tid, "DOM.setFileInputFiles", { objectId, files: [action.path] });
         return { success: true };
       });
       if (outcome.success === false) {
         return { type: "Action", success: false, error: outcome.error };
       }
     } finally {
-      // Strip the marker whether or not the assignment succeeded, so a failed
-      // upload never leaves a stale attribute on the input.
-      await sendToContent(tabId, { type: "unmarkElement", attr }, activeFrameId, 3000)
-        .catch(() => {});
+      // Release the stored reference whether or not the assignment succeeded,
+      // so a failed upload never pins a detached node in the bridge.
+      await sendToContent(tabId, { type: "clearUpload" }, activeFrameId, 3000).catch(() => {});
     }
 
     return { type: "Action", success: true };
   } catch (e) {
     return { type: "Action", success: false, error: exceptionErr(e) };
   }
-}
-
-// A one-shot attribute suffix, unique per call so the page cannot predict it
-// and pre-stamp a decoy element. Charset is `[0-9a-z-]`, safe verbatim in an
-// HTML attribute name and a CSS attribute selector.
-function uploadMarkerNonce() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 async function handleHover(tabId, action) {

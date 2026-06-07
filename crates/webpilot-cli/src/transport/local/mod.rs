@@ -206,6 +206,37 @@ impl LocalTransport {
             .unwrap_or(Value::Null))
     }
 
+    /// Evaluate `expression` in the active frame's context and return the
+    /// `objectId` of the resulting remote object — a live handle CDP can act on
+    /// directly (e.g. `DOM.setFileInputFiles`). `None` when the result is not an
+    /// object (a primitive, `null`, or `undefined`), which the caller maps to
+    /// its own typed error. Unlike `eval_in_active` this keeps the object by
+    /// reference (`returnByValue: false`) so identity, not a serialized copy,
+    /// crosses to CDP.
+    pub(super) async fn eval_object_id(&self, expression: &str) -> Result<Option<String>> {
+        let mut params = json!({
+            "expression": expression,
+            "returnByValue": false,
+            "awaitPromise": true,
+        });
+        if let Some(cid) = self.active_context_id().await? {
+            params["contextId"] = cid.into();
+        }
+        let result = self.page.send("Runtime.evaluate", Some(params)).await?;
+        if let Some(exception) = result.get("exceptionDetails") {
+            let msg = exception
+                .pointer("/exception/description")
+                .or_else(|| exception.pointer("/text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("JS exception");
+            anyhow::bail!("{msg}");
+        }
+        Ok(result
+            .pointer("/result/objectId")
+            .and_then(|v| v.as_str())
+            .map(String::from))
+    }
+
     // ── Bridge invocation ────────────────────────────────────────────────
 
     async fn ensure_bridge(&self) -> Result<()> {

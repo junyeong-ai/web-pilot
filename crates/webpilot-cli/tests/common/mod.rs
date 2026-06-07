@@ -13,7 +13,12 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <input id="file" type="file">
 <a id="nav" href="/second">go second</a>
 <a id="pop" href="/second" target="_blank" rel="noopener">open popup</a>
+<div id="shadowhost"></div>
 <iframe src="/frame"></iframe>
+<script>
+  const sr = document.getElementById('shadowhost').attachShadow({ mode: 'open' });
+  sr.innerHTML = '<input id="shadowfile" type="file">';
+</script>
 </body></html>"#;
 
 pub const FRAME: &str = r##"<!doctype html><html><head><title>frame</title></head>
