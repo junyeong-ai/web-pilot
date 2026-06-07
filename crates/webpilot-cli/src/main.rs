@@ -7,6 +7,8 @@ mod mcp;
 mod output;
 mod policy;
 pub mod session;
+#[cfg(test)]
+mod test_support;
 pub mod stitch;
 mod transport;
 

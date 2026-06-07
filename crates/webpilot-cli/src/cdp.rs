@@ -442,7 +442,7 @@ fn char_safe_prefix(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpListener;
+    use crate::test_support::{Reply, bind, mock_cdp, ok};
     use tokio_tungstenite::accept_async;
 
     #[test]
@@ -459,15 +459,9 @@ mod tests {
     }
 
     // ── Mock-CDP harness ──────────────────────────────────────────────────
-    // These drive the real `CdpClient` over a loopback WebSocket, so the actual
-    // reader task, id→oneshot routing, timeout, and reader-exit drain are
-    // exercised end to end — not a reimplementation.
-
-    async fn bind() -> (TcpListener, String) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("ws://{}", listener.local_addr().unwrap());
-        (listener, url)
-    }
+    // These drive the real `CdpClient` over the loopback mock in `test_support`,
+    // so the actual reader task, id→oneshot routing, timeout, and reader-exit
+    // drain are exercised end to end — not a reimplementation.
 
     fn webpilot_err(err: &anyhow::Error) -> &WebPilotError {
         err.downcast_ref::<WebPilotError>()
@@ -477,7 +471,8 @@ mod tests {
     #[tokio::test]
     async fn routes_responses_to_callers_by_id_out_of_order() {
         // Read two requests, reply in REVERSE order: proves responses are
-        // matched to callers by `id`, never by arrival order.
+        // matched to callers by `id`, never by arrival order. (Bespoke because
+        // it buffers both requests before replying — not a per-request mock.)
         let (listener, url) = bind().await;
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -492,8 +487,7 @@ mod tests {
                 }
             }
             for req in reqs.into_iter().rev() {
-                let resp =
-                    serde_json::json!({ "id": req["id"], "result": { "method": req["method"] } });
+                let resp = ok(&req, serde_json::json!({ "method": req["method"] }));
                 ws.send(Message::Text(resp.to_string().into())).await.unwrap();
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -507,13 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn unanswered_request_times_out() {
-        let (listener, url) = bind().await;
-        tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = accept_async(stream).await.unwrap();
-            while let Some(Ok(_)) = ws.next().await {} // read, never reply
-        });
-
+        let url = mock_cdp(|_| Reply::Silent).await;
         let cdp = CdpClient::connect(&url).await.unwrap();
         let err = cdp
             .send_with_timeout("Hang", None, std::time::Duration::from_millis(150))
@@ -525,14 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn closed_connection_fails_inflight_with_connection_lost() {
-        let (listener, url) = bind().await;
-        tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = accept_async(stream).await.unwrap();
-            let _ = ws.next().await; // read one request, then close
-            drop(ws);
-        });
-
+        let url = mock_cdp(|_| Reply::Close).await;
         let cdp = CdpClient::connect(&url).await.unwrap();
         let err = cdp.send("Doomed", None).await.unwrap_err();
         assert!(matches!(
@@ -544,21 +525,13 @@ mod tests {
 
     #[tokio::test]
     async fn cdp_error_response_is_surfaced() {
-        let (listener, url) = bind().await;
-        tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = accept_async(stream).await.unwrap();
-            if let Some(Ok(Message::Text(t))) = ws.next().await {
-                let req: Value = serde_json::from_str(&t).unwrap();
-                let resp = serde_json::json!({
-                    "id": req["id"],
-                    "error": { "code": -32000, "message": "boom" },
-                });
-                ws.send(Message::Text(resp.to_string().into())).await.unwrap();
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        });
-
+        let url = mock_cdp(|req| {
+            Reply::Send(serde_json::json!({
+                "id": req["id"],
+                "error": { "code": -32000, "message": "boom" },
+            }))
+        })
+        .await;
         let cdp = CdpClient::connect(&url).await.unwrap();
         let err = cdp.send("Boom", None).await.unwrap_err();
         assert!(err.to_string().contains("CDP error"));

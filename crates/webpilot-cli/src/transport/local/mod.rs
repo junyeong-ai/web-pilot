@@ -697,3 +697,60 @@ pub(crate) fn clear_context_state(browser_context_id: &str) {
     clear_persisted_active_frame(Some(browser_context_id));
     clear_persisted_active_tab(Some(browser_context_id));
 }
+
+#[cfg(test)]
+mod navigation_settled_tests {
+    use super::*;
+    use crate::test_support::{Reply, mock_cdp, ok};
+
+    /// A mock that answers `Page.getFrameTree` with the given main-frame
+    /// `loaderId`/`url` and `Runtime.evaluate` (document.readyState) with `ready`.
+    fn serve_frame(
+        loader: &'static str,
+        url: &'static str,
+        ready: &'static str,
+    ) -> impl Fn(&Value) -> Reply {
+        move |req| {
+            let result = match req["method"].as_str() {
+                Some("Page.getFrameTree") => {
+                    json!({ "frameTree": { "frame": { "loaderId": loader, "url": url } } })
+                }
+                Some("Runtime.evaluate") => {
+                    json!({ "result": { "type": "string", "value": ready } })
+                }
+                _ => json!({}),
+            };
+            Reply::Send(ok(req, result))
+        }
+    }
+
+    #[tokio::test]
+    async fn settled_when_loader_matches_and_document_ready() {
+        let url = mock_cdp(serve_frame("L1", "https://same", "complete")).await;
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        assert!(navigation_settled(&cdp, Some("L1"), "https://same").await);
+    }
+
+    #[tokio::test]
+    async fn settled_when_url_left_before_url_even_if_loader_differs() {
+        // A cross-page nav: the loader may differ across a process swap, but the
+        // URL having moved is enough to count as committed.
+        let url = mock_cdp(serve_frame("Lx", "https://new", "interactive")).await;
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        assert!(navigation_settled(&cdp, Some("Lwant"), "https://old").await);
+    }
+
+    #[tokio::test]
+    async fn not_settled_when_neither_loader_nor_url_committed() {
+        let url = mock_cdp(serve_frame("Lx", "https://old", "complete")).await;
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        assert!(!navigation_settled(&cdp, Some("Lwant"), "https://old").await);
+    }
+
+    #[tokio::test]
+    async fn not_settled_while_document_still_loading() {
+        let url = mock_cdp(serve_frame("L1", "https://same", "loading")).await;
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        assert!(!navigation_settled(&cdp, Some("L1"), "https://same").await);
+    }
+}
