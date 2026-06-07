@@ -321,13 +321,13 @@ async function handleUpload(tabId, action) {
       }
 
       const outcome = await withCdp(tabId, async (tid) => {
-        const contextId = await frameWorldContextId(tid, tabId, activeFrameId, "ISOLATED");
-        if (contextId == null) {
+        const uniqueContextId = await frameWorldContextId(tid, tabId, activeFrameId, "ISOLATED");
+        if (uniqueContextId == null) {
           return { success: false, error: otherErr("upload: could not reach the content-script context") };
         }
         const ev = await cdpSend(tid, "Runtime.evaluate", {
           expression: "window.__webpilot_state.uploadTarget",
-          contextId,
+          uniqueContextId,
           returnByValue: false,
         });
         const objectId = ev?.result?.objectId;

@@ -178,9 +178,9 @@ async function handleFrameSwitch(selector) {
     matched = await withCdp(tab.id, async (tid) => {
       await cdpSend(tid, "Runtime.enable", {});
       for (const f of httpFrames) {
-        const contextId = await frameWorldContextId(tid, tab.id, f.frameId, "MAIN");
-        if (contextId == null) continue;
-        const r = await cdpEval(tid, selector.js, contextId).catch(() => null);
+        const uniqueContextId = await frameWorldContextId(tid, tab.id, f.frameId, "MAIN");
+        if (uniqueContextId == null) continue;
+        const r = await cdpEval(tid, selector.js, uniqueContextId).catch(() => null);
         if (r?.success && r.result && JSON.parse(r.result) === true) return f;
       }
       return null;

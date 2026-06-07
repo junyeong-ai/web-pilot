@@ -45,14 +45,17 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
     const probed = new Set();
     while (Date.now() < deadline) {
       for (const c of contexts) {
-        if (probed.has(c.id)) continue;
-        probed.add(c.id);
+        if (probed.has(c.uniqueId)) continue;
+        probed.add(c.uniqueId);
         const r = await cdpSend(tid, "Runtime.evaluate", {
           expression: `window[${JSON.stringify(key)}]`,
-          contextId: c.id,
+          uniqueContextId: c.uniqueId,
           returnByValue: true,
         }).catch(() => null);
-        if (r?.result?.value === nonce) return c.id;
+        // Return the uniqueContextId, not the reusable integer id: it stays
+        // valid across a renderer swap and can never resolve to a different
+        // context that reused the integer.
+        if (r?.result?.value === nonce) return c.uniqueId;
       }
       await sleep(25);
     }
@@ -75,20 +78,22 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
 // Debugger-routed evaluation is not subject to the page's CSP, so a hardened
 // page (`script-src 'self'`) keeps full eval in any frame — headless parity.
 // Requires Runtime enabled on the session.
-async function cdpEval(tid, code, contextId) {
-  const scope = contextId != null ? { executionContextId: contextId } : {};
+async function cdpEval(tid, code, uniqueContextId) {
+  // The form probe compiles WITHOUT a context — a parse (expression vs
+  // statements) is context-independent, and compileScript takes only the
+  // integer executionContextId, never a uniqueContextId. The real evaluation
+  // targets the frame's context by its stable uniqueContextId.
   const compiled = await cdpSend(tid, "Runtime.compileScript", {
     expression: `(${code})`,
     sourceURL: "webpilot://eval-form-probe",
     persistScript: false,
-    ...scope,
   });
   const form = compiled.exceptionDetails ? code : `(()=>(${code}))()`;
   const ev = await cdpSend(tid, "Runtime.evaluate", {
     expression: form,
     returnByValue: true,
     awaitPromise: true,
-    ...(contextId != null ? { contextId } : {}),
+    ...(uniqueContextId != null ? { uniqueContextId } : {}),
   });
   if (ev.exceptionDetails) {
     const msg = ev.exceptionDetails.exception?.description || ev.exceptionDetails.text || "JS exception";
@@ -105,10 +110,10 @@ async function handleEval(command) {
   try {
     const r = await withCdp(tab.id, async (tid) => {
       await cdpSend(tid, "Runtime.enable", {});
-      let contextId;
+      let uniqueContextId;
       if (activeFrameId !== 0) {
-        contextId = await frameWorldContextId(tid, tab.id, activeFrameId, "MAIN");
-        if (contextId == null) {
+        uniqueContextId = await frameWorldContextId(tid, tab.id, activeFrameId, "MAIN");
+        if (uniqueContextId == null) {
           return {
             success: false,
             error: err(
@@ -119,7 +124,7 @@ async function handleEval(command) {
           };
         }
       }
-      return cdpEval(tid, command.code, contextId);
+      return cdpEval(tid, command.code, uniqueContextId);
     });
     return { type: "Eval", ...r };
   } catch (e) {

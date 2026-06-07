@@ -104,6 +104,30 @@ fn headless_behavioral_flow() {
         stdout(&title)
     );
 
+    // 2a2. A same-URL reload rebuilds the document, clearing the old execution
+    //      contexts. The bridge re-injects into the fresh isolated world on its
+    //      own (the persistent addScriptToEvaluateOnNewDocument), and the open-
+    //      time listener — still bound to this unswapped session — repopulates
+    //      the maps, so a capture right after must resolve, never hang.
+    let reloaded = fx.run(&["action", "reload"]);
+    assert_eq!(code(&reloaded), 0, "reload failed: {}", stdout(&reloaded));
+    let after_reload = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(
+        code(&after_reload),
+        0,
+        "capture after a same-URL reload failed: {}",
+        stdout(&after_reload)
+    );
+    let ar: serde_json::Value =
+        serde_json::from_str(&stdout(&after_reload)).expect("capture json");
+    assert!(
+        ar["elements"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|e| e["tag"] == "button")),
+        "the bridge must repopulate in the reloaded document's isolated world: {}",
+        stdout(&after_reload)
+    );
+
     // 2b. `key-press` is a real CDP input event, not a synthetic one: focus the
     //     text input, seed a value with the caret at the end, press Backspace,
     //     and the browser must natively delete a character. A synthetic
