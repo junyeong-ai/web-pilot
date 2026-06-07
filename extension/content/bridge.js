@@ -786,33 +786,6 @@
         };
       case "executeAction":
         return executeAction(msg.action);
-      case "eval":
-        // Used by frame list/find (per-frame name reads, predicates). A
-        // thenable result is awaited so an async predicate resolves to its
-        // value instead of serializing the Promise object as `{}`.
-        return (async () => {
-          try {
-            // Decide the form by CONSTRUCTING the function (which parses but
-            // does not run it), never by executing and retrying: a predicate
-            // that throws a runtime SyntaxError from valid code must not run
-            // twice. Same contract as the headless/CDP eval paths.
-            let fn;
-            try {
-              fn = new Function("return (" + msg.code + ")");
-            } catch (syntaxErr) {
-              if (syntaxErr instanceof SyntaxError) fn = new Function(msg.code);
-              else throw syntaxErr;
-            }
-            let result = fn();
-            if (result && typeof result.then === "function") result = await result;
-            return {
-              success: true,
-              result: result !== undefined ? JSON.stringify(result) : null,
-            };
-          } catch (e) {
-            return err("Other", e.message);
-          }
-        })();
       case "wait":
         return new Promise((resolve) => handleWait(msg, resolve));
       case "tagElement": {

@@ -14,7 +14,7 @@ paths:
 - Subcommand enums: singular `XCommand` (e.g., `TabCommand`, `FrameCommand`).
 - Args structs: `XArgs` with subcommand field named `command` (or `action` / `condition` when more specific).
 - Protocol commands: `NounVerb` (e.g., `TabList`, `CookieSet`, `FrameSwitch`).
-- Initialism casing: `CspViolation` (Rust idiom), not `CSPViolation`.
+- Initialism casing: `NmError` / `CdpClient` (Rust idiom), not `NMError` / `CDPClient`.
 - String parsing: `impl FromStr` — never bespoke `parse(s)` / `from_str_lossy(s)` helpers.
 
 ## Error handling

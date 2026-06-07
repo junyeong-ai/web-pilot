@@ -168,6 +168,25 @@ fn process_nm_message(
         let id = msg.get("id").and_then(|v| v.as_u64()).ok_or("missing id")?;
         let pong = serde_json::json!({"id": id, "result": {"type": "Pong"}});
         let _ = nm_tx.blocking_send(pong);
+        // Push the host's resolved settings alongside every Pong. Every Ping —
+        // the connect-time hello AND each keepalive — re-delivers it, because
+        // an MV3 worker is routinely suspended and restarted with empty state;
+        // re-Pinging on wake is exactly when it needs the config again. The
+        // payload carries only values whose defaults already agree across
+        // modes (today: the navigation timeout), so applying it never changes
+        // untuned behaviour; the schema is versioned and unknown fields are
+        // ignored so future tunables can ride the same channel.
+        let config = serde_json::json!({
+            "result": {
+                "type": "Config",
+                "schema": 1,
+                "timeouts": {
+                    "navigation_ms":
+                        webpilot::settings::timeouts().navigation.as_millis() as u64,
+                },
+            },
+        });
+        let _ = nm_tx.blocking_send(config);
         return Ok(());
     }
 
@@ -498,4 +517,56 @@ fn epoch_nanos() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Ping must resolve the version gate, answer with a Pong, AND push the
+    /// host's resolved settings — the Config ride-along is what lets a
+    /// restarted (state-wiped) worker re-learn tuned timeouts on its next
+    /// keepalive, so browser mode honors the same `webpilot::settings` the
+    /// headless transport reads directly.
+    #[test]
+    fn ping_resolves_gate_and_pushes_pong_then_config() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let pending: Arc<Mutex<Pending>> = Arc::new(Mutex::new(Pending::new()));
+        let gate: VersionGate = Arc::new(std::sync::Mutex::new(GateState::Unknown));
+
+        let ping = serde_json::json!({
+            "id": 7,
+            "command": {
+                "type": "Ping",
+                "extension_version": assets::expected_extension_version(),
+            },
+        });
+        process_nm_message(ping, &pending, &tx, &gate).expect("ping processed");
+
+        let pong = rx.try_recv().expect("a Pong reply");
+        assert_eq!(
+            pong.pointer("/result/type").and_then(|v| v.as_str()),
+            Some("Pong")
+        );
+
+        let config = rx.try_recv().expect("a Config push after the Pong");
+        assert_eq!(
+            config.pointer("/result/type").and_then(|v| v.as_str()),
+            Some("Config")
+        );
+        let nav = config
+            .pointer("/result/timeouts/navigation_ms")
+            .and_then(|v| v.as_u64())
+            .expect("navigation_ms present");
+        assert_eq!(
+            nav,
+            webpilot::settings::timeouts().navigation.as_millis() as u64,
+            "the pushed value must be the host's RESOLVED setting"
+        );
+
+        assert!(
+            matches!(current_gate(&gate), GateState::Matched),
+            "a matching version Ping must resolve the gate"
+        );
+    }
 }

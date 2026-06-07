@@ -244,6 +244,40 @@ fn headless_behavioral_flow() {
     let clear = fx.run(&["policy", "clear"]);
     assert_eq!(code(&clear), 0);
 
+    // 7b. A CSP-strict iframe (`script-src 'self'`, no unsafe-eval) keeps the
+    //     full frame surface working — switch by NAME, eval inside the frame,
+    //     and a `frame find` predicate: CDP-routed evaluation is not subject
+    //     to page CSP, so hardening a page must not cost the agent its eval.
+    //     Locks the same contract the browser-mode suite asserts.
+    let nav = fx.run(&["action", "navigate", &format!("{base}/csp")]);
+    assert_eq!(code(&nav), 0, "csp navigate failed: {}", stdout(&nav));
+    let sw = fx.run(&["frame", "switch", "cspframe"]);
+    assert_eq!(code(&sw), 0, "csp frame switch by name failed: {}", stdout(&sw));
+    let title = fx.run(&["eval", "document.title"]);
+    assert_eq!(code(&title), 0, "csp frame eval failed: {}", stdout(&title));
+    assert!(
+        stdout(&title).contains("cspframe"),
+        "eval must run inside the CSP-strict frame: {}",
+        stdout(&title)
+    );
+    let back_to_main = fx.run(&["frame", "main"]);
+    assert_eq!(code(&back_to_main), 0);
+    let found = fx.run(&["frame", "find", "document.title === 'cspframe'"]);
+    assert_eq!(
+        code(&found),
+        0,
+        "predicate find must work inside a CSP-strict frame: {}",
+        stdout(&found)
+    );
+    let title = fx.run(&["eval", "document.title"]);
+    assert!(
+        stdout(&title).contains("cspframe"),
+        "predicate match must scope eval to the found frame: {}",
+        stdout(&title)
+    );
+    let back_to_main = fx.run(&["frame", "main"]);
+    assert_eq!(code(&back_to_main), 0);
+
     // 8. Context isolation: localStorage written in one context is invisible in
     //    another (separate CDP browser contexts = separate storage partitions).
     let a_url = base.clone();

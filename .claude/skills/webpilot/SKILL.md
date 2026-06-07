@@ -293,7 +293,7 @@ webpilot uninstall --yes                       # quit Chrome + remove binary, sk
 | 3 | infrastructure (Chrome connection, bridge, `VersionMismatch`) |
 | 4 | not found (element / `StaleSnapshot` / selector / tab / context / frame) |
 | 5 | timeout |
-| 6 | security (`PolicyDenied`, `CspViolation`) |
+| 6 | security (`PolicyDenied`) |
 | 7 | invalid argument |
 | 8 | navigation failed / no page |
 

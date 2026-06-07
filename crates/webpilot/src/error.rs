@@ -59,9 +59,6 @@ pub enum WebPilotError {
     #[error("Blocked by policy: {operation}. Check: webpilot policy list")]
     PolicyDenied { operation: String },
 
-    #[error("CSP blocks script injection. Use: webpilot dom get-text SELECTOR")]
-    CspViolation,
-
     #[error("Tab not found: {tab_id}. List: webpilot tab")]
     TabNotFound { tab_id: String },
 
@@ -87,7 +84,7 @@ impl WebPilotError {
             | E::ContextNotFound { .. }
             | E::FrameNotFound { .. } => 4,
             E::Timeout { .. } => 5,
-            E::PolicyDenied { .. } | E::CspViolation => 6,
+            E::PolicyDenied { .. } => 6,
             E::ConnectionLost { .. } | E::BridgeUnavailable | E::VersionMismatch { .. } => 3,
             E::InvalidArgument { .. } => 7,
             E::NavigationFailed { .. } | E::NoPage => 8,
@@ -111,7 +108,6 @@ impl WebPilotError {
             E::BridgeUnavailable => "BridgeUnavailable",
             E::ConnectionLost { .. } => "ConnectionLost",
             E::PolicyDenied { .. } => "PolicyDenied",
-            E::CspViolation => "CspViolation",
             E::TabNotFound { .. } => "TabNotFound",
             E::ContextNotFound { .. } => "ContextNotFound",
             E::Session { .. } => "Session",
@@ -160,7 +156,6 @@ impl WebPilotError {
             "PolicyDenied" => Self::PolicyDenied {
                 operation: str_field("operation").unwrap_or(w.message),
             },
-            "CspViolation" => Self::CspViolation,
             "TabNotFound" => Self::TabNotFound {
                 tab_id: str_field("tab_id").unwrap_or(w.message),
             },

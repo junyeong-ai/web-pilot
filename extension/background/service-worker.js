@@ -252,6 +252,12 @@ const QUEUE_EXEMPT = new Set(["Status", "Ping"]);
 
 function handleHostMessage(request, port) {
   const { id, command } = request;
+  // The host pushes its resolved settings alongside every Pong; apply them
+  // before the command-only early return below would drop the message.
+  if (request.result?.type === "Config") {
+    applyHostConfig(request.result);
+    return;
+  }
   if (!command) return;
   if (QUEUE_EXEMPT.has(command.type)) {
     processCommandWithKeepAlive(id, command, port);
@@ -1157,91 +1163,112 @@ async function handleStatus() {
 
 // ── Eval ───────────────────────────────────────────────────────────────────
 
+// Resolve the MAIN-world CDP execution context of a webNavigation frame, inside
+// an attached debugger session. Extension frame ids are integers; CDP contexts
+// carry opaque frame GUIDs — the bridge between the two id spaces is a one-shot
+// nonce: a PRECOMPILED function (no dynamic code, so page CSP cannot block it)
+// stamps the frame's window, and the default context whose global carries the
+// stamp is the frame's context. URL matching would be ambiguous for same-URL
+// sibling frames; the nonce never is. A cross-origin out-of-process iframe has
+// no context in the tab's session and resolves to null — the same boundary the
+// headless per-page context map has.
+async function frameMainContextId(tid, tabId, frameId) {
+  const contexts = [];
+  const onEvent = (source, method, params) => {
+    if (source.tabId === tabId && method === "Runtime.executionContextCreated") {
+      contexts.push(params.context);
+    }
+  };
+  chrome.debugger.onEvent.addListener(onEvent);
+  const nonce = `wp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    // Toggle the domain so existing contexts re-announce into our listener.
+    await cdpSend(tid, "Runtime.disable", {});
+    await cdpSend(tid, "Runtime.enable", {});
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: "MAIN",
+      func: (n) => { window.__wp_frame_nonce = n; },
+      args: [nonce],
+    });
+    const deadline = Date.now() + 2000;
+    const probed = new Set();
+    while (Date.now() < deadline) {
+      for (const c of contexts) {
+        if (probed.has(c.id) || c.auxData?.type !== "default") continue;
+        probed.add(c.id);
+        const r = await cdpSend(tid, "Runtime.evaluate", {
+          expression: "window.__wp_frame_nonce",
+          contextId: c.id,
+          returnByValue: true,
+        }).catch(() => null);
+        if (r?.result?.value === nonce) return c.id;
+      }
+      await sleep(25);
+    }
+    return null;
+  } finally {
+    chrome.debugger.onEvent.removeListener(onEvent);
+    chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: "MAIN",
+      func: () => { delete window.__wp_frame_nonce; },
+    }).catch(() => {});
+  }
+}
+
+// One evaluation contract for every frame: decide the form by COMPILING
+// (`compileScript` parses without evaluating — a runtime
+// `throw new SyntaxError(...)` from a valid expression must not run the code
+// twice), expression-first so `{a:1}` is an object literal, promise awaited.
+// Debugger-routed evaluation is not subject to the page's CSP, so a hardened
+// page (`script-src 'self'`) keeps full eval in any frame — headless parity.
+// Requires Runtime enabled on the session.
+async function cdpEval(tid, code, contextId) {
+  const scope = contextId != null ? { executionContextId: contextId } : {};
+  const compiled = await cdpSend(tid, "Runtime.compileScript", {
+    expression: `(${code})`,
+    sourceURL: "webpilot://eval-form-probe",
+    persistScript: false,
+    ...scope,
+  });
+  const form = compiled.exceptionDetails ? code : `(()=>(${code}))()`;
+  const ev = await cdpSend(tid, "Runtime.evaluate", {
+    expression: form,
+    returnByValue: true,
+    awaitPromise: true,
+    ...(contextId != null ? { contextId } : {}),
+  });
+  if (ev.exceptionDetails) {
+    const msg = ev.exceptionDetails.exception?.description || ev.exceptionDetails.text || "JS exception";
+    return { success: false, error: otherErr(msg) };
+  }
+  const v = ev.result?.value;
+  return { success: true, result: v !== undefined ? JSON.stringify(v) : null };
+}
+
 async function handleEval(command) {
   const tab = await resolveActiveTab();
   if (!tab) return { type: "Eval", success: false, error: noPageErr() };
 
   try {
-    // A switched frame routes through the scripting API — the only execution
-    // path addressed by webNavigation frame ids. A page CSP that forbids
-    // dynamic evaluation surfaces as a typed CspViolation, which beats the
-    // old behavior of silently evaluating in the wrong (main) frame.
-    if (activeFrameId !== 0) {
-      const [res] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, frameIds: [activeFrameId] },
-        world: "MAIN",
-        func: async (code) => {
-          // CSP preflight: if the policy forbids dynamic evaluation, this empty
-          // constructor throws before any user code runs — so the security
-          // classification can never be confused by user-thrown errors. The
-          // message check guards the other direction: a page that shadowed
-          // `Function` with a throwing fake must not masquerade as CSP either.
-          try {
-            new Function("");
-          } catch (e) {
-            const msg = e?.message || String(e);
-            return { thrown: msg, csp: /Content Security Policy|unsafe-eval/i.test(msg) };
-          }
-          try {
-            // Decide the form by PARSING (Function construction runs no user
-            // code), never by executing and retrying: a runtime
-            // `throw new SyntaxError(...)` from a valid expression must not
-            // trigger a second run — the headless transport's contract.
-            let fn;
-            try {
-              fn = new Function(`return (${code})`);
-            } catch (e) {
-              if (e instanceof SyntaxError) fn = new Function(code);
-              else throw e;
-            }
-            let v = fn();
-            if (v && typeof v.then === "function") v = await v;
-            return { value: v };
-          } catch (e) {
-            return { thrown: e?.message || String(e), csp: false };
-          }
-        },
-        args: [command.code],
-      });
-      const out = res?.result;
-      if (out?.thrown !== undefined) {
-        return {
-          type: "Eval",
-          success: false,
-          error: out.csp
-            ? err("CspViolation", `Page CSP forbids dynamic evaluation in this frame: ${out.thrown}`)
-            : otherErr(out.thrown),
-        };
-      }
-      const v = out?.value;
-      return { type: "Eval", success: true, result: v !== undefined ? JSON.stringify(v) : null };
-    }
-
     const r = await withCdp(tab.id, async (tid) => {
-      // Decide the form by COMPILING (`compileScript` parses without
-      // evaluating), never by executing and retrying: a runtime
-      // `throw new SyntaxError(...)` from a valid expression must not run the
-      // code twice. Expression-first so `{a:1}` is an object literal, not a
-      // labeled statement — the headless contract. Unlike `Runtime.evaluate`,
-      // `compileScript` requires the Runtime domain enabled on this session.
       await cdpSend(tid, "Runtime.enable", {});
-      const compiled = await cdpSend(tid, "Runtime.compileScript", {
-        expression: `(${command.code})`,
-        sourceURL: "webpilot://eval-form-probe",
-        persistScript: false,
-      });
-      const form = compiled.exceptionDetails ? command.code : `(()=>(${command.code}))()`;
-      const ev = await cdpSend(tid, "Runtime.evaluate", {
-        expression: form,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      if (ev.exceptionDetails) {
-        const msg = ev.exceptionDetails.exception?.description || ev.exceptionDetails.text || "JS exception";
-        return { success: false, error: otherErr(msg) };
+      let contextId;
+      if (activeFrameId !== 0) {
+        contextId = await frameMainContextId(tid, tab.id, activeFrameId);
+        if (contextId == null) {
+          return {
+            success: false,
+            error: err(
+              "FrameNotFound",
+              `frame ${activeFrameId} has no reachable execution context`,
+              { frame_id: String(activeFrameId) },
+            ),
+          };
+        }
       }
-      const v = ev.result?.value;
-      return { success: true, result: v !== undefined ? JSON.stringify(v) : null };
+      return cdpEval(tid, command.code, contextId);
     });
     return { type: "Eval", ...r };
   } catch (e) {
@@ -1428,13 +1455,24 @@ async function handleFrameList() {
 
   await Promise.allSettled(all.map(async (f, idx) => {
     if (f.frameId === 0 || !f.url?.startsWith("http")) return;
-    try {
-      const r = await sendToContent(tab.id, { type: "eval", code: "window.name" }, f.frameId, 2000);
-      if (r?.success && r.result) frames[idx].name = JSON.parse(r.result) || null;
-    } catch {}
+    frames[idx].name = await readFrameName(tab.id, f.frameId);
   }));
 
   return { type: "Frames", frames, active_frame_id: activeFrameIdWire() };
+}
+
+// Read a frame's `window.name` with a PRECOMPILED injected function: no
+// dynamic code, so neither the page's CSP nor the extension's can refuse it,
+// and no debugger attach is needed for a plain property read.
+async function readFrameName(tabId, frameId) {
+  return chrome.scripting
+    .executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: "MAIN",
+      func: () => window.name,
+    })
+    .then((r) => r?.[0]?.result || null)
+    .catch(() => null);
 }
 
 async function handleFrameSwitch(selector) {
@@ -1457,13 +1495,10 @@ async function handleFrameSwitch(selector) {
 
   if (selector.by === "name") {
     for (const f of httpFrames) {
-      try {
-        const r = await sendToContent(tab.id, { type: "eval", code: "window.name" }, f.frameId, 2000);
-        if (r?.success && r.result && JSON.parse(r.result) === selector.value) {
-          matched = f;
-          break;
-        }
-      } catch {}
+      if ((await readFrameName(tab.id, f.frameId)) === selector.value) {
+        matched = f;
+        break;
+      }
     }
     if (!matched) {
       matched = httpFrames.find((f) => f.url?.includes(selector.value));
@@ -1473,16 +1508,19 @@ async function handleFrameSwitch(selector) {
     matched = httpFrames.find((f) => f.url?.includes(needle));
   } else if (selector.by === "predicate") {
     // A predicate is arbitrary caller JS, gated by the `eval` key — enforced
-    // by the NM host before the command is forwarded here.
-    for (const f of httpFrames) {
-      try {
-        const r = await sendToContent(tab.id, { type: "eval", code: selector.js }, f.frameId, 2000);
-        if (r?.success && r.result && JSON.parse(r.result) === true) {
-          matched = f;
-          break;
-        }
-      } catch {}
-    }
+    // by the NM host before the command is forwarded here. It runs through the
+    // same debugger-routed evaluation as `eval`, so a frame's CSP cannot block
+    // it (headless parity) — one withCdp session probes every candidate frame.
+    matched = await withCdp(tab.id, async (tid) => {
+      await cdpSend(tid, "Runtime.enable", {});
+      for (const f of httpFrames) {
+        const contextId = await frameMainContextId(tid, tab.id, f.frameId);
+        if (contextId == null) continue;
+        const r = await cdpEval(tid, selector.js, contextId).catch(() => null);
+        if (r?.success && r.result && JSON.parse(r.result) === true) return f;
+      }
+      return null;
+    }).catch(() => null);
   }
 
   if (matched) {
@@ -1741,7 +1779,22 @@ function sleep(ms) {
 // no fixed sleeps, and the debugger is never attached (no banner). The commit
 // watch must be registered before the navigation is issued.
 
-const NAVIGATION_TIMEOUT_MS = 15000;
+// Resolved host settings, pushed alongside every Pong — an MV3 worker is
+// routinely suspended and restarted with empty state, and re-Pings on wake,
+// which re-delivers this. The defaults here equal the host's own defaults, so
+// behaviour before the first Config (or under an untuned install) is
+// unchanged; only an operator-tuned value diverges, and then both modes move
+// together. Unknown fields are ignored for forward compatibility.
+const hostConfig = { navigationTimeoutMs: 15000 };
+
+function applyHostConfig(cfg) {
+  const nav = cfg?.timeouts?.navigation_ms;
+  if (Number.isFinite(nav) && nav > 0) hostConfig.navigationTimeoutMs = nav;
+}
+
+function navigationTimeoutMs() {
+  return hostConfig.navigationTimeoutMs;
+}
 
 function watchMainFrameCommit(tabId) {
   const watch = { committed: false, documentId: null, dispose: () => {} };
@@ -1769,7 +1822,7 @@ function watchMainFrameCommit(tabId) {
   // regardless, bounding the leak to one settle window instead of the worker's
   // lifetime; the explicit dispose on the normal path clears the timer.
   let disposed = false;
-  const timer = setTimeout(() => watch.dispose(), NAVIGATION_TIMEOUT_MS + 1000);
+  const timer = setTimeout(() => watch.dispose(), navigationTimeoutMs() + 1000);
   watch.dispose = () => {
     if (disposed) return;
     disposed = true;
@@ -1782,7 +1835,7 @@ function watchMainFrameCommit(tabId) {
 async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
   const start = Date.now();
   try {
-    while (Date.now() - start < NAVIGATION_TIMEOUT_MS) {
+    while (Date.now() - start < navigationTimeoutMs()) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (tab && (watch.committed || (tab.url && tab.url !== beforeUrl))) {
         // Bind the readiness probe to the COMMITTED document, not just "the
@@ -1814,7 +1867,7 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
   }
   const e = new Error(`Navigation did not settle: ${url}`);
   e.code = "NavigationFailed";
-  e.data = { url, reason: `not settled within ${NAVIGATION_TIMEOUT_MS}ms` };
+  e.data = { url, reason: `not settled within ${navigationTimeoutMs()}ms` };
   throw e;
 }
 

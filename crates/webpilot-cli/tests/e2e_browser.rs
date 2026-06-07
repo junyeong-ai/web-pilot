@@ -392,6 +392,41 @@ fn browser_behavioral_flow() {
         stdout(&href_main)
     );
 
+    // 7b. A CSP-strict iframe (`script-src 'self'`, no unsafe-eval) keeps the
+    //     full frame surface working: switching by NAME (a precompiled
+    //     `window.name` read no CSP can refuse), eval inside the frame, and a
+    //     `frame find` predicate all ride debugger-routed evaluation, which is
+    //     not subject to page CSP — exactly like headless. This is the
+    //     regression test for the retired scripting-injection eval path.
+    let nav = fx.run(&["action", "navigate", &format!("{base}/csp")]);
+    assert_eq!(code(&nav), 0, "csp navigate failed: {}", stdout(&nav));
+    let sw = fx.run(&["frame", "switch", "cspframe"]);
+    assert_eq!(code(&sw), 0, "csp frame switch by name failed: {}", stdout(&sw));
+    let title = fx.run(&["eval", "document.title"]);
+    assert_eq!(code(&title), 0, "csp frame eval failed: {}", stdout(&title));
+    assert!(
+        stdout(&title).contains("cspframe"),
+        "eval must run inside the CSP-strict frame: {}",
+        stdout(&title)
+    );
+    let main = fx.run(&["frame", "main"]);
+    assert_eq!(code(&main), 0);
+    let found = fx.run(&["frame", "find", "document.title === 'cspframe'"]);
+    assert_eq!(
+        code(&found),
+        0,
+        "predicate find must work inside a CSP-strict frame: {}",
+        stdout(&found)
+    );
+    let title = fx.run(&["eval", "document.title"]);
+    assert!(
+        stdout(&title).contains("cspframe"),
+        "predicate match must scope eval to the found frame: {}",
+        stdout(&title)
+    );
+    let main = fx.run(&["frame", "main"]);
+    assert_eq!(code(&main), 0);
+
     // 8. Both screenshot paths ride CDP, not `captureVisibleTab`: they capture
     //    the tab's own surface through the debugger, so they need neither the
     //    window to be OS-foreground nor an `<all_urls>` grant. The viewport

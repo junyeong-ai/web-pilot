@@ -108,7 +108,7 @@ hand-written match tables.
 | 3 | `ConnectionLost`, `BridgeUnavailable`, `VersionMismatch` | infra |
 | 4 | `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `TabNotFound`, `ContextNotFound`, `FrameNotFound` | not-found |
 | 5 | `Timeout` | timeout |
-| 6 | `PolicyDenied`, `CspViolation` | security |
+| 6 | `PolicyDenied` | security |
 | 7 | `InvalidArgument` | user error |
 | 8 | `NavigationFailed`, `NoPage` | navigation |
 
