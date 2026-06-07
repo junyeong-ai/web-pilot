@@ -69,6 +69,8 @@ impl LocalTransport {
 
     pub(super) async fn do_console_start(&self) -> Result<ResponseData> {
         self.page.evaluate(CONSOLE_INSTALL_JS).await?;
+        self.console_monitoring
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(ok_command_result())
     }
 
@@ -113,7 +115,22 @@ impl LocalTransport {
 
     pub(super) async fn do_network_start(&self) -> Result<ResponseData> {
         self.page.evaluate(NETWORK_INSTALL_JS).await?;
+        self.network_monitoring
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(ok_command_result())
+    }
+
+    /// Re-arm any active monitors after a navigation wiped their `window`
+    /// hooks. A no-op until `console start` / `network start` has run, so a
+    /// plain navigation pays nothing.
+    pub(super) async fn reinstall_monitors(&self) {
+        use std::sync::atomic::Ordering::Acquire;
+        if self.console_monitoring.load(Acquire) {
+            let _ = self.page.evaluate(CONSOLE_INSTALL_JS).await;
+        }
+        if self.network_monitoring.load(Acquire) {
+            let _ = self.page.evaluate(NETWORK_INSTALL_JS).await;
+        }
     }
 
     pub(super) async fn do_network_read(&self, since: Option<u64>) -> Result<ResponseData> {
@@ -127,7 +144,7 @@ impl LocalTransport {
             .into_iter()
             .filter_map(|v| serde_json::from_value(v).ok())
             .collect();
-        Ok(ResponseData::NetworkLog { requests })
+        Ok(ResponseData::NetworkEntries { entries: requests })
     }
 
     pub(super) async fn do_network_clear(&self) -> Result<ResponseData> {

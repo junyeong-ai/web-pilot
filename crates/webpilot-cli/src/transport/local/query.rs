@@ -16,7 +16,7 @@ fn is_syntax_error(e: &anyhow::Error) -> bool {
 }
 
 impl LocalTransport {
-    pub(super) async fn do_evaluate(&self, code: &str) -> Result<ResponseData> {
+    pub(super) async fn do_eval(&self, code: &str) -> Result<ResponseData> {
         // First try as a single expression (so `{a: 1}` is read as an object
         // literal, not a labeled statement). Fall back to multi-statement
         // form on `SyntaxError` so things like `console.log(x); x` still work.

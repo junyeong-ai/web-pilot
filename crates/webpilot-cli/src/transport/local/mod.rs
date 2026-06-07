@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::Mutex;
 
 use webpilot::dirs;
@@ -53,6 +54,12 @@ pub struct LocalTransport {
     pub(crate) frame_contexts: Arc<Mutex<HashMap<String, i64>>>,
     /// Active frame for evaluation. `None` means the page's main world.
     pub(crate) active_frame_id: Arc<Mutex<Option<String>>>,
+    /// Whether the console / network monitors are armed. Their hooks live on
+    /// `window` and are wiped by every full-document navigation, so when armed
+    /// they are re-installed after each navigation settles — matching the
+    /// browser-mode service worker, which re-injects on `webNavigation`.
+    pub(crate) console_monitoring: Arc<AtomicBool>,
+    pub(crate) network_monitoring: Arc<AtomicBool>,
 }
 
 impl LocalTransport {
@@ -97,6 +104,8 @@ impl LocalTransport {
             target_id,
             frame_contexts,
             active_frame_id: Arc::new(Mutex::new(restored_active)),
+            console_monitoring: Arc::new(AtomicBool::new(false)),
+            network_monitoring: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -277,6 +286,7 @@ impl LocalTransport {
                         self.target_id = target_id;
                         self.clear_active_frame().await;
                         self.rebind_frame_listener().await;
+                        self.reinstall_monitors().await;
                         return Ok(());
                     }
                 } else if navigation_settled(&self.page, loader, &before_url).await {
@@ -284,6 +294,7 @@ impl LocalTransport {
                     // session stays valid (no renderer swap). The loader match
                     // distinguishes the reloaded document from the previous one.
                     self.clear_active_frame().await;
+                    self.reinstall_monitors().await;
                     return Ok(());
                 }
             }
@@ -393,7 +404,7 @@ impl Transport for LocalTransport {
         match command {
             Command::Capture { include, opts, url } => self.do_capture(include, opts, url).await,
             Command::Action { action, capture } => self.do_action(action, capture).await,
-            Command::Eval { code } => self.do_evaluate(&code).await,
+            Command::Eval { code } => self.do_eval(&code).await,
             Command::Wait {
                 condition,
                 timeout_ms,

@@ -151,7 +151,23 @@ impl Command {
             Command::FrameSwitch {
                 selector: FrameSelector::Predicate { .. },
             } => Some(PolicyKey::Eval),
-            _ => None,
+            // Read-only observation: no page/browser mutation, no credential
+            // movement. Listed exhaustively (no wildcard) so a newly added
+            // privileged command cannot silently default to ungated — the
+            // compiler forces every variant to declare its gate.
+            Command::Capture { url: None, .. }
+            | Command::FrameSwitch { .. }
+            | Command::Wait { .. }
+            | Command::Status
+            | Command::TabList
+            | Command::TabSwitch { .. }
+            | Command::DomGet { .. }
+            | Command::FrameList
+            | Command::ConsoleRead
+            | Command::ConsoleClear
+            | Command::NetworkRead { .. }
+            | Command::NetworkClear
+            | Command::Ping => None,
         }
     }
 }
@@ -306,8 +322,8 @@ pub enum ResponseData {
     ConsoleEntries {
         entries: Vec<ConsoleEntry>,
     },
-    NetworkLog {
-        requests: Vec<NetworkEntry>,
+    NetworkEntries {
+        entries: Vec<NetworkEntry>,
     },
     SessionExport {
         path: String,

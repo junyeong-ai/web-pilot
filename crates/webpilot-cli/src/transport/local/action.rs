@@ -87,7 +87,7 @@ impl LocalTransport {
 
         let dom = if capture {
             let r = self
-                .invoke_bridge(&json!({"type": "extractDOM", "options": {}}))
+                .invoke_bridge(&json!({"type": "extractDom", "options": {}}))
                 .await?;
             let mut snapshot: Option<webpilot::types::DomSnapshot> = serde_json::from_value(r).ok();
             if let Some(s) = snapshot.as_mut()

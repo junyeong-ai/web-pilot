@@ -43,10 +43,14 @@ impl LocalTransport {
         if want_dom {
             let dom = self
                 .invoke_bridge(&json!({
-                    "type": "extractDOM",
+                    "type": "extractDom",
                     "options": {"bounds": bounds, "occlusion": opts.occlusion},
                 }))
                 .await?;
+            // A bridge-side extraction failure comes back as a typed
+            // `{success:false, error}` — surface it rather than feeding it to
+            // the snapshot parser as if it were a (suspiciously empty) page.
+            let dom = Self::parse_bridge_response(dom)?;
             snapshot = Some(serde_json::from_value(dom).context("Failed to parse DOM snapshot")?);
         }
 

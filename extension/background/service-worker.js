@@ -253,7 +253,7 @@ async function processCommand(id, command, port) {
         break;
 
       case "Action":
-        result = await handleActionCommand(command);
+        result = await handleAction(command);
         break;
 
       case "Status":
@@ -261,7 +261,7 @@ async function processCommand(id, command, port) {
         break;
 
       case "TabList":
-        result = await handleListTabs();
+        result = await handleTabList();
         break;
 
       case "TabSwitch":
@@ -426,7 +426,7 @@ async function handleCapture(command) {
       await ensureBridge(tabId, activeFrameId);
       const dom = await sendToContent(
         tabId,
-        { type: "extractDOM", options: { bounds: opts.bounds || false, occlusion: opts.occlusion || false } },
+        { type: "extractDom", options: { bounds: opts.bounds || false, occlusion: opts.occlusion || false } },
         activeFrameId,
         5000,
       );
@@ -581,7 +581,7 @@ function emptyDom() {
 
 // ── Action ─────────────────────────────────────────────────────────────────
 
-async function handleActionCommand(command) {
+async function handleAction(command) {
   const { action } = command;
 
   // Policy is enforced CLI-side at the transport boundary before the command
@@ -678,7 +678,7 @@ async function handleActionCommand(command) {
       const t = await findHttpTab();
       if (t) {
         await ensureBridge(t.id, activeFrameId);
-        const dom = await sendToContent(t.id, { type: "extractDOM", options: {} }, activeFrameId, 5000);
+        const dom = await sendToContent(t.id, { type: "extractDom", options: {} }, activeFrameId, 5000);
         if (dom) {
           // Mirror standalone capture: report out-of-scope http iframes so the
           // agent's subframe logic works the same after an action.
@@ -823,7 +823,7 @@ async function handleTabSwitch(tabId) {
   }
 }
 
-async function handleListTabs() {
+async function handleTabList() {
   const tabs = await chrome.tabs.query({});
   return {
     type: "Tabs",
@@ -1213,7 +1213,7 @@ async function handleNetworkStart() {
 
 async function handleNetworkRead(since) {
   const tab = await findHttpTab();
-  if (!tab) return { type: "NetworkLog", requests: [] };
+  if (!tab) return { type: "NetworkEntries", entries: [] };
   try {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
@@ -1224,9 +1224,9 @@ async function handleNetworkRead(since) {
       },
       args: [since || 0],
     });
-    return { type: "NetworkLog", requests: r?.[0]?.result || [] };
+    return { type: "NetworkEntries", entries: r?.[0]?.result || [] };
   } catch {
-    return { type: "NetworkLog", requests: [] };
+    return { type: "NetworkEntries", entries: [] };
   }
 }
 

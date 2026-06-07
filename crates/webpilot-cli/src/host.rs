@@ -88,9 +88,19 @@ fn spawn_nm_writer(mut rx: mpsc::Receiver<serde_json::Value>) -> tokio::task::Jo
     tokio::task::spawn_blocking(move || {
         while let Some(msg) = rx.blocking_recv() {
             let mut stdout = std::io::stdout().lock();
-            if let Err(e) = native_messaging::write_message(&mut stdout, &msg) {
-                tracing::error!("NM write error: {e}");
-                break;
+            match native_messaging::write_message(&mut stdout, &msg) {
+                Ok(()) => {}
+                // An oversized payload is rejected before any byte reaches the
+                // stream, so the pipe is still intact — skip just this message
+                // and keep serving every later command. Only a real IO failure
+                // (broken pipe) ends the writer.
+                Err(e @ native_messaging::NmError::TooLarge(_)) => {
+                    tracing::error!("dropping oversized NM message: {e}");
+                }
+                Err(e) => {
+                    tracing::error!("NM write error: {e}");
+                    break;
+                }
             }
         }
     })
@@ -312,9 +322,16 @@ async fn handle_one_cli_request(
     // (rejecting anything the strict Rust types refuse but the loose JS bridge
     // would coerce — e.g. a string index) and applies the deny rules, so only
     // a validated, permitted command is forwarded below.
-    if let Err(e) = crate::policy::parse_and_enforce(&request["command"]) {
-        return reply_error(&mut writer, cli_id, e).await;
-    }
+    let command = match crate::policy::parse_and_enforce(&request["command"]) {
+        Ok(command) => command,
+        Err(e) => return reply_error(&mut writer, cli_id, e).await,
+    };
+    // Forward the re-serialized parsed command, not the raw wire value. For
+    // legitimate CLI traffic this is identical (a `Command` round-trips), but it
+    // strips any unmodeled field a direct socket writer might have appended to
+    // steer the extension past what policy validated.
+    request["command"] =
+        serde_json::to_value(&command).expect("Command serializes (static shape)");
 
     // The CLI's own id only correlates this one socket's request/response, so we
     // restore it on the way back; over the multiplexed NM channel we use a

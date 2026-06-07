@@ -12,24 +12,34 @@
 
 (() => {
   // ── Per-document state ────────────────────────────────────────────────────
-  // `previousKeys` — new-element baseline: "new" means an element appeared
-  // since the previous capture (e.g. a modal opened). Reset on URL change —
-  // see `syncBaselineUrl`, which runs on every extraction so SPA route
-  // changes (no re-injection) are caught.
-  // `snapshot` — the exact element references the last `extractDOM` emitted,
+  // `snapshot` — the exact element references the last `extractDom` emitted,
   // in index order. Index-addressed actions resolve against this list, so an
   // index always targets the element the agent actually saw. A null snapshot
   // (no capture in this document yet) or an element that has left the DOM /
   // become invisible is a typed `StaleSnapshot` error — never a silent
-  // re-resolution against the live DOM.
+  // re-resolution against the live DOM. The same list is the new-element
+  // baseline: an element is "new" when its node identity was absent from the
+  // previous snapshot (see `extractDom`), so detection needs no separate
+  // bookkeeping and cannot drift from what the agent actually saw.
+  // `lastUrl` — page identity at the last extraction; a change means the first
+  // capture of a new page, where "everything is new" would be noise.
   if (!window.__webpilot_state) {
     window.__webpilot_state = {
       lastUrl: location.href,
-      previousKeys: new Set(),
       snapshot: null,
     };
   }
   const state = window.__webpilot_state;
+
+  // Codepoint-safe truncation: slice on Unicode scalar values, never on a
+  // UTF-16 surrogate half. A raw `String.slice` can cut an emoji/astral
+  // character in two and emit a lone surrogate, which then fails JSON
+  // serialization over CDP / native messaging and sinks the whole capture.
+  const clip = (s, n) => {
+    if (s == null) return s;
+    const cps = Array.from(s);
+    return cps.length > n ? cps.slice(0, n).join("") : s;
+  };
 
   // ── Error helpers ─────────────────────────────────────────────────────────
   const err = (code, message, data) => ({
@@ -66,64 +76,100 @@
     "a", "button", "input", "select", "textarea", "summary",
   ]);
 
-  function queryAllDeep(selector, root = document, depth = 0) {
-    if (depth > 10) return [];
+  // Shadow-DOM traversal is bounded by the number of shadow hosts visited, not
+  // an arbitrary nesting depth. A depth cap silently drops controls in
+  // component libraries that legitimately nest a dozen-plus shadow roots; a
+  // host budget bounds only a pathological tree and records when it clipped.
+  const SHADOW_HOST_BUDGET = 5000;
+
+  function queryAllDeep(selector, root, budget) {
     const results = [...root.querySelectorAll(selector)];
-    for (const el of root.querySelectorAll("*")) {
-      if (el.shadowRoot) {
-        results.push(...queryAllDeep(selector, el.shadowRoot, depth + 1));
+    for (const host of root.querySelectorAll("*")) {
+      if (!host.shadowRoot) continue;
+      if (budget.hosts <= 0) {
+        budget.truncated = true;
+        break;
       }
+      budget.hosts -= 1;
+      results.push(...queryAllDeep(selector, host.shadowRoot, budget));
     }
     return results;
   }
 
   function collectInteractiveElements() {
-    const all = queryAllDeep(INTERACTIVE_SELECTOR);
+    const budget = { hosts: SHADOW_HOST_BUDGET, truncated: false };
+    const all = queryAllDeep(INTERACTIVE_SELECTOR, document, budget);
     const seen = new Set(all);
+    const add = (el) => {
+      all.push(el);
+      seen.add(el);
+    };
 
-    const clickableSel = '[onclick],[tabindex],[data-action],[ng-click],' +
+    // Explicit interaction markers. `tabindex` qualifies only when >= 0: a
+    // tabindex of -1 is script-only focus (route announcers, modal roots,
+    // headings) and is not a click affordance, so it must not mint a phantom
+    // target. Size is not a gate — an 8px icon button is still interactive;
+    // visibility (real layout, not display:none/collapse) is the gate.
+    const markerSel = '[onclick],[data-action],[ng-click],' +
       '[v-on\\:click],[\\@click],[data-click],[jsaction]';
-    for (const el of document.querySelectorAll(clickableSel)) {
+    const markers = new Set(document.querySelectorAll(markerSel));
+    for (const el of document.querySelectorAll("[tabindex]")) {
+      const ti = parseInt(el.getAttribute("tabindex"), 10);
+      if (Number.isFinite(ti) && ti >= 0) markers.add(el);
+    }
+    for (const el of markers) {
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
       if (el.getAttribute("role")) continue;
-      const rect = el.getBoundingClientRect();
-      if (rect.width > 10 && rect.height > 10) {
-        all.push(el);
-        seen.add(el);
-      }
+      if (!isVisible(el)) continue;
+      add(el);
     }
 
-    const vh = window.innerHeight;
+    // cursor:pointer signals a target only on the INNERMOST such element.
+    // Cards, rows and banners set pointer on a wrapper that merely contains the
+    // real control; surfacing the wrapper hands the agent a giant phantom
+    // overlapping the actual button. Skip any pointer element that wraps an
+    // already-collected interactive node.
     for (const el of document.querySelectorAll("*")) {
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
       if (el.getAttribute("role")) continue;
-      const rect = el.getBoundingClientRect();
-      if (rect.width <= 10 || rect.height <= 10) continue;
-      if (rect.bottom < 0 || rect.top > vh) continue;
+      if (!isVisible(el)) continue;
+      let cursor;
       try {
-        if (getComputedStyle(el).cursor === "pointer" && !el.closest("a,button")) {
-          all.push(el);
-          seen.add(el);
+        cursor = getComputedStyle(el).cursor;
+      } catch {
+        continue;
+      }
+      if (cursor !== "pointer") continue;
+      let wrapsCollected = false;
+      for (const c of seen) {
+        if (el.contains(c)) {
+          wrapsCollected = true;
+          break;
         }
-      } catch {}
+      }
+      if (wrapsCollected) continue;
+      add(el);
     }
-    return all;
+    return { all, shadowTruncated: budget.truncated };
   }
 
   // Single visibility predicate shared by extraction and action-time
-  // revalidation, so the two can never drift apart.
+  // revalidation, so the two can never drift apart. Delegates the CSS side to
+  // the platform's own computation, which correctly accounts for ancestor
+  // display:none/contents, visibility:hidden|collapse, opacity:0, and
+  // content-visibility:auto subtrees — cases a hand-rolled style read on the
+  // element alone silently misses. A zero-area box is never actionable, so
+  // real layout is still required.
   function isVisible(el) {
     const rect = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
-    return (
-      rect.width > 0 &&
-      rect.height > 0 &&
-      style.display !== "none" &&
-      style.visibility !== "hidden" &&
-      parseFloat(style.opacity) > 0
-    );
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    return el.checkVisibility({
+      contentVisibilityAuto: true,
+      opacityProperty: true,
+      visibilityProperty: true,
+    });
   }
 
   // Resolve an element index against the stored snapshot.
@@ -161,12 +207,6 @@
     return { el };
   }
 
-  function elementKey(el, text) {
-    const tag = el.tagName.toLowerCase();
-    const t = (text || "").slice(0, 30);
-    return `${tag}|${t}|${el.getAttribute("href") || ""}|${el.getAttribute("role") || ""}`;
-  }
-
   function resolveLabel(el) {
     const labelledBy = el.getAttribute("aria-labelledby");
     if (labelledBy) {
@@ -174,23 +214,23 @@
         .split(/\s+/)
         .map((id) => document.getElementById(id)?.textContent?.trim())
         .filter(Boolean);
-      if (parts.length > 0) return parts.join(" ").slice(0, 80);
+      if (parts.length > 0) return clip(parts.join(" "), 80);
     }
     // aria-label is an explicit label for the field, ranked by ARIA right after
     // aria-labelledby and above a native <label>. Without it, `find --label`
     // can't match inputs labelled only with aria-label.
     const ariaLabel = el.getAttribute("aria-label")?.trim();
-    if (ariaLabel) return ariaLabel.slice(0, 80);
+    if (ariaLabel) return clip(ariaLabel, 80);
     if (el.labels && el.labels.length > 0) {
-      return el.labels[0].textContent.trim().slice(0, 80) || null;
+      return clip(el.labels[0].textContent.trim(), 80) || null;
     }
     if (el.id) {
       const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-      if (label) return label.textContent.trim().slice(0, 80) || null;
+      if (label) return clip(label.textContent.trim(), 80) || null;
     }
     const parent = el.closest("label");
     if (parent) {
-      const text = parent.textContent.trim().replace(/\s+/g, " ").slice(0, 80);
+      const text = clip(parent.textContent.trim().replace(/\s+/g, " "), 80);
       if (text && text !== el.value) return text;
     }
     return null;
@@ -222,8 +262,8 @@
       const opts = el.querySelectorAll('[role="option"], [role="menuitem"]');
       if (opts.length > 0) {
         return [...opts].slice(0, 50).map((o) => ({
-          value: o.getAttribute("data-value") || o.textContent.trim().slice(0, 80),
-          text: o.textContent.trim().slice(0, 80),
+          value: o.getAttribute("data-value") || clip(o.textContent.trim(), 80),
+          text: clip(o.textContent.trim(), 80),
           selected: o.getAttribute("aria-selected") === "true",
         }));
       }
@@ -231,25 +271,49 @@
     return undefined;
   }
 
-  // Reset the new-element baseline when the page identity changed since the
-  // last extraction. Covers SPA navigations where the content script is never
-  // re-injected, so the top-level init alone would leave a stale baseline.
-  function syncBaselineUrl() {
-    if (state.lastUrl !== location.href) {
-      state.previousKeys = new Set();
-      state.lastUrl = location.href;
+  // Occlusion by multi-point hit-test. A single centre probe both over-reports
+  // (a sticky header or tooltip covering only the middle marks a clickable
+  // control occluded) and under-reports (a transparent gap at the exact centre
+  // pixel hides a real overlay). Sample the centre plus four inset corners and
+  // judge by majority of the points that actually fall inside the viewport.
+  function isOccluded(el, rect) {
+    const inset = 0.15;
+    const xs = [0.5, inset, 1 - inset, inset, 1 - inset];
+    const ys = [0.5, inset, inset, 1 - inset, 1 - inset];
+    let tested = 0;
+    let blocked = 0;
+    for (let i = 0; i < xs.length; i++) {
+      const px = rect.left + rect.width * xs[i];
+      const py = rect.top + rect.height * ys[i];
+      if (px < 0 || py < 0 || px >= innerWidth || py >= innerHeight) continue;
+      tested++;
+      const top = document.elementFromPoint(px, py);
+      if (top && top !== el && !el.contains(top) && !top.contains(el)) blocked++;
     }
+    return tested > 0 && blocked * 2 > tested;
   }
 
-  function extractDOM(options) {
+
+  function extractDom(options) {
     try {
-      syncBaselineUrl();
       const start = performance.now();
-      const all = collectInteractiveElements();
+      const urlChanged = state.lastUrl !== location.href;
+      state.lastUrl = location.href;
+      // New-element baseline by node identity: the previous snapshot already
+      // holds the exact elements the agent last saw, so "new" means simply not
+      // present then. Identity is collision-free (no two elements share it) and
+      // churn-free (a re-rendered-but-same node stays not-new; a remounted node
+      // is correctly new). On the first capture of a freshly navigated page
+      // there is no meaningful prior set, so nothing is flagged — a new page is
+      // not "all new".
+      const prevNodes = urlChanged ? new Set() : new Set(state.snapshot || []);
+      const { all, shadowTruncated } = collectInteractiveElements();
+      if (shadowTruncated) {
+        console.warn("[WebPilot] shadow-DOM traversal hit its host budget; some controls may be omitted");
+      }
       const totalNodes = document.querySelectorAll("*").length;
       const elements = [];
       const picked = [];
-      const currentKeys = new Set();
       let idx = 1;
       const includeBounds = options.bounds || false;
 
@@ -263,12 +327,14 @@
           .replace(/\s+/g, " ");
         const text = (tag === "input" || tag === "textarea")
           ? (el.placeholder || el.getAttribute("aria-label") || "")
-          : innerText.slice(0, 300);
+          : clip(innerText, 300);
 
-        const elemId =
-          el.id && el.id.length <= 50 && /^[a-zA-Z0-9_-]+$/.test(el.id)
-            ? el.id
-            : undefined;
+        // Display-only identifier — the actionable handle is the snapshot
+        // index, never this. Emit any non-empty id (codepoint-clipped); modern
+        // frameworks mint ids like ":r1:" (React useId) that a character
+        // allowlist would wrongly drop, and it is never used to build a
+        // selector here.
+        const elemId = el.id ? clip(el.id, 50) : undefined;
 
         const entry = {
           index: idx++,
@@ -278,7 +344,7 @@
           text,
           name: el.getAttribute("aria-label") || el.getAttribute("title") || undefined,
           value: (el.value != null && el.value !== "")
-            ? String(el.value).slice(0, 100)
+            ? clip(String(el.value), 100)
             : undefined,
           placeholder: el.placeholder || undefined,
           href: el.getAttribute("href") || undefined,
@@ -314,17 +380,11 @@
             .split(/\s+/)
             .map((id) => document.getElementById(id)?.textContent?.trim())
             .filter(Boolean);
-          entry.description = parts.join(" ").slice(0, 120) || undefined;
+          entry.description = clip(parts.join(" "), 120) || undefined;
         }
 
         if (options.occlusion) {
-          const cx = rect.left + rect.width / 2;
-          const cy = rect.top + rect.height / 2;
-          if (cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight) {
-            const top = document.elementFromPoint(cx, cy);
-            entry.occluded =
-              !!top && top !== el && !el.contains(top) && !top.contains(el);
-          }
+          entry.occluded = isOccluded(el, rect);
         }
 
         if (includeBounds) {
@@ -336,13 +396,18 @@
           };
         }
 
-        const key = elementKey(el, text);
-        currentKeys.add(key);
-        entry.is_new = !state.previousKeys.has(key);
+        entry.is_new = !prevNodes.has(el);
 
+        // Strip absent (undefined) fields, and `false` only where it is the
+        // mere absence of a property. `checked` and `expanded` are genuine
+        // tri-states — `false` means "unchecked checkbox" / "collapsed
+        // disclosure", distinct from "not a checkbox" / "not expandable" — so
+        // they survive alongside `disabled`/`focused`.
         for (const k of Object.keys(entry)) {
           if (entry[k] === undefined ||
-              (entry[k] === false && k !== "disabled" && k !== "focused")) {
+              (entry[k] === false &&
+                k !== "disabled" && k !== "focused" &&
+                k !== "checked" && k !== "expanded")) {
             delete entry[k];
           }
         }
@@ -350,7 +415,6 @@
         picked.push(el);
       }
 
-      state.previousKeys = currentKeys;
       state.snapshot = picked;
 
       const sh = document.documentElement.scrollHeight;
@@ -370,19 +434,14 @@
           viewport_width: innerWidth,
           viewport_height: vh,
         },
-        scroll_percent: sh > vh ? Math.round((sy / (sh - vh)) * 100) : 100,
+        scroll_percent: sh > vh ? Math.round((sy / (sh - vh)) * 100) : 0,
         extraction_ms: Math.round(performance.now() - start),
       };
     } catch (e) {
-      return {
-        elements: [],
-        total_nodes: 0,
-        page_url: location.href,
-        page_title: document.title,
-        scroll: {},
-        extraction_ms: 0,
-        error: e.message,
-      };
+      // A genuine extraction failure must surface as a typed error, not a
+      // fabricated empty snapshot — an agent that reads "0 interactive
+      // elements" on a populated page makes catastrophically wrong decisions.
+      return err("Other", `DOM extraction failed: ${e.message}`);
     }
   }
 
@@ -490,7 +549,13 @@
           el.dispatchEvent(new KeyboardEvent("keypress", opts));
           el.dispatchEvent(new KeyboardEvent("keyup", opts));
           if (action.key === "Enter" && el.form) {
-            el.form.requestSubmit?.() || el.form.submit();
+            // requestSubmit() fires native validation and the submit handler
+            // (so a preventDefault-based AJAX form stays put); submit() bypasses
+            // both and force-navigates. They are alternatives, never both — the
+            // old `requestSubmit?.() || submit()` ran submit() every time
+            // because requestSubmit returns undefined, double-submitting.
+            if (el.form.requestSubmit) el.form.requestSubmit();
+            else el.form.submit();
           }
           return { success: true };
         }
@@ -619,21 +684,6 @@
     }
   }
 
-  // ── Frame switch (delegated to Rust frame ID, but keeps current API stable) ─
-
-  function switchFrame(msg) {
-    const sel = msg.selector || { by: "main" };
-    if (sel.by === "main") {
-      return { success: true, frame_id: 0, url: location.href };
-    }
-    // Frame switch in headless mode operates at the CDP level; the bridge
-    // here only echoes back. The Rust side should not call this for frames
-    // beyond the main frame.
-    return err("FrameNotFound", `Bridge cannot switch to frame: ${JSON.stringify(sel)}`, {
-      selector: JSON.stringify(sel),
-    });
-  }
-
   // ── DOM property helpers ─────────────────────────────────────────────────
 
   function querySelectorOrErr(selector) {
@@ -716,8 +766,8 @@
 
   function handle(msg) {
     switch (msg.type) {
-      case "extractDOM":
-        return extractDOM(msg.options || {});
+      case "extractDom":
+        return extractDom(msg.options || {});
       case "extractText":
         return {
           text: document.body?.innerText || "",
@@ -748,8 +798,6 @@
       }
       case "wait":
         return new Promise((resolve) => handleWait(msg, resolve));
-      case "switchFrame":
-        return switchFrame(msg);
       case "tagElement": {
         const r = resolveIndex(msg.index);
         if (r.error) return r.error;

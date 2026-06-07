@@ -34,7 +34,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: NetworkArgs) -> Result<C
     let result = transport.send(cmd).await?;
 
     match result {
-        ResponseData::NetworkLog { requests } => {
+        ResponseData::NetworkEntries { entries: requests } => {
             let human_lines: Vec<String> = requests
                 .iter()
                 .map(|r| {
