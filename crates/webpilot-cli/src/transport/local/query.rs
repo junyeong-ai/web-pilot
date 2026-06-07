@@ -21,14 +21,16 @@ impl LocalTransport {
     /// banned project-wide. `compileScript` with `persistScript: false`
     /// parses without evaluating anything.
     async fn parses_as_expression(&self, code: &str) -> Result<bool> {
-        let mut params = json!({
+        // Pure syntax probe: whether `(code)` parses as an expression is the
+        // same in every execution context, so it runs in the default one
+        // (`compileScript` takes only the reusable integer `executionContextId`,
+        // not a `uniqueContextId`, and the frame context is irrelevant to a
+        // parse anyway). The actual evaluation still targets the active frame.
+        let params = json!({
             "expression": format!("({code})"),
             "sourceURL": "webpilot://eval-form-probe",
             "persistScript": false,
         });
-        if let Some(cid) = self.active_context_id().await? {
-            params["executionContextId"] = cid.into();
-        }
         let r = self.page.send("Runtime.compileScript", Some(params)).await?;
         Ok(r.get("exceptionDetails").is_none())
     }

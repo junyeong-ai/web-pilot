@@ -347,10 +347,10 @@ fn browser_behavioral_flow() {
         stdout(&scount)
     );
 
-    // 2e. `fetch` runs in the content-script (isolated) world and returns the
-    //     response body — a same-origin GET against the fixture server comes
-    //     back with the page markup, the parity bar the headless suite asserts
-    //     against its now-isolated bridge.
+    // 2e. `fetch` runs as a debugger-routed MAIN-world eval (no contextId,
+    //     CSP-exempt) and returns the response body — a same-origin GET against
+    //     the fixture server comes back with the page markup, parity with the
+    //     headless suite.
     let fetched = fx.run(&["fetch", &base]);
     assert_eq!(code(&fetched), 0, "fetch failed: {}", stdout(&fetched));
     assert!(

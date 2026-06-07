@@ -59,17 +59,20 @@ pub struct LocalTransport {
     pub(crate) ws_url: String,
     pub(crate) browser_context_id: Option<String>,
     pub(crate) target_id: String,
-    /// Top frame id (CDP string), stable across navigations. Resolves the bridge
-    /// context for the main frame when no iframe is switched.
+    /// Top frame id (CDP string). Refreshed on every page swap (`rebind_page_world`),
+    /// so it always names the bound tab's main frame. Resolves the bridge context
+    /// for the main frame when no iframe is switched.
     pub(crate) main_frame_id: String,
-    /// frame_id (CDP string) → MAIN-world execution context id, for page
+    /// frame_id (CDP string) → MAIN-world **`uniqueContextId`**, for page
     /// expressions. Populated by the background subscriber from each frame's
-    /// default (`isDefault`) `Runtime.executionContextCreated`.
-    pub(crate) frame_contexts: Arc<Mutex<HashMap<String, i64>>>,
-    /// frame_id (CDP string) → the bridge isolated-world execution context id.
+    /// default (`isDefault`) `Runtime.executionContextCreated`. The unique id
+    /// (not the reusable integer `id`) is stored so a stale entry can never
+    /// resolve to a different context after a cross-process navigation.
+    pub(crate) frame_contexts: Arc<Mutex<HashMap<String, String>>>,
+    /// frame_id (CDP string) → the bridge isolated world's `uniqueContextId`.
     /// Populated by the same subscriber from the `BRIDGE_WORLD`-named context
     /// that `Page.addScriptToEvaluateOnNewDocument` creates per document.
-    pub(crate) bridge_contexts: Arc<Mutex<HashMap<String, i64>>>,
+    pub(crate) bridge_contexts: Arc<Mutex<HashMap<String, String>>>,
     /// Active frame for evaluation. `None` means the page's main world.
     pub(crate) active_frame_id: Arc<Mutex<Option<String>>>,
     /// Whether the console / network monitors are armed. Their hooks live on
@@ -185,7 +188,7 @@ impl LocalTransport {
     /// listener repopulates the map asynchronously after open/rebind — is a
     /// typed `FrameNotFound`, never a silent fall-through to the main world:
     /// that would run the agent's code in a frame it did not choose.
-    async fn active_context_id(&self) -> Result<Option<i64>> {
+    async fn active_context_id(&self) -> Result<Option<String>> {
         let active = self.active_frame_id.lock().await.clone();
         let Some(fid) = active else { return Ok(None) };
         Ok(Some(self.await_context(&self.frame_contexts, &fid).await?))
@@ -197,24 +200,24 @@ impl LocalTransport {
     /// `BRIDGE_WORLD` context the auto-injected script creates, surfacing a
     /// typed `FrameNotFound` if it never appears rather than silently routing a
     /// bridge call into the page's main world.
-    async fn bridge_context_id(&self) -> Result<i64> {
+    async fn bridge_context_id(&self) -> Result<String> {
         let active = self.active_frame_id.lock().await.clone();
         let fid = active.unwrap_or_else(|| self.main_frame_id.clone());
         self.await_context(&self.bridge_contexts, &fid).await
     }
 
-    /// Poll `map` for frame `fid`'s context id until it appears or `PROBE`
+    /// Poll `map` for frame `fid`'s `uniqueContextId` until it appears or `PROBE`
     /// elapses — the contexts populate asynchronously as the listener observes
     /// `executionContextCreated`, so a just-navigated frame may not be mapped
     /// the instant a command fires.
     async fn await_context(
         &self,
-        map: &Arc<Mutex<HashMap<String, i64>>>,
+        map: &Arc<Mutex<HashMap<String, String>>>,
         fid: &str,
-    ) -> Result<i64> {
+    ) -> Result<String> {
         let deadline = std::time::Instant::now() + PROBE;
         loop {
-            if let Some(cid) = map.lock().await.get(fid).copied() {
+            if let Some(cid) = map.lock().await.get(fid).cloned() {
                 return Ok(cid);
             }
             if std::time::Instant::now() >= deadline {
@@ -227,13 +230,16 @@ impl LocalTransport {
         }
     }
 
-    /// Evaluate `expression` in `context_id` (or the default world when `None`),
-    /// returning either its serialized value or — when `by_value` is false — the
-    /// `objectId` of the remote result under `/result/objectId`.
+    /// Evaluate `expression` in `context` (a `uniqueContextId`; the default
+    /// world when `None`), returning either its serialized value or — when
+    /// `by_value` is false — the `objectId` of the remote result under
+    /// `/result/objectId`. `uniqueContextId` (not the reusable integer id) means
+    /// a context destroyed between map read and send fails cleanly instead of
+    /// landing in a different context that reused the integer.
     async fn eval_in_context(
         &self,
         expression: &str,
-        context_id: Option<i64>,
+        context: Option<&str>,
         by_value: bool,
     ) -> Result<Value> {
         let mut params = json!({
@@ -241,8 +247,8 @@ impl LocalTransport {
             "returnByValue": by_value,
             "awaitPromise": true,
         });
-        if let Some(cid) = context_id {
-            params["contextId"] = cid.into();
+        if let Some(cid) = context {
+            params["uniqueContextId"] = cid.into();
         }
         let result = self.page.send("Runtime.evaluate", Some(params)).await?;
         if let Some(exception) = result.get("exceptionDetails") {
@@ -260,7 +266,7 @@ impl LocalTransport {
     /// `frame find`, readyState/title probes).
     pub(super) async fn eval_in_active(&self, expression: &str) -> Result<Value> {
         let cid = self.active_context_id().await?;
-        let result = self.eval_in_context(expression, cid, true).await?;
+        let result = self.eval_in_context(expression, cid.as_deref(), true).await?;
         Ok(result.get("value").cloned().unwrap_or(Value::Null))
     }
 
@@ -273,7 +279,7 @@ impl LocalTransport {
     /// not a serialized copy, crosses to CDP.
     pub(super) async fn eval_object_id(&self, expression: &str) -> Result<Option<String>> {
         let cid = self.bridge_context_id().await?;
-        let result = self.eval_in_context(expression, Some(cid), false).await?;
+        let result = self.eval_in_context(expression, Some(&cid), false).await?;
         Ok(result
             .get("objectId")
             .and_then(|v| v.as_str())
@@ -289,7 +295,7 @@ impl LocalTransport {
         let cid = self.bridge_context_id().await?;
         let payload = msg.to_string();
         let js = format!("(async () => __webpilot_handle({payload}))()");
-        let result = self.eval_in_context(&js, Some(cid), true).await?;
+        let result = self.eval_in_context(&js, Some(&cid), true).await?;
         Ok(result.get("value").cloned().unwrap_or(Value::Null))
     }
 
@@ -310,17 +316,21 @@ impl LocalTransport {
 
     // ── Navigation (with cross-origin renderer swap handling) ────────────
 
-    /// Re-subscribe the context listener and re-register the bridge world on a
-    /// freshly bound page session (after a cross-origin renderer swap), then
-    /// re-emit existing contexts so both maps repopulate — the same priming
-    /// `open` does, for the new session.
-    pub(super) async fn rebind_page_world(&mut self) {
+    /// Re-prime the bound page session: re-subscribe the context listener,
+    /// re-register the bridge world, refresh the main frame id (a tab switch
+    /// binds a different tab whose top frame differs), then re-emit existing
+    /// contexts so both maps repopulate — the same priming `open` does, for the
+    /// new session. The bridge install must succeed; a session that silently ran
+    /// without it would answer every bridge call with `FrameNotFound`.
+    pub(super) async fn rebind_page_world(&mut self) -> Result<()> {
         self.frame_contexts = Arc::new(Mutex::new(HashMap::new()));
         self.bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
         spawn_frame_context_listener(&self.page, self.frame_contexts.clone(), self.bridge_contexts.clone());
-        let _ = install_bridge_world(&self.page).await;
+        install_bridge_world(&self.page).await?;
+        self.main_frame_id = fetch_main_frame_id(&self.page).await?;
         let _ = self.page.send("Runtime.disable", None).await;
         let _ = self.page.send("Runtime.enable", None).await;
+        Ok(())
     }
 
     pub(super) async fn navigate_reconnect(&mut self, url: &str) -> Result<()> {
@@ -398,7 +408,7 @@ impl LocalTransport {
                         self.page = new_page;
                         self.target_id = target_id;
                         self.clear_active_frame().await;
-                        self.rebind_page_world().await;
+                        self.rebind_page_world().await?;
                         self.reinstall_monitors().await;
                         return Ok(());
                     }
@@ -855,8 +865,8 @@ async fn install_bridge_world(page: &CdpClient) -> Result<()> {
 /// flow from first connection.
 fn spawn_frame_context_listener(
     page: &CdpClient,
-    main: Arc<Mutex<HashMap<String, i64>>>,
-    bridge: Arc<Mutex<HashMap<String, i64>>>,
+    main: Arc<Mutex<HashMap<String, String>>>,
+    bridge: Arc<Mutex<HashMap<String, String>>>,
 ) {
     let mut events = page.subscribe_events();
     tokio::spawn(async move {
@@ -871,7 +881,10 @@ fn spawn_frame_context_listener(
                                 .and_then(|c| c.pointer("/auxData/frameId"))
                                 .and_then(|v| v.as_str())
                                 .map(str::to_string);
-                            let cid = ctx.and_then(|c| c.get("id")).and_then(|v| v.as_i64());
+                            let unique = ctx
+                                .and_then(|c| c.get("uniqueId"))
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string);
                             let is_default = ctx
                                 .and_then(|c| c.pointer("/auxData/isDefault"))
                                 .and_then(|v| v.as_bool())
@@ -880,21 +893,24 @@ fn spawn_frame_context_listener(
                                 .and_then(|c| c.get("name"))
                                 .and_then(|v| v.as_str())
                                 == Some(BRIDGE_WORLD);
-                            if let (Some(fid), Some(c)) = (frame_id, cid) {
+                            if let (Some(fid), Some(uid)) = (frame_id, unique) {
                                 if is_default {
-                                    main.lock().await.insert(fid, c);
+                                    main.lock().await.insert(fid, uid);
                                 } else if is_bridge {
-                                    bridge.lock().await.insert(fid, c);
+                                    bridge.lock().await.insert(fid, uid);
                                 }
                             }
                         }
                         "Runtime.executionContextDestroyed" => {
-                            let cid = event
-                                .pointer("/params/executionContextId")
-                                .and_then(|v| v.as_i64());
-                            if let Some(c) = cid {
-                                main.lock().await.retain(|_, v| *v != c);
-                                bridge.lock().await.retain(|_, v| *v != c);
+                            // CDP identifies the gone context by its unique id;
+                            // drop it so a later read can't hand back a context
+                            // that no longer exists.
+                            if let Some(uid) = event
+                                .pointer("/params/executionContextUniqueId")
+                                .and_then(|v| v.as_str())
+                            {
+                                main.lock().await.retain(|_, v| v != uid);
+                                bridge.lock().await.retain(|_, v| v != uid);
                             }
                         }
                         "Runtime.executionContextsCleared" => {

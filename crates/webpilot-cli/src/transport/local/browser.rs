@@ -80,7 +80,7 @@ impl LocalTransport {
         *self.active_frame_id.lock().await = None;
         super::clear_persisted_active_frame(self.persisted_context_key());
         super::write_persisted_active_tab(self.persisted_context_key(), tab_id);
-        self.rebind_page_world().await;
+        self.rebind_page_world().await?;
         // Armed monitors follow the agent's working tab: the freshly bound
         // page has no hooks yet (idempotent no-op when nothing is armed).
         self.reinstall_monitors().await;
@@ -253,7 +253,7 @@ impl LocalTransport {
             FrameSelector::Predicate { js } => {
                 let mut found = None;
                 for f in &candidates {
-                    let Some(cid) = self.frame_contexts.lock().await.get(&f.frame_id).copied()
+                    let Some(cid) = self.frame_contexts.lock().await.get(&f.frame_id).cloned()
                     else {
                         continue;
                     };
@@ -263,7 +263,7 @@ impl LocalTransport {
                             "Runtime.evaluate",
                             Some(json!({
                                 "expression": format!("({js})"),
-                                "contextId": cid,
+                                "uniqueContextId": cid,
                                 "returnByValue": true,
                                 "awaitPromise": true,
                             })),

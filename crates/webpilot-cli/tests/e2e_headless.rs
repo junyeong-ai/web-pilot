@@ -175,10 +175,9 @@ fn headless_behavioral_flow() {
         stdout(&scount)
     );
 
-    // 2e. `fetch` runs in the bridge's world and returns the response body — a
-    //     same-origin GET against the fixture server must come back with the
-    //     page markup, proving the isolated-world bridge keeps full network
-    //     access (parity with browser mode, whose bridge is also isolated).
+    // 2e. `fetch` runs as a debugger-routed MAIN-world eval in both modes (no
+    //     contextId, CSP-exempt) and returns the response body — a same-origin
+    //     GET against the fixture server must come back with the page markup.
     let fetched = fx.run(&["fetch", &base]);
     assert_eq!(code(&fetched), 0, "fetch failed: {}", stdout(&fetched));
     assert!(
@@ -215,6 +214,26 @@ fn headless_behavioral_flow() {
         "click must resolve via the isolated bridge, not the hijacked MAIN snapshot: {}",
         stdout(&title)
     );
+
+    // 2g. The bridge runs in EACH frame's isolated world, not just the top one:
+    //     switch into the child iframe, then capture + click resolve against
+    //     that subframe's `webpilot_bridge` context. The old MAIN-world bridge
+    //     worked in subframes, so the isolated one must too — proves the
+    //     auto-injected world is created and routed per frame, not just the top.
+    let sw_frame = fx.run(&["frame", "url", "/frame"]);
+    assert_eq!(code(&sw_frame), 0, "switch into child iframe failed: {}", stdout(&sw_frame));
+    let frame_cap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&frame_cap), 0, "capture inside iframe failed: {}", stdout(&frame_cap));
+    let link_idx = index_of(&frame_cap, "link");
+    let frame_click = fx.run(&["action", "click", &link_idx]);
+    assert_eq!(
+        code(&frame_click),
+        0,
+        "click inside the iframe must resolve via the subframe bridge: {}",
+        stdout(&frame_click)
+    );
+    let back = fx.run(&["frame", "main"]);
+    assert_eq!(code(&back), 0, "frame main failed: {}", stdout(&back));
 
     // 3. A link click that navigates reports `url_changed`, `--capture`
     //    returns the NEW document (settle: committed + parsed, never the dying
@@ -314,6 +333,37 @@ fn headless_behavioral_flow() {
         stdout(&stale).contains("StaleSnapshot"),
         "stale click must be StaleSnapshot: {}",
         stdout(&stale)
+    );
+
+    // 6b. Opening a new tab rebinds the page session AND refreshes the cached
+    //     main frame id, so a bridge op on the new tab's main frame resolves
+    //     against the NEW tab's isolated world — not the previous tab's frame
+    //     id. Without the refresh this capture/click would FrameNotFound: the
+    //     bridge context is looked up by main frame id, which differs per tab.
+    let newtab = fx.run(&["tab", "new", &base]);
+    assert_eq!(code(&newtab), 0, "tab new failed: {}", stdout(&newtab));
+    let nt_cap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(
+        code(&nt_cap),
+        0,
+        "capture on the new tab's main frame failed: {}",
+        stdout(&nt_cap)
+    );
+    let nt: serde_json::Value = serde_json::from_str(&stdout(&nt_cap)).expect("capture json");
+    assert!(
+        nt["elements"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|e| e["tag"] == "button")),
+        "new-tab capture must resolve the new tab's bridge (refreshed main frame id): {}",
+        stdout(&nt_cap)
+    );
+    let nt_go = index_of(&nt_cap, "go");
+    let nt_click = fx.run(&["action", "click", &nt_go]);
+    assert_eq!(
+        code(&nt_click),
+        0,
+        "click on the new tab must resolve via its bridge: {}",
+        stdout(&nt_click)
     );
 
     // 7. Policy: a deny rule is enforced at the transport boundary before the
