@@ -43,6 +43,7 @@ paths:
 - `keyToCode()` maps Enter / Tab / Escape / Backspace / Delete / Arrow* / Home / End / PageUp / PageDown / Space / Insert / CapsLock / F1-F12.
 
 ## Service worker (browser mode)
+- The worker is an **ES-module graph** (`manifest background.type: "module"`) whose domain modules mirror the Rust transport files one-to-one — `action`/`capture`/`query`/`state`/`browser`.js ↔ the same-named `transport/local/*.rs` — plus infra modules `errors`/`session` (pins, monitor sets, host config, persistence)/`cdp`/`content` (bridge link)/`navigation`/`router` (the `LocalTransport::send` twin, guarded by `tests/browser_parity.rs`)/`host` (NM link). `service-worker.js` is the entry: every `chrome.*` event listener is registered there, synchronously, at the top of the module graph — the MV3 listener-registration invariant lives in one file by construction. One deliberate cycle: `browser.js` imports `isHostConnected` from `host.js` (host→router→browser→host); it is a hoisted function declaration accessed only at call time, which ESM defines as safe.
 - `nmPort?.postMessage()` for NM communication (optional chaining handles SW restart races).
 - `handleStatus()` returns `connected: !!nmPort` — derived from real port state — and reports the pinned tab without ever pinning as a side effect.
 - `withCdp(tabId, fn)` serialises concurrent CDP operations per tab; per-tab state (`cdpLocks`, monitoring sets) is pruned on `tabs.onRemoved`.

@@ -14,7 +14,25 @@
 use std::collections::BTreeSet;
 
 const PROTOCOL: &str = include_str!("../../webpilot/src/protocol.rs");
-const SERVICE_WORKER: &str = include_str!("../../../extension/background/service-worker.js");
+
+/// Concatenated source of every background module. The worker is an ES-module
+/// graph, so the router (and any future split) can live in any file under
+/// `background/` — scanning the directory keeps this test honest across
+/// refactors instead of being pinned to one filename.
+fn service_worker_source() -> String {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../extension/background");
+    let mut src = String::new();
+    for entry in std::fs::read_dir(&dir).expect("extension/background exists") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) == Some("js") {
+            src.push_str(&std::fs::read_to_string(&path).expect("readable module"));
+            src.push('\n');
+        }
+    }
+    assert!(!src.is_empty(), "no background modules found in {dir:?}");
+    src
+}
 
 /// Variant names of `pub enum Command` — its wire tags.
 fn command_wire_tags() -> BTreeSet<String> {
@@ -70,9 +88,10 @@ fn command_wire_tags() -> BTreeSet<String> {
 /// PascalCase wire tags; lowercase bridge-style cases live in bridge.js, not
 /// here, so an uppercase-initial filter isolates the router.
 fn service_worker_cases() -> BTreeSet<String> {
+    let source = service_worker_source();
     let mut cases = BTreeSet::new();
-    for (i, _) in SERVICE_WORKER.match_indices("case \"") {
-        let rest = &SERVICE_WORKER[i + 6..];
+    for (i, _) in source.match_indices("case \"") {
+        let rest = &source[i + 6..];
         if let Some(end) = rest.find('"') {
             let name = &rest[..end];
             if name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {

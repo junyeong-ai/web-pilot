@@ -27,7 +27,8 @@
     "extension_pages": "script-src 'self'"
   },
   "background": {
-    "service_worker": "background/service-worker.js"
+    "service_worker": "background/service-worker.js",
+    "type": "module"
   },
   "action": {
     "default_popup": "popup/popup.html",

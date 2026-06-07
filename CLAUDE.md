@@ -45,9 +45,12 @@ matches, so the compiler forces every one**: a `protocol::Command` variant +
 `commands/mod.rs` (`pub mod` + enum variant) + a `commands/<x>.rs` handler +
 `cli.rs::Cmd::execution()` classification + a `cli.rs::dispatch_via_transport`
 arm + a `LocalTransport::send` arm and its `do_*` body (headless). The browser
-side adds a `service-worker.js` router case — JS, so not compiler-checked, but
-`tests/browser_parity.rs` fails the build if any `Command` variant lacks one.
-Add a `bridge.js` case only when new content-script behavior is needed. Gate a command by adding an arm to `protocol::Command::policy_key()` —
+side adds a case in `extension/background/router.js` and its handler in the
+domain module that mirrors the Rust file (`action`/`capture`/`query`/`state`/
+`browser`.js ↔ the same-named `.rs`) — JS, so not compiler-checked, but
+`tests/browser_parity.rs` fails the build if any `Command` variant lacks a
+router case. Add a `bridge.js` case only when new content-script behavior is
+needed. Gate a command by adding an arm to `protocol::Command::policy_key()` —
 that match is exhaustive too, so a new command **must declare its gate** and
 cannot leak ungated (enforcement runs automatically at each privileged sink).
 MCP exposes a curated subset of commands — adding a command is not an MCP change.
