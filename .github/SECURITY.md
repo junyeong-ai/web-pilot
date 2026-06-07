@@ -17,12 +17,9 @@ You can expect:
 
 ## Supported versions
 
-Only the most recent minor release line receives security fixes.
-
-| Version | Supported |
-| ------- | --------- |
-| 0.2.x   | ✅        |
-| < 0.2   | ❌        |
+Only the most recent minor release line receives security fixes —
+upgrade to the [latest release](https://github.com/junyeong-ai/web-pilot/releases/latest)
+before reporting.
 
 ## Scope
 

@@ -13,7 +13,7 @@ paths:
 ## Naming
 - Subcommand enums: singular `XCommand` (e.g., `TabCommand`, `FrameCommand`).
 - Args structs: `XArgs` with subcommand field named `command` (or `action` / `condition` when more specific).
-- Protocol commands: `NounVerb` (e.g., `TabList`, `CookieSet`, `FrameSwitch`).
+- Protocol commands: noun-scoped commands are `NounVerb` (`TabList`, `CookieSet`, `FrameSwitch`); a top-level single-concept command is the bare verb (`Capture`, `Eval`, `Wait`, `Fetch`).
 - Initialism casing: `NmError` / `CdpClient` (Rust idiom), not `NMError` / `CDPClient`.
 - String parsing: `impl FromStr` — never bespoke `parse(s)` / `from_str_lossy(s)` helpers.
 

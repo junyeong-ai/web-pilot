@@ -130,13 +130,15 @@ fn validate(settings: &Settings) -> std::result::Result<(), String> {
 }
 
 /// Process-wide resolved settings. `init` populates this at startup; the lazy
-/// fallback (library/test use without `init`) reads the same file and, only for
-/// that path, tolerates an absent/unreadable file as defaults. Invariants still
-/// hold: with no error channel here, an invalid value panics rather than
-/// running with settings `init` would have refused.
+/// fallback (library/test use without `init`) reads the same file. The module
+/// contract holds on both paths: an absent file is the all-default state, but
+/// a config the operator wrote and got wrong is never quietly ignored — with
+/// no error channel here, a malformed/unreadable file or an invalid value
+/// panics rather than running with settings `init` would have refused.
 pub fn get() -> &'static Settings {
     SETTINGS.get_or_init(|| {
-        let settings = Settings::resolve(read_config().unwrap_or_default());
+        let file = read_config().unwrap_or_else(|message| panic!("{message}"));
+        let settings = Settings::resolve(file);
         if let Err(message) = validate(&settings) {
             panic!("invalid settings: {message}");
         }

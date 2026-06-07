@@ -14,8 +14,9 @@
 
 ## Wire-protocol impact
 
-<!-- Any change touching crates/webpilot/{action,capture,protocol,error,wait}.rs
-     or extension/content/bridge.js MUST be ticked here. -->
+<!-- Any change touching crates/webpilot/{action,capture,protocol,error,wait}.rs,
+     extension/content/bridge.js, or extension/background/router.js MUST be
+     ticked here. -->
 
 - [ ] No protocol change
 - [ ] Additive change (new variant / field with default — both transports updated)

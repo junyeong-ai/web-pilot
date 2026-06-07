@@ -3,3 +3,4 @@
 **/*.rs.bk
 *.pdb
 .DS_Store
+.claude/scheduled_tasks.lock

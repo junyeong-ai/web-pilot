@@ -18,8 +18,12 @@ on:
 permissions:
   contents: read
 
+# Static group prefix, never `${{ github.workflow }}`: inside a workflow_call
+# that context resolves to the CALLER's name, which would land the release
+# gate in a group adjacent to the release run's own and inherit the wrong
+# cancellation semantics (GitHub's documented reusable-workflow guidance).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
