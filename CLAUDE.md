@@ -75,6 +75,9 @@ against the previous snapshot, suppressed on the first capture after a URL
 change (a fresh page is not "all new"). `@landmark` is semantic context.
 `--- N iframe(s) not shown ---` is the count of HTTP iframes outside the active
 frame (`DomSnapshot.subframes`); enter one with `frame switch`.
+`--- shadow DOM clipped (host budget exceeded) — some controls may be omitted ---`
+appears when a shadow-component-heavy page exhausts the traversal budget
+(`DomSnapshot.shadow_truncated`), so the index may be incomplete.
 
 ## Wire Protocol
 
