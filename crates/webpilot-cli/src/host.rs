@@ -410,8 +410,7 @@ async fn handle_one_cli_request(
     // legitimate CLI traffic this is identical (a `Command` round-trips), but it
     // strips any unmodeled field a direct socket writer might have appended to
     // steer the extension past what policy validated.
-    request["command"] =
-        serde_json::to_value(&command).expect("Command serializes (static shape)");
+    request["command"] = serde_json::to_value(&command).expect("Command serializes (static shape)");
 
     // The CLI's own id only correlates this one socket's request/response, so we
     // restore it on the way back; over the multiplexed NM channel we use a

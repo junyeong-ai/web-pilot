@@ -31,7 +31,10 @@ impl LocalTransport {
             "sourceURL": "webpilot://eval-form-probe",
             "persistScript": false,
         });
-        let r = self.page.send("Runtime.compileScript", Some(params)).await?;
+        let r = self
+            .page
+            .send("Runtime.compileScript", Some(params))
+            .await?;
         Ok(r.get("exceptionDetails").is_none())
     }
 

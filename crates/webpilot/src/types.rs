@@ -749,7 +749,10 @@ mod tests {
         assert!(!snap.to_text().contains("shadow DOM clipped"));
 
         snap.shadow_truncated = true;
-        assert!(snap.to_text().contains("shadow DOM clipped (host budget exceeded)"));
+        assert!(
+            snap.to_text()
+                .contains("shadow DOM clipped (host budget exceeded)")
+        );
 
         snap.subframes = 2;
         let text = snap.to_text();

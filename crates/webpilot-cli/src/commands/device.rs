@@ -3,9 +3,7 @@ use clap::{Args, Subcommand};
 
 use crate::output::CommandOutput;
 use crate::transport::LocalTransport;
-use crate::transport::local::{
-    DeviceState, clear_persisted_device, write_persisted_device,
-};
+use crate::transport::local::{DeviceState, clear_persisted_device, write_persisted_device};
 
 #[derive(Args)]
 pub struct DeviceArgs {
@@ -54,7 +52,13 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
                 }
                 .into());
             }
-            let state = DeviceState { width, height, mobile, scale, user_agent };
+            let state = DeviceState {
+                width,
+                height,
+                mobile,
+                scale,
+                user_agent,
+            };
             state.apply(local.page()).await?;
             // Persist so the override (UA especially) survives this process —
             // re-applied by every later `open`, matching the metrics that

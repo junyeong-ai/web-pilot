@@ -69,7 +69,9 @@ pub async fn run(args: DiffArgs) -> Result<CommandOutput> {
                 diff_screenshot(&args.file_a, &args.file_b)
             }
             (Some(_), Some(_)) => {
-                anyhow::bail!("Both files must be the same kind (two JSON snapshots or two images).")
+                anyhow::bail!(
+                    "Both files must be the same kind (two JSON snapshots or two images)."
+                )
             }
             _ => anyhow::bail!("Cannot detect file type. Use --dom or --screenshot."),
         }
@@ -90,21 +92,20 @@ fn detect_kind(path: &Path) -> Option<Kind> {
 }
 
 fn diff_dom(a: &Path, b: &Path) -> Result<CommandOutput> {
-    let text_a = String::from_utf8(read_capped(a, "file A")?)
-        .context("file A is not valid UTF-8")?;
-    let text_b = String::from_utf8(read_capped(b, "file B")?)
-        .context("file B is not valid UTF-8")?;
+    let text_a =
+        String::from_utf8(read_capped(a, "file A")?).context("file A is not valid UTF-8")?;
+    let text_b =
+        String::from_utf8(read_capped(b, "file B")?).context("file B is not valid UTF-8")?;
 
     // A `--dom` diff compares DOM snapshots, which are JSON. Parse both first so
     // a truncated or non-snapshot file fails loud instead of producing a
     // meaningless line diff, and re-emit canonically so two snapshots that
     // differ only in whitespace or key order don't read as changed.
     let canon = |text: &str, label: &str| -> Result<String> {
-        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
-            webpilot::WebPilotError::InvalidArgument {
+        let value: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| webpilot::WebPilotError::InvalidArgument {
                 detail: format!("{label} is not a valid DOM snapshot (JSON): {e}"),
-            }
-        })?;
+            })?;
         Ok(serde_json::to_string_pretty(&value).expect("re-serialize parsed json"))
     };
     let text_a = canon(&text_a, "file A")?;
@@ -147,10 +148,10 @@ fn diff_dom(a: &Path, b: &Path) -> Result<CommandOutput> {
 }
 
 fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
-    let img_a = image::load_from_memory(&read_capped(a, "image A")?)
-        .context("Cannot decode image A")?;
-    let img_b = image::load_from_memory(&read_capped(b, "image B")?)
-        .context("Cannot decode image B")?;
+    let img_a =
+        image::load_from_memory(&read_capped(a, "image A")?).context("Cannot decode image A")?;
+    let img_b =
+        image::load_from_memory(&read_capped(b, "image B")?).context("Cannot decode image B")?;
 
     // When the two images differ in size, compare their overlapping region —
     // but report it: a 100%-of-overlap match between mismatched canvases must
@@ -159,8 +160,7 @@ fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
         img_a.width().min(img_b.width()),
         img_a.height().min(img_b.height()),
     );
-    let dimensions_differ =
-        (img_a.width(), img_a.height()) != (img_b.width(), img_b.height());
+    let dimensions_differ = (img_a.width(), img_a.height()) != (img_b.width(), img_b.height());
     let rgba_a = img_a.to_rgba8();
     let rgba_b = img_b.to_rgba8();
 

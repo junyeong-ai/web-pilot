@@ -401,8 +401,12 @@ impl LocalTransport {
                         seq.push(Ev::Commit(u.to_string()));
                     } else if let Some(id) = ev.pointer("/params/frameId").and_then(Value::as_str) {
                         match ev.get("method").and_then(Value::as_str) {
-                            Some("Page.frameStartedLoading") => seq.push(Ev::Started(id.to_string())),
-                            Some("Page.frameStoppedLoading") => seq.push(Ev::Stopped(id.to_string())),
+                            Some("Page.frameStartedLoading") => {
+                                seq.push(Ev::Started(id.to_string()))
+                            }
+                            Some("Page.frameStoppedLoading") => {
+                                seq.push(Ev::Stopped(id.to_string()))
+                            }
                             _ => {}
                         }
                     }
@@ -472,8 +476,7 @@ impl LocalTransport {
                     }
                     // The load ended without a commit (cancelled, download):
                     // nothing further to wait for.
-                    if ev.get("method").and_then(Value::as_str)
-                        == Some("Page.frameStoppedLoading")
+                    if ev.get("method").and_then(Value::as_str) == Some("Page.frameStoppedLoading")
                     {
                         return self.bound_target_url().await;
                     }
@@ -509,8 +512,7 @@ impl LocalTransport {
                     // The event is only a wake-up signal — a buffered firing
                     // from the PREVIOUS document must not satisfy the wait, so
                     // readyState stays the authority.
-                    if ev.get("method").and_then(Value::as_str)
-                        == Some("Page.domContentEventFired")
+                    if ev.get("method").and_then(Value::as_str) == Some("Page.domContentEventFired")
                         && self.document_parsed(deadline).await
                     {
                         return;
@@ -590,11 +592,7 @@ impl LocalTransport {
     /// a synthetic `KeyboardEvent` only notifies JS listeners. Printable text
     /// is inserted only without a chord modifier (Ctrl/Alt/Meta make the key a
     /// shortcut, not input).
-    async fn do_key_press(
-        &self,
-        key: &str,
-        mods: &webpilot::action::Modifiers,
-    ) -> Result<()> {
+    async fn do_key_press(&self, key: &str, mods: &webpilot::action::Modifiers) -> Result<()> {
         let modifiers = modifier_mask(mods);
         let (code, vk) = key_descriptor(key);
         let text = (!mods.ctrl && !mods.alt && !mods.meta)

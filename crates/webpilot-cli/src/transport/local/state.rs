@@ -179,7 +179,9 @@ impl LocalTransport {
 
         // A failed storage read must fail the export: silently writing a
         // session file with empty storage would import back as data loss.
-        let storage = self.invoke_bridge(&json!({"type": "exportStorage"})).await?;
+        let storage = self
+            .invoke_bridge(&json!({"type": "exportStorage"}))
+            .await?;
         let storage = Self::parse_bridge_response(storage)?;
 
         let data = json!({
@@ -533,7 +535,10 @@ mod tests {
         c.domain = "app.example.com".into();
         c.path = "/".into();
         let v = cookie_info_to_cdp(&c);
-        assert!(v.get("domain").is_none(), "host-only cookie must omit domain");
+        assert!(
+            v.get("domain").is_none(),
+            "host-only cookie must omit domain"
+        );
         assert_eq!(v["url"], "https://app.example.com/");
     }
 }

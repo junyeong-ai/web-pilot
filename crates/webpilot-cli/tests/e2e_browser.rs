@@ -233,7 +233,11 @@ fn browser_behavioral_flow() {
     std::fs::create_dir_all(&user_data_dir).expect("user data dir");
     let extension_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extension");
 
-    let chrome = launch(&home, &user_data_dir, &extension_dir.canonicalize().expect("ext dir"));
+    let chrome = launch(
+        &home,
+        &user_data_dir,
+        &extension_dir.canonicalize().expect("ext dir"),
+    );
     let fx = BrowserFixture {
         home,
         user_data_dir,
@@ -277,7 +281,8 @@ fn browser_behavioral_flow() {
         stdout(&cap)
     );
     assert_eq!(
-        snapshot["subframes"], 1,
+        snapshot["subframes"],
+        1,
         "the one http iframe must be reported as a subframe: {}",
         stdout(&cap)
     );
@@ -402,7 +407,9 @@ fn browser_behavioral_flow() {
     assert_eq!(code(&navd), 0, "slow-nav click failed: {}", stdout(&navd));
     let navd_json: serde_json::Value = serde_json::from_str(&stdout(&navd)).expect("action json");
     assert!(
-        navd_json["url_changed"].as_str().is_some_and(|u| u.ends_with("/slow")),
+        navd_json["url_changed"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("/slow")),
         "a click-triggered same-tab navigation must report url_changed=/slow: {}",
         stdout(&navd)
     );
@@ -413,7 +420,12 @@ fn browser_behavioral_flow() {
         stdout(&navd)
     );
     let back_to_base = fx.run(&["action", "navigate", &base]);
-    assert_eq!(code(&back_to_base), 0, "re-navigate failed: {}", stdout(&back_to_base));
+    assert_eq!(
+        code(&back_to_base),
+        0,
+        "re-navigate failed: {}",
+        stdout(&back_to_base)
+    );
 
     // 3. Stale-snapshot guard (the bridge is shared, so the typed error must
     //    hold in this mode too).
@@ -421,7 +433,12 @@ fn browser_behavioral_flow() {
     assert_eq!(code(&recap), 0);
     let _ = fx.run(&["eval", "document.getElementById('go').remove()"]);
     let stale = fx.run(&["action", "click", &button_index]);
-    assert_eq!(code(&stale), 4, "stale click must exit 4: {}", stdout(&stale));
+    assert_eq!(
+        code(&stale),
+        4,
+        "stale click must exit 4: {}",
+        stdout(&stale)
+    );
     assert!(
         stdout(&stale).contains("StaleSnapshot"),
         "{}",
@@ -436,7 +453,12 @@ fn browser_behavioral_flow() {
     let set = fx.run(&["policy", "set", "--operation", "click", "--verdict", "deny"]);
     assert_eq!(code(&set), 0, "policy set failed: {}", stdout(&set));
     let denied = fx.run(&["action", "click", "1"]);
-    assert_eq!(code(&denied), 6, "denied click must exit 6: {}", stdout(&denied));
+    assert_eq!(
+        code(&denied),
+        6,
+        "denied click must exit 6: {}",
+        stdout(&denied)
+    );
     assert!(
         stdout(&denied).contains("PolicyDenied"),
         "{}",
@@ -449,7 +471,12 @@ fn browser_behavioral_flow() {
     //     records entries the agent produces, and a cookie set is readable
     //     back — covering the monitor-injection and cookie paths end to end.
     let started = fx.run(&["console", "start"]);
-    assert_eq!(code(&started), 0, "console start failed: {}", stdout(&started));
+    assert_eq!(
+        code(&started),
+        0,
+        "console start failed: {}",
+        stdout(&started)
+    );
     let logged = fx.run(&["eval", "console.log('e2e-browser-console-marker')"]);
     assert_eq!(code(&logged), 0);
     let logs = fx.run(&["console", "read"]);
@@ -478,7 +505,12 @@ fn browser_behavioral_flow() {
         .expect("tabs array")
         .iter()
         .find(|t| t["url"].as_str().is_some_and(|u| u.starts_with(&base)))
-        .and_then(|t| t["id"].as_str().map(str::to_string).or_else(|| t["id"].as_u64().map(|n| n.to_string())))
+        .and_then(|t| {
+            t["id"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| t["id"].as_u64().map(|n| n.to_string()))
+        })
         .expect("fixture tab id");
     let closed = fx.run(&["tab", "close", &fixture_tab]);
     assert_eq!(code(&closed), 0, "tab close failed: {}", stdout(&closed));
@@ -497,7 +529,12 @@ fn browser_behavioral_flow() {
     let repin = fx.run(&["tab", "new", &base]);
     assert_eq!(code(&repin), 0, "re-pin failed: {}", stdout(&repin));
     let recap = fx.run(&["capture", "--include", "dom"]);
-    assert_eq!(code(&recap), 0, "capture after re-pin failed: {}", stdout(&recap));
+    assert_eq!(
+        code(&recap),
+        0,
+        "capture after re-pin failed: {}",
+        stdout(&recap)
+    );
 
     // 6. Navigation settles via the predicate, not sleeps: a capture issued
     //    immediately after navigate must see the new document. And history
@@ -506,7 +543,12 @@ fn browser_behavioral_flow() {
     let nav = fx.run(&["action", "navigate", &format!("{base}/frame")]);
     assert_eq!(code(&nav), 0, "navigate failed: {}", stdout(&nav));
     let cap = fx.run(&["capture", "--include", "dom"]);
-    assert_eq!(code(&cap), 0, "capture after navigate failed: {}", stdout(&cap));
+    assert_eq!(
+        code(&cap),
+        0,
+        "capture after navigate failed: {}",
+        stdout(&cap)
+    );
     assert!(
         stdout(&cap).contains("inner link"),
         "the navigated-to document must be captured immediately: {}",
@@ -541,7 +583,14 @@ fn browser_behavioral_flow() {
     // scope — so `--annotate` here must succeed on the new main frame, not
     // false-fail against the stale switched-frame id. It also leaves us back on
     // the main frame, which the rest of this step then re-confirms.
-    let reannotate = fx.run(&["capture", "--include", "screenshot", "--annotate", "--url", &base]);
+    let reannotate = fx.run(&[
+        "capture",
+        "--include",
+        "screenshot",
+        "--annotate",
+        "--url",
+        &base,
+    ]);
     assert_eq!(
         code(&reannotate),
         0,
@@ -551,10 +600,18 @@ fn browser_behavioral_flow() {
     let main = fx.run(&["frame", "main"]);
     assert_eq!(code(&main), 0);
     let href_main = fx.run(&["eval", "location.href"]);
-    assert_eq!(code(&href_main), 0, "main-frame eval failed: {}", stdout(&href_main));
+    assert_eq!(
+        code(&href_main),
+        0,
+        "main-frame eval failed: {}",
+        stdout(&href_main)
+    );
     let hmj: serde_json::Value = serde_json::from_str(&stdout(&href_main)).expect("eval json");
     assert!(
-        !hmj["result"].as_str().unwrap_or_default().contains("/frame"),
+        !hmj["result"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("/frame"),
         "after frame main, eval must run in the main frame again: {}",
         stdout(&href_main)
     );
@@ -568,7 +625,12 @@ fn browser_behavioral_flow() {
     let nav = fx.run(&["action", "navigate", &format!("{base}/csp")]);
     assert_eq!(code(&nav), 0, "csp navigate failed: {}", stdout(&nav));
     let sw = fx.run(&["frame", "switch", "cspframe"]);
-    assert_eq!(code(&sw), 0, "csp frame switch by name failed: {}", stdout(&sw));
+    assert_eq!(
+        code(&sw),
+        0,
+        "csp frame switch by name failed: {}",
+        stdout(&sw)
+    );
     let title = fx.run(&["eval", "document.title"]);
     assert_eq!(code(&title), 0, "csp frame eval failed: {}", stdout(&title));
     assert!(
@@ -622,14 +684,24 @@ fn browser_behavioral_flow() {
     //    window to be OS-foreground nor an `<all_urls>` grant. The viewport
     //    shot is the common case; the full-page shot adds captureBeyondViewport.
     let shot = fx.run(&["capture", "--include", "screenshot"]);
-    assert_eq!(code(&shot), 0, "viewport screenshot failed: {}", stdout(&shot));
+    assert_eq!(
+        code(&shot),
+        0,
+        "viewport screenshot failed: {}",
+        stdout(&shot)
+    );
     assert!(
         stdout(&shot).contains("screenshot_path"),
         "viewport screenshot must be persisted to a path: {}",
         stdout(&shot)
     );
     let full = fx.run(&["capture", "--include", "screenshot", "--full-page"]);
-    assert_eq!(code(&full), 0, "full-page screenshot failed: {}", stdout(&full));
+    assert_eq!(
+        code(&full),
+        0,
+        "full-page screenshot failed: {}",
+        stdout(&full)
+    );
     assert!(
         stdout(&full).contains("screenshot_path"),
         "full-page screenshot must be persisted to a path: {}",

@@ -76,8 +76,8 @@ pub async fn run<T: Transport>(transport: &mut T, args: SessionArgs) -> Result<C
                 }
                 .into());
             }
-            let data = String::from_utf8(buf)
-                .map_err(|_| webpilot::WebPilotError::InvalidArgument {
+            let data =
+                String::from_utf8(buf).map_err(|_| webpilot::WebPilotError::InvalidArgument {
                     detail: "session file is not valid UTF-8".into(),
                 })?;
             let result = transport.send(Command::SessionImport { data }).await?;

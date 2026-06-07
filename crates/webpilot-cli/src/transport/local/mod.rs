@@ -300,7 +300,9 @@ impl LocalTransport {
     /// `frame find`, readyState/title probes).
     pub(super) async fn eval_in_active(&self, expression: &str) -> Result<Value> {
         let cid = self.active_context_id().await?;
-        let result = self.eval_in_context(expression, cid.as_deref(), true).await?;
+        let result = self
+            .eval_in_context(expression, cid.as_deref(), true)
+            .await?;
         Ok(result.get("value").cloned().unwrap_or(Value::Null))
     }
 
@@ -376,7 +378,11 @@ impl LocalTransport {
     pub(super) async fn rebind_page_world(&mut self) -> Result<()> {
         self.frame_contexts = Arc::new(Mutex::new(HashMap::new()));
         self.bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
-        spawn_frame_context_listener(&self.page, self.frame_contexts.clone(), self.bridge_contexts.clone());
+        spawn_frame_context_listener(
+            &self.page,
+            self.frame_contexts.clone(),
+            self.bridge_contexts.clone(),
+        );
         install_bridge_world(&self.page).await?;
         self.main_frame_id = fetch_main_frame_id(&self.page).await?;
         let _ = self.page.send("Runtime.disable", None).await;
@@ -707,8 +713,11 @@ impl DeviceState {
         )
         .await?;
         if let Some(ua) = &self.user_agent {
-            page.send("Emulation.setUserAgentOverride", Some(json!({"userAgent": ua})))
-                .await?;
+            page.send(
+                "Emulation.setUserAgentOverride",
+                Some(json!({"userAgent": ua})),
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1001,10 +1010,9 @@ fn spawn_frame_context_listener(
                                 .and_then(|c| c.pointer("/auxData/isDefault"))
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false);
-                            let is_bridge = ctx
-                                .and_then(|c| c.get("name"))
-                                .and_then(|v| v.as_str())
-                                == Some(BRIDGE_WORLD);
+                            let is_bridge =
+                                ctx.and_then(|c| c.get("name")).and_then(|v| v.as_str())
+                                    == Some(BRIDGE_WORLD);
                             if let (Some(fid), Some(uid)) = (frame_id, unique) {
                                 if is_default {
                                     main.lock().await.insert(fid, uid);

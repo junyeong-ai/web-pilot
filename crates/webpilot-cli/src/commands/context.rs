@@ -99,7 +99,10 @@ async fn close_contexts(
                     // Best-effort across the whole set: one context that fails
                     // to dispose must not abort the sweep, but its metadata is
                     // kept (a live context with no record would be orphaned).
-                    if dispose_if_live(browser, &ctx.browser_context_id).await.is_err() {
+                    if dispose_if_live(browser, &ctx.browser_context_id)
+                        .await
+                        .is_err()
+                    {
                         kept += 1;
                         continue;
                     }
@@ -139,10 +142,7 @@ async fn close_contexts(
 /// stale entry must remain closable) but propagating a failure to dispose a
 /// LIVE context — deleting its metadata then would orphan it in Chrome with
 /// no record left to close it through.
-async fn dispose_if_live(
-    browser: &crate::cdp::CdpClient,
-    browser_context_id: &str,
-) -> Result<()> {
+async fn dispose_if_live(browser: &crate::cdp::CdpClient, browser_context_id: &str) -> Result<()> {
     let live = browser.get_browser_contexts().await?;
     if live.contains(&browser_context_id.to_string()) {
         browser.dispose_browser_context(browser_context_id).await?;

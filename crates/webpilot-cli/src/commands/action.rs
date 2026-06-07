@@ -23,11 +23,10 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
     // Chrome), and a missing file would surface as a raw CDP error instead of a
     // typed InvalidArgument. `canonicalize` doubles as the existence check.
     if let Action::Upload { path, .. } = &mut args.action {
-        *path = std::fs::canonicalize(&path).map_err(|e| {
-            webpilot::WebPilotError::InvalidArgument {
+        *path =
+            std::fs::canonicalize(&path).map_err(|e| webpilot::WebPilotError::InvalidArgument {
                 detail: format!("upload file not readable: {} ({e})", path.display()),
-            }
-        })?;
+            })?;
     }
     let result = transport
         .send(Command::Action {

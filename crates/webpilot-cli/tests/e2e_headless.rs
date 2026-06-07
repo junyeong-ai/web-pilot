@@ -130,12 +130,27 @@ fn headless_behavioral_flow() {
     //      typing a negative number must not hit a clap usage error — and a
     //      trailing flag after such a value must still parse.
     let neg = fx.run(&["eval", "-7 * 6"]);
-    assert_eq!(code(&neg), 0, "leading-dash eval must not be a clap error: {}", stdout(&neg));
+    assert_eq!(
+        code(&neg),
+        0,
+        "leading-dash eval must not be a clap error: {}",
+        stdout(&neg)
+    );
     let nj: serde_json::Value = serde_json::from_str(&stdout(&neg)).expect("eval json");
-    assert_eq!(nj["result"].as_str(), Some("-42"), "leading-dash eval must evaluate: {}", stdout(&neg));
+    assert_eq!(
+        nj["result"].as_str(),
+        Some("-42"),
+        "leading-dash eval must evaluate: {}",
+        stdout(&neg)
+    );
     let q_index = index_of(&cap, "q");
     let typed = fx.run(&["action", "type", &q_index, "-99", "--clear"]);
-    assert_eq!(code(&typed), 0, "type of a leading-dash value with --clear failed: {}", stdout(&typed));
+    assert_eq!(
+        code(&typed),
+        0,
+        "type of a leading-dash value with --clear failed: {}",
+        stdout(&typed)
+    );
     let tv = fx.run(&["eval", "document.getElementById('q').value === '-99'"]);
     let tvj: serde_json::Value = serde_json::from_str(&stdout(&tv)).expect("eval json");
     assert_eq!(
@@ -159,8 +174,7 @@ fn headless_behavioral_flow() {
         "capture after a same-URL reload failed: {}",
         stdout(&after_reload)
     );
-    let ar: serde_json::Value =
-        serde_json::from_str(&stdout(&after_reload)).expect("capture json");
+    let ar: serde_json::Value = serde_json::from_str(&stdout(&after_reload)).expect("capture json");
     assert!(
         ar["elements"]
             .as_array()
@@ -285,7 +299,12 @@ fn headless_behavioral_flow() {
         stdout(&tamper)
     );
     let cap_t = fx.run(&["capture", "--include", "dom"]);
-    assert_eq!(code(&cap_t), 0, "capture must survive MAIN tampering: {}", stdout(&cap_t));
+    assert_eq!(
+        code(&cap_t),
+        0,
+        "capture must survive MAIN tampering: {}",
+        stdout(&cap_t)
+    );
     let tampered: serde_json::Value = serde_json::from_str(&stdout(&cap_t)).expect("capture json");
     assert!(
         tampered["elements"]
@@ -296,7 +315,12 @@ fn headless_behavioral_flow() {
     );
     let go_idx = index_of(&cap_t, "go");
     let clk = fx.run(&["action", "click", &go_idx]);
-    assert_eq!(code(&clk), 0, "click must survive MAIN tampering: {}", stdout(&clk));
+    assert_eq!(
+        code(&clk),
+        0,
+        "click must survive MAIN tampering: {}",
+        stdout(&clk)
+    );
     let title = fx.run(&["eval", "document.title"]);
     assert!(
         stdout(&title).contains("clicked"),
@@ -310,9 +334,19 @@ fn headless_behavioral_flow() {
     //     worked in subframes, so the isolated one must too — proves the
     //     auto-injected world is created and routed per frame, not just the top.
     let sw_frame = fx.run(&["frame", "url", "/frame"]);
-    assert_eq!(code(&sw_frame), 0, "switch into child iframe failed: {}", stdout(&sw_frame));
+    assert_eq!(
+        code(&sw_frame),
+        0,
+        "switch into child iframe failed: {}",
+        stdout(&sw_frame)
+    );
     let frame_cap = fx.run(&["capture", "--include", "dom"]);
-    assert_eq!(code(&frame_cap), 0, "capture inside iframe failed: {}", stdout(&frame_cap));
+    assert_eq!(
+        code(&frame_cap),
+        0,
+        "capture inside iframe failed: {}",
+        stdout(&frame_cap)
+    );
     let link_idx = index_of(&frame_cap, "link");
     let frame_click = fx.run(&["action", "click", &link_idx]);
     assert_eq!(
@@ -328,7 +362,8 @@ fn headless_behavioral_flow() {
     //     return InvalidArgument.)
     let annotate_in_frame = fx.run(&["capture", "--include", "screenshot", "--annotate"]);
     assert_eq!(
-        code(&annotate_in_frame), 7,
+        code(&annotate_in_frame),
+        7,
         "capture --annotate while an iframe is active must fail InvalidArgument (7): {}",
         stdout(&annotate_in_frame)
     );
@@ -407,8 +442,16 @@ fn headless_behavioral_flow() {
     let cap = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&cap), 0);
     let go_index = index_of(&cap, "go");
-    let pushed = fx.run(&["eval", "history.pushState({}, '', '/changed'); location.pathname"]);
-    assert_eq!(code(&pushed), 0, "pushState eval failed: {}", stdout(&pushed));
+    let pushed = fx.run(&[
+        "eval",
+        "history.pushState({}, '', '/changed'); location.pathname",
+    ]);
+    assert_eq!(
+        code(&pushed),
+        0,
+        "pushState eval failed: {}",
+        stdout(&pushed)
+    );
     let pj: serde_json::Value = serde_json::from_str(&stdout(&pushed)).expect("eval json");
     assert_eq!(
         pj["result"].as_str(),
@@ -505,7 +548,12 @@ fn headless_behavioral_flow() {
     let nav = fx.run(&["action", "navigate", &format!("{base}/csp")]);
     assert_eq!(code(&nav), 0, "csp navigate failed: {}", stdout(&nav));
     let sw = fx.run(&["frame", "switch", "cspframe"]);
-    assert_eq!(code(&sw), 0, "csp frame switch by name failed: {}", stdout(&sw));
+    assert_eq!(
+        code(&sw),
+        0,
+        "csp frame switch by name failed: {}",
+        stdout(&sw)
+    );
     let title = fx.run(&["eval", "document.title"]);
     assert_eq!(code(&title), 0, "csp frame eval failed: {}", stdout(&title));
     assert!(
@@ -562,7 +610,14 @@ fn headless_behavioral_flow() {
     //     fresh process re-attaching to the one Chrome. Set, then read UA +
     //     viewport in a SEPARATE invocation; reset must revert both.
     let dev = fx.run(&[
-        "device", "set", "--width", "390", "--height", "844", "--user-agent", "WP-E2E-UA/1",
+        "device",
+        "set",
+        "--width",
+        "390",
+        "--height",
+        "844",
+        "--user-agent",
+        "WP-E2E-UA/1",
     ]);
     assert_eq!(code(&dev), 0, "device set failed: {}", stdout(&dev));
     let ua = fx.run(&["eval", "navigator.userAgent"]);
@@ -585,14 +640,22 @@ fn headless_behavioral_flow() {
     assert_eq!(code(&ua2), 0, "UA eval failed: {}", stdout(&ua2));
     let ua2j: serde_json::Value = serde_json::from_str(&stdout(&ua2)).expect("eval json");
     assert!(
-        !ua2j["result"].as_str().unwrap_or_default().contains("WP-E2E-UA/1"),
+        !ua2j["result"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("WP-E2E-UA/1"),
         "device reset must clear the persisted UA override: {}",
         stdout(&ua2)
     );
 
     // 7e. Wait + drag on a clean page.
     let cap_w = fx.run(&["capture", "--include", "dom", "--url", &base]);
-    assert_eq!(code(&cap_w), 0, "wait-page capture failed: {}", stdout(&cap_w));
+    assert_eq!(
+        code(&cap_w),
+        0,
+        "wait-page capture failed: {}",
+        stdout(&cap_w)
+    );
 
     // A CDP "invalid params" rejection (here, a cookie URL with no scheme) is a
     // typed InvalidArgument (exit 7), not a leaked "CDP error" Other (exit 1).
@@ -609,7 +672,8 @@ fn headless_behavioral_flow() {
     // rejected by clap (exit 2).
     let wt = fx.run(&["wait", "--timeout", "1", "text", "-nomatch-"]);
     assert_eq!(
-        code(&wt), 5,
+        code(&wt),
+        5,
         "leading-dash wait text must parse and time out (5), not clap-reject (2): {}",
         stdout(&wt)
     );
@@ -632,7 +696,12 @@ fn headless_behavioral_flow() {
         stdout(&lw)
     );
     let alive = fx.run(&["eval", "1+1"]);
-    assert_eq!(code(&alive), 0, "the CDP connection must survive a long wait: {}", stdout(&alive));
+    assert_eq!(
+        code(&alive),
+        0,
+        "the CDP connection must survive a long wait: {}",
+        stdout(&alive)
+    );
 
     // Drag whose source and target can't share the viewport (far apart) fails
     // loud (`InvalidArgument`) instead of releasing into empty space and
@@ -641,14 +710,20 @@ fn headless_behavioral_flow() {
         "eval",
         "document.body.insertAdjacentHTML('beforeend','<div id=dsrc onclick=\"\" style=\"width:50px;height:50px\">S</div><div style=\"height:4000px\"></div><div id=dtgt onclick=\"\" style=\"width:50px;height:50px\">T</div>'); 'ok'",
     ]);
-    assert_eq!(code(&inject), 0, "drag-fixture inject failed: {}", stdout(&inject));
+    assert_eq!(
+        code(&inject),
+        0,
+        "drag-fixture inject failed: {}",
+        stdout(&inject)
+    );
     let cap_d = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&cap_d), 0, "drag capture failed: {}", stdout(&cap_d));
     let dsrc = index_of(&cap_d, "dsrc");
     let dtgt = index_of(&cap_d, "dtgt");
     let drag = fx.run(&["action", "drag", &dsrc, &dtgt]);
     assert_eq!(
-        code(&drag), 7,
+        code(&drag),
+        7,
         "a drag whose endpoints can't share the viewport must fail InvalidArgument (7), not falsely succeed: {}",
         stdout(&drag)
     );

@@ -74,14 +74,22 @@ where
         }
         let over_cap = buf.len() as u64 > MAX_LINE_BYTES && buf.last() != Some(&b'\n');
         let reply = if over_cap {
-            Some(error_reply(Value::Null, -32700, "request exceeds size limit"))
+            Some(error_reply(
+                Value::Null,
+                -32700,
+                "request exceeds size limit",
+            ))
         } else {
             // Strict UTF-8: a JSON-RPC frame is UTF-8 by spec, so decode rather
             // than lossily coerce invalid bytes into U+FFFD and parse garbage.
             match std::str::from_utf8(&buf) {
                 Ok(line) if line.trim().is_empty() => continue,
                 Ok(line) => handle_line(&connect, &mut transport, line).await,
-                Err(_) => Some(error_reply(Value::Null, -32700, "parse error: invalid UTF-8")),
+                Err(_) => Some(error_reply(
+                    Value::Null,
+                    -32700,
+                    "parse error: invalid UTF-8",
+                )),
             }
         };
         let Some(reply) = reply else {
@@ -114,7 +122,11 @@ where
     // JSON-RPC 2.0 requires `"jsonrpc": "2.0"`; a missing or different version
     // is an invalid request (-32600).
     if msg.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Some(error_reply(id, -32600, "invalid request: jsonrpc must be \"2.0\""));
+        return Some(error_reply(
+            id,
+            -32600,
+            "invalid request: jsonrpc must be \"2.0\"",
+        ));
     }
     // A request carrying an id but no string `method` is malformed: JSON-RPC
     // 2.0 answers that with -32600 (invalid request), distinct from -32601
@@ -167,8 +179,14 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
-    let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
 
     let outcome = async {
         if transport.is_none() {
@@ -264,14 +282,15 @@ async fn call_tool<T: Transport>(
             // or zero) is a typed error, not a silent fall-back to the default —
             // a wait the caller asked for must not run for a duration they did
             // not specify.
-            let timeout_ms = match args.get("timeout_ms") {
-                None | Some(Value::Null) => 10_000,
-                Some(v) => v.as_u64().filter(|&n| n > 0).ok_or_else(|| {
-                    WebPilotError::InvalidArgument {
-                        detail: "timeout_ms must be a positive integer (milliseconds)".into(),
-                    }
-                })?,
-            };
+            let timeout_ms =
+                match args.get("timeout_ms") {
+                    None | Some(Value::Null) => 10_000,
+                    Some(v) => v.as_u64().filter(|&n| n > 0).ok_or_else(|| {
+                        WebPilotError::InvalidArgument {
+                            detail: "timeout_ms must be a positive integer (milliseconds)".into(),
+                        }
+                    })?,
+                };
             // Reuse WaitCondition's tagged deserialization; keep only its
             // fields so the extra `timeout_ms` can't trip a stricter schema.
             let mut cond = serde_json::Map::new();
@@ -298,7 +317,9 @@ async fn call_tool<T: Transport>(
         }
     };
     let output = output.map_err(crate::into_webpilot_error)?;
-    Ok(vec![json!({ "type": "text", "text": output.to_agent_text() })])
+    Ok(vec![
+        json!({ "type": "text", "text": output.to_agent_text() }),
+    ])
 }
 
 /// Build a typed `Action` from a tool's arguments by injecting the wire `kind`
@@ -514,7 +535,11 @@ mod tests {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
         for tool in specs.as_array().unwrap() {
-            assert_eq!(tool["inputSchema"]["type"], "object", "{} schema", tool["name"]);
+            assert_eq!(
+                tool["inputSchema"]["type"], "object",
+                "{} schema",
+                tool["name"]
+            );
         }
     }
 

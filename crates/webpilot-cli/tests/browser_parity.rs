@@ -20,8 +20,7 @@ const PROTOCOL: &str = include_str!("../../webpilot/src/protocol.rs");
 /// `background/` — scanning the directory keeps this test honest across
 /// refactors instead of being pinned to one filename.
 fn service_worker_source() -> String {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../extension/background");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extension/background");
     let mut src = String::new();
     for entry in std::fs::read_dir(&dir).expect("extension/background exists") {
         let path = entry.expect("dir entry").path();
@@ -65,19 +64,14 @@ fn command_wire_tags() -> BTreeSet<String> {
         let t = line.trim_start();
         // Skip doc comments, attributes, and struct-variant field lines (which
         // start lowercase). A variant starts with an uppercase identifier.
-        if t.starts_with("//") || t.starts_with('#') || t.starts_with('*') || t.starts_with("/*")
-        {
+        if t.starts_with("//") || t.starts_with('#') || t.starts_with('*') || t.starts_with("/*") {
             continue;
         }
         let ident: String = t
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_')
             .collect();
-        if ident
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_uppercase())
-        {
+        if ident.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
             tags.insert(ident);
         }
     }

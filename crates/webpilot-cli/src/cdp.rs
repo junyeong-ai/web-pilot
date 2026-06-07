@@ -413,10 +413,12 @@ impl CdpClient {
 
     pub async fn get_browser_contexts(&self) -> Result<Vec<String>> {
         let result = self.send("Target.getBrowserContexts", None).await?;
-        Ok(require_array(&result, "browserContextIds", "Target.getBrowserContexts")?
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect())
+        Ok(
+            require_array(&result, "browserContextIds", "Target.getBrowserContexts")?
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+        )
     }
 
     pub async fn create_browser_context(&self) -> Result<String> {
@@ -547,7 +549,9 @@ mod tests {
             }
             for req in reqs.into_iter().rev() {
                 let resp = ok(&req, serde_json::json!({ "method": req["method"] }));
-                ws.send(Message::Text(resp.to_string().into())).await.unwrap();
+                ws.send(Message::Text(resp.to_string().into()))
+                    .await
+                    .unwrap();
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         });
