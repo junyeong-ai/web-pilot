@@ -2,7 +2,7 @@
 // // navigation detection. Mirrors transport/local/action.rs.
 
 import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
-import { activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
+import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, settledActionUrl, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
@@ -153,8 +153,8 @@ async function handleAction(command) {
         // A click-opened popup is often `about:blank` (already complete)
         // before its destination commits — wait past it; a same-tab
         // navigation just waits for the new document to parse.
-        if (result.new_tab) await adoptedDocumentReady(t.id, 2000);
-        else if (result.url_changed) await documentReady(t.id, 2000);
+        if (result.new_tab) await adoptedDocumentReady(t.id, PROBE_MS);
+        else if (result.url_changed) await documentReady(t.id, PROBE_MS);
         await ensureBridge(t.id, activeFrameId);
         const dom = await sendToContent(t.id, { type: "extractDom", options: {} }, activeFrameId, 5000);
         // The bridge returns a snapshot (with an `elements` array) on success,

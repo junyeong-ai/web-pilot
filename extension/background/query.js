@@ -2,7 +2,7 @@
 // // Mirrors transport/local/query.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, timeoutErr } from "./errors.js";
-import { activeFrameId, resolveActiveTab, sleep } from "./session.js";
+import { PROBE_MS, activeFrameId, resolveActiveTab, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
 
@@ -41,7 +41,7 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
       func: (k, n) => { window[k] = n; },
       args: [key, nonce],
     });
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + PROBE_MS;
     const probed = new Set();
     while (Date.now() < deadline) {
       const matches = [];

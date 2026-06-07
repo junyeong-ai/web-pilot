@@ -78,6 +78,13 @@ function navigationTimeoutMs() {
   return hostConfig.navigationTimeoutMs;
 }
 
+// Bounded window for an async browser event to be observed — a document to
+// parse after a navigation, or a frame's execution context to appear. The
+// browser twin of the headless `PROBE` constant (also 2s). A miss degrades to a
+// best-effort result (a slightly-early capture, a typed FrameNotFound), never a
+// wrong one, so it is a fixed structural bound, not an operator knob.
+const PROBE_MS = 2000;
+
 // ── Active tab ──────────────────────────────────────────────────────────────
 // Browser mode binds every command to ONE tab, exactly as headless binds to
 // one target: pinned on first use (the focused window's active http tab),
@@ -104,4 +111,4 @@ async function resolveActiveTab() {
   return focused;
 }
 
-export { RESTORED, activeFrameId, activeTabId, applyHostConfig, monitoringState, navigationTimeoutMs, pruneTabMonitoring, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };
+export { PROBE_MS, RESTORED, activeFrameId, activeTabId, applyHostConfig, monitoringState, navigationTimeoutMs, pruneTabMonitoring, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };

@@ -65,10 +65,16 @@ function watchMainFrameCommit(tabId) {
 // dying page. Never throws: the action's side effect is already done. The watch
 // must be registered BEFORE the action so the start/commit it triggers is seen.
 async function settledActionUrl(tabId, beforeUrl, watch) {
-  // The `chrome.tabs.get` await also yields to the event loop, letting an
-  // onBeforeNavigate dispatched during the action be processed before the
-  // `watch.started` check — the browser equivalent of headless's pre-buffered
-  // `frameStartedLoading`.
+  // The navigation-start signal (`watch.started`, from onBeforeNavigate) is the
+  // decision authority, not a fixed grace window: a guessed delay would either
+  // add latency to every non-navigating action or still miss a slow start, so
+  // none is added. The `chrome.tabs.get` await yields the event loop so an
+  // onBeforeNavigate dispatched during the action is processed before the check
+  // — the browser's nearest equivalent of headless's in-order CDP event buffer.
+  // The residual gap (a start that dispatches after this point) is inherent to
+  // MV3's cross-channel event ordering and degrades to a best-effort capture the
+  // agent re-runs, never a wrong action; headless, on one ordered socket, has no
+  // such gap.
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const urlNow = tab?.url || "";
   if (!watch.started && !watch.committed && (!urlNow || urlNow === beforeUrl)) {
