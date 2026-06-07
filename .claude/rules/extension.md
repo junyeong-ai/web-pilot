@@ -43,5 +43,9 @@ paths:
 
 ## Service worker (browser mode)
 - `nmPort?.postMessage()` for NM communication (optional chaining handles SW restart races).
-- `handleStatus()` returns `connected: !!nmPort` — derived from real port state.
-- `withCdp(tabId, fn)` serialises concurrent CDP operations per tab.
+- `handleStatus()` returns `connected: !!nmPort` — derived from real port state — and reports the pinned tab without ever pinning as a side effect.
+- `withCdp(tabId, fn)` serialises concurrent CDP operations per tab; per-tab state (`cdpLocks`, monitoring sets) is pruned on `tabs.onRemoved`.
+- **Active tab**: every command targets one pinned tab (`resolveActiveTab`, persisted in `storage.session` across SW restarts), pinned on first use to the focused window's active http tab, moved only by `tab switch` / `tab new` / a click-opened tab. A vanished pin is a typed `TabNotFound` — never a silent retarget. Browser mode is single-agent by design; multi-agent isolation is headless `--context`.
+- **Navigation** settles through `waitNavigationSettled`, mirroring headless `navigation_settled`: committed (a main-frame commit event — `onCommitted` / `onHistoryStateUpdated` / `onReferenceFragmentUpdated` — or the URL leaving its pre-navigation value) AND parsed (readyState past `loading`). Deadline-bounded, no fixed sleeps, no debugger. History nav runs `history.back()/forward()` in the page (`chrome.tabs.goBack` refuses even with history in headless Chrome — measured); `navigation.canGoBack/Forward` makes a missing entry an immediate typed `NavigationFailed`.
+- **Capture** fails loud with typed errors (headless parity); only screenshots degrade explicitly via `screenshot_error`. Full-page is one CDP `captureBeyondViewport` shot — there is no tiling.
+- **Eval**: main frame via CDP with the headless expression contract (`(()=>(code))()`, statements on SyntaxError, promise awaited); a switched frame routes via `scripting.executeScript(frameIds)` and surfaces a forbidding page CSP as typed `CspViolation`.

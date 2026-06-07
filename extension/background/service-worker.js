@@ -82,6 +82,16 @@ function topErr(error) {
 
 const cdpLocks = new Map();
 
+// A closed tab's per-tab state must not accumulate for the worker's lifetime.
+// The pin is deliberately NOT cleared here: a vanished pin is a typed
+// TabNotFound at the next command, never a silent retarget.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  cdpLocks.delete(tabId);
+  const hadConsole = monitoringState.console.delete(tabId);
+  const hadNetwork = monitoringState.network.delete(tabId);
+  if (hadConsole || hadNetwork) saveMonitoringState();
+});
+
 async function withCdp(tabId, fn) {
   const prev = cdpLocks.get(tabId) || Promise.resolve();
   const op = prev.then(async () => {
@@ -482,7 +492,7 @@ async function handleCapture(command) {
       const r = await sendToContent(tabId, { type: "extractText" }, activeFrameId, 5000);
       if (r?.text) {
         result.dom = result.dom || emptyDom();
-        result.dom.text_content = r.text.slice(0, 50000);
+        result.dom.text_content = r.text;
         result.page_url = r.url || result.page_url;
         result.page_title = r.title || result.page_title;
       }

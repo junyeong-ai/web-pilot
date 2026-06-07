@@ -789,8 +789,10 @@
       case "extractDom":
         return extractDom(msg.options || {});
       case "extractText":
+        // Capped here, in the one place both modes share, so a giant page
+        // costs the same bounded tokens everywhere (codepoint-safe).
         return {
-          text: document.body?.innerText || "",
+          text: clip(document.body?.innerText || "", 50000),
           url: location.href,
           title: document.title,
         };
