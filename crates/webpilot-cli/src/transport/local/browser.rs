@@ -81,7 +81,71 @@ impl LocalTransport {
         super::clear_persisted_active_frame(self.persisted_context_key());
         super::write_persisted_active_tab(self.persisted_context_key(), tab_id);
         self.rebind_frame_listener().await;
+        // Armed monitors follow the agent's working tab: the freshly bound
+        // page has no hooks yet (idempotent no-op when nothing is armed).
+        self.reinstall_monitors().await;
         Ok(action_success(None))
+    }
+
+    /// Adopt a tab the acted-on page opened during the action window — the
+    /// headless mirror of browser mode's `tabs.onCreated` correlation. The
+    /// first buffered `Target.targetCreated` whose `openerId` is the acted-on
+    /// target moves the pin, exactly as a user-visible popup steals focus.
+    /// Only a tab THIS page opened qualifies; an unrelated target created
+    /// concurrently (another context, another agent) never captures the pin.
+    pub(super) async fn adopt_click_opened_target(
+        &mut self,
+        events: &mut tokio::sync::broadcast::Receiver<Value>,
+    ) -> Option<TabInfo> {
+        use tokio::sync::broadcast::error::TryRecvError;
+        let opener = self.target_id.clone();
+        let info = loop {
+            match events.try_recv() {
+                Ok(ev) => {
+                    if ev.get("method").and_then(Value::as_str) != Some("Target.targetCreated") {
+                        continue;
+                    }
+                    let Some(info) = ev.pointer("/params/targetInfo") else {
+                        continue;
+                    };
+                    if info.get("type").and_then(Value::as_str) == Some("page")
+                        && info.get("openerId").and_then(Value::as_str) == Some(opener.as_str())
+                    {
+                        break info.clone();
+                    }
+                }
+                Err(TryRecvError::Lagged(_)) => continue,
+                Err(_) => return None,
+            }
+        };
+        let id = info.get("targetId").and_then(Value::as_str)?.to_string();
+        // Rebind through the same path `tab switch` uses, so frame scope,
+        // persistence, and monitors stay consistent. A popup that already
+        // vanished is simply not adopted.
+        match self.do_tab_switch(&id).await {
+            Ok(ResponseData::Action { success: true, .. }) => {}
+            _ => return None,
+        }
+        // The creation event usually carries `about:blank`; the pin has moved,
+        // so the bound target reports where the popup actually is by now.
+        let url = match self.bound_target_url().await {
+            u if u.is_empty() => info
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            u => u,
+        };
+        Some(TabInfo {
+            id,
+            url,
+            title: info
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            active: true,
+        })
     }
 
     pub(super) async fn do_tab_new(&mut self, url: &str) -> Result<ResponseData> {
@@ -99,9 +163,13 @@ impl LocalTransport {
             }
         };
         // A new tab becomes the active one — same UX as `chrome.tabs.create`
-        // in browser mode.
-        super::write_persisted_active_tab(self.persisted_context_key(), &target_id);
-        super::clear_persisted_active_frame(self.persisted_context_key());
+        // in browser mode. Rebind through the `tab switch` path so a
+        // long-lived transport (the MCP server) acts on the tab it just
+        // created, not the page it was bound to before.
+        match self.do_tab_switch(&target_id).await? {
+            ResponseData::Action { success: true, .. } => {}
+            other => return Ok(other),
+        }
         Ok(ResponseData::Action {
             success: true,
             error: None,

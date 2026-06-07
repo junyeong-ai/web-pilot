@@ -71,6 +71,7 @@ impl LocalTransport {
         self.page.evaluate(CONSOLE_INSTALL_JS).await?;
         self.console_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
+        self.persist_monitor_flags();
         Ok(ok_command_result())
     }
 
@@ -117,18 +118,38 @@ impl LocalTransport {
         self.page.evaluate(NETWORK_INSTALL_JS).await?;
         self.network_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
+        self.persist_monitor_flags();
         Ok(ok_command_result())
+    }
+
+    /// Record the armed-monitor state so later CLI processes keep re-arming
+    /// the hooks (see `read_persisted_monitors`).
+    fn persist_monitor_flags(&self) {
+        use std::sync::atomic::Ordering::Acquire;
+        super::write_persisted_monitors(
+            self.persisted_context_key(),
+            self.console_monitoring.load(Acquire),
+            self.network_monitoring.load(Acquire),
+        );
     }
 
     /// Re-arm any active monitors after a navigation wiped their `window`
     /// hooks. A no-op until `console start` / `network start` has run, so a
-    /// plain navigation pays nothing.
+    /// plain navigation pays nothing. Re-arming re-checks policy rather than
+    /// extending the grant made at `start` time: an `eval` deny issued after
+    /// a monitor started stops its JS from being injected ever again, instead
+    /// of riding along inside permitted navigation commands.
     pub(super) async fn reinstall_monitors(&self) {
         use std::sync::atomic::Ordering::Acquire;
-        if self.console_monitoring.load(Acquire) {
+        use webpilot::protocol::Command;
+        if self.console_monitoring.load(Acquire)
+            && crate::policy::enforce(&Command::ConsoleStart).is_ok()
+        {
             let _ = self.page.evaluate(CONSOLE_INSTALL_JS).await;
         }
-        if self.network_monitoring.load(Acquire) {
+        if self.network_monitoring.load(Acquire)
+            && crate::policy::enforce(&Command::NetworkStart).is_ok()
+        {
             let _ = self.page.evaluate(NETWORK_INSTALL_JS).await;
         }
     }

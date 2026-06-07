@@ -70,6 +70,17 @@ impl LocalTransport {
         let ws_url = session::ensure_session().await?;
         let browser = CdpClient::connect(&ws_url).await?;
 
+        // Push-based target discovery: a click-opened popup is correlated by
+        // the `Target.targetCreated` event captured during an action's bridge
+        // window — the headless mirror of browser mode's `tabs.onCreated`
+        // listener. Idempotent per connection.
+        browser
+            .send(
+                "Target.setDiscoverTargets",
+                Some(serde_json::json!({"discover": true})),
+            )
+            .await?;
+
         let (page, browser_context_id, target_id) =
             resolve_target(&browser, &ws_url, context_name).await?;
 
@@ -96,6 +107,12 @@ impl LocalTransport {
             None => None,
         };
 
+        // Restore the armed-monitor state across CLI invocations: `network
+        // start` in one process must keep recording through navigations run
+        // from later processes, exactly as the browser-mode service worker's
+        // per-tab monitoring survives because the worker itself persists.
+        let (console_armed, network_armed) = read_persisted_monitors(browser_context_id.as_deref());
+
         Ok(Self {
             browser,
             page,
@@ -104,8 +121,8 @@ impl LocalTransport {
             target_id,
             frame_contexts,
             active_frame_id: Arc::new(Mutex::new(restored_active)),
-            console_monitoring: Arc::new(AtomicBool::new(false)),
-            network_monitoring: Arc::new(AtomicBool::new(false)),
+            console_monitoring: Arc::new(AtomicBool::new(console_armed)),
+            network_monitoring: Arc::new(AtomicBool::new(network_armed)),
         })
     }
 
@@ -513,6 +530,40 @@ pub(super) fn write_persisted_active_tab(browser_context_id: Option<&str>, targe
 
 pub(super) fn clear_persisted_active_tab(browser_context_id: Option<&str>) {
     let _ = std::fs::remove_file(active_tab_file(browser_context_id));
+}
+
+// ── Armed-monitor persistence ─────────────────────────────────────────────
+//
+// `console start` / `network start` arm a per-context recording intent that
+// must outlive the CLI process that issued it — the hooks live on the page's
+// `window` and are wiped by every full-document navigation, so whichever
+// later process drives a navigation is the one that has to re-install them.
+// Session-scoped like the tab/frame pins: `quit` removes the files.
+
+fn monitors_file(browser_context_id: Option<&str>) -> PathBuf {
+    let key = browser_context_id.unwrap_or("default");
+    dirs::runtime_dir().join(format!("monitors_{key}.json"))
+}
+
+pub(super) fn read_persisted_monitors(browser_context_id: Option<&str>) -> (bool, bool) {
+    let Ok(raw) = std::fs::read_to_string(monitors_file(browser_context_id)) else {
+        return (false, false);
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+        return (false, false);
+    };
+    let flag = |name: &str| v.get(name).and_then(Value::as_bool).unwrap_or(false);
+    (flag("console"), flag("network"))
+}
+
+pub(super) fn write_persisted_monitors(
+    browser_context_id: Option<&str>,
+    console: bool,
+    network: bool,
+) {
+    let path = monitors_file(browser_context_id);
+    let s = serde_json::json!({"console": console, "network": network}).to_string();
+    let _ = std::fs::write(&path, s);
 }
 
 async fn frame_exists(page: &CdpClient, frame_id: &str) -> bool {

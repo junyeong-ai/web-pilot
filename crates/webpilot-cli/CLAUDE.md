@@ -30,13 +30,18 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       (`navigate_reconnect`), monitor re-install after navigation.
     - `action.rs` — page-mutating (click/type/scroll/drag, `do_action`).
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
-      active.
+      active. Bridge actions bracket a navigation + popup watch (events
+      subscribed *before* the action runs): `settled_action_url` reports
+      `url_changed` (bounded commit wait only when a main-frame load started),
+      `adopt_click_opened_target` moves the pin to a click-opened tab — the
+      browser-mode `dispatchActionToPage` contract, mirrored.
     - `capture.rs` — DOM / screenshot / PDF / accessibility tree;
       `count_http_subframes` → `DomSnapshot.subframes`.
     - `query.rs` — eval (`do_eval`) / wait / dom get·set / fetch.
     - `state.rs` — cookies / console·network monitors / session. Monitors set an
-      armed flag so `reinstall_monitors` re-injects them after a navigation wipes
-      their `window` hooks.
+      armed flag — persisted per context, so later CLI processes keep re-arming —
+      and `reinstall_monitors` re-injects after every WebPilot-driven page change,
+      re-checking policy first (an `eval` deny stops armed monitors too).
     - `browser.rs` — tab / frame / status.
   - `local_context.rs` — per-user CDP browser-context store (multi-agent,
     `MAX_CONTEXTS`).

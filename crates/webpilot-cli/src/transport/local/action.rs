@@ -59,6 +59,7 @@ impl LocalTransport {
                     .await
                     .ok();
                 self.clear_active_frame().await;
+                self.reinstall_monitors().await;
                 return Ok(action_success(None));
             }
             Action::Drag {
@@ -87,6 +88,16 @@ impl LocalTransport {
             _ => {}
         }
 
+        // Mirror browser mode's action contract (`dispatchActionToPage`): the
+        // popup watch and the navigation watch open BEFORE the action runs —
+        // no detection window — and the URL comparison brackets the action.
+        // Both are best-effort by design in both modes: a navigation or popup
+        // the browser registers after the action's round-trip is reported by
+        // the next capture.
+        let url_before = self.bound_target_url().await;
+        let mut target_events = self.browser.subscribe_events();
+        let mut page_events = self.page.subscribe_events();
+
         let action_json = serde_json::to_value(&action)?;
         let raw = self
             .invoke_bridge(&json!({"type": "executeAction", "action": action_json}))
@@ -108,7 +119,26 @@ impl LocalTransport {
             None
         };
 
-        Ok(action_success(dom))
+        // Sample the acted-on page before any pin move, so `url_changed`
+        // reports this tab's navigation, never the popup's URL.
+        let landed = self.settled_action_url(&mut page_events, &url_before).await;
+        let url_changed = (!landed.is_empty() && landed != url_before).then_some(landed);
+        if url_changed.is_some() {
+            // The action landed on a new document — its `window` hooks are
+            // gone, and the commit has been observed, so re-arm here. (A
+            // navigation that outlives the bounded settle window resumes
+            // recording at the next WebPilot navigation or tab command.)
+            self.reinstall_monitors().await;
+        }
+        let new_tab = self.adopt_click_opened_target(&mut target_events).await;
+
+        Ok(ResponseData::Action {
+            success: true,
+            error: None,
+            dom,
+            url_changed,
+            new_tab,
+        })
     }
 
     /// Typed guard for actions whose CDP path (page-viewport coordinates or
@@ -213,6 +243,104 @@ impl LocalTransport {
         Ok(())
     }
 
+    /// Where the acted-on page's main frame ended up after an action, given
+    /// the page events buffered since just before the action ran.
+    ///
+    /// The immediate URL compare covers navigations that committed within the
+    /// action's round-trip (and same-document/SPA route changes, which update
+    /// the target URL synchronously). When the action *started* a main-frame
+    /// load that has not committed yet — a plain link click racing the bridge
+    /// response — the commit is awaited, bounded by `PROBE`, so the agent gets
+    /// `url_changed` exactly as browser mode reports it. An action that
+    /// started no main-frame load pays nothing: no events, no wait.
+    async fn settled_action_url(
+        &self,
+        events: &mut tokio::sync::broadcast::Receiver<Value>,
+        before: &str,
+    ) -> String {
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+
+        fn main_frame_url(ev: &Value) -> Option<&str> {
+            if ev.get("method").and_then(Value::as_str) != Some("Page.frameNavigated") {
+                return None;
+            }
+            let frame = ev.pointer("/params/frame")?;
+            if frame.get("parentId").is_some() {
+                return None;
+            }
+            frame.get("url").and_then(Value::as_str)
+        }
+
+        let immediate = self.bound_target_url().await;
+        if !immediate.is_empty() && immediate != before {
+            return immediate;
+        }
+
+        // Drain what the action already produced: a commit decides instantly;
+        // otherwise collect which frames started loading.
+        let mut committed: Option<String> = None;
+        let mut started: Vec<String> = Vec::new();
+        loop {
+            match events.try_recv() {
+                Ok(ev) => {
+                    if let Some(u) = main_frame_url(&ev) {
+                        committed = Some(u.to_string());
+                    } else if ev.get("method").and_then(Value::as_str)
+                        == Some("Page.frameStartedLoading")
+                        && let Some(id) = ev.pointer("/params/frameId").and_then(Value::as_str)
+                    {
+                        started.push(id.to_string());
+                    }
+                }
+                Err(TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+        if let Some(u) = committed {
+            return u;
+        }
+        if started.is_empty() {
+            return immediate;
+        }
+
+        // Only a MAIN-frame start justifies waiting for the commit — an
+        // iframe the click lazy-loaded must not stall the action.
+        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
+            return immediate;
+        };
+        let is_main_started = tree
+            .pointer("/frameTree/frame/id")
+            .and_then(Value::as_str)
+            .is_some_and(|main| started.iter().any(|f| f == main));
+        if !is_main_started {
+            return immediate;
+        }
+
+        let deadline = tokio::time::Instant::now() + super::PROBE;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return self.bound_target_url().await;
+            }
+            match tokio::time::timeout(deadline - now, events.recv()).await {
+                Ok(Ok(ev)) => {
+                    if let Some(u) = main_frame_url(&ev) {
+                        return u.to_string();
+                    }
+                    // The load ended without a commit (cancelled, download):
+                    // nothing further to wait for.
+                    if ev.get("method").and_then(Value::as_str)
+                        == Some("Page.frameStoppedLoading")
+                    {
+                        return self.bound_target_url().await;
+                    }
+                }
+                Ok(Err(RecvError::Lagged(_))) => continue,
+                Ok(Err(_)) | Err(_) => return self.bound_target_url().await,
+            }
+        }
+    }
+
     /// Drive a same-document history navigation (`history.back()`/`forward()`).
     ///
     /// The navigation tears down the execution context the expression runs in,
@@ -257,6 +385,10 @@ impl LocalTransport {
             .await
             .ok();
         self.clear_active_frame().await;
+        // A history traversal that built a new document wiped the monitor
+        // hooks; for a same-document traversal the re-install is an idempotent
+        // no-op (the install scripts guard on their `window` flags).
+        self.reinstall_monitors().await;
         Ok(())
     }
 

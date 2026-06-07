@@ -317,13 +317,16 @@ pub async fn quit_session() -> Result<()> {
     }
     let _ = std::fs::remove_file(ws_url_path());
 
-    // Per-(context|default) active-frame and active-tab state — session-scoped,
-    // gone with Chrome.
+    // Per-(context|default) active-frame, active-tab, and armed-monitor
+    // state — session-scoped, gone with Chrome.
     if let Ok(entries) = std::fs::read_dir(dirs::runtime_dir()) {
         for entry in entries.filter_map(|e| e.ok()) {
             let n = entry.file_name();
             let name = n.to_string_lossy();
-            if name.starts_with("active_frame_") || name.starts_with("active_tab_") {
+            if name.starts_with("active_frame_")
+                || name.starts_with("active_tab_")
+                || name.starts_with("monitors_")
+            {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
