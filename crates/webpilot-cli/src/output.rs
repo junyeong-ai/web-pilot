@@ -44,6 +44,52 @@ pub enum CommandOutput {
     },
 }
 
+/// The side-channel artefacts a capture reports next to the DOM, with their
+/// human labels. Single source for both the CLI renderer and `to_agent_text`.
+const DOM_EXTRA_LABELS: [(&str, &str); 4] = [
+    ("screenshot_path", "Screenshot"),
+    ("screenshot_error", "Screenshot failed"),
+    ("pdf_path", "PDF"),
+    ("accessibility_path", "Accessibility tree"),
+];
+
+impl CommandOutput {
+    /// Flatten to one agent-facing text block — the body of an MCP tool result.
+    /// Mirrors the Human render but returns the text instead of splitting it
+    /// across stdout/stderr, so the MCP surface and the CLI share one set of
+    /// renderers (`DomSnapshot::to_text`, the handler-built `human` strings).
+    pub fn to_agent_text(&self) -> String {
+        match self {
+            CommandOutput::Ok(msg) => msg.clone(),
+            CommandOutput::Data { human, .. } => human.clone(),
+            CommandOutput::Content { stdout, .. } => stdout.clone(),
+            CommandOutput::Dom { snapshot, extra } => {
+                let mut lines: Vec<String> = Vec::new();
+                if !snapshot.elements.is_empty() {
+                    lines.push(snapshot.to_text());
+                }
+                for (key, label) in DOM_EXTRA_LABELS {
+                    if let Some(p) = extra.get(key).and_then(|v| v.as_str()) {
+                        lines.push(format!("{label}: {p}"));
+                    }
+                }
+                lines.join("\n")
+            }
+            CommandOutput::List {
+                human_lines,
+                summary,
+                ..
+            } => {
+                let mut lines = human_lines.clone();
+                if !summary.is_empty() {
+                    lines.push(summary.clone());
+                }
+                lines.join("\n")
+            }
+        }
+    }
+}
+
 pub fn render(result: CommandOutput, mode: OutputMode) {
     match (result, mode) {
         (CommandOutput::Ok(msg), OutputMode::Human) => eprintln!("{msg}"),
@@ -56,12 +102,7 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
             if !snapshot.elements.is_empty() {
                 print!("{}", snapshot.to_text());
             }
-            for (key, label) in [
-                ("screenshot_path", "Screenshot"),
-                ("screenshot_error", "Screenshot failed"),
-                ("pdf_path", "PDF"),
-                ("accessibility_path", "Accessibility tree"),
-            ] {
+            for (key, label) in DOM_EXTRA_LABELS {
                 if let Some(p) = extra.get(key).and_then(|v| v.as_str()) {
                     eprintln!("{label}: {p}");
                 }

@@ -8,8 +8,9 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-# Async runtime — feature-trimmed (no `process` or `signal` here; stdlib is enough)
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "fs"] }
+# Async runtime — feature-trimmed (no `process` or `signal` here; stdlib is enough).
+# `io-std` powers the MCP server's async stdin/stdout JSON-RPC loop.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "fs"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # Serialization

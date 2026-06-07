@@ -73,6 +73,8 @@ pub enum Command {
     SelfCmd(self_cmd::SelfArgs),
     /// Remove every artefact this binary created
     Uninstall(uninstall::UninstallArgs),
+    /// Run as an MCP server over stdio for AI-agent hosts
+    Mcp(crate::mcp::McpArgs),
     /// Stop the entire headless Chrome session. Use `context close NAME` to close one context.
     Quit,
 }

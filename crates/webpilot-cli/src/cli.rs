@@ -61,6 +61,12 @@ pub async fn run_cli() -> Result<()> {
         return run_local(cli.command, mode).await;
     }
 
+    // The MCP server owns its own long-lived transport and stdio loop; it picks
+    // the mode from the same flags the CLI does.
+    if matches!(cli.command.execution(), Execution::Mcp) {
+        return crate::mcp::serve(cli.browser, cli.context).await;
+    }
+
     if cli.browser {
         run_browser_mode(cli.command, mode).await
     } else {
@@ -97,6 +103,8 @@ enum Execution {
     HeadlessOnly,
     /// Identical in both modes through the `Transport` trait.
     TransportGeneric,
+    /// Long-lived stdio MCP server; opens its own transport in `run_cli`.
+    Mcp,
 }
 
 impl Cmd {
@@ -105,6 +113,7 @@ impl Cmd {
             Cmd::Setup(_) | Cmd::SelfCmd(_) | Cmd::Uninstall(_) | Cmd::Diff(_) | Cmd::Policy(_) => {
                 Execution::Local
             }
+            Cmd::Mcp(_) => Execution::Mcp,
             Cmd::Status => Execution::Status,
             Cmd::Quit => Execution::Quit,
             Cmd::Device(_) | Cmd::Profile(_) | Cmd::Record(_) | Cmd::Context(_) => {
@@ -135,6 +144,7 @@ async fn run_browser_mode(command: commands::Command, mode: OutputMode) -> Resul
             dispatch_via_transport(&mut IpcTransport::new(), command).await
         }
         Execution::Local => unreachable!("Local commands are resolved in run_cli"),
+        Execution::Mcp => unreachable!("MCP is resolved in run_cli"),
     };
     output::render(result?, mode);
     Ok(())
@@ -198,6 +208,7 @@ async fn dispatch_via_transport<T: Transport>(
         | Cmd::Policy(_)
         | Cmd::Setup(_)
         | Cmd::SelfCmd(_)
+        | Cmd::Mcp(_)
         | Cmd::Uninstall(_) => unreachable!("non-transport command reached generic dispatch"),
     }
 }
