@@ -152,18 +152,22 @@ async function handleWait(command) {
   const timeoutMs = command.timeout_ms || 10000;
 
   if (cond.until === "navigation") {
+    // The main frame finished a document navigation — the headless
+    // `Page.loadEventFired` twin. `webNavigation.onCompleted` (frame 0) is
+    // scheme-agnostic, so unlike a `tabs.onUpdated` + `http` filter it doesn't
+    // miss a navigation to a non-http document.
     let listener;
     try {
       await Promise.race([
         new Promise((resolve) => {
-          listener = (tid, info, updated) => {
-            if (tid === tab.id && info.status === "complete" && updated.url?.startsWith("http")) {
-              chrome.tabs.onUpdated.removeListener(listener);
+          listener = (d) => {
+            if (d.tabId === tab.id && d.frameId === 0) {
+              chrome.webNavigation.onCompleted.removeListener(listener);
               listener = null;
               resolve();
             }
           };
-          chrome.tabs.onUpdated.addListener(listener);
+          chrome.webNavigation.onCompleted.addListener(listener);
         }),
         new Promise((_, rej) => setTimeout(() => rej(new Error("nav-timeout")), timeoutMs)),
       ]);
@@ -171,7 +175,7 @@ async function handleWait(command) {
     } catch {
       return { type: "Wait", success: false, error: timeoutErr("navigation", timeoutMs) };
     } finally {
-      if (listener) chrome.tabs.onUpdated.removeListener(listener);
+      if (listener) chrome.webNavigation.onCompleted.removeListener(listener);
     }
   }
 

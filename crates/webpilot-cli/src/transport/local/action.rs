@@ -492,12 +492,13 @@ impl LocalTransport {
     /// action), so no polling.
     async fn await_document_ready(&self, events: &mut tokio::sync::broadcast::Receiver<Value>) {
         use tokio::sync::broadcast::error::RecvError;
-        if let Ok(v) = self.page.evaluate("document.readyState").await
-            && v.as_str().is_some_and(|s| s != "loading")
-        {
+        // The whole wait — both the readyState probes AND the event waits — is
+        // bounded by one PROBE deadline, so a hung renderer can never stretch a
+        // probe to the 30s CDP send timeout and blow the budget.
+        let deadline = tokio::time::Instant::now() + super::PROBE;
+        if self.document_parsed(deadline).await {
             return;
         }
-        let deadline = tokio::time::Instant::now() + super::PROBE;
         loop {
             let now = tokio::time::Instant::now();
             if now >= deadline {
@@ -510,8 +511,7 @@ impl LocalTransport {
                     // readyState stays the authority.
                     if ev.get("method").and_then(Value::as_str)
                         == Some("Page.domContentEventFired")
-                        && let Ok(v) = self.page.evaluate("document.readyState").await
-                        && v.as_str().is_some_and(|s| s != "loading")
+                        && self.document_parsed(deadline).await
                     {
                         return;
                     }
@@ -520,6 +520,20 @@ impl LocalTransport {
                 Ok(Err(_)) | Err(_) => return,
             }
         }
+    }
+
+    /// `document.readyState` is past `loading`, probed within the remaining
+    /// `deadline` budget — so a stuck renderer's evaluate can't exceed the
+    /// caller's wait window by falling back to the CDP send timeout.
+    async fn document_parsed(&self, deadline: tokio::time::Instant) -> bool {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        matches!(
+            tokio::time::timeout(deadline - now, self.page.evaluate("document.readyState")).await,
+            Ok(Ok(v)) if v.as_str().is_some_and(|s| s != "loading")
+        )
     }
 
     /// Wait — bounded by `PROBE` — for a freshly adopted popup to settle on
