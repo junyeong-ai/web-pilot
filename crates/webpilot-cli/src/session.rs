@@ -377,8 +377,8 @@ pub async fn quit_session() -> Result<()> {
     let _ = std::fs::remove_file(&pid_file);
     let _ = std::fs::remove_file(ws_url_path());
 
-    // Per-(context|default) active-frame, active-tab, and armed-monitor
-    // state — session-scoped, gone with Chrome.
+    // Per-(context|default) active-frame, active-tab, armed-monitor, and
+    // device-emulation state — all session-scoped, gone with Chrome.
     if let Ok(entries) = std::fs::read_dir(dirs::runtime_dir()) {
         for entry in entries.filter_map(|e| e.ok()) {
             let n = entry.file_name();
@@ -386,6 +386,7 @@ pub async fn quit_session() -> Result<()> {
             if name.starts_with("active_frame_")
                 || name.starts_with("active_tab_")
                 || name.starts_with("monitor_")
+                || name.starts_with("device_")
             {
                 let _ = std::fs::remove_file(entry.path());
             }

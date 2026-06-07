@@ -744,6 +744,16 @@
         return err("InvalidArgument", `${store} must be an object of string keys and values`);
       }
     }
+    // Storage values are always strings (that's all the Web Storage API holds);
+    // a non-string in the file would coerce to garbage like "[object Object]",
+    // so reject it rather than import a silent lie.
+    for (const store of ["localStorage", "sessionStorage"]) {
+      for (const v of Object.values(msg[store] || {})) {
+        if (typeof v !== "string") {
+          return err("InvalidArgument", `${store} values must be strings`);
+        }
+      }
+    }
     const restore = (store, obj) => {
       for (const [k, v] of Object.entries(obj || {})) {
         total++;

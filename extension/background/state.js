@@ -267,6 +267,12 @@ async function handleSessionExport() {
 async function handleSessionImport(rawData) {
   try {
     const data = JSON.parse(rawData);
+    // `cookies`, when present, must be an array — a string would otherwise
+    // iterate character by character into a spray of failures. Reject loudly,
+    // matching headless do_session_import.
+    if (data.cookies != null && !Array.isArray(data.cookies)) {
+      return { type: "SessionResult", success: false, error: err("InvalidArgument", "session `cookies` must be an array") };
+    }
     let cookiesTotal = 0;
     let cookiesFailed = 0;
     for (const c of data.cookies || []) {

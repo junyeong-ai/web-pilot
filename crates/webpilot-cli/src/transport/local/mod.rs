@@ -996,13 +996,15 @@ fn spawn_frame_context_listener(
     });
 }
 
-/// Clear all per-context session state (active tab/frame markers) tied to
-/// `browser_context_id`. Callers that dispose the CDP browser context
-/// should invoke this so no stale runtime files remain.
+/// Clear all per-context session state (active tab/frame markers, armed
+/// monitors, device emulation) tied to `browser_context_id`. Callers that
+/// dispose the CDP browser context should invoke this so no stale runtime
+/// files remain.
 pub(crate) fn clear_context_state(browser_context_id: &str) {
     clear_persisted_active_frame(Some(browser_context_id));
     clear_persisted_active_tab(Some(browser_context_id));
     clear_persisted_monitors(Some(browser_context_id));
+    clear_persisted_device(Some(browser_context_id));
 }
 
 #[cfg(test)]

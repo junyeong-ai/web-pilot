@@ -204,6 +204,18 @@ impl LocalTransport {
                 detail: format!("session JSON parse error: {e}"),
             })?;
 
+        // `cookies`, when present, must be an array — a non-array would be
+        // silently dropped here and iterated character by character in browser
+        // mode. Reject the malformed shape loudly, identically in both modes.
+        if let Some(c) = parsed.get("cookies")
+            && !c.is_array()
+        {
+            return Err(WebPilotError::InvalidArgument {
+                detail: "session `cookies` must be an array".into(),
+            }
+            .into());
+        }
+
         let mut cookies_failed = 0usize;
         let mut cookies_total = 0usize;
         if let Some(arr) = parsed.get("cookies").and_then(|v| v.as_array()) {

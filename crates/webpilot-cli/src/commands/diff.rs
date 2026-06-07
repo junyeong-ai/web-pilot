@@ -60,17 +60,32 @@ pub async fn run(args: DiffArgs) -> Result<CommandOutput> {
     } else if args.screenshot {
         diff_screenshot(&args.file_a, &args.file_b)
     } else {
-        // Default: detect by extension
-        let ext = args
-            .file_a
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        match ext {
-            "json" => diff_dom(&args.file_a, &args.file_b),
-            "png" | "jpg" | "jpeg" => diff_screenshot(&args.file_a, &args.file_b),
+        // Default: detect by extension — from BOTH files, so a mismatched pair
+        // (`a.json b.png`) is a typed error rather than silently treating PNG
+        // bytes as DOM text. Case-insensitive (`.PNG` is an image).
+        match (detect_kind(&args.file_a), detect_kind(&args.file_b)) {
+            (Some(Kind::Dom), Some(Kind::Dom)) => diff_dom(&args.file_a, &args.file_b),
+            (Some(Kind::Screenshot), Some(Kind::Screenshot)) => {
+                diff_screenshot(&args.file_a, &args.file_b)
+            }
+            (Some(_), Some(_)) => {
+                anyhow::bail!("Both files must be the same kind (two JSON snapshots or two images).")
+            }
             _ => anyhow::bail!("Cannot detect file type. Use --dom or --screenshot."),
         }
+    }
+}
+
+enum Kind {
+    Dom,
+    Screenshot,
+}
+
+fn detect_kind(path: &Path) -> Option<Kind> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "json" => Some(Kind::Dom),
+        "png" | "jpg" | "jpeg" => Some(Kind::Screenshot),
+        _ => None,
     }
 }
 
