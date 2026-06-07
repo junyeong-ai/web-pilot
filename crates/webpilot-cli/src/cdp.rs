@@ -441,7 +441,9 @@ fn char_safe_prefix(s: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::char_safe_prefix;
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
 
     #[test]
     fn prefix_is_codepoint_safe_for_multibyte() {
@@ -454,5 +456,111 @@ mod tests {
     fn prefix_does_not_overrun() {
         let s = "abc";
         assert_eq!(char_safe_prefix(s, 100), "abc");
+    }
+
+    // ── Mock-CDP harness ──────────────────────────────────────────────────
+    // These drive the real `CdpClient` over a loopback WebSocket, so the actual
+    // reader task, id→oneshot routing, timeout, and reader-exit drain are
+    // exercised end to end — not a reimplementation.
+
+    async fn bind() -> (TcpListener, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        (listener, url)
+    }
+
+    fn webpilot_err(err: &anyhow::Error) -> &WebPilotError {
+        err.downcast_ref::<WebPilotError>()
+            .expect("a typed WebPilotError")
+    }
+
+    #[tokio::test]
+    async fn routes_responses_to_callers_by_id_out_of_order() {
+        // Read two requests, reply in REVERSE order: proves responses are
+        // matched to callers by `id`, never by arrival order.
+        let (listener, url) = bind().await;
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let mut reqs = Vec::new();
+            while reqs.len() < 2 {
+                match ws.next().await {
+                    Some(Ok(Message::Text(t))) => {
+                        reqs.push(serde_json::from_str::<Value>(&t).unwrap())
+                    }
+                    _ => return,
+                }
+            }
+            for req in reqs.into_iter().rev() {
+                let resp =
+                    serde_json::json!({ "id": req["id"], "result": { "method": req["method"] } });
+                ws.send(Message::Text(resp.to_string().into())).await.unwrap();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        });
+
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        let (a, b) = tokio::join!(cdp.send("Alpha", None), cdp.send("Beta", None));
+        assert_eq!(a.unwrap()["method"], "Alpha");
+        assert_eq!(b.unwrap()["method"], "Beta");
+    }
+
+    #[tokio::test]
+    async fn unanswered_request_times_out() {
+        let (listener, url) = bind().await;
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            while let Some(Ok(_)) = ws.next().await {} // read, never reply
+        });
+
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        let err = cdp
+            .send_with_timeout("Hang", None, std::time::Duration::from_millis(150))
+            .await
+            .unwrap_err();
+        assert!(matches!(webpilot_err(&err), WebPilotError::Timeout { .. }));
+        assert_eq!(webpilot_err(&err).exit_code(), 5);
+    }
+
+    #[tokio::test]
+    async fn closed_connection_fails_inflight_with_connection_lost() {
+        let (listener, url) = bind().await;
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let _ = ws.next().await; // read one request, then close
+            drop(ws);
+        });
+
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        let err = cdp.send("Doomed", None).await.unwrap_err();
+        assert!(matches!(
+            webpilot_err(&err),
+            WebPilotError::ConnectionLost { .. }
+        ));
+        assert_eq!(webpilot_err(&err).exit_code(), 3);
+    }
+
+    #[tokio::test]
+    async fn cdp_error_response_is_surfaced() {
+        let (listener, url) = bind().await;
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            if let Some(Ok(Message::Text(t))) = ws.next().await {
+                let req: Value = serde_json::from_str(&t).unwrap();
+                let resp = serde_json::json!({
+                    "id": req["id"],
+                    "error": { "code": -32000, "message": "boom" },
+                });
+                ws.send(Message::Text(resp.to_string().into())).await.unwrap();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        });
+
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        let err = cdp.send("Boom", None).await.unwrap_err();
+        assert!(err.to_string().contains("CDP error"));
     }
 }
