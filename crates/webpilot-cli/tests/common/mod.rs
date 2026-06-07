@@ -10,6 +10,8 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <body>
 <button id="go" onclick="document.title='clicked'">Go</button>
 <input id="q" type="text" placeholder="Search">
+<a id="nav" href="/second">go second</a>
+<a id="pop" href="/second" target="_blank" rel="noopener">open popup</a>
 <iframe src="/frame"></iframe>
 </body></html>"#;
 

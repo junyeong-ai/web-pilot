@@ -87,7 +87,7 @@ webpilot action upload N "/abs/path/file.pdf"      # works in both modes
 webpilot action click N --capture                  # auto-capture DOM after success
 ```
 
-Action responses include `url_changed` if navigation happened and `new_tab` if a `target="_blank"` opened (it is auto-switched to).
+Action responses include `url_changed` if navigation happened and `new_tab` if a `target="_blank"` opened (it is auto-switched to; `--capture` then snapshots the tab you're now on). If the `--capture` snapshot itself fails, the response carries `capture_error` while `success` stays true — the action's side effect already ran, so **do not retry the action**; just run `capture --include dom`.
 
 ## Find (semantic search → optional chained action)
 

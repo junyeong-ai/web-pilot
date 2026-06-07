@@ -36,21 +36,33 @@ pub(crate) fn context_file_path(name: &str) -> std::path::PathBuf {
 /// only the last would be recorded, leaking the other until Chrome exits. The
 /// returned file handle holds an exclusive `flock` until it is dropped.
 fn lock_context(name: &str) -> Result<std::fs::File> {
+    flock_file(
+        &format!("ctx-{}.lock", context_hash(name)),
+        &format!("context '{name}'"),
+    )
+}
+
+/// Serialize store-wide mutations (GC + cap check + create) across processes.
+/// The per-name lock alone cannot enforce `MAX_CONTEXTS`: two processes
+/// creating *different* names would each count the same existing entries and
+/// both pass the cap. Lock order is always name → store; nothing acquires
+/// them the other way, so the pair cannot deadlock.
+fn lock_store() -> Result<std::fs::File> {
+    flock_file("store.lock", "context store")
+}
+
+fn flock_file(filename: &str, what: &str) -> Result<std::fs::File> {
     use std::os::unix::io::AsRawFd;
     let dir = dirs::contexts_dir();
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("ctx-{}.lock", context_hash(name)));
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
-        .open(&path)?;
+        .open(dir.join(filename))?;
     // SAFETY: flock() is a POSIX advisory lock; no memory-safety implications.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        anyhow::bail!(
-            "failed to lock context '{name}': {}",
-            std::io::Error::last_os_error()
-        );
+        anyhow::bail!("failed to lock {what}: {}", std::io::Error::last_os_error());
     }
     Ok(file)
 }
@@ -79,6 +91,7 @@ pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> R
         && let Ok(mut entry) = serde_json::from_str::<ContextEntry>(&data)
     {
         if entry.chrome_pid != chrome_pid {
+            super::local::clear_context_state(&entry.browser_context_id);
             let _ = std::fs::remove_file(&file_path);
         } else {
             let live = browser.get_browser_contexts().await?;
@@ -100,10 +113,14 @@ pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> R
                 let _ = std::fs::write(&file_path, serde_json::to_string(&entry)?);
                 return Ok(tid);
             } else {
+                super::local::clear_context_state(&entry.browser_context_id);
                 let _ = std::fs::remove_file(&file_path);
             }
         }
     }
+
+    // GC, cap check, and create are one atomic store mutation.
+    let _store_lock = lock_store()?;
 
     gc_expired_contexts(browser, chrome_pid).await;
 
@@ -168,14 +185,26 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
             continue;
         };
         if ctx.chrome_pid != current_pid {
+            super::local::clear_context_state(&ctx.browser_context_id);
             let _ = std::fs::remove_file(entry.path());
             continue;
         }
         if now.saturating_sub(ctx.last_used) > ttl {
-            let _ = browser
+            // Deleting the metadata is only safe once the CDP context is
+            // actually gone — otherwise a live context would be orphaned in
+            // Chrome with no record left to close it through.
+            let disposed = browser
                 .dispose_browser_context(&ctx.browser_context_id)
                 .await;
-            let _ = std::fs::remove_file(entry.path());
+            let gone = disposed.is_ok()
+                || !matches!(
+                    browser.get_browser_contexts().await,
+                    Ok(live) if live.contains(&ctx.browser_context_id)
+                );
+            if gone {
+                super::local::clear_context_state(&ctx.browser_context_id);
+                let _ = std::fs::remove_file(entry.path());
+            }
         }
     }
 }

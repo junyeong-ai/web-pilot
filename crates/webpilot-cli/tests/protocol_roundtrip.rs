@@ -288,6 +288,7 @@ fn response_action_carries_typed_error() {
             dom: None,
             url_changed: None,
             new_tab: None,
+            capture_error: None,
         },
     };
     let v = serde_json::to_value(&r).unwrap();

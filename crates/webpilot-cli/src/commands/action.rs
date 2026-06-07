@@ -31,6 +31,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: ActionArgs) -> Result<Co
             dom,
             url_changed,
             new_tab,
+            capture_error,
             ..
         } => {
             lift_error(success, error, ())?;
@@ -59,14 +60,22 @@ pub async fn run<T: Transport>(transport: &mut T, args: ActionArgs) -> Result<Co
                     tab.url
                 ));
             }
+            if let Some(ref ce) = capture_error {
+                msg.push_str(&format!(
+                    "\nCapture failed (the action itself succeeded): {ce} — re-run `webpilot capture --include dom`"
+                ));
+            }
 
-            if url_changed.is_some() || new_tab.is_some() {
+            if url_changed.is_some() || new_tab.is_some() || capture_error.is_some() {
                 let mut json = serde_json::json!({"success": true});
                 if let Some(ref url) = url_changed {
                     json["url_changed"] = serde_json::json!(url);
                 }
                 if let Some(ref tab) = new_tab {
                     json["new_tab"] = serde_json::to_value(tab).unwrap_or(serde_json::Value::Null);
+                }
+                if let Some(ref ce) = capture_error {
+                    json["capture_error"] = serde_json::json!(ce);
                 }
                 Ok(CommandOutput::Data { json, human: msg })
             } else {

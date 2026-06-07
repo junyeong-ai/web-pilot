@@ -95,9 +95,7 @@ async fn close_contexts(
                 if let Ok(data) = std::fs::read_to_string(entry.path())
                     && let Ok(ctx) = serde_json::from_str::<ContextEntry>(&data)
                 {
-                    let _ = browser
-                        .dispose_browser_context(&ctx.browser_context_id)
-                        .await;
+                    dispose_if_live(browser, &ctx.browser_context_id).await?;
                     crate::transport::local::clear_context_state(&ctx.browser_context_id);
                 }
                 let _ = std::fs::remove_file(entry.path());
@@ -118,11 +116,24 @@ async fn close_contexts(
     let data = std::fs::read_to_string(&file_path)
         .map_err(|_| WebPilotError::ContextNotFound { name: name.clone() })?;
     if let Ok(ctx) = serde_json::from_str::<ContextEntry>(&data) {
-        let _ = browser
-            .dispose_browser_context(&ctx.browser_context_id)
-            .await;
+        dispose_if_live(browser, &ctx.browser_context_id).await?;
         crate::transport::local::clear_context_state(&ctx.browser_context_id);
     }
     let _ = std::fs::remove_file(&file_path);
     Ok(CommandOutput::Ok(format!("Closed context '{name}'")))
+}
+
+/// Dispose a CDP browser context, tolerating one that is already gone (a
+/// stale entry must remain closable) but propagating a failure to dispose a
+/// LIVE context — deleting its metadata then would orphan it in Chrome with
+/// no record left to close it through.
+async fn dispose_if_live(
+    browser: &crate::cdp::CdpClient,
+    browser_context_id: &str,
+) -> Result<()> {
+    let live = browser.get_browser_contexts().await?;
+    if live.contains(&browser_context_id.to_string()) {
+        browser.dispose_browser_context(browser_context_id).await?;
+    }
+    Ok(())
 }

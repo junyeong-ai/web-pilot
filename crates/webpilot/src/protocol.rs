@@ -239,6 +239,12 @@ pub enum ResponseData {
         url_changed: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         new_tab: Option<TabInfo>,
+        /// Why the requested `--capture` snapshot is absent. The action itself
+        /// succeeded — failing the whole command would invite a retry that
+        /// re-runs the side effect (a double click), so the capture failure is
+        /// reported alongside the success instead.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capture_error: Option<String>,
     },
     Eval {
         success: bool,

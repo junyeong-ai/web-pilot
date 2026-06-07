@@ -32,9 +32,12 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
       active. Bridge actions bracket a navigation + popup watch (events
       subscribed *before* the action runs): `settled_action_url` reports
-      `url_changed` (bounded commit wait only when a main-frame load started),
-      `adopt_click_opened_target` moves the pin to a click-opened tab — the
-      browser-mode `dispatchActionToPage` contract, mirrored.
+      `url_changed` (bounded commit wait only when a main-frame load started
+      and has not already stopped), `adopt_click_opened_target` moves the pin
+      to a click-opened tab — the browser-mode `dispatchActionToPage`
+      contract, mirrored. `--capture` runs after adoption and document
+      readiness; a capture failure becomes `capture_error`, never a command
+      failure (a retry would re-run the side effect).
     - `capture.rs` — DOM / screenshot / PDF / accessibility tree;
       `count_http_subframes` → `DomSnapshot.subframes`.
     - `query.rs` — eval (`do_eval`) / wait / dom get·set / fetch.

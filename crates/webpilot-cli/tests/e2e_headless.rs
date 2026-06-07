@@ -20,6 +20,19 @@ use common::{code, spawn_server, stdout};
 
 const BIN: &str = env!("CARGO_BIN_EXE_webpilot");
 
+/// The captured index of the element with the given DOM id, as a CLI argument.
+fn index_of(cap: &Output, id: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(&stdout(cap)).expect("capture json");
+    v["elements"]
+        .as_array()
+        .expect("elements array")
+        .iter()
+        .find(|e| e["id"] == id)
+        .and_then(|e| e["index"].as_u64())
+        .unwrap_or_else(|| panic!("element #{id} not captured: {}", stdout(cap)))
+        .to_string()
+}
+
 struct Fixture {
     home: PathBuf,
 }
@@ -91,15 +104,79 @@ fn headless_behavioral_flow() {
         stdout(&title)
     );
 
-    // 3. Zero-false-positive guard: a same-document navigation (pushState)
+    // 3. A link click that navigates reports `url_changed`, `--capture`
+    //    returns the NEW document (settle: committed + parsed, never the dying
+    //    page), and armed monitors keep recording across the navigation even
+    //    though every step here is a separate process.
+    let started = fx.run(&["console", "start"]);
+    assert_eq!(code(&started), 0, "console start: {}", stdout(&started));
+    let cap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&cap), 0);
+    let nav_index = index_of(&cap, "nav");
+    let navd = fx.run(&["action", "click", &nav_index, "--capture"]);
+    assert_eq!(code(&navd), 0, "nav click failed: {}", stdout(&navd));
+    let navd_json: serde_json::Value = serde_json::from_str(&stdout(&navd)).expect("action json");
+    assert!(
+        navd_json["url_changed"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("/second")),
+        "link click must report url_changed: {}",
+        stdout(&navd)
+    );
+    assert!(
+        navd_json["page_url"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("/second")),
+        "--capture must return the document the click landed on: {}",
+        stdout(&navd)
+    );
+    let logged = fx.run(&["eval", "console.log('e2e-monitor-marker')"]);
+    assert_eq!(code(&logged), 0);
+    let logs = fx.run(&["console", "read"]);
+    assert!(
+        stdout(&logs).contains("e2e-monitor-marker"),
+        "monitors must stay armed across a link-click navigation: {}",
+        stdout(&logs)
+    );
+
+    // 4. A click-opened tab (`rel=noopener`, so correlation cannot rely on
+    //    `window.opener`) is reported as `new_tab` and becomes the active tab —
+    //    the pin follows the agent's working tab.
+    let cap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&cap), 0);
+    let pop_index = index_of(&cap, "pop");
+    let popped = fx.run(&["action", "click", &pop_index]);
+    assert_eq!(code(&popped), 0, "popup click failed: {}", stdout(&popped));
+    let popped_json: serde_json::Value =
+        serde_json::from_str(&stdout(&popped)).expect("action json");
+    assert!(
+        popped_json["new_tab"]["id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "popup must be reported as new_tab: {}",
+        stdout(&popped)
+    );
+    let status = fx.run(&["status"]);
+    let status_json: serde_json::Value =
+        serde_json::from_str(&stdout(&status)).expect("status json");
+    assert!(
+        status_json["tab_url"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("/second")),
+        "the popup must be the active tab after adoption: {}",
+        stdout(&status)
+    );
+
+    // 5. Zero-false-positive guard: a same-document navigation (pushState)
     //    changes location.href but keeps the DOM. An index from the prior
     //    capture must STILL resolve — the snapshot binds to node identity, not
     //    URL, so invalidating here would be a false positive (a regression if
     //    anyone "fixes" staleness by comparing URLs).
     let cap = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&cap), 0);
+    let go_index = index_of(&cap, "go");
     let _ = fx.run(&["eval", "history.pushState({}, '', '/changed')"]);
-    let after_nav = fx.run(&["action", "click", &button_index.to_string()]);
+    let after_nav = fx.run(&["action", "click", &go_index]);
     assert_eq!(
         code(&after_nav),
         0,
@@ -107,13 +184,14 @@ fn headless_behavioral_flow() {
         stdout(&after_nav)
     );
 
-    // 4. Stale-snapshot guard: remove the button from the DOM (out of band, via
+    // 6. Stale-snapshot guard: remove the button from the DOM (out of band, via
     //    eval — which never touches the bridge snapshot), then click its old
     //    index. It must fail typed, not silently click a different element.
     let recap = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&recap), 0);
+    let go_index = index_of(&recap, "go");
     let _ = fx.run(&["eval", "document.getElementById('go').remove()"]);
-    let stale = fx.run(&["action", "click", &button_index.to_string()]);
+    let stale = fx.run(&["action", "click", &go_index]);
     assert_eq!(
         code(&stale),
         4,
@@ -126,7 +204,7 @@ fn headless_behavioral_flow() {
         stdout(&stale)
     );
 
-    // 5. Policy: a deny rule is enforced at the transport boundary before the
+    // 7. Policy: a deny rule is enforced at the transport boundary before the
     //    page is touched, in this (headless) mode. Re-capture first so the
     //    index is otherwise valid — proving policy, not staleness, blocks it.
     let recap = fx.run(&["capture", "--include", "dom"]);
@@ -148,7 +226,7 @@ fn headless_behavioral_flow() {
     let clear = fx.run(&["policy", "clear"]);
     assert_eq!(code(&clear), 0);
 
-    // 6. Context isolation: localStorage written in one context is invisible in
+    // 8. Context isolation: localStorage written in one context is invisible in
     //    another (separate CDP browser contexts = separate storage partitions).
     let a_url = base.clone();
     let null_result = |out: &Output| -> bool {

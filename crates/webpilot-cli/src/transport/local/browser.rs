@@ -181,6 +181,7 @@ impl LocalTransport {
                 title: String::new(),
                 active: true,
             }),
+            capture_error: None,
         })
     }
 

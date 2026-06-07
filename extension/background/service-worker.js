@@ -758,13 +758,17 @@ async function handleAction(command) {
       result = await dispatchActionToPage(tab, action);
   }
 
-  // Auto-capture DOM after success if requested — immediately, exactly like
-  // the headless transport. Settling after a possibly-page-changing click is
-  // the agent's explicit `wait` command, not a hidden sleep.
+  // Auto-capture DOM after success if requested — exactly like the headless
+  // transport: the snapshot describes the tab the agent will act on next (a
+  // click-adopted popup included), and a navigating click waits — bounded —
+  // for the new document to parse, so the capture is never the dying page. A
+  // capture failure must not fail the command: the action's side effect is
+  // done, and a retry would run it twice — it is reported as `capture_error`.
   if (command.capture && result?.success) {
     try {
       const t = await resolveActiveTab();
       if (t) {
+        if (result.url_changed || result.new_tab) await documentReady(t.id, 2000);
         await ensureBridge(t.id, activeFrameId);
         const dom = await sendToContent(t.id, { type: "extractDom", options: {} }, activeFrameId, 5000);
         if (dom) {
@@ -775,12 +779,40 @@ async function handleAction(command) {
             dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
           }
           result.dom = dom;
+        } else {
+          result.capture_error = "empty DOM snapshot from content script";
         }
       }
-    } catch {}
+    } catch (e) {
+      result.capture_error = e?.message || String(e);
+    }
   }
 
   return result;
+}
+
+// Wait — bounded — until the tab's main-frame document has parsed, so a
+// post-action capture never reads a committed-but-empty page. The listener is
+// registered BEFORE the readyState probe: a DOMContentLoaded that fires
+// between the two still resolves the wait instead of forcing the timeout.
+async function documentReady(tabId, timeoutMs) {
+  let settle;
+  const settled = new Promise((resolve) => (settle = resolve));
+  const timer = setTimeout(settle, timeoutMs);
+  const onReady = (d) => {
+    if (d.tabId === tabId && d.frameId === 0) settle();
+  };
+  chrome.webNavigation.onDOMContentLoaded.addListener(onReady);
+  try {
+    const [probe] = await chrome.scripting
+      .executeScript({ target: { tabId }, func: () => document.readyState })
+      .catch(() => []);
+    if (probe?.result && probe.result !== "loading") return;
+    await settled;
+  } finally {
+    clearTimeout(timer);
+    chrome.webNavigation.onDOMContentLoaded.removeListener(onReady);
+  }
 }
 
 async function dispatchActionToPage(tab, action) {
@@ -1001,15 +1033,18 @@ async function handleEval(command) {
             return { thrown: msg, csp: /Content Security Policy|unsafe-eval/i.test(msg) };
           }
           try {
-            let v;
-            // Expression-first, statements on SyntaxError — the same contract
-            // as the headless transport's do_eval.
+            // Decide the form by PARSING (Function construction runs no user
+            // code), never by executing and retrying: a runtime
+            // `throw new SyntaxError(...)` from a valid expression must not
+            // trigger a second run — the headless transport's contract.
+            let fn;
             try {
-              v = new Function(`return (${code})`)();
+              fn = new Function(`return (${code})`);
             } catch (e) {
-              if (e instanceof SyntaxError) v = new Function(code)();
+              if (e instanceof SyntaxError) fn = new Function(code);
               else throw e;
             }
+            let v = fn();
             if (v && typeof v.then === "function") v = await v;
             return { value: v };
           } catch (e) {
@@ -1033,14 +1068,24 @@ async function handleEval(command) {
     }
 
     const r = await withCdp(tab.id, async (tid) => {
-      const evalOnce = (expression) =>
-        cdpSend(tid, "Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-      // Expression-first (`{a:1}` is an object literal, not a labeled
-      // statement), statements on SyntaxError — the headless contract.
-      let ev = await evalOnce(`(()=>(${command.code}))()`);
-      if (ev.exceptionDetails?.exception?.className === "SyntaxError") {
-        ev = await evalOnce(command.code);
-      }
+      // Decide the form by COMPILING (`compileScript` parses without
+      // evaluating), never by executing and retrying: a runtime
+      // `throw new SyntaxError(...)` from a valid expression must not run the
+      // code twice. Expression-first so `{a:1}` is an object literal, not a
+      // labeled statement — the headless contract. Unlike `Runtime.evaluate`,
+      // `compileScript` requires the Runtime domain enabled on this session.
+      await cdpSend(tid, "Runtime.enable", {});
+      const compiled = await cdpSend(tid, "Runtime.compileScript", {
+        expression: `(${command.code})`,
+        sourceURL: "webpilot://eval-form-probe",
+        persistScript: false,
+      });
+      const form = compiled.exceptionDetails ? command.code : `(()=>(${command.code}))()`;
+      const ev = await cdpSend(tid, "Runtime.evaluate", {
+        expression: form,
+        returnByValue: true,
+        awaitPromise: true,
+      });
       if (ev.exceptionDetails) {
         const msg = ev.exceptionDetails.exception?.description || ev.exceptionDetails.text || "JS exception";
         return { success: false, error: otherErr(msg) };

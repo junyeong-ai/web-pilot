@@ -4,8 +4,6 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-const MAX_LONG_EDGE: u32 = 1568;
-
 #[derive(Debug, Error)]
 pub enum ScreenshotError {
     #[error("decode failed: {0}")]
@@ -43,9 +41,10 @@ pub fn process_and_save(
     let (orig_w, orig_h) = (img.width(), img.height());
 
     // Resize if needed
+    let max_long_edge = crate::settings::get().capture.screenshot_max_long_edge;
     let long_edge = orig_w.max(orig_h);
-    let (new_w, new_h) = if long_edge > MAX_LONG_EDGE {
-        let scale = MAX_LONG_EDGE as f64 / long_edge as f64;
+    let (new_w, new_h) = if long_edge > max_long_edge {
+        let scale = max_long_edge as f64 / long_edge as f64;
         // Clamp to at least 1px: an extreme aspect ratio can round the short
         // edge to 0, which would make the resize step fail.
         (
@@ -179,7 +178,10 @@ mod tests {
 
         let info = process_and_save(&b64, &dir).unwrap();
 
-        assert_eq!(info.width, MAX_LONG_EDGE);
+        assert_eq!(
+            info.width,
+            crate::settings::get().capture.screenshot_max_long_edge
+        );
         assert!(info.height >= 1, "short edge must clamp to at least 1px");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -197,7 +199,10 @@ mod tests {
 
         let info = process_and_save(&b64, &dir).unwrap();
 
-        assert_eq!(info.width, MAX_LONG_EDGE);
+        assert_eq!(
+            info.width,
+            crate::settings::get().capture.screenshot_max_long_edge
+        );
         let bytes = std::fs::read(&info.path).unwrap();
         assert_eq!(
             image::guess_format(&bytes).unwrap(),

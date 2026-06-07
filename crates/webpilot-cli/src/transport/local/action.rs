@@ -39,6 +39,7 @@ impl LocalTransport {
                     dom: None,
                     url_changed: (!landed.is_empty()).then_some(landed),
                     new_tab: None,
+                    capture_error: None,
                 });
             }
             Action::Back => {
@@ -104,33 +105,51 @@ impl LocalTransport {
             .await?;
         let _ = Self::parse_bridge_response(raw)?;
 
-        let dom = if capture {
-            let r = self
-                .invoke_bridge(&json!({"type": "extractDom", "options": {}}))
-                .await?;
-            let mut snapshot: Option<webpilot::types::DomSnapshot> = serde_json::from_value(r).ok();
-            if let Some(s) = snapshot.as_mut()
-                && self.active_frame_id.lock().await.is_none()
-            {
-                s.subframes = self.count_http_subframes().await;
-            }
-            snapshot
-        } else {
-            None
-        };
-
         // Sample the acted-on page before any pin move, so `url_changed`
         // reports this tab's navigation, never the popup's URL.
         let landed = self.settled_action_url(&mut page_events, &url_before).await;
         let url_changed = (!landed.is_empty() && landed != url_before).then_some(landed);
         if url_changed.is_some() {
-            // The action landed on a new document — its `window` hooks are
-            // gone, and the commit has been observed, so re-arm here. (A
-            // navigation that outlives the bounded settle window resumes
-            // recording at the next WebPilot navigation or tab command.)
+            // The action landed on a new document: a frame scope switched in
+            // the old document died with it (same contract as `navigate`),
+            // and the `window` monitor hooks are gone — the commit has been
+            // observed, so re-arm here. The CDP page session itself survives
+            // a cross-site renderer swap (the /devtools/page endpoint lives
+            // browser-side — verified against a file://→http:// process
+            // swap), so no session rebind is needed. A navigation that
+            // outlives the bounded settle window resumes recording at the
+            // next WebPilot navigation or tab command.
+            self.clear_active_frame().await;
             self.reinstall_monitors().await;
         }
+
+        // Adopt a click-opened tab BEFORE the capture: the pin moves to the
+        // popup (the browser-mode contract), and the agent's snapshot must
+        // describe the tab it will act on next — capturing the opener would
+        // hand back indices that resolve nowhere.
         let new_tab = self.adopt_click_opened_target(&mut target_events).await;
+
+        // Capture AFTER everything settled: for a navigating click that is
+        // the committed-and-parsed new document, for a popup the adopted tab.
+        // A capture failure must not fail the command — the action's side
+        // effect is done, and a retry would run it twice — so it is reported
+        // alongside the success as `capture_error`.
+        let (dom, capture_error) = if capture {
+            if new_tab.is_some() {
+                // Fresh subscription: readiness of the adopted tab, not the
+                // opener that `page_events` is bound to.
+                let mut popup_events = self.page.subscribe_events();
+                self.await_document_ready(&mut popup_events).await;
+            } else if url_changed.is_some() {
+                self.await_document_ready(&mut page_events).await;
+            }
+            match self.capture_action_snapshot().await {
+                Ok(snapshot) => (Some(snapshot), None),
+                Err(e) => (None, Some(e.to_string())),
+            }
+        } else {
+            (None, None)
+        };
 
         Ok(ResponseData::Action {
             success: true,
@@ -138,7 +157,24 @@ impl LocalTransport {
             dom,
             url_changed,
             new_tab,
+            capture_error,
         })
+    }
+
+    /// One post-action DOM snapshot from the currently bound page.
+    async fn capture_action_snapshot(&self) -> Result<webpilot::types::DomSnapshot> {
+        let r = self
+            .invoke_bridge(&json!({"type": "extractDom", "options": {}}))
+            .await?;
+        let r = Self::parse_bridge_response(r)?;
+        let mut snapshot: webpilot::types::DomSnapshot =
+            serde_json::from_value(r).map_err(|e| WebPilotError::Other {
+                detail: format!("malformed DOM snapshot from bridge: {e}"),
+            })?;
+        if self.active_frame_id.lock().await.is_none() {
+            snapshot.subframes = self.count_http_subframes().await;
+        }
+        Ok(snapshot)
     }
 
     /// Typed guard for actions whose CDP path (page-viewport coordinates or
@@ -277,19 +313,23 @@ impl LocalTransport {
         }
 
         // Drain what the action already produced: a commit decides instantly;
-        // otherwise collect which frames started loading.
+        // otherwise collect which frames started — and stopped — loading.
         let mut committed: Option<String> = None;
         let mut started: Vec<String> = Vec::new();
+        let mut stopped: Vec<String> = Vec::new();
         loop {
             match events.try_recv() {
                 Ok(ev) => {
                     if let Some(u) = main_frame_url(&ev) {
                         committed = Some(u.to_string());
-                    } else if ev.get("method").and_then(Value::as_str)
-                        == Some("Page.frameStartedLoading")
-                        && let Some(id) = ev.pointer("/params/frameId").and_then(Value::as_str)
+                    } else if let Some(id) =
+                        ev.pointer("/params/frameId").and_then(Value::as_str)
                     {
-                        started.push(id.to_string());
+                        match ev.get("method").and_then(Value::as_str) {
+                            Some("Page.frameStartedLoading") => started.push(id.to_string()),
+                            Some("Page.frameStoppedLoading") => stopped.push(id.to_string()),
+                            _ => {}
+                        }
                     }
                 }
                 Err(TryRecvError::Lagged(_)) => continue,
@@ -304,15 +344,16 @@ impl LocalTransport {
         }
 
         // Only a MAIN-frame start justifies waiting for the commit — an
-        // iframe the click lazy-loaded must not stall the action.
+        // iframe the click lazy-loaded must not stall the action — and a
+        // main-frame load that already STOPPED without committing (cancelled,
+        // intercepted as a download) has nothing left to wait for.
         let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
             return immediate;
         };
-        let is_main_started = tree
-            .pointer("/frameTree/frame/id")
-            .and_then(Value::as_str)
-            .is_some_and(|main| started.iter().any(|f| f == main));
-        if !is_main_started {
+        let Some(main) = tree.pointer("/frameTree/frame/id").and_then(Value::as_str) else {
+            return immediate;
+        };
+        if !started.iter().any(|f| f == main) || stopped.iter().any(|f| f == main) {
             return immediate;
         }
 
@@ -337,6 +378,44 @@ impl LocalTransport {
                 }
                 Ok(Err(RecvError::Lagged(_))) => continue,
                 Ok(Err(_)) | Err(_) => return self.bound_target_url().await,
+            }
+        }
+    }
+
+    /// Wait — bounded by `PROBE` — until the committed document has parsed,
+    /// mirroring the `ready` half of the navigation predicate: a capture
+    /// during `readyState=loading` would hand the agent a near-empty DOM as
+    /// THE result of its action. Event-driven via the already-open page
+    /// subscription (`Page.domContentEventFired` is buffered from before the
+    /// action), so no polling.
+    async fn await_document_ready(&self, events: &mut tokio::sync::broadcast::Receiver<Value>) {
+        use tokio::sync::broadcast::error::RecvError;
+        if let Ok(v) = self.page.evaluate("document.readyState").await
+            && v.as_str().is_some_and(|s| s != "loading")
+        {
+            return;
+        }
+        let deadline = tokio::time::Instant::now() + super::PROBE;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return;
+            }
+            match tokio::time::timeout(deadline - now, events.recv()).await {
+                Ok(Ok(ev)) => {
+                    // The event is only a wake-up signal — a buffered firing
+                    // from the PREVIOUS document must not satisfy the wait, so
+                    // readyState stays the authority.
+                    if ev.get("method").and_then(Value::as_str)
+                        == Some("Page.domContentEventFired")
+                        && let Ok(v) = self.page.evaluate("document.readyState").await
+                        && v.as_str().is_some_and(|s| s != "loading")
+                    {
+                        return;
+                    }
+                }
+                Ok(Err(RecvError::Lagged(_))) => continue,
+                Ok(Err(_)) | Err(_) => return,
             }
         }
     }

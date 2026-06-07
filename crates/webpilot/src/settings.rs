@@ -40,6 +40,7 @@ pub struct Settings {
     pub chrome: Chrome,
     pub context: Context,
     pub cdp: Cdp,
+    pub capture: Capture,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +78,14 @@ pub struct Cdp {
     pub event_buffer: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct Capture {
+    /// Screenshots are downscaled so their longest edge fits this many
+    /// pixels. The default (1568) is the largest size Claude's vision ingests
+    /// without server-side resizing — bigger only costs tokens and latency.
+    pub screenshot_max_long_edge: u32,
+}
+
 /// Validate `config.toml` and cache the resolved settings. Call once at startup
 /// (CLI and host both do). Returns a human-readable error if the file exists but
 /// can't be read or parsed, so the caller can abort with a clear message instead
@@ -88,6 +97,9 @@ pub fn init() -> std::result::Result<(), String> {
     // a message instead (`broadcast::channel` requires capacity >= 1).
     if settings.cdp.event_buffer == 0 {
         return Err("cdp.event_buffer must be greater than 0".into());
+    }
+    if settings.capture.screenshot_max_long_edge == 0 {
+        return Err("capture.screenshot_max_long_edge must be greater than 0".into());
     }
     let _ = SETTINGS.set(settings);
     Ok(())
@@ -140,6 +152,13 @@ impl Settings {
             cdp: Cdp {
                 event_buffer: usize_var("WEBPILOT_CDP_EVENT_BUFFER", file.cdp.event_buffer, 256),
             },
+            capture: Capture {
+                screenshot_max_long_edge: u32_var(
+                    "WEBPILOT_SCREENSHOT_MAX_LONG_EDGE",
+                    file.capture.screenshot_max_long_edge,
+                    1568,
+                ),
+            },
         }
     }
 }
@@ -184,6 +203,7 @@ struct FileSettings {
     chrome: FileChrome,
     context: FileContext,
     cdp: FileCdp,
+    capture: FileCapture,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -218,6 +238,12 @@ struct FileContext {
 #[serde(default, deny_unknown_fields)]
 struct FileCdp {
     event_buffer: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct FileCapture {
+    screenshot_max_long_edge: Option<u32>,
 }
 
 /// Read and parse `config.toml`. An absent file is the empty (all-default)

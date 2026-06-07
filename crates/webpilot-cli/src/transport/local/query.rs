@@ -8,24 +8,34 @@ use webpilot::wait::WaitCondition;
 
 use super::LocalTransport;
 
-/// Recognise V8's SyntaxError variants so we know when to retry as a
-/// multi-statement script. `cdp::evaluate` surfaces the exception's
-/// `description` text, which always starts with "SyntaxError:".
-fn is_syntax_error(e: &anyhow::Error) -> bool {
-    e.to_string().starts_with("SyntaxError")
-}
-
 impl LocalTransport {
+    /// Whether `code` compiles as a single expression. Decided by COMPILING —
+    /// never by executing and retrying: a runtime `throw new SyntaxError(...)`
+    /// thrown from a perfectly valid expression must not trigger a second run
+    /// of the code (duplicated side effects), and error-message inspection is
+    /// banned project-wide. `compileScript` with `persistScript: false`
+    /// parses without evaluating anything.
+    async fn parses_as_expression(&self, code: &str) -> Result<bool> {
+        let mut params = json!({
+            "expression": format!("({code})"),
+            "sourceURL": "webpilot://eval-form-probe",
+            "persistScript": false,
+        });
+        if let Some(cid) = self.active_context_id().await? {
+            params["executionContextId"] = cid.into();
+        }
+        let r = self.page.send("Runtime.compileScript", Some(params)).await?;
+        Ok(r.get("exceptionDetails").is_none())
+    }
+
     pub(super) async fn do_eval(&self, code: &str) -> Result<ResponseData> {
-        // First try as a single expression (so `{a: 1}` is read as an object
-        // literal, not a labeled statement). Fall back to multi-statement
-        // form on `SyntaxError` so things like `console.log(x); x` still work.
-        let expression_form = format!("(()=>({code}))()");
-        let attempt = self.eval_in_active(&expression_form).await;
-        let val = match attempt {
-            Ok(v) => Ok(v),
-            Err(e) if is_syntax_error(&e) => self.eval_in_active(code).await,
-            Err(e) => Err(e),
+        // Prefer the expression form whenever the code COMPILES as one (so
+        // `{a: 1}` is read as an object literal, not a labeled statement);
+        // everything else runs as a multi-statement script.
+        let val = if self.parses_as_expression(code).await? {
+            self.eval_in_active(&format!("(()=>({code}))()")).await
+        } else {
+            self.eval_in_active(code).await
         };
         match val {
             Ok(v) => Ok(ResponseData::Eval {

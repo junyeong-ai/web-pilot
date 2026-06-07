@@ -71,7 +71,7 @@ impl LocalTransport {
         self.page.evaluate(CONSOLE_INSTALL_JS).await?;
         self.console_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
-        self.persist_monitor_flags();
+        super::persist_monitor_armed(super::Monitor::Console, self.persisted_context_key());
         Ok(ok_command_result())
     }
 
@@ -118,19 +118,8 @@ impl LocalTransport {
         self.page.evaluate(NETWORK_INSTALL_JS).await?;
         self.network_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
-        self.persist_monitor_flags();
+        super::persist_monitor_armed(super::Monitor::Network, self.persisted_context_key());
         Ok(ok_command_result())
-    }
-
-    /// Record the armed-monitor state so later CLI processes keep re-arming
-    /// the hooks (see `read_persisted_monitors`).
-    fn persist_monitor_flags(&self) {
-        use std::sync::atomic::Ordering::Acquire;
-        super::write_persisted_monitors(
-            self.persisted_context_key(),
-            self.console_monitoring.load(Acquire),
-            self.network_monitoring.load(Acquire),
-        );
     }
 
     /// Re-arm any active monitors after a navigation wiped their `window`
@@ -188,10 +177,10 @@ impl LocalTransport {
             .await?;
         let cookies: Vec<CookieInfo> = raw.into_iter().map(parse_cdp_cookie).collect();
 
-        let storage = self
-            .invoke_bridge(&json!({"type": "exportStorage"}))
-            .await
-            .unwrap_or_else(|_| json!({"localStorage": {}, "sessionStorage": {}}));
+        // A failed storage read must fail the export: silently writing a
+        // session file with empty storage would import back as data loss.
+        let storage = self.invoke_bridge(&json!({"type": "exportStorage"})).await?;
+        let storage = Self::parse_bridge_response(storage)?;
 
         let data = json!({
             "version": 1,

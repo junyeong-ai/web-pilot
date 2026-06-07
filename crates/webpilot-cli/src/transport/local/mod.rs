@@ -538,32 +538,46 @@ pub(super) fn clear_persisted_active_tab(browser_context_id: Option<&str>) {
 // must outlive the CLI process that issued it — the hooks live on the page's
 // `window` and are wiped by every full-document navigation, so whichever
 // later process drives a navigation is the one that has to re-install them.
-// Session-scoped like the tab/frame pins: `quit` removes the files.
+// One marker file per monitor: file creation is atomic, so two processes
+// arming different monitors concurrently can never lose each other's flag
+// (a shared read-modify-write JSON could). Arming is monotonic within a
+// session — nothing disarms short of `quit`, which removes the markers
+// alongside the tab/frame pins.
 
-fn monitors_file(browser_context_id: Option<&str>) -> PathBuf {
+#[derive(Copy, Clone)]
+pub(super) enum Monitor {
+    Console,
+    Network,
+}
+
+impl Monitor {
+    fn name(self) -> &'static str {
+        match self {
+            Monitor::Console => "console",
+            Monitor::Network => "network",
+        }
+    }
+}
+
+fn monitor_marker(kind: Monitor, browser_context_id: Option<&str>) -> PathBuf {
     let key = browser_context_id.unwrap_or("default");
-    dirs::runtime_dir().join(format!("monitors_{key}.json"))
+    dirs::runtime_dir().join(format!("monitor_{}_{key}", kind.name()))
 }
 
 pub(super) fn read_persisted_monitors(browser_context_id: Option<&str>) -> (bool, bool) {
-    let Ok(raw) = std::fs::read_to_string(monitors_file(browser_context_id)) else {
-        return (false, false);
-    };
-    let Ok(v) = serde_json::from_str::<Value>(&raw) else {
-        return (false, false);
-    };
-    let flag = |name: &str| v.get(name).and_then(Value::as_bool).unwrap_or(false);
-    (flag("console"), flag("network"))
+    (
+        monitor_marker(Monitor::Console, browser_context_id).exists(),
+        monitor_marker(Monitor::Network, browser_context_id).exists(),
+    )
 }
 
-pub(super) fn write_persisted_monitors(
-    browser_context_id: Option<&str>,
-    console: bool,
-    network: bool,
-) {
-    let path = monitors_file(browser_context_id);
-    let s = serde_json::json!({"console": console, "network": network}).to_string();
-    let _ = std::fs::write(&path, s);
+pub(super) fn persist_monitor_armed(kind: Monitor, browser_context_id: Option<&str>) {
+    let _ = std::fs::write(monitor_marker(kind, browser_context_id), b"");
+}
+
+fn clear_persisted_monitors(browser_context_id: Option<&str>) {
+    let _ = std::fs::remove_file(monitor_marker(Monitor::Console, browser_context_id));
+    let _ = std::fs::remove_file(monitor_marker(Monitor::Network, browser_context_id));
 }
 
 async fn frame_exists(page: &CdpClient, frame_id: &str) -> bool {
@@ -699,6 +713,7 @@ pub(super) fn action_success(dom: Option<DomSnapshot>) -> ResponseData {
         dom,
         url_changed: None,
         new_tab: None,
+        capture_error: None,
     }
 }
 
@@ -768,6 +783,7 @@ fn spawn_frame_context_listener(page: &CdpClient, map: Arc<Mutex<HashMap<String,
 pub(crate) fn clear_context_state(browser_context_id: &str) {
     clear_persisted_active_frame(Some(browser_context_id));
     clear_persisted_active_tab(Some(browser_context_id));
+    clear_persisted_monitors(Some(browser_context_id));
 }
 
 #[cfg(test)]

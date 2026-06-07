@@ -325,7 +325,7 @@ pub async fn quit_session() -> Result<()> {
             let name = n.to_string_lossy();
             if name.starts_with("active_frame_")
                 || name.starts_with("active_tab_")
-                || name.starts_with("monitors_")
+                || name.starts_with("monitor_")
             {
                 let _ = std::fs::remove_file(entry.path());
             }
