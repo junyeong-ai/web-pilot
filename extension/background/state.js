@@ -12,8 +12,13 @@ async function injectConsoleMonitoring(tabId) {
     target: { tabId, frameIds: [0] },
     world: "MAIN",
     func: () => {
-      if (window.__webpilot_console) return;
-      window.__webpilot_console = [];
+      // Gating on `__webpilot_console` alone fails after `console clear` (an
+      // empty array is truthy, so the patch wouldn't reinstall) and double-wraps
+      // if the buffer is cleared out of band. A separate sentinel keeps `start`
+      // idempotent without that hazard — the headless CONSOLE_INSTALL_JS design.
+      if (!Array.isArray(window.__webpilot_console)) window.__webpilot_console = [];
+      if (window.__webpilot_console_patched) return;
+      window.__webpilot_console_patched = true;
       const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info };
       ["log", "error", "warn", "info"].forEach((m) => {
         console[m] = (...args) => {
@@ -56,6 +61,7 @@ async function injectNetworkMonitoring(tabId) {
             error: err.message, duration_ms: Math.round(performance.now() - t0),
             timestamp: Date.now(),
           });
+          if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
           throw err;
         });
       };

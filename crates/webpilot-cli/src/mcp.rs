@@ -260,10 +260,18 @@ async fn call_tool<T: Transport>(
             .await
         }
         "browser_wait" => {
-            let timeout_ms = args
-                .get("timeout_ms")
-                .and_then(Value::as_u64)
-                .unwrap_or(10_000);
+            // Absent → default. Present-but-malformed (string, float, negative,
+            // or zero) is a typed error, not a silent fall-back to the default —
+            // a wait the caller asked for must not run for a duration they did
+            // not specify.
+            let timeout_ms = match args.get("timeout_ms") {
+                None | Some(Value::Null) => 10_000,
+                Some(v) => v.as_u64().filter(|&n| n > 0).ok_or_else(|| {
+                    WebPilotError::InvalidArgument {
+                        detail: "timeout_ms must be a positive integer (milliseconds)".into(),
+                    }
+                })?,
+            };
             // Reuse WaitCondition's tagged deserialization; keep only its
             // fields so the extra `timeout_ms` can't trip a stricter schema.
             let mut cond = serde_json::Map::new();
