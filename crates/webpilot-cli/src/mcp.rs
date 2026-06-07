@@ -76,11 +76,13 @@ where
         let reply = if over_cap {
             Some(error_reply(Value::Null, -32700, "request exceeds size limit"))
         } else {
-            let line = String::from_utf8_lossy(&buf);
-            if line.trim().is_empty() {
-                continue;
+            // Strict UTF-8: a JSON-RPC frame is UTF-8 by spec, so decode rather
+            // than lossily coerce invalid bytes into U+FFFD and parse garbage.
+            match std::str::from_utf8(&buf) {
+                Ok(line) if line.trim().is_empty() => continue,
+                Ok(line) => handle_line(&connect, &mut transport, line).await,
+                Err(_) => Some(error_reply(Value::Null, -32700, "parse error: invalid UTF-8")),
             }
-            handle_line(&connect, &mut transport, &line).await
         };
         let Some(reply) = reply else {
             continue; // a notification — no response
@@ -93,7 +95,9 @@ where
     Ok(())
 }
 
-/// Route one JSON-RPC message. Returns `None` only for notifications (no `id`).
+/// Route one JSON-RPC message. Returns `None` only for a notification — a
+/// request with NO `id` member at all. An explicit `id: null` is a request and
+/// is answered (with a null id), distinct from an absent id.
 async fn handle_line<T, F, Fut>(connect: &F, transport: &mut Option<T>, line: &str) -> Option<Value>
 where
     T: Transport,
@@ -104,7 +108,14 @@ where
         // JSON-RPC 2.0: a parse error is answered with a null id, never dropped.
         return Some(error_reply(Value::Null, -32700, "parse error"));
     };
-    let id = msg.get("id").filter(|v| !v.is_null()).cloned()?;
+    // Absent id = notification (no response). Present id (including null) = a
+    // request that must be answered, echoing the id back.
+    let id = msg.get("id").cloned()?;
+    // JSON-RPC 2.0 requires `"jsonrpc": "2.0"`; a missing or different version
+    // is an invalid request (-32600).
+    if msg.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Some(error_reply(id, -32600, "invalid request: jsonrpc must be \"2.0\""));
+    }
     // A request carrying an id but no string `method` is malformed: JSON-RPC
     // 2.0 answers that with -32600 (invalid request), distinct from -32601
     // (a well-formed call to a method that does not exist).

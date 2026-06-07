@@ -263,11 +263,14 @@ fn process_nm_message(
         }
     }
 
-    // Dispatch by request id.
+    // Dispatch by request id. Request ids are a `u32` counter, so a response id
+    // that doesn't fit `u32` can't name a real pending slot — reject it rather
+    // than truncate, which could resolve to the wrong slot (e.g. 2^32+1 → 1).
     let id = msg
         .get("id")
         .and_then(|v| v.as_u64())
-        .ok_or("response missing id")? as u32;
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or("response missing or out-of-range id")?;
 
     let mut pending_guard = pending.blocking_lock();
     if let Some(sender) = pending_guard.remove(&id) {
