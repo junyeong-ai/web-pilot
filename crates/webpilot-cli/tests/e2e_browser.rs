@@ -347,5 +347,27 @@ fn browser_behavioral_flow() {
         stdout(&no_history)
     );
 
+    // 7. Frame-scoped eval: after switching into the iframe, eval runs THERE
+    //    (headless parity) — not silently in the main frame.
+    let cap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&cap), 0);
+    let sw = fx.run(&["frame", "url", "/frame"]);
+    assert_eq!(code(&sw), 0, "frame switch failed: {}", stdout(&sw));
+    let href = fx.run(&["eval", "location.href"]);
+    assert_eq!(code(&href), 0, "frame eval failed: {}", stdout(&href));
+    assert!(
+        stdout(&href).contains("/frame"),
+        "eval must run in the switched frame: {}",
+        stdout(&href)
+    );
+    let main = fx.run(&["frame", "main"]);
+    assert_eq!(code(&main), 0);
+    let href_main = fx.run(&["eval", "location.href"]);
+    assert!(
+        !stdout(&href_main).contains("/frame"),
+        "after frame main, eval must run in the main frame again: {}",
+        stdout(&href_main)
+    );
+
     drop(fx);
 }

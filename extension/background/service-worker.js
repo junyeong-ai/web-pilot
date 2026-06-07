@@ -968,10 +968,56 @@ async function handleEval(command) {
   if (!tab) return { type: "Eval", success: false, error: noPageErr() };
 
   try {
-    const r = await withCdp(tab.id, async (tid) => {
-      const ev = await cdpSend(tid, "Runtime.evaluate", {
-        expression: command.code, returnByValue: true, awaitPromise: true,
+    // A switched frame routes through the scripting API — the only execution
+    // path addressed by webNavigation frame ids. A page CSP that forbids
+    // dynamic evaluation surfaces as a typed CspViolation, which beats the
+    // old behavior of silently evaluating in the wrong (main) frame.
+    if (activeFrameId !== 0) {
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [activeFrameId] },
+        world: "MAIN",
+        func: async (code) => {
+          try {
+            let v;
+            // Expression-first, statements on SyntaxError — the same contract
+            // as the headless transport's do_eval.
+            try {
+              v = new Function(`return (${code})`)();
+            } catch (e) {
+              if (e instanceof SyntaxError) v = new Function(code)();
+              else throw e;
+            }
+            if (v && typeof v.then === "function") v = await v;
+            return { value: v };
+          } catch (e) {
+            return { thrown: e?.message || String(e), csp: e instanceof EvalError };
+          }
+        },
+        args: [command.code],
       });
+      const out = res?.result;
+      if (out?.thrown !== undefined) {
+        return {
+          type: "Eval",
+          success: false,
+          error: out.csp
+            ? err("CspViolation", `Page CSP forbids dynamic evaluation in this frame: ${out.thrown}`)
+            : otherErr(out.thrown),
+        };
+      }
+      const v = out?.value;
+      return { type: "Eval", success: true, result: v !== undefined ? JSON.stringify(v) : null };
+    }
+
+    const r = await withCdp(tab.id, async (tid) => {
+      const evalOnce = (expression) =>
+        cdpSend(tid, "Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+      // Expression-first (`{a:1}` is an object literal, not a labeled
+      // statement), statements on SyntaxError — the headless contract.
+      let ev = await evalOnce(`(()=>(${command.code}))()`);
+      if (ev.exceptionDetails?.exception?.className === "SyntaxError") {
+        ev = await evalOnce(command.code);
+      }
       if (ev.exceptionDetails) {
         const msg = ev.exceptionDetails.exception?.description || ev.exceptionDetails.text || "JS exception";
         return { success: false, error: otherErr(msg) };
