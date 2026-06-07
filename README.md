@@ -2,99 +2,107 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.96.0-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 
-**AI 에이전트를 위한 브라우저 제어 CLI.** 설정 없이 바로 사용 — Chrome이 자동으로 실행됩니다.
+**Browser-control CLI for AI agents.** Zero setup — Chrome launches automatically.
 
 ---
 
-## 왜 WebPilot인가?
+## Why WebPilot?
 
-- **제로 설정** — `webpilot capture --include dom --url URL` 한 줄로 시작 (Chrome 자동 실행)
-- **풀스택 커맨드** — DOM, 스크린샷, 액션, 네트워크, 콘솔, 쿠키, 세션, 정책
-- **Headless + SSO** — 기본 headless, `--browser`로 사용자 Chrome SSO 세션 활용
-- **영속 세션** — Chrome 을 살려 두고 후속 명령이 재연결 (런치 비용 1회)
-- **AI 최적화** — 토큰 효율적 DOM 출력, 시맨틱 검색, 타입드 에러 안내
+- **Zero setup** — start with one line: `webpilot capture --include dom --url URL` (Chrome auto-launches)
+- **Full command surface** — DOM, screenshots, actions, network, console, cookies, sessions, policies
+- **Headless + SSO** — headless by default; `--browser` drives your real Chrome with its SSO sessions
+- **Persistent session** — Chrome stays warm; every later command reconnects (launch cost paid once)
+- **AI-native** — token-efficient DOM output, semantic search, typed errors with guidance, and an **MCP server** (`webpilot mcp`) over the same engine
 
 ---
 
-## 빠른 시작
+## Quick Start
 
 ```bash
-# 한 줄 설치 — 바이너리 다운로드 + 체크섬 검증 + 대화형 셋업
+# One-line install — binary download + checksum verification + interactive setup
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
 
-# 바로 사용 (headless — Chrome 자동 실행)
+# Use immediately (headless — Chrome auto-launches)
 webpilot capture --include dom --url "https://example.com"
 
-# 소스에서 빌드 (체크아웃 안에서 실행, Rust 1.96 필요)
+# Build from source (run inside a checkout; requires Rust 1.96)
 WEBPILOT_BUILD=source bash scripts/install.sh
 
-# SSO가 필요한 경우 (사용자 Chrome 연결)
-webpilot setup extension                       # 확장 추출 + Chrome 가이드
-webpilot setup nm-host --extension-id <ID>     # Native Messaging host 등록
+# When you need SSO (drive your own Chrome)
+webpilot setup extension                       # extract the extension + Chrome guide
+webpilot setup nm-host --extension-id <ID>     # register the Native Messaging host
 webpilot --browser capture --include dom
+
+# Expose the same engine to any MCP host
+webpilot mcp
 ```
 
-설치 시 스킬·확장은 `webpilot setup`이 바이너리에 임베드된 자산으로 설치합니다. 체크아웃 안에서 실행하면 prebuilt/source 빌드를 대화형으로 선택합니다.
+The installer sets up the skill and extension from assets embedded in the
+binary via `webpilot setup`. Inside a checkout it offers prebuilt/source
+interactively.
 
-| 환경변수 | 기본값 | 설명 |
+| Env var | Default | Meaning |
 |---|---|---|
-| `WEBPILOT_BUILD` | `prebuilt` | `prebuilt`(릴리스 다운로드) 또는 `source`(`cargo build`) |
-| `WEBPILOT_VERSION` | latest | 특정 태그로 핀 (prebuilt, 예: `v0.3.0`) |
-| `WEBPILOT_INSTALL_DIR` | `$HOME/.local/bin` | 설치 경로 |
-| `WEBPILOT_REPO` | `junyeong-ai/web-pilot` | 포크 사용 시 오버라이드 |
-| `WEBPILOT_NO_SETUP=1` | — | 설치 후 `webpilot setup` 자동 실행 생략 |
+| `WEBPILOT_BUILD` | `prebuilt` | `prebuilt` (release download) or `source` (`cargo build`) |
+| `WEBPILOT_VERSION` | latest | pin a tag (prebuilt, e.g. `v0.3.0`) |
+| `WEBPILOT_INSTALL_DIR` | `$HOME/.local/bin` | install path |
+| `WEBPILOT_REPO` | `junyeong-ai/web-pilot` | override when using a fork |
+| `WEBPILOT_NO_SETUP=1` | — | skip the automatic `webpilot setup` after install |
 
 ---
 
-## 주요 기능
+## Highlights
 
-### 페이지 캡처
+### Page capture
 ```bash
-webpilot capture --include dom --url "https://naver.com"   # DOM 요소 리스트
-webpilot capture --include screenshot                       # 뷰포트 스크린샷
-webpilot capture --include screenshot --annotate            # 번호 오버레이 스크린샷
-webpilot capture --include pdf                              # PDF 생성
-webpilot capture --include dom text screenshot              # 통합 JSON 출력
+webpilot capture --include dom --url "https://example.com"  # DOM element list
+webpilot capture --include screenshot                       # viewport screenshot
+webpilot capture --include screenshot --annotate            # numbered-overlay screenshot
+webpilot capture --include screenshot --full-page           # whole page, one shot
+webpilot capture --include pdf                              # PDF
+webpilot capture --include dom text screenshot              # combined JSON output
 ```
 
-### 요소 검색 + 액션
+### Find + act
 ```bash
-webpilot find --role button --text "Submit" --click  # 시맨틱 검색 + 클릭
-webpilot find --label "Email" --fill "user@test.com" # 레이블 검색 + 입력
-webpilot action click 5                              # 인덱스로 클릭
-webpilot action type 3 "hello" --clear               # 텍스트 입력
-webpilot action key-press Enter                       # 키 입력
+webpilot find --role button --text "Submit" --click  # semantic search + click
+webpilot find --label "Email" --fill "user@test.com" # label search + fill
+webpilot action click 5                              # click by index
+webpilot action type 3 "hello" --clear               # type text
+webpilot action key-press Enter                      # key press
 ```
 
-### 디바이스 에뮬레이션
+### Device emulation
 ```bash
-webpilot device preset iphone-15                     # 모바일 디바이스 에뮬레이션
-webpilot device set --width 390 --height 844 --mobile  # 커스텀 뷰포트
-webpilot device reset                                # 에뮬레이션 해제
+webpilot device preset iphone-15                       # mobile device emulation
+webpilot device set --width 390 --height 844 --mobile  # custom viewport
+webpilot device reset                                  # clear emulation
 ```
 
-### 모니터링
+### Monitoring
 ```bash
-webpilot network start && webpilot network read      # 네트워크 요청 추적
-webpilot console start && webpilot console read      # JS 콘솔 캡처
+webpilot network start && webpilot network read      # track network requests
+webpilot console start && webpilot console read      # capture JS console
 ```
 
-### 세션 관리
+### Sessions
 ```bash
-webpilot cookie list "https://example.com"           # 쿠키 조회
-webpilot session export --output session.json        # 세션 저장
-webpilot fetch "https://api.example.com" --method POST --body '{}' # 인증 포함 API 호출
+webpilot cookie list "https://example.com"           # read cookies
+webpilot session export --output session.json        # save session state
+webpilot fetch "https://api.example.com" --method POST --body '{}'  # authed API call
 ```
 
-### 안전 제어
+### Safety controls
 ```bash
-webpilot policy set --operation navigate --verdict deny # 네비게이션 차단
-webpilot policy list                                  # 정책 조회
+webpilot policy default deny                             # least-privilege lockdown
+webpilot policy set --operation click --verdict allow    # then allowlist
+webpilot policy set --operation navigate --verdict deny  # or deny selectively
+webpilot policy list                                     # inspect
 ```
 
 ---
 
-## DOM 출력 형식
+## DOM output format
 
 ```
 *[1] input#query "Search" type=text @search
@@ -105,67 +113,73 @@ webpilot policy list                                  # 정책 조회
 --- 3 elements (from 120 nodes, 5ms) ---
 ```
 
-| 표시 | 의미 |
+| Marker | Meaning |
 |------|------|
-| `[N]` | 요소 인덱스 (`action click N`으로 사용) |
-| `*` | 이전 캡처 이후 새로 나타난 요소 |
+| `[N]` | element index (use with `action click N`) |
+| `*` | element new since the previous capture |
 | `#id` | HTML element id |
-| `@ctx` | 랜드마크 컨텍스트 (nav, main, form, search) |
+| `@ctx` | landmark context (nav, main, form, search) |
 
 ---
 
-## 아키텍처
+## Architecture
 
 ```
-Headless (기본):
+Headless (default):
   webpilot CLI → CDP WebSocket → Chrome for Testing (headless)
-                → bridge.js (Runtime.evaluate로 주입)
+               → bridge.js (injected via Runtime.evaluate)
 
 Browser (--browser):
-  webpilot CLI → Unix Socket → NM Host → Chrome Extension
-                → bridge.js (content script)
+  webpilot CLI → Unix socket → NM Host → Chrome extension
+               → bridge.js (content script)
+
+MCP (webpilot mcp):
+  MCP host → stdio JSON-RPC → the same Transport + handlers as the CLI
 ```
 
-- **단일 바이너리** — `webpilot` 하나로 headless/browser/host 모드 자동 전환
-- **단일 코드베이스** — 동일한 `bridge.js`를 두 모드에서 공유
-- **풀스택 커맨드** — `webpilot --help`로 전체 목록 확인
+- **One binary** — `webpilot` switches between CLI / host / MCP roles automatically
+- **One codebase** — the same `bridge.js` serves both modes
+- **Full surface** — `webpilot --help` for the complete command list
 
 ---
 
-## 경쟁 비교
+## Comparison
 
-| 기능 | WebPilot | agent-browser | browser-use |
+| Feature | WebPilot | agent-browser | browser-use |
 |------|:--------:|:-------------:|:-----------:|
-| SSO 지원 (`--browser`) | **내장** | ✗ | ✗ |
-| 네트워크 모니터링 | **내장** | ✗ | CDP |
-| 콘솔 캡처 | **내장** | ✗ | CDP |
-| 시맨틱 검색 (`find`) | **내장** | ✗ | XPath |
-| DOM 직접 조작 | **내장** | ✗ | ✗ |
-| Annotated 스크린샷 | **내장** | 내장 | PIL |
-| 세션 export/import | **내장** | auth state | ✗ |
-| 멀티 에이전트 격리 | **`--context`** | ✗ | ✗ |
-| 런타임 의존성 | **없음 (단일 바이너리)** | Node | Python |
+| SSO sessions (`--browser`) | **built in** | ✗ | ✗ |
+| Network monitoring | **built in** | ✗ | CDP |
+| Console capture | **built in** | ✗ | CDP |
+| Semantic search (`find`) | **built in** | ✗ | XPath |
+| Direct DOM read/write | **built in** | ✗ | ✗ |
+| Annotated screenshots | **built in** | built in | PIL |
+| Session export/import | **built in** | auth state | ✗ |
+| Multi-agent isolation | **`--context`** | ✗ | ✗ |
+| MCP server | **built in** | ✗ | ✗ |
+| Runtime dependencies | **none (single binary)** | Node | Python |
 
 ---
 
-## 생애주기
+## Lifecycle
 
 ```bash
-webpilot setup                 # 스킬 + 확장 + NM host 대화형 셋업
-webpilot setup skill           # 스킬만 재설치/갱신
-webpilot setup extension       # 확장 추출 + Chrome 안내 (chrome://extensions 자동 오픈)
+webpilot setup                 # interactive setup: skill + extension + NM host
+webpilot setup skill           # (re)install just the skill
+webpilot setup extension       # extract the extension + Chrome guide (opens chrome://extensions)
 webpilot setup nm-host --extension-id <ID>
 
-webpilot self update           # 최신 release로 자기 업데이트 (atomic, sha256 검증)
-webpilot self update --version 0.3.0   # 특정 버전 핀
+webpilot self update           # self-update to the latest release (atomic, sha256-verified)
+webpilot self update --version 0.3.0   # pin a version
 
-webpilot uninstall             # 흔적 없이 제거 (Chrome 종료 + 모든 디렉토리 정리)
+webpilot uninstall             # remove without trace (quit Chrome + clean every directory)
 ```
 
-스킬과 확장은 바이너리에 컴파일 타임 임베드되어 있습니다. 버전 드리프트가 원천적으로 발생하지 않으며, 설치 후 별도 다운로드 단계가 없습니다. 설치 후 Claude Code에서 `/webpilot` 또는 자연어로 자동 활성화됩니다.
+The skill and extension are embedded in the binary at compile time: version
+drift cannot happen, and there is no post-install download. After setup,
+Claude Code activates the skill via `/webpilot` or plain natural language.
 
 ---
 
-## 라이선스
+## License
 
 MIT
