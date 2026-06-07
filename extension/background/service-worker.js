@@ -397,16 +397,20 @@ async function handleCapture(command) {
       // Navigate the pinned tab (or pin a fresh one) — never whatever tab the
       // user happens to be looking at.
       const existing = await resolveActiveTab();
+      let beforeUrl = "";
+      let watch;
       if (existing) {
         tabId = existing.id;
+        beforeUrl = existing.url || "";
+        watch = watchMainFrameCommit(tabId);
         await chrome.tabs.update(tabId, { url: command.url, active: true });
       } else {
         const t = await chrome.tabs.create({ url: command.url, active: true });
         tabId = t.id;
         setActiveTabId(tabId);
+        watch = watchMainFrameCommit(tabId);
       }
-      await waitForTabReady(tabId, 20000);
-      await sleep(500);
+      await waitNavigationSettled(tabId, beforeUrl, watch, command.url);
     } else {
       const t = await resolveActiveTab();
       if (!t) return topErr(noPageErr());
@@ -674,9 +678,9 @@ async function handleAction(command) {
   // SW-handled action kinds (navigation + upload).
   switch (action.kind) {
     case "navigate": {
+      const watch = watchMainFrameCommit(tab.id);
       await chrome.tabs.update(tab.id, { url: action.url, active: true });
-      await waitForTabReady(tab.id, 15000);
-      await sleep(500);
+      await waitNavigationSettled(tab.id, tab.url || "", watch, action.url);
       // A new document invalidates any switched-to frame — reset to main, as
       // the headless transport does on navigation.
       setActiveFrameId(0);
@@ -686,25 +690,58 @@ async function handleAction(command) {
     }
 
     case "back":
-      await chrome.tabs.goBack(tab.id);
-      await sleep(500);
+    case "forward": {
+      // History traversal runs in the page (`history.back()`), mirroring the
+      // headless transport — `chrome.tabs.goBack` refuses even with history
+      // present in headless Chrome (measured). The Navigation API makes the
+      // no-entry case an honest, immediate typed failure instead of a success
+      // that silently did nothing.
+      const dir = action.kind;
+      const can = await chrome.scripting
+        .executeScript({
+          target: { tabId: tab.id, frameIds: [0] },
+          world: "MAIN",
+          func: (d) => (d === "back" ? navigation.canGoBack : navigation.canGoForward),
+          args: [dir],
+        })
+        .then((r) => r?.[0]?.result)
+        .catch(() => null);
+      if (can === false) {
+        return {
+          type: "Action",
+          success: false,
+          error: err("NavigationFailed", `Cannot go ${dir}: no history entry`, {
+            url: `history.${dir}()`,
+            reason: "no history entry",
+          }),
+        };
+      }
+      const watch = watchMainFrameCommit(tab.id);
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [0] },
+        world: "MAIN",
+        func: (d) => {
+          if (d === "back") history.back();
+          else history.forward();
+        },
+        args: [dir],
+      });
+      await waitNavigationSettled(tab.id, tab.url || "", watch, `history.${dir}()`);
       setActiveFrameId(0);
       result = { type: "Action", success: true };
       break;
+    }
 
-    case "forward":
-      await chrome.tabs.goForward(tab.id);
-      await sleep(500);
-      setActiveFrameId(0);
-      result = { type: "Action", success: true };
-      break;
-
-    case "reload":
+    case "reload": {
+      // The URL never moves on a reload, so commitment is the observed
+      // main-frame commit — the headless loaderId case.
+      const watch = watchMainFrameCommit(tab.id);
       await chrome.tabs.reload(tab.id);
-      await waitForTabReady(tab.id, 15000);
+      await waitNavigationSettled(tab.id, tab.url || "", watch, "reload");
       setActiveFrameId(0);
       result = { type: "Action", success: true };
       break;
+    }
 
     case "upload":
       result = await handleUpload(tab.id, action);
@@ -718,9 +755,10 @@ async function handleAction(command) {
       result = await dispatchActionToPage(tab, action);
   }
 
-  // Auto-capture DOM after success if requested.
+  // Auto-capture DOM after success if requested — immediately, exactly like
+  // the headless transport. Settling after a possibly-page-changing click is
+  // the agent's explicit `wait` command, not a hidden sleep.
   if (command.capture && result?.success) {
-    await sleep(500);
     try {
       const t = await resolveActiveTab();
       if (t) {
@@ -743,7 +781,15 @@ async function handleAction(command) {
 }
 
 async function dispatchActionToPage(tab, action) {
-  const tabsBefore = new Set((await chrome.tabs.query({})).map((t) => t.id));
+  // A click-opened tab is caught by the creation event itself, registered
+  // before the action runs — no detection window, no sleep, and reliable even
+  // for popups that are still about:blank at creation (which a snapshot diff
+  // taken after a fixed delay raced against).
+  let openedTab = null;
+  const onCreated = (t) => {
+    openedTab = openedTab || t;
+  };
+  chrome.tabs.onCreated.addListener(onCreated);
   const urlBefore = tab.url;
 
   try {
@@ -751,20 +797,21 @@ async function dispatchActionToPage(tab, action) {
     const r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
     const result = { type: "Action", ...r };
 
-    await sleep(300);
-    const tabsAfter = await chrome.tabs.query({});
-    const newTabs = tabsAfter.filter((t) => !tabsBefore.has(t.id) && t.url?.startsWith("http"));
-    if (newTabs.length > 0) {
-      const newTab = newTabs[0];
-      await chrome.tabs.update(newTab.id, { active: true });
-      // Focus moved to a freshly opened tab — its frame tree is its own.
-      setActiveFrameId(0);
-      result.new_tab = {
-        id: String(newTab.id),
-        url: newTab.url || "",
-        title: newTab.title || "",
-        active: true,
-      };
+    if (openedTab?.id != null) {
+      const newTab = await chrome.tabs.get(openedTab.id).catch(() => null);
+      if (newTab) {
+        await chrome.tabs.update(newTab.id, { active: true });
+        // The agent's working tab moved — re-pin so every later command
+        // follows it, and drop any frame scope (a new tab's tree is its own).
+        setActiveTabId(newTab.id);
+        setActiveFrameId(0);
+        result.new_tab = {
+          id: String(newTab.id),
+          url: newTab.url || "",
+          title: newTab.title || "",
+          active: true,
+        };
+      }
     }
 
     try {
@@ -775,6 +822,8 @@ async function dispatchActionToPage(tab, action) {
     return result;
   } catch (e) {
     return { type: "Action", success: false, error: exceptionErr(e) };
+  } finally {
+    chrome.tabs.onCreated.removeListener(onCreated);
   }
 }
 
@@ -1365,23 +1414,57 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function waitForTabReady(tabId, timeoutMs = 15000) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      resolve();
-    }, timeoutMs);
+// ── Navigation settle ───────────────────────────────────────────────────────
+// One predicate for every navigation this worker performs, mirroring the
+// headless `navigation_settled`: committed — the main frame's URL left
+// `beforeUrl`, or a main-frame commit was observed (the reload case, where the
+// URL never moves) — AND parsed, readyState past "loading". Deadline-polled,
+// no fixed sleeps, and the debugger is never attached (no banner). The commit
+// watch must be registered before the navigation is issued.
 
-    function listener(tid, changeInfo, tab) {
-      if (tid !== tabId) return;
-      if (changeInfo.status === "complete" && tab.url && tab.url.startsWith("http")) {
-        chrome.tabs.onUpdated.removeListener(listener);
-        clearTimeout(timer);
-        resolve();
+const NAVIGATION_TIMEOUT_MS = 15000;
+
+function watchMainFrameCommit(tabId) {
+  const watch = { committed: false, dispose: () => {} };
+  const listener = (d) => {
+    if (d.tabId === tabId && d.frameId === 0) watch.committed = true;
+  };
+  // Same-document navigations (pushState history traversal, fragment jumps)
+  // commit via their own events, never onCommitted — all three together make
+  // every navigation kind observable, including one whose URL doesn't move.
+  const events = [
+    chrome.webNavigation.onCommitted,
+    chrome.webNavigation.onHistoryStateUpdated,
+    chrome.webNavigation.onReferenceFragmentUpdated,
+  ];
+  events.forEach((ev) => ev.addListener(listener));
+  watch.dispose = () => events.forEach((ev) => ev.removeListener(listener));
+  return watch;
+}
+
+async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
+  const start = Date.now();
+  try {
+    while (Date.now() - start < NAVIGATION_TIMEOUT_MS) {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (tab && (watch.committed || (tab.url && tab.url !== beforeUrl))) {
+        // Probe readiness; a probe failing mid renderer swap just retries on
+        // the next poll, exactly like the headless time-boxed PROBE.
+        const ready = await chrome.scripting
+          .executeScript({ target: { tabId, frameIds: [0] }, func: () => document.readyState })
+          .then((r) => r?.[0]?.result)
+          .catch(() => null);
+        if (ready === "interactive" || ready === "complete") return;
       }
+      await sleep(150);
     }
-    chrome.tabs.onUpdated.addListener(listener);
-  });
+  } finally {
+    watch.dispose();
+  }
+  const e = new Error(`Navigation did not settle: ${url}`);
+  e.code = "NavigationFailed";
+  e.data = { url, reason: `not settled within ${NAVIGATION_TIMEOUT_MS}ms` };
+  throw e;
 }
 
 // ── Active tab ──────────────────────────────────────────────────────────────

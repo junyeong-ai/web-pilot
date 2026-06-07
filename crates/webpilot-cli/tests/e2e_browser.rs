@@ -322,5 +322,30 @@ fn browser_behavioral_flow() {
     let recap = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&recap), 0, "capture after re-pin failed: {}", stdout(&recap));
 
+    // 6. Navigation settles via the predicate, not sleeps: a capture issued
+    //    immediately after navigate must see the new document. And history
+    //    nav is honest — `back` with no earlier entry is a typed
+    //    NavigationFailed (exit 8), never a success that did nothing.
+    let nav = fx.run(&["action", "navigate", &format!("{base}/frame")]);
+    assert_eq!(code(&nav), 0, "navigate failed: {}", stdout(&nav));
+    let cap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&cap), 0, "capture after navigate failed: {}", stdout(&cap));
+    assert!(
+        stdout(&cap).contains("inner link"),
+        "the navigated-to document must be captured immediately: {}",
+        stdout(&cap)
+    );
+    let back = fx.run(&["action", "back"]);
+    assert_eq!(code(&back), 0, "real back failed: {}", stdout(&back));
+    let fresh = fx.run(&["tab", "new", &base]);
+    assert_eq!(code(&fresh), 0);
+    let no_history = fx.run(&["action", "back"]);
+    assert_eq!(
+        code(&no_history),
+        8,
+        "back with no history must be a typed NavigationFailed: {}",
+        stdout(&no_history)
+    );
+
     drop(fx);
 }
