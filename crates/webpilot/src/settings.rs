@@ -54,6 +54,10 @@ pub struct Timeouts {
     pub ipc_response: Duration,
     pub chrome_launch: Duration,
     pub heartbeat: Duration,
+    /// How long the NM host waits for the extension's connect-time version
+    /// Ping before failing a command closed. The Ping lands in milliseconds in
+    /// practice; a loaded machine may want longer.
+    pub version_handshake: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +145,11 @@ impl Settings {
                     15_000,
                 ),
                 heartbeat: ms("WEBPILOT_HEARTBEAT_INTERVAL_MS", t.heartbeat_ms, 10_000),
+                version_handshake: ms(
+                    "WEBPILOT_VERSION_HANDSHAKE_TIMEOUT_MS",
+                    t.version_handshake_ms,
+                    2_000,
+                ),
             },
             chrome: Chrome {
                 binary: string_var("WEBPILOT_CHROME").or(c.binary),
@@ -228,6 +237,7 @@ struct FileTimeouts {
     ipc_response_ms: Option<u64>,
     chrome_launch_ms: Option<u64>,
     heartbeat_ms: Option<u64>,
+    version_handshake_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

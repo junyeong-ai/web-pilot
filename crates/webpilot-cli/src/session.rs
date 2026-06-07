@@ -138,6 +138,48 @@ fn is_process_alive(pid: i32) -> bool {
     send_signal(pid, 0).unwrap_or(false)
 }
 
+/// Whether `pid` is alive AND is the Chrome WE launched — its command line
+/// carries our `--user-data-dir`. Every signal aimed at a PID-file pid is
+/// gated on this: after Chrome exits, the OS can recycle its pid to an
+/// unrelated same-user process, and a bare liveness check would then have us
+/// SIGKILL a stranger. `get_existing_session` deliberately does NOT pay this
+/// `ps` cost on the hot path — a recycled pid there just makes the CDP connect
+/// fail, and the connect-failure path verifies identity before it kills.
+fn is_our_chrome(pid: i32) -> bool {
+    if pid <= 0 || !is_process_alive(pid) {
+        return false;
+    }
+    let marker = format!("--user-data-dir={}", dirs::chrome_profile_dir().display());
+    std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&marker))
+        .unwrap_or(false)
+}
+
+/// Acquire the cross-process launch lock (advisory `flock`). Held until the
+/// returned file is dropped. Serialises launch and session-invalidation so a
+/// relaunch can't interleave with another process tearing the session down.
+fn launch_lock_guard() -> Result<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(dirs::launch_lock_file())
+        .context("Failed to create launch lock file")?;
+    // SAFETY: flock() is a POSIX advisory lock; no memory safety implications.
+    if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        anyhow::bail!(
+            "Failed to acquire launch lock: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    Ok(lock_file)
+}
+
 /// Pure path accessors: locate the PID/WS files without materialising the
 /// runtime directory. Writers must call [`ensure_runtime`] beforehand.
 pub fn pid_path() -> PathBuf {
@@ -259,13 +301,28 @@ pub fn get_existing_session() -> Option<String> {
 }
 
 /// Tear down a session that proved unreachable — Chrome exited (or hung)
-/// between the liveness check and the CDP connect, so the recorded URL is
-/// stale. Kills a still-alive PID and removes the PID/WS files so the next
-/// `ensure_session` relaunches cleanly instead of handing back the dead URL.
-pub fn invalidate_session() {
+/// between the liveness check and the CDP connect — but ONLY if the recorded
+/// session is still the one we failed on (`failed_ws_url`). Under the launch
+/// lock, this compare-and-invalidate stops a concurrent `open` that already
+/// relaunched a fresh session from being torn down by a slow loser: the loser
+/// sees the new URL on disk, recognises it is no longer its dead session, and
+/// leaves it alone. A still-alive PID is killed only when it is verifiably our
+/// Chrome (never a recycled-pid stranger).
+pub fn invalidate_session_if_current(failed_ws_url: &str) {
+    let _lock = match launch_lock_guard() {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    let current = std::fs::read_to_string(ws_url_path())
+        .ok()
+        .map(|s| s.trim().to_string());
+    if current.as_deref() != Some(failed_ws_url) {
+        // A concurrent open already replaced this session — don't touch it.
+        return;
+    }
     if let Ok(pid_str) = std::fs::read_to_string(pid_path())
         && let Ok(pid) = pid_str.trim().parse::<i32>()
-        && is_process_alive(pid)
+        && is_our_chrome(pid)
     {
         let _ = send_signal(pid, libc::SIGKILL);
     }
@@ -280,32 +337,17 @@ pub async fn ensure_session() -> Result<String> {
         return Ok(url);
     }
 
-    let lock_path = dirs::launch_lock_file();
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)
-        .context("Failed to create launch lock file")?;
-
-    use std::os::unix::io::AsRawFd;
-    // SAFETY: flock() is a POSIX advisory lock; no memory safety implications.
-    let ret = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
-    if ret != 0 {
-        anyhow::bail!(
-            "Failed to acquire launch lock: {}",
-            std::io::Error::last_os_error()
-        );
-    }
+    let _lock = launch_lock_guard()?;
 
     if let Some(url) = get_existing_session() {
         return Ok(url);
     }
 
-    // Clean up an orphaned Chrome whose PID file we own.
+    // Clean up an orphaned Chrome whose PID file we own — but only if it is
+    // verifiably our Chrome, never a process that reused the recorded pid.
     if let Ok(pid_str) = std::fs::read_to_string(pid_path())
         && let Ok(pid) = pid_str.trim().parse::<i32>()
-        && is_process_alive(pid)
+        && is_our_chrome(pid)
     {
         let _ = send_signal(pid, libc::SIGTERM);
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -320,16 +362,19 @@ pub async fn ensure_session() -> Result<String> {
 /// Shut down the entire headless Chrome session. Idempotent.
 pub async fn quit_session() -> Result<()> {
     let pid_file = pid_path();
+    // Signal only a verifiably-our-Chrome pid: after a crash the recorded pid
+    // can belong to an unrelated process that reused it.
     if let Ok(pid_str) = std::fs::read_to_string(&pid_file)
         && let Ok(pid) = pid_str.trim().parse::<i32>()
+        && is_our_chrome(pid)
     {
         let _ = send_signal(pid, libc::SIGTERM);
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        if is_process_alive(pid) {
+        if is_our_chrome(pid) {
             let _ = send_signal(pid, libc::SIGKILL);
         }
-        let _ = std::fs::remove_file(&pid_file);
     }
+    let _ = std::fs::remove_file(&pid_file);
     let _ = std::fs::remove_file(ws_url_path());
 
     // Per-(context|default) active-frame, active-tab, and armed-monitor

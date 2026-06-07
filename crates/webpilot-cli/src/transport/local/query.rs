@@ -8,6 +8,11 @@ use webpilot::wait::WaitCondition;
 
 use super::LocalTransport;
 
+/// Cap on the response body `fetch` reads into memory, in both modes. A safety
+/// ceiling, not an operational tunable: an API response never approaches it,
+/// and a body that does is failed loud rather than read unbounded.
+const FETCH_MAX_BODY_BYTES: u64 = 10 * 1024 * 1024;
+
 impl LocalTransport {
     /// Whether `code` compiles as a single expression. Decided by COMPILING —
     /// never by executing and retrying: a runtime `throw new SyntaxError(...)`
@@ -173,12 +178,39 @@ impl LocalTransport {
             Some(b) => format!("body: {},", serde_json::to_string(b)?),
             None => String::new(),
         };
+        // Stream the response and fail loud past the cap rather than reading an
+        // unbounded body into the renderer and back over CDP — a silently
+        // truncated body returned as success would be a lie. Mirrors the
+        // browser-mode `fetchExpression`.
         let js = format!(
-            r#"fetch({url}, {{method: {method}, credentials: "include", headers: {{"Content-Type": "application/json"}}, {body_part}}}).then(r => r.text().then(body => ({{status: r.status, body}})))"#,
+            r#"(async () => {{
+                const r = await fetch({url}, {{method: {method}, credentials: "include", headers: {{"Content-Type": "application/json"}}, {body_part}}});
+                const MAX = {max};
+                const reader = r.body && r.body.getReader();
+                if (!reader) return {{ status: r.status, body: "" }};
+                const parts = []; let total = 0;
+                for (;;) {{
+                    const {{ done, value }} = await reader.read();
+                    if (done) break;
+                    total += value.length;
+                    if (total > MAX) {{ try {{ await reader.cancel(); }} catch (e) {{}} return {{ status: r.status, oversize: MAX }}; }}
+                    parts.push(value);
+                }}
+                const merged = new Uint8Array(total); let off = 0;
+                for (const p of parts) {{ merged.set(p, off); off += p.length; }}
+                return {{ status: r.status, body: new TextDecoder().decode(merged) }};
+            }})()"#,
             url = serde_json::to_string(url)?,
             method = serde_json::to_string(method.unwrap_or("GET"))?,
+            max = FETCH_MAX_BODY_BYTES,
         );
         let result = self.page.evaluate(&js).await?;
+        if let Some(max) = result.get("oversize").and_then(|v| v.as_u64()) {
+            return Err(WebPilotError::Other {
+                detail: format!("response body exceeds the {max}-byte fetch limit"),
+            }
+            .into());
+        }
         let status = result
             .get("status")
             .and_then(|v| v.as_u64())

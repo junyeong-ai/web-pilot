@@ -76,7 +76,9 @@ impl LocalTransport {
         let browser = match CdpClient::connect(&ws_url).await {
             Ok(browser) => browser,
             Err(_) => {
-                session::invalidate_session();
+                // Invalidate only if this is still the session we failed on —
+                // a concurrent `open` may have already relaunched a fresh one.
+                session::invalidate_session_if_current(&ws_url);
                 let ws_url = session::ensure_session().await?;
                 CdpClient::connect(&ws_url).await?
             }

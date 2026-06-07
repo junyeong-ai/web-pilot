@@ -16,7 +16,7 @@ use std::future::Future;
 
 use anyhow::Result;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use webpilot::WebPilotError;
 use webpilot::action::Action;
 use webpilot::capture::{CaptureField, CaptureOpts};
@@ -53,19 +53,41 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
+    // Bound each request line: a JSON-RPC message from the host is small, so a
+    // line that grows past this cap — or never terminates — is malformed input,
+    // not a request. `read_until` on a `take`-limited reader keeps one read from
+    // growing memory without bound; an over-cap line is answered with a parse
+    // error and skipped rather than buffered whole.
+    const MAX_LINE_BYTES: u64 = 8 * 1024 * 1024;
     let mut transport: Option<T> = None;
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut reader = BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::stdout();
-    while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = (&mut reader)
+            .take(MAX_LINE_BYTES + 1)
+            .read_until(b'\n', &mut buf)
+            .await?;
+        if n == 0 {
+            break; // EOF
         }
-        let Some(reply) = handle_line(&connect, &mut transport, &line).await else {
+        let over_cap = buf.len() as u64 > MAX_LINE_BYTES && buf.last() != Some(&b'\n');
+        let reply = if over_cap {
+            Some(error_reply(Value::Null, -32700, "request exceeds size limit"))
+        } else {
+            let line = String::from_utf8_lossy(&buf);
+            if line.trim().is_empty() {
+                continue;
+            }
+            handle_line(&connect, &mut transport, &line).await
+        };
+        let Some(reply) = reply else {
             continue; // a notification — no response
         };
-        let mut buf = serde_json::to_string(&reply).expect("JSON-RPC reply serializes");
-        buf.push('\n');
-        stdout.write_all(buf.as_bytes()).await?;
+        let mut out = serde_json::to_string(&reply).expect("JSON-RPC reply serializes");
+        out.push('\n');
+        stdout.write_all(out.as_bytes()).await?;
         stdout.flush().await?;
     }
     Ok(())
@@ -83,7 +105,12 @@ where
         return Some(error_reply(Value::Null, -32700, "parse error"));
     };
     let id = msg.get("id").filter(|v| !v.is_null()).cloned()?;
-    let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
+    // A request carrying an id but no string `method` is malformed: JSON-RPC
+    // 2.0 answers that with -32600 (invalid request), distinct from -32601
+    // (a well-formed call to a method that does not exist).
+    let Some(method) = msg.get("method").and_then(Value::as_str) else {
+        return Some(error_reply(id, -32600, "invalid request: missing method"));
+    };
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
 
     match method {

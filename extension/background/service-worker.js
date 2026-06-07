@@ -1242,7 +1242,11 @@ async function handleWait(command) {
     if (r.success) return { type: "Wait", success: true };
     return { type: "Wait", success: false, error: r.error || timeoutErr("wait", timeoutMs) };
   } catch (e) {
-    return { type: "Wait", success: false, error: timeoutErr("wait", timeoutMs) };
+    // A thrown exception here is the bridge CALL failing (the content script is
+    // gone, eval was refused), not the wait condition timing out — the real
+    // timeout comes back as `r.error` above. Surface it typed (BridgeUnavailable
+    // keeps exit 3) instead of masking every infra failure as a Timeout.
+    return { type: "Wait", success: false, error: exceptionErr(e) };
   }
 }
 
@@ -1298,24 +1302,50 @@ async function handleDomGet(command) {
 
 // ── Fetch ──────────────────────────────────────────────────────────────────
 
+// The fetch expression, shared in spirit with headless `do_fetch`: it streams
+// the response and FAILS LOUD past the byte cap rather than reading an
+// unbounded body into the worker (and the NM pipe) — a truncated body returned
+// as success would be a silent lie. Returns `{oversize}` when over the limit.
+const FETCH_MAX_BODY_BYTES = 10 * 1024 * 1024;
+function fetchExpression(command) {
+  return `(async () => {
+    const r = await fetch(${JSON.stringify(command.url)}, {
+      method: ${JSON.stringify(command.method || "GET")},
+      headers: {"Content-Type": "application/json"},
+      credentials: "include",
+      ${command.body ? `body: ${JSON.stringify(command.body)},` : ""}
+    });
+    const MAX = ${FETCH_MAX_BODY_BYTES};
+    const reader = r.body && r.body.getReader();
+    if (!reader) return { status: r.status, body: "" };
+    const parts = []; let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > MAX) { try { await reader.cancel(); } catch (e) {} return { status: r.status, oversize: MAX }; }
+      parts.push(value);
+    }
+    const merged = new Uint8Array(total); let off = 0;
+    for (const p of parts) { merged.set(p, off); off += p.length; }
+    return { status: r.status, body: new TextDecoder().decode(merged) };
+  })()`;
+}
+
 async function handleFetch(command) {
   const tab = await resolveActiveTab();
   if (!tab) return { type: "FetchResult", success: false, error: noPageErr() };
   try {
     const r = await withCdp(tab.id, async (tid) => {
-      const code = `
-        fetch(${JSON.stringify(command.url)}, {
-          method: ${JSON.stringify(command.method || "GET")},
-          headers: {"Content-Type": "application/json"},
-          credentials: "include",
-          ${command.body ? `body: ${JSON.stringify(command.body)},` : ""}
-        }).then(r => r.text().then(body => ({status: r.status, body})))
-      `;
+      const code = fetchExpression(command);
       const ev = await cdpSend(tid, "Runtime.evaluate", {
         expression: code, awaitPromise: true, returnByValue: true,
       });
       return ev.result?.value;
     });
+    if (r && r.oversize) {
+      return { type: "FetchResult", success: false, error: err("Other", `response body exceeds the ${r.oversize}-byte fetch limit`) };
+    }
     if (r) {
       return { type: "FetchResult", success: true, status: r.status, body: r.body };
     }
@@ -1488,7 +1518,7 @@ async function handleConsoleStart() {
 
 async function handleConsoleRead() {
   const tab = await resolveActiveTab();
-  if (!tab) return { type: "ConsoleEntries", entries: [] };
+  if (!tab) return topErr(noPageErr());
   try {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
@@ -1496,23 +1526,27 @@ async function handleConsoleRead() {
       func: () => JSON.parse(JSON.stringify(window.__webpilot_console || [])),
     });
     return { type: "ConsoleEntries", entries: r?.[0]?.result || [] };
-  } catch {
-    return { type: "ConsoleEntries", entries: [] };
+  } catch (e) {
+    // A scripting failure means we could not read the buffer — surface it
+    // typed instead of reporting an empty (but successful) read, which would
+    // hide the failure exactly as headless never does (it propagates).
+    return topErr(exceptionErr(e));
   }
 }
 
 async function handleConsoleClear() {
   const tab = await resolveActiveTab();
-  if (tab) {
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id, frameIds: [0] },
-        world: "MAIN",
-        func: () => { window.__webpilot_console = []; },
-      });
-    } catch {}
+  if (!tab) return topErr(noPageErr());
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] },
+      world: "MAIN",
+      func: () => { window.__webpilot_console = []; },
+    });
+    return { type: "CommandResult", success: true };
+  } catch (e) {
+    return topErr(exceptionErr(e));
   }
-  return { type: "CommandResult", success: true };
 }
 
 async function handleNetworkStart() {
@@ -1530,7 +1564,7 @@ async function handleNetworkStart() {
 
 async function handleNetworkRead(since) {
   const tab = await resolveActiveTab();
-  if (!tab) return { type: "NetworkEntries", entries: [] };
+  if (!tab) return topErr(noPageErr());
   try {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
@@ -1542,23 +1576,24 @@ async function handleNetworkRead(since) {
       args: [since || 0],
     });
     return { type: "NetworkEntries", entries: r?.[0]?.result || [] };
-  } catch {
-    return { type: "NetworkEntries", entries: [] };
+  } catch (e) {
+    return topErr(exceptionErr(e));
   }
 }
 
 async function handleNetworkClear() {
   const tab = await resolveActiveTab();
-  if (tab) {
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id, frameIds: [0] },
-        world: "MAIN",
-        func: () => { window.__webpilot_network = []; },
-      });
-    } catch {}
+  if (!tab) return topErr(noPageErr());
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] },
+      world: "MAIN",
+      func: () => { window.__webpilot_network = []; },
+    });
+    return { type: "CommandResult", success: true };
+  } catch (e) {
+    return topErr(exceptionErr(e));
   }
-  return { type: "CommandResult", success: true };
 }
 
 // ── Session ────────────────────────────────────────────────────────────────
@@ -1676,7 +1711,19 @@ function watchMainFrameCommit(tabId) {
     chrome.webNavigation.onReferenceFragmentUpdated,
   ];
   events.forEach((ev) => ev.addListener(listener));
-  watch.dispose = () => events.forEach((ev) => ev.removeListener(listener));
+  // Self-disposing and idempotent: callers register the watch BEFORE issuing
+  // the navigation, so if that issuance throws, `waitNavigationSettled` (which
+  // would dispose) is never reached. A backstop timer removes the listeners
+  // regardless, bounding the leak to one settle window instead of the worker's
+  // lifetime; the explicit dispose on the normal path clears the timer.
+  let disposed = false;
+  const timer = setTimeout(() => watch.dispose(), NAVIGATION_TIMEOUT_MS + 1000);
+  watch.dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    clearTimeout(timer);
+    events.forEach((ev) => ev.removeListener(listener));
+  };
   return watch;
 }
 
@@ -1789,13 +1836,18 @@ async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
   try {
     return await sendOnce();
   } catch (firstError) {
-    const recoverable = firstError.message.includes("Receiving end") || firstError.message === SEND_TIMEOUT_MSG;
-    if (recoverable) {
-      console.warn(`[WebPilot] Content script disconnected (${firstError.message}), recovering...`);
+    // The only recovery for ANY first failure is the same: re-inject the
+    // bridge and try once more. So attempt it unconditionally rather than
+    // matching Chrome's "Receiving end does not exist" message string — if
+    // re-injection doesn't help (tab gone, eval refused), the retry throws and
+    // the real error surfaces. Substring-matching a localized Chrome message
+    // is exactly the message-parsing the typed-error convention forbids.
+    try {
       await ensureBridge(tabId, frameId);
-      return await sendOnce();
+    } catch {
+      throw firstError; // can't even re-inject — surface the original failure
     }
-    throw firstError;
+    return await sendOnce();
   }
 }
 

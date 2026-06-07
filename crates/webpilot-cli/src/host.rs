@@ -461,15 +461,14 @@ fn current_gate(gate: &VersionGate) -> GateState {
 /// the first non-`Unknown` state, or `Unknown` if the handshake never arrives.
 async fn resolve_gate(gate: &VersionGate) -> GateState {
     const POLL: std::time::Duration = std::time::Duration::from_millis(20);
-    const ATTEMPTS: u32 = 100; // ~2s; the Ping lands in milliseconds in practice.
-    for _ in 0..ATTEMPTS {
+    let deadline = tokio::time::Instant::now() + webpilot::settings::timeouts().version_handshake;
+    loop {
         let state = current_gate(gate);
-        if !matches!(state, GateState::Unknown) {
+        if !matches!(state, GateState::Unknown) || tokio::time::Instant::now() >= deadline {
             return state;
         }
         tokio::time::sleep(POLL).await;
     }
-    current_gate(gate)
 }
 
 /// Write a typed error back to the CLI as a `ResponseData::Error` envelope —

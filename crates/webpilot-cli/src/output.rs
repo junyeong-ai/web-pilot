@@ -111,16 +111,18 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
         (CommandOutput::Data { json, .. }, OutputMode::Json) => emit_json(&json),
 
         (CommandOutput::Dom { snapshot, extra }, OutputMode::Human) => {
-            if !snapshot.elements.is_empty() {
-                print!("{}", snapshot.to_text());
-            }
+            // Always render the snapshot text, even with zero interactive
+            // elements: the `--- Page / Scroll / iframe ---` footer carries the
+            // URL, title, and scroll context an agent needs to orient, and the
+            // MCP path emits it unconditionally — human mode must not diverge.
+            print!("{}", snapshot.to_text());
             for line in dom_extra_lines(&extra) {
                 eprintln!("{line}");
             }
         }
         (CommandOutput::Dom { snapshot, extra }, OutputMode::Json) => {
-            let mut value = serde_json::to_value(&snapshot)
-                .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+            let mut value =
+                serde_json::to_value(&snapshot).expect("DomSnapshot serializes (static shape)");
             if let Some(map) = value.as_object_mut() {
                 for (k, v) in extra {
                     map.insert(k, v);

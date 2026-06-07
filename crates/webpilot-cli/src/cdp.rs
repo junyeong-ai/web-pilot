@@ -212,23 +212,40 @@ impl CdpClient {
         // caller's timeout.
         let text = serde_json::to_string(&msg)?;
         let write = async {
-            self.writer
-                .lock()
-                .await
-                .send(Message::Text(text.into()))
-                .await
+            let mut guard = self.writer.lock().await;
+            // Re-check liveness AFTER winning the lock: a concurrent send that
+            // timed out (or the heartbeat) may have marked the connection dead
+            // while we queued behind it. Dispatching now would push a frame
+            // onto a sink known to be wedged.
+            if !self.alive.load(Ordering::Acquire) {
+                return None;
+            }
+            Some(guard.send(Message::Text(text.into())).await)
         };
         match tokio::time::timeout(timeout, write).await {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => {
+            Ok(Some(Ok(()))) => {}
+            Ok(Some(Err(_))) => {
                 self.pending.lock().await.remove(&id);
                 return Err(WebPilotError::ConnectionLost {
                     detail: format!("CDP socket write failed for {method}"),
                 }
                 .into());
             }
-            Err(_) => {
+            Ok(None) => {
                 self.pending.lock().await.remove(&id);
+                return Err(WebPilotError::ConnectionLost {
+                    detail: format!("CDP connection died before sending {method}"),
+                }
+                .into());
+            }
+            Err(_) => {
+                // A write that can't drain within the deadline means the socket
+                // is wedged (on loopback, backpressure for this long is not
+                // "slow" — it is dead). Mark the connection dead and fail EVERY
+                // in-flight request: none of them will see a reply over a stuck
+                // sink, and a fresh session is relaunched on the next `open`.
+                self.alive.store(false, Ordering::Release);
+                self.pending.lock().await.drain();
                 return Err(WebPilotError::Timeout {
                     kind: method.to_string(),
                     elapsed_ms: timeout.as_millis() as u64,
