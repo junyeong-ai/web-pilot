@@ -36,8 +36,11 @@ pub async fn run<T: Transport>(transport: &mut T, args: NetworkArgs) -> Result<C
     let result = transport.send(cmd).await?;
 
     match result {
-        ResponseData::NetworkEntries { entries: requests } => {
-            let human_lines: Vec<String> = requests
+        ResponseData::NetworkEntries {
+            entries: requests,
+            truncated,
+        } => {
+            let mut human: String = requests
                 .iter()
                 .map(|r| {
                     let status = r
@@ -53,11 +56,21 @@ pub async fn run<T: Transport>(transport: &mut T, args: NetworkArgs) -> Result<C
                         r.duration_ms as u64
                     )
                 })
-                .collect();
-            Ok(CommandOutput::List {
-                items: serde_json::to_value(&requests)?,
-                human_lines,
-                summary: format!("({} requests)", requests.len()),
+                .collect::<Vec<_>>()
+                .join("\n");
+            // `truncated` rides in both the JSON and the human text so neither an
+            // MCP nor a CLI agent reads a full-looking buffer as the whole story.
+            if truncated {
+                if !human.is_empty() {
+                    human.push('\n');
+                }
+                human.push_str(
+                    "--- network buffer at capacity — older requests may have been dropped ---",
+                );
+            }
+            Ok(CommandOutput::Data {
+                json: serde_json::json!({ "entries": requests, "truncated": truncated }),
+                human,
             })
         }
         ResponseData::CommandResult { success, error, .. } => {

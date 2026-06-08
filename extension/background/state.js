@@ -5,6 +5,11 @@ import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
 import { activeFrameId, monitoringState, resolveActiveTab, saveMonitoringState } from "./session.js";
 import { ensureBridge, sendToContent } from "./content.js";
 
+// Max entries each MAIN-world monitor ring buffer keeps; the install scripts
+// below evict the oldest past this, and a read reports `truncated` when the
+// buffer is at this cap, so the literal `500` in those scripts must match.
+const MONITOR_BUFFER_CAP = 500;
+
 // ── Console / network monitoring injection ─────────────────────────────────
 
 // Re-arm any ARMED console/network hooks on `tabId`'s new main document — the
@@ -200,23 +205,30 @@ async function handleConsoleRead(since) {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
       world: "MAIN",
-      args: [since || 0, ["log", "warn", "error", "info", "debug"]],
+      args: [since || 0, ["log", "warn", "error", "info", "debug"], MONITOR_BUFFER_CAP],
       // Filter by `timestamp >= since` (the incremental cursor) AND sanitize to
       // the same shape headless returns: drop any entry whose `level` is not a
       // known ConsoleLevel (the MAIN-world buffer is page-reachable and only
       // best-effort), and coerce `message` to a string — so the CLI deserializes
       // an identical `Vec<ConsoleEntry>` in both modes and a tampered entry can't
-      // break the read or leak a wire shape headless would never emit.
-      func: (s, levels) =>
-        (window.__webpilot_console || [])
-          .filter((e) => e && levels.includes(e.level) && e.timestamp >= s)
-          .map((e) => ({
-            level: e.level,
-            message: typeof e.message === "string" ? e.message : "",
-            timestamp: e.timestamp,
-          })),
+      // break the read or leak a wire shape headless would never emit. `truncated`
+      // reports a full buffer (older entries possibly evicted), like headless.
+      func: (s, levels, cap) => {
+        const all = window.__webpilot_console || [];
+        return {
+          entries: all
+            .filter((e) => e && levels.includes(e.level) && e.timestamp >= s)
+            .map((e) => ({
+              level: e.level,
+              message: typeof e.message === "string" ? e.message : "",
+              timestamp: e.timestamp,
+            })),
+          truncated: all.length >= cap,
+        };
+      },
     });
-    return { type: "ConsoleEntries", entries: r?.[0]?.result || [] };
+    const out = r?.[0]?.result || { entries: [], truncated: false };
+    return { type: "ConsoleEntries", entries: out.entries, truncated: out.truncated };
   } catch (e) {
     // A scripting failure means we could not read the buffer — surface it
     // typed instead of reporting an empty (but successful) read, which would
@@ -265,20 +277,26 @@ async function handleNetworkRead(since) {
       // MAIN-world buffer is page-reachable and best-effort), so the CLI
       // deserializes an identical `Vec<NetworkEntry>` in both modes and a tampered
       // entry can't break the read. `status`/`error` stay optional.
-      func: (s) =>
-        (window.__webpilot_network || []).filter(
-          (e) =>
-            e &&
-            e.timestamp >= s &&
-            typeof e.type === "string" &&
-            typeof e.url === "string" &&
-            typeof e.method === "string" &&
-            typeof e.duration_ms === "number" &&
-            typeof e.timestamp === "number",
-        ),
-      args: [since || 0],
+      func: (s, cap) => {
+        const all = window.__webpilot_network || [];
+        return {
+          entries: all.filter(
+            (e) =>
+              e &&
+              e.timestamp >= s &&
+              typeof e.type === "string" &&
+              typeof e.url === "string" &&
+              typeof e.method === "string" &&
+              typeof e.duration_ms === "number" &&
+              typeof e.timestamp === "number",
+          ),
+          truncated: all.length >= cap,
+        };
+      },
+      args: [since || 0, MONITOR_BUFFER_CAP],
     });
-    return { type: "NetworkEntries", entries: r?.[0]?.result || [] };
+    const out = r?.[0]?.result || { entries: [], truncated: false };
+    return { type: "NetworkEntries", entries: out.entries, truncated: out.truncated };
   } catch (e) {
     return topErr(exceptionErr(e));
   }

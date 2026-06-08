@@ -42,8 +42,8 @@ pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<C
     let result = transport.send(cmd).await?;
 
     match result {
-        ResponseData::ConsoleEntries { entries } => {
-            let filtered = match &args.command {
+        ResponseData::ConsoleEntries { entries, truncated } => {
+            let filtered: Vec<_> = match &args.command {
                 ConsoleCommand::Read {
                     level: Some(lvl), ..
                 } => {
@@ -57,14 +57,24 @@ pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<C
                 _ => entries,
             };
 
-            let human_lines: Vec<String> = filtered
+            let mut human: String = filtered
                 .iter()
                 .map(|e| format!("[{}] {}", e.level, line_safe(&e.message)))
-                .collect();
-            Ok(CommandOutput::List {
-                items: serde_json::to_value(&filtered)?,
-                human_lines,
-                summary: format!("({} entries)", filtered.len()),
+                .collect::<Vec<_>>()
+                .join("\n");
+            // `truncated` rides in both the JSON and the human text so neither an
+            // MCP nor a CLI agent reads a full-looking buffer as the whole story.
+            if truncated {
+                if !human.is_empty() {
+                    human.push('\n');
+                }
+                human.push_str(
+                    "--- console buffer at capacity — older entries may have been dropped ---",
+                );
+            }
+            Ok(CommandOutput::Data {
+                json: serde_json::json!({ "entries": filtered, "truncated": truncated }),
+                human,
             })
         }
         ResponseData::CommandResult { success, error, .. } => {

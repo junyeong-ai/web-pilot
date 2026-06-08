@@ -76,15 +76,25 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_console_read(&self, since: Option<u64>) -> Result<ResponseData> {
+        // Read the entries AND whether the buffer is at its cap in one round-trip
+        // — `truncated` flags a full buffer (older entries possibly evicted) so a
+        // missing early entry never reads as a confident absence.
         let result = self
             .page
             .evaluate(&format!(
-                "(window.__webpilot_console || []).filter(e => e.timestamp >= {})",
-                since.unwrap_or(0)
+                "(()=>{{const a=window.__webpilot_console||[];\
+                  return{{entries:a.filter(e=>e.timestamp>={}),truncated:a.length>={}}};}})()",
+                since.unwrap_or(0),
+                MONITOR_BUFFER_CAP,
             ))
             .await?;
+        let truncated = result
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let entries: Vec<ConsoleEntry> = result
-            .as_array()
+            .get("entries")
+            .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| {
@@ -107,7 +117,7 @@ impl LocalTransport {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(ResponseData::ConsoleEntries { entries })
+        Ok(ResponseData::ConsoleEntries { entries, truncated })
     }
 
     pub(super) async fn do_console_clear(&self) -> Result<ResponseData> {
@@ -148,16 +158,29 @@ impl LocalTransport {
 
     pub(super) async fn do_network_read(&self, since: Option<u64>) -> Result<ResponseData> {
         let js = format!(
-            "(window.__webpilot_network || []).filter(e => e.timestamp >= {})",
-            since.unwrap_or(0)
+            "(()=>{{const a=window.__webpilot_network||[];\
+              return{{entries:a.filter(e=>e.timestamp>={}),truncated:a.length>={}}};}})()",
+            since.unwrap_or(0),
+            MONITOR_BUFFER_CAP,
         );
         let result = self.page.evaluate(&js).await?;
-        let arr = result.as_array().cloned().unwrap_or_default();
+        let truncated = result
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let arr = result
+            .get("entries")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         let requests: Vec<NetworkEntry> = arr
             .into_iter()
             .filter_map(|v| serde_json::from_value(v).ok())
             .collect();
-        Ok(ResponseData::NetworkEntries { entries: requests })
+        Ok(ResponseData::NetworkEntries {
+            entries: requests,
+            truncated,
+        })
     }
 
     pub(super) async fn do_network_clear(&self) -> Result<ResponseData> {
@@ -381,6 +404,11 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
         },
     }
 }
+
+/// Max entries kept in each MAIN-world monitor ring buffer. The install scripts
+/// below evict the oldest past this; a read reports `truncated` when the buffer
+/// is at this cap, so the literal `500` in those scripts must match this value.
+const MONITOR_BUFFER_CAP: usize = 500;
 
 const CONSOLE_INSTALL_JS: &str = r#"
 // Always (re-)attach the recorder. Gating on `window.__webpilot_console`

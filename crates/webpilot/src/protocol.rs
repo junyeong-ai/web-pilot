@@ -332,9 +332,19 @@ pub enum ResponseData {
     },
     ConsoleEntries {
         entries: Vec<ConsoleEntry>,
+        /// The monitor buffer is full (capped at 500), so older entries may have
+        /// been evicted — an honest "this read may be incomplete" signal so a
+        /// missing early entry never reads as a confident absence. Conservative:
+        /// true whenever the buffer is at capacity, false otherwise.
+        #[serde(default)]
+        truncated: bool,
     },
     NetworkEntries {
         entries: Vec<NetworkEntry>,
+        /// As `ConsoleEntries::truncated`: the buffer is at its 500-entry cap, so
+        /// older requests may have been evicted from this read.
+        #[serde(default)]
+        truncated: bool,
     },
     SessionExport {
         path: String,
