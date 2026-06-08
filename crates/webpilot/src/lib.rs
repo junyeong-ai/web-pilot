@@ -8,6 +8,7 @@ pub mod protocol;
 pub mod screenshot;
 pub mod settings;
 pub mod types;
+pub mod url_glob;
 pub mod wait;
 
 pub use action::{Action, ActionKind, ElementIndex, Modifiers, ScrollDir};

@@ -281,7 +281,7 @@ impl LocalTransport {
                 .copied(),
             FrameSelector::Url { pattern } => candidates
                 .iter()
-                .find(|f| url_glob_match(pattern, &f.url))
+                .find(|f| webpilot::url_glob::matches(pattern, &f.url))
                 .copied(),
             FrameSelector::Predicate { js } => {
                 // The predicate rides the SAME form decision as `eval` — compile
@@ -478,40 +478,22 @@ fn parse_chrome_product(product: &str) -> String {
         .to_string()
 }
 
-/// Match a `frame url` pattern against a frame URL: every non-`*` run of the
-/// pattern must appear in the URL in order, with `*` standing for any (possibly
-/// empty) run between them. So `/auth/` matches any URL containing it (a plain
-/// substring), and `accounts.*/o/oauth2` spans a wildcard. There is no start/end
-/// anchoring — the pattern is a *contains* match, the least surprising reading of
-/// "find the frame whose URL has this in it". An empty or all-`*` pattern is
-/// rejected by the CLI before it reaches here (it would match every frame), so
-/// the segment iterator is never empty.
-fn url_glob_match(pattern: &str, url: &str) -> bool {
-    let mut cursor = 0;
-    for segment in pattern.split('*').filter(|s| !s.is_empty()) {
-        match url[cursor..].find(segment) {
-            Some(rel) => cursor += rel + segment.len(),
-            None => return false,
-        }
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn url_glob_matches_substring_and_wildcards() {
-        // Plain substring (the common case).
-        assert!(url_glob_match("/auth/", "https://x.com/auth/login"));
-        assert!(!url_glob_match("/auth/", "https://x.com/login"));
-        // Leading/trailing `*` are no-ops for a contains match.
-        assert!(url_glob_match("*auth*", "https://x.com/auth/login"));
-        // A middle `*` spans arbitrary characters in order — the case the old
-        // star-stripping `replace('*', "")` broke (it searched for "authlogin").
-        assert!(url_glob_match("auth*login", "https://x.com/auth/x/login"));
-        assert!(!url_glob_match("login*auth", "https://x.com/auth/login"));
+        // The matcher itself is unit-tested in `webpilot::url_glob`; this guards
+        // that `frame url` routes through it (not the old star-stripping).
+        assert!(webpilot::url_glob::matches(
+            "auth*login",
+            "https://x/auth/x/login"
+        ));
+        assert!(!webpilot::url_glob::matches(
+            "login*auth",
+            "https://x/auth/login"
+        ));
     }
 
     #[test]

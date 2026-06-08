@@ -43,7 +43,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: FrameArgs) -> Result<Com
             // A `frame url` pattern that is empty or only wildcards matches every
             // frame — reject it rather than silently switch into the first one.
             if let FrameCommand::Url { pattern } = &cmd
-                && pattern.replace('*', "").trim().is_empty()
+                && webpilot::url_glob::is_blank(pattern)
             {
                 return Err(webpilot::WebPilotError::InvalidArgument {
                     detail: "frame url pattern must contain a non-wildcard character".into(),
