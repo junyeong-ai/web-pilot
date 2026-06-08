@@ -46,7 +46,12 @@ pub enum CommandOutput {
 
 /// The side-channel artefacts a capture reports next to the DOM, with their
 /// human labels. Single source for both the CLI renderer and `to_agent_text`.
-const DOM_EXTRA_LABELS: [(&str, &str); 4] = [
+const DOM_EXTRA_LABELS: [(&str, &str); 6] = [
+    // Page identity first — a screenshot/PDF/AX-only capture has no DOM footer,
+    // so these are how the agent learns what page the artifact actually shows
+    // (after a redirect, or when an iframe is the active frame).
+    ("page_url", "Page"),
+    ("page_title", "Title"),
     ("screenshot_path", "Screenshot"),
     ("screenshot_error", "Screenshot failed"),
     ("pdf_path", "PDF"),

@@ -44,7 +44,8 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             screenshot_error,
             pdf_path,
             pdf_b64,
-            ..
+            page_url,
+            page_title,
         } => {
             // Persist accessibility tree to a file when present.
             let mut ax_path: Option<String> = None;
@@ -84,11 +85,19 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             }
 
             if let Some(mut snapshot) = dom {
+                // The DOM snapshot already carries the page URL/title in its
+                // footer, so it identifies the captured page on its own.
                 snapshot.accessibility_tree = None;
                 Ok(CommandOutput::Dom { snapshot, extra })
-            } else if extra.is_empty() {
-                Ok(CommandOutput::Ok("OK".into()))
             } else {
+                // No DOM footer here, so a screenshot/PDF/AX-only capture must
+                // still say WHAT page it captured — otherwise a redirected `--url`
+                // or a switched iframe leaves the agent holding an artifact path
+                // with no idea what navigation state it reflects.
+                extra.insert("page_url".into(), serde_json::json!(page_url));
+                if !page_title.is_empty() {
+                    extra.insert("page_title".into(), serde_json::json!(page_title));
+                }
                 let json = serde_json::Value::Object(extra.clone());
                 let human = crate::output::dom_extra_lines(&extra).join("\n");
                 Ok(CommandOutput::Data { json, human })
