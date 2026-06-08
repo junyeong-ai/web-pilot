@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use webpilot::protocol::ResponseData;
 use webpilot::{Action, WebPilotError};
 
-use super::{LocalTransport, action_success};
+use super::LocalTransport;
 
 /// History traversal direction — typed so the probe and the page expression
 /// derive from one discriminant instead of string inspection.
@@ -109,22 +109,16 @@ impl LocalTransport {
                 self.navigate_reconnect(&url).await?;
                 // Report where the navigation actually landed (after redirects).
                 let landed = self.bound_target_url().await;
-                return Ok(ResponseData::Action {
-                    success: true,
-                    error: None,
-                    dom: None,
-                    url_changed: (!landed.is_empty()).then_some(landed),
-                    new_tab: None,
-                    capture_error: None,
-                });
+                let url_changed = (!landed.is_empty()).then_some(landed);
+                return Ok(self.settled_action_result(capture, url_changed).await);
             }
             Action::Back => {
                 self.history_nav(HistoryNav::Back).await?;
-                return Ok(action_success(None));
+                return Ok(self.settled_action_result(capture, None).await);
             }
             Action::Forward => {
                 self.history_nav(HistoryNav::Forward).await?;
-                return Ok(action_success(None));
+                return Ok(self.settled_action_result(capture, None).await);
             }
             Action::Reload => {
                 self.page.send("Page.reload", None).await?;
@@ -137,7 +131,7 @@ impl LocalTransport {
                     .ok();
                 self.clear_active_frame().await;
                 self.reinstall_monitors().await;
-                return Ok(action_success(None));
+                return Ok(self.settled_action_result(capture, None).await);
             }
             Action::Drag {
                 source,
@@ -146,7 +140,7 @@ impl LocalTransport {
             } => {
                 self.require_main_frame("drag").await?;
                 self.do_drag(*source, *target, *steps).await?;
-                return Ok(action_success(None));
+                return Ok(self.settled_action_result(capture, None).await);
             }
             Action::Hover { index } => {
                 // Browser-input mouse move so CSS `:hover` actually fires.
@@ -154,13 +148,13 @@ impl LocalTransport {
                 // internal hover state.
                 self.require_main_frame("hover").await?;
                 self.do_hover(*index).await?;
-                return Ok(action_success(None));
+                return Ok(self.settled_action_result(capture, None).await);
             }
             Action::Upload { index, path } => {
                 self.require_main_frame("upload").await?;
                 let path = path.clone();
                 self.do_upload(*index, &path).await?;
-                return Ok(action_success(None));
+                return Ok(self.settled_action_result(capture, None).await);
             }
             _ => {}
         }
@@ -265,6 +259,35 @@ impl LocalTransport {
             snapshot.subframes = self.count_http_subframes().await;
         }
         Ok(snapshot)
+    }
+
+    /// Build the result for an action that has already settled its own page
+    /// change — navigation, history, reload, drag, hover, upload — honouring
+    /// `--capture` with a post-settle snapshot exactly like the fall-through
+    /// click/type path and browser mode (whose auto-capture runs after every
+    /// action). A capture failure is reported as `capture_error` beside the
+    /// success, never a command failure (a retry would re-run the side effect).
+    async fn settled_action_result(
+        &self,
+        capture: bool,
+        url_changed: Option<String>,
+    ) -> ResponseData {
+        let (dom, capture_error) = if capture {
+            match self.capture_action_snapshot().await {
+                Ok(snapshot) => (Some(snapshot), None),
+                Err(e) => (None, Some(e.to_string())),
+            }
+        } else {
+            (None, None)
+        };
+        ResponseData::Action {
+            success: true,
+            error: None,
+            dom,
+            url_changed,
+            new_tab: None,
+            capture_error,
+        }
     }
 
     /// Typed guard for actions whose CDP path (page-viewport coordinates or
