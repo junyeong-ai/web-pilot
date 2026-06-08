@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.15] - 2026-06-08
+
+### Fixed
+
+- **An unknown `key_press` key is a typed error, not a silent no-op success.** A
+  typo like "Entr" or an out-of-range "F13" was dispatched with no native effect
+  while reporting success; an unrecognized multi-character key now returns
+  `InvalidArgument` (a single character still types via its text). Both modes.
+- **MCP rejects misplaced/unknown action arguments.** `Action` deserialized
+  permissively, so e.g. `ctrl` placed at the top level instead of inside
+  `modifiers` was silently dropped, turning an intended chord into a plain key
+  press. `Action` now denies unknown fields and a misaligned call fails clearly.
+- **A closed pinned tab is `TabNotFound`, not a silent retarget.** Headless fell
+  through to the first page when the persisted pin's tab had closed, landing the
+  next command on a different tab; it now fails typed, matching browser mode (a
+  genuine Chrome restart already clears the pin, so a fresh attach is unaffected).
+
 ## [0.4.14] - 2026-06-08
 
 ### Fixed
