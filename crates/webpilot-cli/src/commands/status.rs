@@ -5,12 +5,12 @@
 //! reaches `render` directly after opening a `LocalTransport`.
 
 use anyhow::Result;
-use webpilot::ipc::IpcError;
-use webpilot::protocol::{Command, ResponseData, RunMode};
+use webpilot::WebPilotError;
+use webpilot::ipc::{self, IpcError};
+use webpilot::protocol::{Command, Request, Response, ResponseData, RunMode};
 use webpilot::types::line_safe;
 
 use crate::output::CommandOutput;
-use crate::transport::{IpcTransport, Transport};
 
 /// Render a typed `Status` response into the unified `CommandOutput` shape.
 pub fn render(
@@ -60,16 +60,29 @@ pub fn render(
 /// Browser-mode status entry point. Produces an informative response even
 /// when the IPC connection cannot be established.
 pub async fn run() -> Result<CommandOutput> {
-    let mut transport = IpcTransport::new();
-    match transport.send(Command::Status).await {
-        Ok(ResponseData::Status {
+    // Reach the IPC layer directly rather than through `IpcTransport`, which
+    // flattens every `IpcError` into `ConnectionLost`. `diagnose` needs the typed
+    // variant — host-not-running vs timeout vs closed — to give the specific,
+    // actionable hint; the generic transport error would erase it before the only
+    // code that reads it.
+    let request = Request::new(1, Command::Status);
+    let raw = match ipc::send_request(&serde_json::to_value(&request)?).await {
+        Ok(raw) => raw,
+        Err(e) => return Ok(diagnose(&e)),
+    };
+    let response: Response =
+        serde_json::from_value(raw).map_err(|e| WebPilotError::ConnectionLost {
+            detail: format!("malformed reply from the Native Messaging host: {e}"),
+        })?;
+    match response.result {
+        ResponseData::Status {
             connected,
             mode,
             tab_url,
             tab_title,
             chrome_version,
             extension_version,
-        }) => Ok(render(
+        } => Ok(render(
             connected,
             mode,
             tab_url,
@@ -78,16 +91,17 @@ pub async fn run() -> Result<CommandOutput> {
             extension_version,
             None,
         )),
-        Ok(ResponseData::Error { error }) => Err(error.into()),
-        Ok(_) => anyhow::bail!("Unexpected response shape"),
-        Err(e) => Ok(diagnose(&e)),
+        ResponseData::Error { error } => Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
     }
 }
 
-/// Render a connection failure as an informative status (not an error).
-fn diagnose(error: &anyhow::Error) -> CommandOutput {
-    let (msg, hint) = match error.downcast_ref::<IpcError>() {
-        Some(IpcError::HostNotRunning(path)) => {
+/// Render a connection failure as an informative status (not an error). Takes the
+/// typed `IpcError` directly — every variant maps to a specific hint, so there is
+/// no generic catch-all to fall through to.
+fn diagnose(error: &IpcError) -> CommandOutput {
+    let (msg, hint) = match error {
+        IpcError::HostNotRunning(path) => {
             let hint = match check_nm_manifest() {
                 ManifestState::NotFound => {
                     "  NM manifest not found.\n  Run: webpilot setup nm-host --extension-id <ID>".into()
@@ -105,25 +119,21 @@ fn diagnose(error: &anyhow::Error) -> CommandOutput {
             };
             (format!("Host not running (socket: {path})"), hint)
         }
-        Some(IpcError::Timeout) => (
+        IpcError::Timeout => (
             "Timed out waiting for host response.".into(),
             "  The NM host may be stuck. Reload the extension in Chrome.".into(),
         ),
-        Some(IpcError::ConnectionClosed) => (
+        IpcError::ConnectionClosed => (
             "Host closed the connection.".into(),
             "  The NM host may have crashed. Reload the extension in Chrome.".into(),
         ),
-        Some(IpcError::Io(e)) => (
+        IpcError::Io(e) => (
             format!("Socket error: {e}"),
             "  Check that the NM host is running and the socket is accessible.".into(),
         ),
-        Some(IpcError::Json(e)) => (
+        IpcError::Json(e) => (
             format!("Invalid response from host: {e}"),
             "  The NM host sent malformed data. Try reloading the extension.".into(),
-        ),
-        None => (
-            format!("Status query failed: {error:#}"),
-            "  Check that the host is running and reachable.".into(),
         ),
     };
 
