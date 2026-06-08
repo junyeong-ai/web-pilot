@@ -257,6 +257,20 @@ impl LocalTransport {
     /// all are present or the short budget expires. Used before a `frame find`
     /// predicate judges every candidate, and after a frame switch.
     async fn settle_frame_contexts(&self, frame_ids: &[String]) {
+        // Drop any existing entry for these frames first. After a navigation the
+        // map can still hold a *stale* uniqueContextId — the `executionContext\
+        // Destroyed` event that prunes it is processed asynchronously — and
+        // `Runtime.disable`/`enable` does not emit `executionContextsCleared`, so
+        // a bare `contains_key` would treat that dead id as "settled" and the
+        // caller would evaluate against a context CDP has already discarded.
+        // Clearing makes "settled" mean a context *re-observed* after the re-emit
+        // below, not a leftover from before the navigation.
+        {
+            let mut map = self.frame_contexts.lock().await;
+            for fid in frame_ids {
+                map.remove(fid);
+            }
+        }
         let _ = self.page.send("Runtime.disable", None).await;
         let _ = self.page.send("Runtime.enable", None).await;
         for _ in 0..20 {
