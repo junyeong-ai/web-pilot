@@ -65,6 +65,10 @@ fails the build if they drift.
   calls can no longer lose an update (a dropped `deny` would leave an effect open).
 - The context GC never disposes a context another process is actively using; an
   orphaned Chrome from a crash window is reaped before relaunch.
+- A capture/eval immediately after a navigation no longer fails with CDP's
+  "Cannot find context with specified id": the bridge drops the stale
+  isolated-world context and retries against the new document's context (the
+  renderer-swap race, more likely on slower/loaded machines).
 - Upload paths are resolved against the CLI's working directory and existence-checked
   before the wire (correct in both modes; a missing file is a typed error).
 - Many headless↔browser parity fixes across cookies, monitors, navigation settle,

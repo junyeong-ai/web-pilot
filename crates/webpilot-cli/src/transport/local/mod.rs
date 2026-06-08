@@ -328,11 +328,8 @@ impl LocalTransport {
     /// auto-loads there on every document (`install_bridge_world`), so there is
     /// no per-call injection — only the context to target.
     pub(super) async fn invoke_bridge(&self, msg: &Value) -> Result<Value> {
-        let cid = self.bridge_context_id().await?;
-        let payload = msg.to_string();
-        let js = format!("(async () => __webpilot_handle({payload}))()");
-        let result = self.eval_in_context(&js, Some(&cid), true).await?;
-        Ok(result.get("value").cloned().unwrap_or(Value::Null))
+        self.invoke_bridge_with_timeout(msg, webpilot::settings::timeouts().cdp_send)
+            .await
     }
 
     /// As `invoke_bridge`, but bounds the CDP round-trip by `timeout` instead of
@@ -343,13 +340,32 @@ impl LocalTransport {
         msg: &Value,
         timeout: std::time::Duration,
     ) -> Result<Value> {
-        let cid = self.bridge_context_id().await?;
         let payload = msg.to_string();
         let js = format!("(async () => __webpilot_handle({payload}))()");
-        let result = self
+
+        let cid = self.bridge_context_id().await?;
+        match self
             .eval_in_context_with_timeout(&js, Some(&cid), true, timeout)
-            .await?;
-        Ok(result.get("value").cloned().unwrap_or(Value::Null))
+            .await
+        {
+            Ok(result) => Ok(result.get("value").cloned().unwrap_or(Value::Null)),
+            Err(e) if is_stale_context(&e) => {
+                // A navigation destroyed the isolated world this `cid` named, but
+                // the context map can still hand it back until the async
+                // `executionContextDestroyed` event is processed (a window the
+                // slower the machine, the wider). Drop just that stale id and
+                // re-resolve — `bridge_context_id` then waits for the new
+                // document's context — and retry once. This is the renderer-swap
+                // race Puppeteer/Playwright also retry through.
+                self.bridge_contexts.lock().await.retain(|_, v| *v != cid);
+                let fresh = self.bridge_context_id().await?;
+                let result = self
+                    .eval_in_context_with_timeout(&js, Some(&fresh), true, timeout)
+                    .await?;
+                Ok(result.get("value").cloned().unwrap_or(Value::Null))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub(super) fn parse_bridge_response(val: Value) -> Result<Value> {
@@ -524,6 +540,14 @@ impl LocalTransport {
             .map(|(_, url)| url)
             .unwrap_or_default()
     }
+}
+
+/// Whether an error is CDP's "context destroyed" signal — the renderer swapped
+/// the document out from under a `uniqueContextId` the caller still held. Keyed
+/// on the CDP protocol's own wording (its stable contract, the same string
+/// Puppeteer and Playwright retry on), never on a WebPilot error message.
+fn is_stale_context(err: &anyhow::Error) -> bool {
+    format!("{err:#}").contains("Cannot find context with specified id")
 }
 
 /// Per-probe time box: a context busy with an in-flight renderer swap can stall
