@@ -67,10 +67,16 @@ async function injectNetworkMonitoring(tabId) {
       const origFetch = window.fetch;
       window.fetch = function (...args) {
         const [resource, config] = args;
+        // `fetch` accepts a string/URL or a Request object. A Request carries its
+        // own url and method, which a `config` override can still trump. Reading
+        // `String(resource)` would log "[object Request]" and lose the method.
+        const isReq = typeof Request !== "undefined" && resource instanceof Request;
+        const url = isReq ? resource.url : String(resource);
+        const method = config?.method || (isReq ? resource.method : "GET");
         const t0 = performance.now();
         return origFetch.apply(this, args).then((response) => {
           window.__webpilot_network.push({
-            type: "fetch", url: String(resource), method: config?.method || "GET",
+            type: "fetch", url, method,
             status: response.status, duration_ms: Math.round(performance.now() - t0),
             timestamp: Date.now(),
           });
@@ -78,7 +84,7 @@ async function injectNetworkMonitoring(tabId) {
           return response;
         }).catch((err) => {
           window.__webpilot_network.push({
-            type: "fetch", url: String(resource), method: config?.method || "GET",
+            type: "fetch", url, method,
             error: err.message, duration_ms: Math.round(performance.now() - t0),
             timestamp: Date.now(),
           });

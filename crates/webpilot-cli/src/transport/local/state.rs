@@ -219,15 +219,19 @@ impl LocalTransport {
         }
 
         let mut cookies_failed = 0usize;
+        let mut cookies_malformed = 0usize;
         let mut cookies_total = 0usize;
         if let Some(arr) = parsed.get("cookies").and_then(|v| v.as_array()) {
+            cookies_total = arr.len();
             for v in arr {
-                // Tolerate both CookieInfo (CLI shape) and raw CDP rows. Bad
-                // entries are skipped — one bad cookie shouldn't fail import.
+                // A row that parses as neither a `CookieInfo` (CLI shape) nor a
+                // raw CDP cookie is counted, not silently dropped — losing a
+                // cookie while reporting success would hand the agent a session
+                // that is quietly missing some of what the file held.
                 let Ok(info) = serde_json::from_value::<CookieInfo>(v.clone()) else {
+                    cookies_malformed += 1;
                     continue;
                 };
-                cookies_total += 1;
                 if self
                     .page
                     .send("Network.setCookie", Some(cookie_info_to_cdp(&info)))
@@ -254,14 +258,25 @@ impl LocalTransport {
             Self::parse_bridge_response(resp)?;
         }
 
-        // A well-formed cookie the browser refused to set is a partial
-        // failure the agent must see — never a success that silently
-        // imported less than the file contained.
-        if cookies_failed > 0 {
+        // A cookie the browser refused, or a malformed row that couldn't be
+        // parsed, is a partial failure the agent must see — never a success that
+        // silently imported less than the file contained.
+        if cookies_failed > 0 || cookies_malformed > 0 {
+            let mut reasons = Vec::new();
+            if cookies_failed > 0 {
+                reasons.push(format!("{cookies_failed} refused by the browser"));
+            }
+            if cookies_malformed > 0 {
+                reasons.push(format!("{cookies_malformed} malformed"));
+            }
             return Ok(ResponseData::SessionResult {
                 success: false,
                 error: Some(WebPilotError::Other {
-                    detail: format!("{cookies_failed} of {cookies_total} cookies failed to set"),
+                    detail: format!(
+                        "{} of {cookies_total} cookies not imported ({})",
+                        cookies_failed + cookies_malformed,
+                        reasons.join(", "),
+                    ),
                 }),
             });
         }
@@ -397,11 +412,16 @@ if (!window.__webpilot_network_active) {
     const origFetch = window.fetch;
     window.fetch = function(...args) {
         const [resource, config] = args;
+        // A Request object carries its own url/method (a config override still
+        // wins); String(resource) on one logs "[object Request]" and drops the
+        // method.
+        const isReq = typeof Request !== "undefined" && resource instanceof Request;
+        const url = isReq ? resource.url : String(resource);
+        const method = config?.method || (isReq ? resource.method : "GET");
         const t0 = performance.now();
         return origFetch.apply(this, args).then(response => {
             window.__webpilot_network.push({
-                type: "fetch", url: String(resource),
-                method: config?.method || "GET", status: response.status,
+                type: "fetch", url, method, status: response.status,
                 duration_ms: Math.round(performance.now() - t0),
                 timestamp: Date.now(),
             });
@@ -409,8 +429,7 @@ if (!window.__webpilot_network_active) {
             return response;
         }).catch(err => {
             window.__webpilot_network.push({
-                type: "fetch", url: String(resource),
-                method: config?.method || "GET", error: err.message,
+                type: "fetch", url, method, error: err.message,
                 duration_ms: Math.round(performance.now() - t0),
                 timestamp: Date.now(),
             });

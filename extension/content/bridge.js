@@ -751,8 +751,20 @@
     const root = document.body || document.documentElement;
 
     switch (cond.until) {
-      case "selector":
-        if (document.querySelector(cond.value)) return finish({ success: true });
+      case "selector": {
+        // Validate the selector once: an invalid one throws a SyntaxError, which
+        // must be a typed InvalidArgument, not a wait that runs to its full
+        // timeout. Past this guard the selector is known-valid, so the observer's
+        // re-query cannot throw.
+        let initial;
+        try {
+          initial = document.querySelector(cond.value);
+        } catch {
+          return finish({
+            error: err("InvalidArgument", `Invalid CSS selector: ${JSON.stringify(cond.value)}`),
+          });
+        }
+        if (initial) return finish({ success: true });
         observer = new MutationObserver(() => {
           if (document.querySelector(cond.value)) finish({ success: true });
         });
@@ -763,6 +775,7 @@
         // the wait out even though the element now matches.
         observer.observe(root, { childList: true, subtree: true, attributes: true });
         break;
+      }
       case "text":
         if ((document.body?.innerText || "").includes(cond.value)) {
           return finish({ success: true });
@@ -792,7 +805,17 @@
   // ── DOM property helpers ─────────────────────────────────────────────────
 
   function querySelectorOrErr(selector) {
-    const el = document.querySelector(selector);
+    let el;
+    try {
+      el = document.querySelector(selector);
+    } catch {
+      // An invalid CSS selector throws a SyntaxError. Surface it as a typed
+      // InvalidArgument instead of letting it propagate — in browser mode an
+      // uncaught throw degrades to a page-response timeout, hiding the real cause.
+      return {
+        error: err("InvalidArgument", `Invalid CSS selector: ${JSON.stringify(selector)}`),
+      };
+    }
     return el ? { el } : { error: selectorNotFound(selector) };
   }
 
