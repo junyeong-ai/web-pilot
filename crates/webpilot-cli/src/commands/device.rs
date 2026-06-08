@@ -52,6 +52,18 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
                 }
                 .into());
             }
+            // A control character in the UA is never a legitimate user agent, and
+            // the string is sent as a request header and surfaced via
+            // `navigator.userAgent`; reject it rather than rely on Chrome
+            // stripping it downstream.
+            if let Some(ua) = &user_agent
+                && ua.chars().any(char::is_control)
+            {
+                return Err(webpilot::WebPilotError::InvalidArgument {
+                    detail: "user agent must not contain control characters".into(),
+                }
+                .into());
+            }
             let state = DeviceState {
                 width,
                 height,

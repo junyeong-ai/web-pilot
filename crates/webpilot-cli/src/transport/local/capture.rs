@@ -214,7 +214,15 @@ impl LocalTransport {
         let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
             return 0;
         };
-        fn walk(node: &serde_json::Value, is_root: bool, count: &mut u32) {
+        // Bound the recursion. A frame tree is acyclic and Chrome caps real
+        // nesting far below this, but the structure is browser-supplied, so a
+        // depth limit well above any genuine page keeps a pathological tree from
+        // overflowing the stack — it degrades to an undercount, never a crash.
+        const MAX_FRAME_DEPTH: u32 = 256;
+        fn walk(node: &serde_json::Value, is_root: bool, depth: u32, count: &mut u32) {
+            if depth > MAX_FRAME_DEPTH {
+                return;
+            }
             if !is_root
                 && node
                     .pointer("/frame/url")
@@ -225,13 +233,13 @@ impl LocalTransport {
             }
             if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
                 for child in children {
-                    walk(child, false, count);
+                    walk(child, false, depth + 1, count);
                 }
             }
         }
         let mut count = 0;
         if let Some(root) = tree.get("frameTree") {
-            walk(root, true, &mut count);
+            walk(root, true, 0, &mut count);
         }
         count
     }
