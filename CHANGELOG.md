@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.39] - 2026-06-09
+
+### Fixed
+
+- **A completed network entry is re-stamped so `--since` polling still sees it.**
+  The v0.4.38 in-flight recording stamped each entry's timestamp at request start
+  and left it there, so a request that started before a `--since` cursor but
+  finished after it was filtered out — an incremental poller saw the request in
+  flight but never its resolution. Entries are now re-stamped at completion,
+  restoring the at-completion `--since` semantics while a plain read still shows
+  in-flight requests.
+
 ## [0.4.38] - 2026-06-09
 
 ### Fixed
