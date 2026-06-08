@@ -1,7 +1,7 @@
 // // Browser-level commands: tabs, frames, status.
 // // Mirrors transport/local/browser.rs.
 
-import { err, noPageErr } from "./errors.js";
+import { err, noPageErr, topErr } from "./errors.js";
 import { activeFrameId, activeTabId, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { cdpEval, frameWorldContextId } from "./query.js";
@@ -162,7 +162,11 @@ function activeFrameIdWire() {
 
 async function handleFrameList() {
   const tab = await resolveActiveTab();
-  if (!tab) return { type: "Frames", frames: [], active_frame_id: null };
+  // A non-http page has no webpilot-addressable frame tree, so this is NoPage —
+  // exactly like `frame switch` — not an empty list that an agent would read as
+  // "this page simply has no iframes". (An http page with no iframes still
+  // resolves a tab and correctly returns an empty list below.)
+  if (!tab) return topErr(noPageErr());
 
   const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => []);
   const frames = all.map((f) => ({
