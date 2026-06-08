@@ -344,7 +344,12 @@
       const opts = el.querySelectorAll('[role="option"], [role="menuitem"]');
       if (opts.length > 0) {
         return [...opts].slice(0, 50).map((o) => ({
-          value: o.getAttribute("data-value") || clip(o.textContent.trim(), 80),
+          // `?? clip(...)`, not `|| clip(...)`: an option with an explicit
+          // `data-value=""` (a "none"/placeholder choice) has the empty string
+          // as its real value — `||` would discard it for the visible text and
+          // mis-report what `action select` must send. `getAttribute` returns
+          // null only when the attribute is absent, which correctly falls back.
+          value: o.getAttribute("data-value") ?? clip(o.textContent.trim(), 80),
           text: clip(o.textContent.trim(), 80),
           selected: o.getAttribute("aria-selected") === "true",
         }));
@@ -669,10 +674,21 @@
           // verify the option exists and fail typed instead.
           const opts = r.target.options ? [...r.target.options] : [];
           if (!opts.some((o) => o.value === action.value)) {
+            // Put the valid values IN the message, not only the data: the Rust
+            // `InvalidArgument` variant carries just a string, so a structured
+            // `available` field is dropped on the way to JSON/MCP. A
+            // self-contained message keeps the retry guidance in every surface.
+            const available = opts.map((o) => o.value);
+            const shown = available
+              .slice(0, 12)
+              .map((v) => JSON.stringify(v))
+              .join(", ");
+            const more =
+              available.length > 12 ? `, … (${available.length} total)` : "";
             return err(
               "InvalidArgument",
-              `No <option> with value "${action.value}" in this <select>`,
-              { value: action.value, available: opts.map((o) => o.value) },
+              `No <option> with value "${action.value}" in this <select>. Available: ${shown}${more}`,
+              { value: action.value, available },
             );
           }
           r.target.value = action.value;

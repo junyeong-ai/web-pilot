@@ -658,8 +658,13 @@ impl DomSnapshot {
         }
 
         if self.subframes > 0 {
+            // Guide entry with `frame url <pattern>`: `webpilot frame` lists each
+            // subframe by URL (an iframe usually has no name), and matching the
+            // listed URL is the path that actually resolves. `frame switch
+            // <name>` only matches a frame's `name` attribute, so steering the
+            // agent to it would fail on the common unnamed iframe.
             out.push_str(&format!(
-                "--- {} iframe(s) not shown — list: webpilot frame, enter: webpilot frame switch ---\n",
+                "--- {} iframe(s) not shown — list: webpilot frame, enter: webpilot frame url <pattern> ---\n",
                 self.subframes,
             ));
         }
@@ -774,6 +779,6 @@ mod tests {
         snap.subframes = 2;
         let text = snap.to_text();
         assert!(text.contains("2 iframe(s) not shown"));
-        assert!(text.contains("webpilot frame switch"));
+        assert!(text.contains("webpilot frame url"));
     }
 }
