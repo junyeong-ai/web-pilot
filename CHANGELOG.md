@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.36] - 2026-06-09
+
+### Fixed
+
+- **`action focus` accepts a shadow-DOM control instead of falsely rejecting it.**
+  The v0.4.35 focus guard checked `document.activeElement`, which only names the
+  outermost shadow host — so focusing an `<input>` inside a web component's open
+  shadow root reported `InvalidArgument` though the focus landed. The guard now
+  also descends the shadow-active chain, accepting a focused shadow child while
+  still rejecting a genuinely non-focusable element.
+
 ## [0.4.35] - 2026-06-09
 
 ### Fixed
