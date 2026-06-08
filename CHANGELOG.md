@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.16] - 2026-06-08
+
+### Fixed
+
+- **`wait idle` watches attribute and text mutations**, not just node insertion,
+  so a page still toggling a class or updating a live counter is no longer
+  declared idle after the first 500ms quiet window.
+- **`find --role` matches an ARIA role only, never a raw tag name** — `--role nav`
+  no longer matches `<nav>` (its role is `navigation`) and `--role div` no longer
+  matches every `<div>`. Use `find --tag` for tag matching.
+
+### Added
+
+- **`console read --since <ts>`** — an incremental cursor for the console buffer,
+  matching `network read`, so polling no longer needs a destructive `console
+  clear` to advance.
+
 ## [0.4.15] - 2026-06-08
 
 ### Fixed
