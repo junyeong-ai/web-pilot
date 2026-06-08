@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.32] - 2026-06-09
+
+### Fixed
+
+- **`wait selector` with an invalid CSS selector returns `InvalidArgument`, not a
+  false `OK`.** The invalid-selector guard resolved the wait with the wrong error
+  envelope (`{ error: … }` instead of the bare error object the timeout path uses),
+  so the Rust side parsed it as success — `wait selector "["` reported the wait
+  satisfied. It now matches the timeout path, so an invalid selector is the typed
+  error a valid-but-unmatched one already was.
+
 ## [0.4.31] - 2026-06-09
 
 ### Fixed
