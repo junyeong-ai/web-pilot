@@ -8,6 +8,21 @@ import { cdpEval, frameWorldContextId } from "./query.js";
 import { adoptedDocumentReady } from "./navigation.js";
 import { isHostConnected } from "./host.js";
 
+// Match a `frame url` pattern against a frame URL: every non-`*` run of the
+// pattern must appear in the URL in order, `*` spanning any run between them — a
+// *contains* match (`/auth/` matches any URL holding it), the headless
+// `url_glob_match` twin. An empty or all-`*` pattern is rejected by the CLI.
+function urlGlobMatch(pattern, url) {
+  let cursor = 0;
+  for (const segment of pattern.split("*")) {
+    if (!segment) continue;
+    const rel = url.indexOf(segment, cursor);
+    if (rel === -1) return false;
+    cursor = rel + segment.length;
+  }
+  return true;
+}
+
 // ── Tabs ───────────────────────────────────────────────────────────────────
 
 async function handleTabNew(url) {
@@ -206,26 +221,31 @@ async function handleFrameSwitch(selector) {
       }
     }
   } else if (selector.by === "url") {
-    const needle = (selector.pattern || "").replace(/\*/g, "");
-    matched = httpFrames.find((f) => f.url?.includes(needle));
+    matched = httpFrames.find((f) => f.url && urlGlobMatch(selector.pattern || "", f.url));
   } else if (selector.by === "predicate") {
     // A predicate is arbitrary caller JS, gated by the `eval` key — enforced
     // by the NM host before the command is forwarded here. It runs through the
     // same debugger-routed evaluation as `eval`, so a frame's CSP cannot block
     // it (headless parity) — one withCdp session probes every candidate frame.
-    // Per-frame failures degrade to "didn't match" (the inner guards); a
-    // failure of the SESSION itself — the debugger attach — propagates typed
-    // through the router, never disguised as FrameNotFound.
-    matched = await withCdp(tab.id, async (tid) => {
+    // A failure of the SESSION itself — the debugger attach — propagates typed
+    // through the router; a predicate that THREW is remembered and surfaced
+    // below, never disguised as FrameNotFound.
+    const probe = await withCdp(tab.id, async (tid) => {
       await cdpSend(tid, "Runtime.enable", {});
+      let error = null;
       for (const f of httpFrames) {
         const uniqueContextId = await frameWorldContextId(tid, tab.id, f.frameId, "MAIN");
         if (uniqueContextId == null) continue;
         const r = await cdpEval(tid, selector.js, uniqueContextId).catch(() => null);
-        if (r?.success && r.result && JSON.parse(r.result) === true) return f;
+        if (r && r.success === false && r.error) { error = r.error; continue; }
+        if (r?.success && r.result && JSON.parse(r.result) === true) return { frame: f };
       }
-      return null;
+      return { error };
     });
+    matched = probe.frame || null;
+    if (!matched && probe.error) {
+      return { type: "FrameSwitched", success: false, frame_id: activeFrameIdWire(), error: probe.error };
+    }
   }
 
   if (matched) {

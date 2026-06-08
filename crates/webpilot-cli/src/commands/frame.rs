@@ -39,7 +39,19 @@ impl FrameCommand {
 pub async fn run<T: Transport>(transport: &mut T, args: FrameArgs) -> Result<CommandOutput> {
     match args.command {
         None => list_frames(transport).await,
-        Some(cmd) => switch_frame(transport, cmd.into_selector()).await,
+        Some(cmd) => {
+            // A `frame url` pattern that is empty or only wildcards matches every
+            // frame — reject it rather than silently switch into the first one.
+            if let FrameCommand::Url { pattern } = &cmd
+                && pattern.replace('*', "").trim().is_empty()
+            {
+                return Err(webpilot::WebPilotError::InvalidArgument {
+                    detail: "frame url pattern must contain a non-wildcard character".into(),
+                }
+                .into());
+            }
+            switch_frame(transport, cmd.into_selector()).await
+        }
     }
 }
 

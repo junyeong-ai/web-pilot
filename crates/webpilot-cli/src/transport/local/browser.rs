@@ -274,10 +274,10 @@ impl LocalTransport {
                 .iter()
                 .find(|f| f.name.as_deref() == Some(value.as_str()))
                 .copied(),
-            FrameSelector::Url { pattern } => {
-                let needle = pattern.replace('*', "");
-                candidates.iter().find(|f| f.url.contains(&needle)).copied()
-            }
+            FrameSelector::Url { pattern } => candidates
+                .iter()
+                .find(|f| url_glob_match(pattern, &f.url))
+                .copied(),
             FrameSelector::Predicate { js } => {
                 // The predicate rides the SAME form decision as `eval` — compile
                 // to detect expression vs statements, then evaluate — so a
@@ -292,21 +292,30 @@ impl LocalTransport {
                     candidates.iter().map(|f| f.frame_id.clone()).collect();
                 self.settle_frame_contexts(&candidate_ids).await;
                 let mut found = None;
+                let mut predicate_error = None;
                 for f in &candidates {
                     let Some(cid) = self.frame_contexts.lock().await.get(&f.frame_id).cloned()
                     else {
                         continue;
                     };
-                    let truthy = self
-                        .eval_in_context(&form, Some(&cid), true)
-                        .await
-                        .ok()
-                        .and_then(|v| v.get("value").and_then(|v| v.as_bool()))
-                        == Some(true);
-                    if truthy {
-                        found = Some(*f);
-                        break;
+                    match self.eval_in_context(&form, Some(&cid), true).await {
+                        Ok(v) => {
+                            if v.get("value").and_then(|v| v.as_bool()) == Some(true) {
+                                found = Some(*f);
+                                break;
+                            }
+                        }
+                        // A predicate that THREW (a broken expression) is not a
+                        // frame that cleanly evaluated false. Remember the error;
+                        // if nothing matches, surface it rather than a misleading
+                        // FrameNotFound that implies the predicate ran everywhere.
+                        Err(e) => predicate_error = Some(e),
                     }
+                }
+                if found.is_none()
+                    && let Some(e) = predicate_error
+                {
+                    return Err(e);
                 }
                 found
             }
@@ -464,9 +473,41 @@ fn parse_chrome_product(product: &str) -> String {
         .to_string()
 }
 
+/// Match a `frame url` pattern against a frame URL: every non-`*` run of the
+/// pattern must appear in the URL in order, with `*` standing for any (possibly
+/// empty) run between them. So `/auth/` matches any URL containing it (a plain
+/// substring), and `accounts.*/o/oauth2` spans a wildcard. There is no start/end
+/// anchoring — the pattern is a *contains* match, the least surprising reading of
+/// "find the frame whose URL has this in it". An empty or all-`*` pattern is
+/// rejected by the CLI before it reaches here (it would match every frame), so
+/// the segment iterator is never empty.
+fn url_glob_match(pattern: &str, url: &str) -> bool {
+    let mut cursor = 0;
+    for segment in pattern.split('*').filter(|s| !s.is_empty()) {
+        match url[cursor..].find(segment) {
+            Some(rel) => cursor += rel + segment.len(),
+            None => return false,
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_glob_matches_substring_and_wildcards() {
+        // Plain substring (the common case).
+        assert!(url_glob_match("/auth/", "https://x.com/auth/login"));
+        assert!(!url_glob_match("/auth/", "https://x.com/login"));
+        // Leading/trailing `*` are no-ops for a contains match.
+        assert!(url_glob_match("*auth*", "https://x.com/auth/login"));
+        // A middle `*` spans arbitrary characters in order — the case the old
+        // star-stripping `replace('*', "")` broke (it searched for "authlogin").
+        assert!(url_glob_match("auth*login", "https://x.com/auth/x/login"));
+        assert!(!url_glob_match("login*auth", "https://x.com/auth/login"));
+    }
 
     #[test]
     fn parse_chrome_product_strips_chrome_prefix() {
