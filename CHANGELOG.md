@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.38] - 2026-06-09
+
+### Fixed
+
+- **A command on a pin left on a non-http page reports `NoPage`, not
+  `BridgeUnavailable`.** `resolveActiveTab` applied its http(s) check only to the
+  focused-tab fallback, so a pin on chrome://newtab reached the bridge inject and
+  failed with a confusing infra error. The pinned path now also returns "no page",
+  so every bridge-needing command (including `session export`) says "navigate
+  first".
+- **`network read` shows an in-flight request** instead of an empty buffer. The
+  monitor recorded a request only on completion, so a read during a slow request
+  read as "no network activity". Both fetch and XHR now record the request at start
+  (no status yet) and fill it in on completion.
+
 ## [0.4.37] - 2026-06-09
 
 ### Fixed
