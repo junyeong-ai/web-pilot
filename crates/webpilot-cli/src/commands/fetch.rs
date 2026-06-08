@@ -15,14 +15,33 @@ pub struct FetchArgs {
 
     #[arg(long, allow_hyphen_values = true)]
     pub body: Option<String>,
+
+    /// Request header `NAME:VALUE` (repeatable). Nothing is sent by default — a
+    /// JSON body needs an explicit `--header content-type:application/json`.
+    #[arg(long = "header", value_name = "NAME:VALUE")]
+    pub headers: Vec<String>,
 }
 
 pub async fn run<T: Transport>(transport: &mut T, args: FetchArgs) -> Result<CommandOutput> {
+    let headers = args
+        .headers
+        .iter()
+        .map(|h| {
+            let (name, value) =
+                h.split_once(':')
+                    .ok_or_else(|| webpilot::WebPilotError::InvalidArgument {
+                        detail: format!("--header must be NAME:VALUE, got {h:?}"),
+                    })?;
+            Ok((name.trim().to_string(), value.trim().to_string()))
+        })
+        .collect::<Result<Vec<(String, String)>>>()?;
+
     let result = transport
         .send(Command::Fetch {
             url: args.url,
             method: Some(args.method),
             body: args.body,
+            headers,
         })
         .await?;
 

@@ -78,6 +78,13 @@ pub enum Command {
         method: Option<String>,
         #[serde(default)]
         body: Option<String>,
+        /// Request headers as ordered `(name, value)` pairs — passed straight to
+        /// `fetch`'s `headers` init. Empty by default: no content type is implied,
+        /// so the caller controls it (a JSON body needs an explicit
+        /// `content-type: application/json`). `credentials: include` is separate
+        /// and always on — `fetch` runs as the page's authenticated session.
+        #[serde(default)]
+        headers: Vec<(String, String)>,
     },
     FrameList,
     FrameSwitch {

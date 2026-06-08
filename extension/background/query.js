@@ -276,7 +276,9 @@ function fetchExpression(command) {
   return `(async () => {
     const r = await fetch(${JSON.stringify(command.url)}, {
       method: ${JSON.stringify(command.method ?? "GET")},
-      headers: {"Content-Type": "application/json"},
+      // The caller's headers as [name, value] pairs — fetch takes them verbatim;
+      // no implied content type. credentials:include keeps the session contract.
+      headers: ${JSON.stringify(command.headers ?? [])},
       credentials: "include",
       ${command.body != null ? `body: ${JSON.stringify(command.body)},` : ""}
     });

@@ -193,7 +193,8 @@ denying `eval` also stops armed monitors from injecting.
 
 ```bash
 webpilot fetch "https://api.example.com/me"
-webpilot fetch "https://…" --method POST --body '{"a":1}'
+webpilot fetch "https://…" --method POST --body '{"a":1}' --header content-type:application/json
+webpilot fetch "https://…" --method POST --body 'a=1&b=2' --header content-type:application/x-www-form-urlencoded
 ```
 
 Runs `fetch()` in the page so cookies and CORS apply as the page sees them.
@@ -316,7 +317,7 @@ Errors carry typed data: `ElementNotFound { requested, available }`, `StaleSnaps
 | after `action navigate` | check `url_changed` in response, or `wait navigation` |
 | element below the fold | `action scroll-to N` then `action click N` |
 | inside an iframe | `frame switch "name"` → ops → `frame main` |
-| API call with auth | `fetch URL --method POST --body '…'` |
+| API call with auth | `fetch URL --method POST --body '…' --header content-type:application/json` |
 | debugging a failed click | `network start` → action → `network read`; same with `console` |
 | mobile layout | `device preset iphone-15` then capture |
 | logged-in site | `webpilot --browser …` (after `setup`) |

@@ -195,6 +195,7 @@ impl LocalTransport {
         url: &str,
         method: Option<&str>,
         body: Option<&str>,
+        headers: &[(String, String)],
     ) -> Result<ResponseData> {
         let body_part = match body {
             Some(b) => format!("body: {},", serde_json::to_string(b)?),
@@ -206,7 +207,7 @@ impl LocalTransport {
         // browser-mode `fetchExpression`.
         let js = format!(
             r#"(async () => {{
-                const r = await fetch({url}, {{method: {method}, credentials: "include", headers: {{"Content-Type": "application/json"}}, {body_part}}});
+                const r = await fetch({url}, {{method: {method}, credentials: "include", headers: {headers}, {body_part}}});
                 const MAX = {max};
                 const reader = r.body && r.body.getReader();
                 if (!reader) return {{ status: r.status, body: "" }};
@@ -224,6 +225,9 @@ impl LocalTransport {
             }})()"#,
             url = serde_json::to_string(url)?,
             method = serde_json::to_string(method.unwrap_or("GET"))?,
+            // `fetch` accepts an array of `[name, value]` pairs as the headers
+            // init directly, so the typed wire shape passes through unchanged.
+            headers = serde_json::to_string(headers)?,
             max = FETCH_MAX_BODY_BYTES,
         );
         let result = self.page.evaluate(&js).await?;

@@ -89,7 +89,7 @@ webpilot console start && webpilot console read      # capture JS console
 ```bash
 webpilot cookie list "https://example.com"           # read cookies
 webpilot session export --output session.json        # save session state
-webpilot fetch "https://api.example.com" --method POST --body '{}'  # authed API call
+webpilot fetch "https://api.example.com" --method POST --body '{}' --header content-type:application/json  # authed API call
 ```
 
 ### Safety controls

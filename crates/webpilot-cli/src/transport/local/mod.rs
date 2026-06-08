@@ -689,8 +689,13 @@ impl Transport for LocalTransport {
                 value,
             } => self.do_dom_set(&selector, property, &value).await,
             Command::DomGet { selector, property } => self.do_dom_get(&selector, property).await,
-            Command::Fetch { url, method, body } => {
-                self.do_fetch(&url, method.as_deref(), body.as_deref())
+            Command::Fetch {
+                url,
+                method,
+                body,
+                headers,
+            } => {
+                self.do_fetch(&url, method.as_deref(), body.as_deref(), &headers)
                     .await
             }
             Command::FrameList => self.do_frame_list().await,
