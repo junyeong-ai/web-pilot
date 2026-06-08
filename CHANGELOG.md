@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.20] - 2026-06-08
+
+### Fixed
+
+- **The policy store lives in the durable data root, not the evictable cache.** It
+  was `artifacts/policies.json` under the cache tree (`~/Library/Caches`,
+  `$XDG_CACHE_HOME`, `$XDG_RUNTIME_DIR`) — which the OS evicts under disk pressure
+  and cache cleaners wipe. Losing it silently reset every deny rule to the default,
+  so a `policy default deny` + allowlist guardrail would fail OPEN with no error.
+  The store moves to `policy/policies.json` under the durable data root
+  (Application Support / `$XDG_DATA_HOME` / `~/.local/share`), still honoring
+  `$WEBPILOT_HOME`. Fail-closed-on-corruption is unchanged; this closes the
+  fail-open-on-eviction gap beneath it.
+
 ## [0.4.19] - 2026-06-08
 
 ### Fixed
