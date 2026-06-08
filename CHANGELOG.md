@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.35] - 2026-06-09
+
+### Fixed
+
+A sweep of the "action reports success while doing nothing" class:
+
+- **`action focus` rejects a non-focusable element.** It always returned success,
+  but `focus()` on a static div/span silently doesn't land — the agent then sent a
+  key-press to the wrong place. It now verifies focus actually landed.
+- **`action select` requires a native `<select>`.** It only checked `.options`,
+  which a `<datalist>` also exposes, so a select on one reported success while
+  selecting nothing. It now guards `instanceof HTMLSelectElement`.
+- **Browser `session export` fails when no http page is focused** (e.g. only
+  chrome://newtab) instead of writing a session with silently empty Web Storage —
+  it returns `NoPage`, matching headless.
+
 ## [0.4.34] - 2026-06-09
 
 ### Fixed
