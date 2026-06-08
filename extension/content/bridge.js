@@ -70,7 +70,11 @@
     '[role="button"], [role="link"], [role="tab"], [role="menuitem"], ' +
     '[role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], ' +
     '[role="searchbox"], [role="textbox"], [role="slider"], ' +
-    '[contenteditable="true"], details > summary';
+    // Any editable host, not just `contenteditable="true"`: a bare
+    // `contenteditable` (empty value) and `contenteditable="plaintext-only"` are
+    // both editable, so the literal-"true" match dropped real comment boxes and
+    // rich-text editors. Exclude only an explicit `false` (case-insensitive).
+    '[contenteditable]:not([contenteditable="false" i]), details > summary';
 
   const STANDARD_TAGS = new Set([
     "a", "button", "input", "select", "textarea", "summary",
