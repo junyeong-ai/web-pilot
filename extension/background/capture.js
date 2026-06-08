@@ -70,8 +70,11 @@ async function handleCapture(command) {
   // like the headless transport. Indices the agent sees resolve against the
   // same frame's bridge snapshot at action time, so every shown index is
   // actionable. Iframe content is reached via `frame switch`, surfaced by
-  // the `subframes` hint below.
-  if (include.has("dom")) {
+  // the `subframes` hint below. `--annotate` forces a DOM pass even when the
+  // caller didn't ask for one: the overlay boxes are positioned from the
+  // snapshot's element bounds, so without it there is nothing to draw — matching
+  // headless `want_dom = want(Dom) || opts.annotate`.
+  if (include.has("dom") || opts.annotate) {
     try {
       const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => [{ frameId: 0 }]);
 
@@ -88,7 +91,7 @@ async function handleCapture(command) {
       await ensureBridge(tabId, activeFrameId);
       const dom = await sendToContent(
         tabId,
-        { type: "extractDom", options: { bounds: opts.bounds || false, occlusion: opts.occlusion || false } },
+        { type: "extractDom", options: { bounds: opts.bounds || opts.annotate, occlusion: opts.occlusion || false } },
         activeFrameId,
         5000,
       );
@@ -159,8 +162,12 @@ async function handleCapture(command) {
     }
   }
 
-  // Screenshot.
-  if (include.has("screenshot")) {
+  // Screenshot. `--annotate` forces one even without `--include screenshot`: the
+  // overlay boxes were just drawn onto the page and the shot is the only way the
+  // agent receives them — matching headless `want_screenshot = want(Screenshot)
+  // || opts.annotate`. Without this, `--browser capture --annotate` drew boxes
+  // and returned no image.
+  if (include.has("screenshot") || opts.annotate) {
     try {
       // CDP captures the target's own surface, so a screenshot never depends
       // on the tab being the active tab of a foreground window. That is what

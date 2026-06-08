@@ -595,18 +595,21 @@ fn browser_behavioral_flow() {
     // scope — so `--annotate` here must succeed on the new main frame, not
     // false-fail against the stale switched-frame id. It also leaves us back on
     // the main frame, which the rest of this step then re-confirms.
-    let reannotate = fx.run(&[
-        "capture",
-        "--include",
-        "screenshot",
-        "--annotate",
-        "--url",
-        &base,
-    ]);
+    //
+    // `--annotate` is given WITHOUT `--include screenshot` on purpose: it must
+    // force the DOM+screenshot pass itself, exactly as headless does. This is the
+    // regression guard for the parity gap where browser mode drew the overlay but
+    // returned no image because the screenshot branch keyed only on `include`.
+    let reannotate = fx.run(&["capture", "--annotate", "--url", &base]);
     assert_eq!(
         code(&reannotate),
         0,
         "capture --annotate --url after a frame switch must reset to main and succeed: {}",
+        stdout(&reannotate)
+    );
+    assert!(
+        stdout(&reannotate).contains("screenshot_path"),
+        "capture --annotate alone must still produce a screenshot (headless parity): {}",
         stdout(&reannotate)
     );
     let main = fx.run(&["frame", "main"]);
