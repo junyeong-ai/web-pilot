@@ -540,6 +540,15 @@
     if (el.isContentEditable) {
       if (clear) el.innerHTML = "";
       document.execCommand("insertText", false, text);
+      // The `innerHTML` clear and an empty `text` fire no native event, and a
+      // contenteditable never fires `change` — so a framework-bound editor
+      // (Draft/Slate/ProseMirror, a React onChange) would miss the edit. Mirror
+      // the input path and dispatch both; a redundant `input` from a non-empty
+      // execCommand insert is harmless, since listeners re-read the live text.
+      el.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: "insertText", data: text,
+      }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
       return;
     }
 
