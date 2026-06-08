@@ -111,7 +111,14 @@ const PROBE_MS = 2000;
 async function resolveActiveTab() {
   if (activeTabId != null) {
     const tab = await chrome.tabs.get(activeTabId).catch(() => null);
-    if (tab) return tab;
+    if (tab) {
+      // The pinned tab must be an injectable http(s) page. A pin left on a
+      // chrome:// / about: page has no bridge, so a command there is NoPage
+      // (navigate first) — not a confusing BridgeUnavailable from a failed
+      // inject. Matches the focused fallback below, which already returns null
+      // for a non-http tab, so every caller already handles this.
+      return tab.url?.startsWith("http") ? tab : null;
+    }
     const e = new Error(`Tab not found: ${activeTabId}. List: webpilot tab`);
     e.code = "TabNotFound";
     e.data = { tab_id: String(activeTabId) };
