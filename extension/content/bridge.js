@@ -284,9 +284,17 @@
   function resolveLabel(el) {
     const labelledBy = el.getAttribute("aria-labelledby");
     if (labelledBy) {
+      // An `aria-labelledby` IDREF is scoped to the element's own tree, so for a
+      // control inside a shadow root the label element lives in that SAME shadow
+      // root — `document.getElementById` returns null, the name comes back empty,
+      // and `find --label` can't match the component. Resolve through the
+      // element's root (the ShadowRoot or the document); both expose
+      // getElementById, and an IDREF never crosses the shadow boundary anyway.
+      const root = el.getRootNode();
+      const scope = typeof root.getElementById === "function" ? root : document;
       const parts = labelledBy
         .split(/\s+/)
-        .map((id) => document.getElementById(id)?.textContent?.trim())
+        .map((id) => scope.getElementById(id)?.textContent?.trim())
         .filter(Boolean);
       if (parts.length > 0) return clip(parts.join(" "), 80);
     }
