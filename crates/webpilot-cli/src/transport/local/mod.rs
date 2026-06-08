@@ -347,10 +347,27 @@ impl LocalTransport {
     /// `frame find`, readyState/title probes).
     pub(super) async fn eval_in_active(&self, expression: &str) -> Result<Value> {
         let cid = self.active_context_id().await?;
-        let result = self
-            .eval_in_context(expression, cid.as_deref(), true)
-            .await?;
-        Ok(result.get("value").cloned().unwrap_or(Value::Null))
+        match self.eval_in_context(expression, cid.as_deref(), true).await {
+            Ok(result) => Ok(result.get("value").cloned().unwrap_or(Value::Null)),
+            Err(e) if is_stale_context(&e) => {
+                // The active frame's MAIN-world context was destroyed by a
+                // navigation, but the map can still hand back that dead id until
+                // the async `executionContextDestroyed` lands — including right
+                // after a structural `frame switch` that bound a since-navigated
+                // frame. Drop the stale id and re-resolve (`active_context_id`
+                // then waits for the new document's context), retrying once: the
+                // MAIN-world mirror of the bridge path's renderer-swap retry.
+                if let Some(stale) = &cid {
+                    self.frame_contexts.lock().await.retain(|_, v| v != stale);
+                }
+                let fresh = self.active_context_id().await?;
+                let result = self
+                    .eval_in_context(expression, fresh.as_deref(), true)
+                    .await?;
+                Ok(result.get("value").cloned().unwrap_or(Value::Null))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Resolve a bridge-owned reference (`window.__webpilot_state.…`) to a CDP
