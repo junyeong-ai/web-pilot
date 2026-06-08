@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.25] - 2026-06-08
+
+### Fixed
+
+- **`wait selector` resolves on a state pseudo-class change a MutationObserver
+  can't see.** It re-checked only from mutations, but `el.checked = true`,
+  `el.disabled = false`, or a live `.value` edit fire none — so
+  `wait selector 'input:checked'` (or `:disabled`/`:valid`/`:focus`) ran to its
+  full timeout though the element already matched. A bounded 100ms poll now runs
+  alongside the observer (the observer keeps instant response to structural and
+  attribute changes), the same approach `waitForSelector` takes elsewhere. Both
+  modes get it (shared bridge path).
+
 ## [0.4.24] - 2026-06-08
 
 ### Fixed
