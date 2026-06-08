@@ -789,9 +789,12 @@
         try {
           initial = document.querySelector(cond.value);
         } catch {
-          return finish({
-            error: err("InvalidArgument", `Invalid CSS selector: ${JSON.stringify(cond.value)}`),
-          });
+          // `finish` resolves the wait with this value as-is — the Rust side
+          // reads it like the `Timeout` branch does (`finish(err(...))`), a bare
+          // error object, NOT wrapped in `{ error }`. Wrapping it made the
+          // unrecognized shape parse as success, so an invalid selector reported
+          // the wait satisfied instead of a typed InvalidArgument.
+          return finish(err("InvalidArgument", `Invalid CSS selector: ${JSON.stringify(cond.value)}`));
         }
         if (initial) return finish({ success: true });
         observer = new MutationObserver(() => {
