@@ -86,7 +86,7 @@ async fn new_tab<T: Transport>(transport: &mut T, url: &str) -> Result<CommandOu
     expect_action(result)?;
     Ok(CommandOutput::Data {
         json: serde_json::json!({"success": true, "url": url}),
-        human: format!("New tab opened: {url}"),
+        human: format!("New tab opened: {}", line_safe(url)),
     })
 }
 
