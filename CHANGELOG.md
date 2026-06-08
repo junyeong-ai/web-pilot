@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.34] - 2026-06-09
+
+### Fixed
+
+- **`action type` rejects a non-text element instead of a silent wrong-success.**
+  It dispatched to the typing path for any element; on a link, button, checkbox,
+  or div the native value-setter threw and a fallback stamped a meaningless expando
+  `.value` plus synthetic events — returning OK while changing nothing, so the
+  agent believed its text landed. It now verifies the target is genuinely
+  text-editable (contenteditable, textarea, or a text-admitting `<input>`) and
+  returns `InvalidArgument` otherwise, pointing at `action click`/`action select`.
+
 ## [0.4.33] - 2026-06-09
 
 ### Fixed
