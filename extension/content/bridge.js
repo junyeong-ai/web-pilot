@@ -746,12 +746,14 @@
     let resolved = false;
     let observer = null;
     let idleTimer = null;
+    let pollTimer = null;
 
     const finish = (result) => {
       if (resolved) return;
       resolved = true;
       if (observer) observer.disconnect();
       if (idleTimer) clearTimeout(idleTimer);
+      if (pollTimer) clearInterval(pollTimer);
       clearTimeout(timer);
       resolve(result);
     };
@@ -786,6 +788,15 @@
         // attribute mutation the childList-only observer would never see, timing
         // the wait out even though the element now matches.
         observer.observe(root, { childList: true, subtree: true, attributes: true });
+        // A MutationObserver cannot see a property/state change — `el.checked =
+        // true`, `el.disabled = false`, a `.value` edit — because those fire no
+        // mutation, so a state pseudo-class (`:checked`, `:disabled`, `:valid`,
+        // `:focus`) would run to the full timeout though it already matches. Poll
+        // alongside the observer to catch them within one interval; the observer
+        // still gives instant response to structural and attribute changes.
+        pollTimer = setInterval(() => {
+          if (document.querySelector(cond.value)) finish({ success: true });
+        }, 100);
         break;
       }
       case "text":
