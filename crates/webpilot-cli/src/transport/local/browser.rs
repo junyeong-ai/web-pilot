@@ -256,6 +256,13 @@ impl LocalTransport {
                 // statement-form predicate (`const ok = …; ok`) behaves the same
                 // here as in `eval` and as in browser mode's `cdpEval`.
                 let form = self.eval_form(js).await?;
+                // Settle every candidate's MAIN-world context before judging
+                // them: the async listener can lag a navigation, and a candidate
+                // whose context hasn't landed yet would otherwise be skipped and
+                // the matching frame missed.
+                let candidate_ids: Vec<String> =
+                    candidates.iter().map(|f| f.frame_id.clone()).collect();
+                self.settle_frame_contexts(&candidate_ids).await;
                 let mut found = None;
                 for f in &candidates {
                     let Some(cid) = self.frame_contexts.lock().await.get(&f.frame_id).cloned()
@@ -281,28 +288,16 @@ impl LocalTransport {
             Some(frame) => {
                 // The async listener may not have recorded this frame's
                 // executionContextId yet — without it, every subsequent
-                // `eval`/`invoke_bridge` would silently fall back to the
-                // main world. Force a re-emit and settle until the map
-                // catches up (or the budget expires).
+                // `eval`/`invoke_bridge` would silently fall back to the main
+                // world. Settle until the map catches up (or the budget expires).
                 if !self
                     .frame_contexts
                     .lock()
                     .await
                     .contains_key(&frame.frame_id)
                 {
-                    let _ = self.page.send("Runtime.disable", None).await;
-                    let _ = self.page.send("Runtime.enable", None).await;
-                    for _ in 0..20 {
-                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                        if self
-                            .frame_contexts
-                            .lock()
-                            .await
-                            .contains_key(&frame.frame_id)
-                        {
-                            break;
-                        }
-                    }
+                    self.settle_frame_contexts(std::slice::from_ref(&frame.frame_id))
+                        .await;
                 }
                 *self.active_frame_id.lock().await = Some(frame.frame_id.clone());
                 super::write_persisted_active_frame(self.persisted_context_key(), &frame.frame_id);

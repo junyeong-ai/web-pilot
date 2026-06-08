@@ -249,6 +249,28 @@ impl LocalTransport {
         }
     }
 
+    /// Force the Runtime to re-emit `executionContextCreated` for every existing
+    /// context and wait, briefly, until each of `frame_ids` has its MAIN-world
+    /// context recorded. The async listener can lag a navigation, so without
+    /// this a frame whose context simply hasn't landed yet would be acted on (or
+    /// silently skipped) as if it had no MAIN world. Best-effort: returns once
+    /// all are present or the short budget expires. Used before a `frame find`
+    /// predicate judges every candidate, and after a frame switch.
+    async fn settle_frame_contexts(&self, frame_ids: &[String]) {
+        let _ = self.page.send("Runtime.disable", None).await;
+        let _ = self.page.send("Runtime.enable", None).await;
+        for _ in 0..20 {
+            let all_present = {
+                let map = self.frame_contexts.lock().await;
+                frame_ids.iter().all(|fid| map.contains_key(fid))
+            };
+            if all_present {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
     /// Evaluate `expression` in `context` (a `uniqueContextId`; the default
     /// world when `None`), returning either its serialized value or — when
     /// `by_value` is false — the `objectId` of the remote result under
