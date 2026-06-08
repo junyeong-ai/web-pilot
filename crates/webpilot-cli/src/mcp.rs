@@ -116,6 +116,17 @@ where
         // JSON-RPC 2.0: a parse error is answered with a null id, never dropped.
         return Some(error_reply(Value::Null, -32700, "parse error"));
     };
+    // A top-level array is a JSON-RPC batch. MCP (2025-06-18) does not use
+    // batching, so reject it with an invalid-request rather than letting it fall
+    // through to the no-id notification path, where the client would hang
+    // waiting for a batch response that never comes.
+    if msg.is_array() {
+        return Some(error_reply(
+            Value::Null,
+            -32600,
+            "invalid request: JSON-RPC batches are not supported",
+        ));
+    }
     // Absent id = notification (no response). Present id (including null) = a
     // request that must be answered, echoing the id back.
     let id = msg.get("id").cloned()?;

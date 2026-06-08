@@ -3,7 +3,7 @@ use clap::Args;
 use webpilot::Action;
 use webpilot::capture::{CaptureField, CaptureOpts};
 use webpilot::protocol::{Command, ResponseData};
-use webpilot::types::InteractiveElement;
+use webpilot::types::{InteractiveElement, line_safe};
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
@@ -87,20 +87,24 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
     let human_lines: Vec<String> = matches
         .iter()
         .map(|el| {
+            // Every page-controlled field is line-safed: a `\n` in an id, the
+            // text, or a landmark would otherwise forge an extra match row.
             let id_suffix = el
                 .id
                 .as_deref()
-                .map(|i| format!("#{i}"))
+                .map(|i| format!("#{}", line_safe(i)))
                 .unwrap_or_default();
             let landmark = el
                 .spatial
                 .landmark
                 .as_deref()
-                .map(|l| format!(" @{l}"))
+                .map(|l| format!(" @{}", line_safe(l)))
                 .unwrap_or_default();
             format!(
                 "[{}] {}{id_suffix} \"{}\"{landmark}",
-                el.index, el.tag, el.text
+                el.index,
+                el.tag,
+                line_safe(&el.text)
             )
         })
         .collect();
