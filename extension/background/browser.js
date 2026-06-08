@@ -2,9 +2,10 @@
 // // Mirrors transport/local/browser.rs.
 
 import { err, noPageErr } from "./errors.js";
-import { activeFrameId, activeTabId, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
+import { activeFrameId, activeTabId, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { cdpEval, frameWorldContextId } from "./query.js";
+import { adoptedDocumentReady } from "./navigation.js";
 import { isHostConnected } from "./host.js";
 
 // ── Tabs ───────────────────────────────────────────────────────────────────
@@ -14,13 +15,21 @@ async function handleTabNew(url) {
   setActiveTabId(created.id);
   // A fresh tab has its own frame tree — drop any frame scope.
   setActiveFrameId(0);
+  // Settle on a ready page and report its real, post-redirect URL/title — `tab
+  // new` lands like `navigate`, so the agent's next action cannot race the new
+  // tab's load and a redirect is reflected, not the requested URL echoed back.
+  // `adoptedDocumentReady` waits to leave about:blank and parse (the headless
+  // `wait_navigation_settled(before_url: "about:blank")` twin); best-effort, so
+  // a tab that never leaves about:blank returns at the deadline.
+  await adoptedDocumentReady(created.id, navigationTimeoutMs());
+  const settled = await chrome.tabs.get(created.id).catch(() => null);
   return {
     type: "Action",
     success: true,
     new_tab: {
       id: String(created.id),
-      url: created.url || url,
-      title: created.title || "",
+      url: settled?.url || created.url || url,
+      title: settled?.title || created.title || "",
       active: true,
     },
   };

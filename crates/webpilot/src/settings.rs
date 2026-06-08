@@ -243,21 +243,27 @@ fn usize_var(env: &str, file: Option<usize>, default: usize) -> usize {
     pick(parse_env(env), file, default)
 }
 
-/// A boolean env override. `1` / `true` / `yes` / `on` (any case) are true; any
-/// other non-empty value is false. Absent OR empty falls through to the config
-/// file, then the built-in default — empty is "unset" here just as it is for
-/// `string_var`, so the precedence is consistent across every tunable.
+/// A boolean env override. `1` / `true` / `yes` / `on` are true; `0` / `false` /
+/// `no` / `off` are false (any case). Absent, empty, OR an unrecognized value
+/// falls through to the config file, then the built-in default. An unrecognized
+/// value (a typo like `tru`) must NOT silently read as `false` and override a
+/// correct config-file setting — it is "unset", exactly as empty is, so the
+/// precedence stays consistent across every tunable.
 fn bool_var(env: &str, file: Option<bool>, default: bool) -> bool {
-    let env_val = std::env::var(env)
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        });
+    let env_val = std::env::var(env).ok().and_then(|v| parse_bool(&v));
     pick(env_val, file, default)
+}
+
+/// Parse a boolean setting value. `1` / `true` / `yes` / `on` are true, `0` /
+/// `false` / `no` / `off` are false (any case, surrounding space ignored).
+/// Anything else — a typo like `tru`, or empty — is `None`: "unset", so it falls
+/// through to the next precedence tier instead of silently reading as `false`.
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 /// Precedence: env override, then config file, then built-in default.
@@ -355,6 +361,21 @@ mod tests {
         assert_eq!(pick(Some(1), Some(2), 3), 1, "env wins");
         assert_eq!(pick(None, Some(2), 3), 2, "file beats default");
         assert_eq!(pick(None::<u64>, None, 3), 3, "default is the floor");
+    }
+
+    #[test]
+    fn parse_bool_accepts_canonical_and_falls_through_on_junk() {
+        for t in ["1", "true", "TRUE", "yes", "On", " true "] {
+            assert_eq!(parse_bool(t), Some(true), "{t:?} should be true");
+        }
+        for f in ["0", "false", "FALSE", "no", "Off", " 0 "] {
+            assert_eq!(parse_bool(f), Some(false), "{f:?} should be false");
+        }
+        // A typo or junk is `None` — it falls through to the config/default,
+        // never a silent `false` that would override a correct config value.
+        for n in ["tru", "flase", "", "  ", "2", "enabled", "y"] {
+            assert_eq!(parse_bool(n), None, "{n:?} should fall through");
+        }
     }
 
     #[test]

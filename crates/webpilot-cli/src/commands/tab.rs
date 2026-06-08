@@ -83,10 +83,25 @@ async fn new_tab<T: Transport>(transport: &mut T, url: &str) -> Result<CommandOu
             url: url.to_string(),
         })
         .await?;
-    expect_action(result)?;
+    // Report the tab's real landed URL/title from the response — the transport
+    // settles the new tab and resolves any redirect, so we render what it
+    // actually opened, never a blind echo of the requested URL.
+    let landed = match result {
+        ResponseData::Action {
+            success,
+            error,
+            new_tab,
+            ..
+        } => {
+            lift_error(success, error, ())?;
+            new_tab.map(|t| t.url).unwrap_or_else(|| url.to_string())
+        }
+        ResponseData::Error { error } => return Err(error.into()),
+        _ => anyhow::bail!("Unexpected response shape"),
+    };
     Ok(CommandOutput::Data {
-        json: serde_json::json!({"success": true, "url": url}),
-        human: format!("New tab opened: {}", line_safe(url)),
+        json: serde_json::json!({"success": true, "url": landed}),
+        human: format!("New tab opened: {}", line_safe(&landed)),
     })
 }
 

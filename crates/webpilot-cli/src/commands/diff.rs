@@ -138,6 +138,10 @@ fn diff_dom(a: &Path, b: &Path) -> Result<CommandOutput> {
 
     let stdout = stdout_lines.join("");
     let json = serde_json::json!({
+        // An explicit verdict so a caller checks one field instead of inferring
+        // change from the counts. The exit code stays 0 (the command succeeded);
+        // a WebPilot exit code names an error class, never a domain result.
+        "changed": added > 0 || removed > 0,
         "added": added,
         "removed": removed,
         "unchanged": unchanged,
@@ -220,6 +224,10 @@ fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
 
     Ok(CommandOutput::Data {
         json: serde_json::json!({
+            // Explicit verdict: any differing pixel (above the per-pixel
+            // threshold) counts as changed. Mirrors the DOM diff; the exit code
+            // stays 0 (success) — it names an error class, not a domain result.
+            "changed": diff_count > 0,
             "changed_percent": format!("{:.1}", pct),
             "changed_pixels": diff_count,
             "total_pixels": total,

@@ -170,6 +170,26 @@ impl LocalTransport {
             ResponseData::Action { success: true, .. } => {}
             other => return Ok(other),
         }
+        // Land on a ready page and report its real, post-redirect URL/title —
+        // `tab new` settles like `navigate` does, so the agent's next action
+        // cannot race the new tab's load and the reported URL reflects a redirect
+        // instead of echoing the request. Best-effort: a page that never settles
+        // still returns, carrying whatever URL it reached.
+        let deadline = std::time::Instant::now() + webpilot::settings::timeouts().navigation;
+        super::wait_navigation_settled(&self.page, None, "about:blank", deadline).await;
+        let url = self
+            .eval_in_active("location.href")
+            .await
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| url.to_string());
+        let title = self
+            .eval_in_active("document.title")
+            .await
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
         Ok(ResponseData::Action {
             success: true,
             error: None,
@@ -177,8 +197,8 @@ impl LocalTransport {
             url_changed: None,
             new_tab: Some(TabInfo {
                 id: target_id,
-                url: url.to_string(),
-                title: String::new(),
+                url,
+                title,
                 active: true,
             }),
             capture_error: None,
