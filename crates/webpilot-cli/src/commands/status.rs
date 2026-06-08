@@ -7,6 +7,7 @@
 use anyhow::Result;
 use webpilot::ipc::IpcError;
 use webpilot::protocol::{Command, ResponseData, RunMode};
+use webpilot::types::line_safe;
 
 use crate::output::CommandOutput;
 use crate::transport::{IpcTransport, Transport};
@@ -32,11 +33,14 @@ pub fn render(
     if let Some(ref v) = extension_version {
         human.push_str(&format!("\nExtension: v{v}"));
     }
+    // `tab_title`/`tab_url` are page-controlled; line-safe them so a crafted
+    // title can't embed a newline and forge a status line (the `--json` path is
+    // already safe via JSON escaping).
     if let Some(ref t) = tab_title {
-        human.push_str(&format!("\nTab: {t}"));
+        human.push_str(&format!("\nTab: {}", line_safe(t)));
     }
     if let Some(ref u) = tab_url {
-        human.push_str(&format!("\nURL: {u}"));
+        human.push_str(&format!("\nURL: {}", line_safe(u)));
     }
 
     CommandOutput::Data {
