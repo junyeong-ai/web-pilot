@@ -417,9 +417,24 @@
         const innerText = (el.innerText || el.textContent || "")
           .trim()
           .replace(/\s+/g, " ");
-        const text = (tag === "input" || tag === "textarea")
-          ? (el.placeholder || el.getAttribute("aria-label") || "")
-          : clip(innerText, 300);
+        // An input's VISIBLE LABEL lives in a different field per type: a
+        // button-type carries it in `value` (`<input type=submit value="Search">`
+        // reads "Search"), an image button in `alt`, while a text field's `text`
+        // is its placeholder hint. Emitting the right one as `text` makes the
+        // control findable by its label (`find --text "Search"`) and shows it in
+        // the snapshot, instead of an empty `text` next to a `value`/`alt`
+        // `find --text` never searches.
+        const inputText = (e) => {
+          if (["submit", "button", "reset"].includes(e.type)) return clip(String(e.value || ""), 300);
+          if (e.type === "image") return clip(e.getAttribute("alt") || "", 300);
+          return e.placeholder || e.getAttribute("aria-label") || "";
+        };
+        const text =
+          tag === "input"
+            ? inputText(el)
+            : tag === "textarea"
+              ? el.placeholder || el.getAttribute("aria-label") || ""
+              : clip(innerText, 300);
 
         // Display-only identifier — the actionable handle is the snapshot
         // index, never this. Emit any non-empty id (codepoint-clipped); modern
