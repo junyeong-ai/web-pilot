@@ -151,27 +151,38 @@ pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> R
     }
 
     let ctx_id = browser.create_browser_context().await?;
-    let tid = browser
-        .create_target_in_context(&ctx_id, "about:blank")
-        .await?;
+    // Once the CDP browser context exists, ANY later failure (creating its
+    // page, or persisting the metadata that records it) must dispose it —
+    // otherwise it leaks in Chrome with no record left to reach or close it
+    // through. Build the rest under a guard that tears the context down on the
+    // error path, and forgets it on success.
+    let built = async {
+        let tid = browser
+            .create_target_in_context(&ctx_id, "about:blank")
+            .await?;
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let entry = ContextEntry {
+            name: name.to_string(),
+            cwd,
+            browser_context_id: ctx_id.clone(),
+            target_id: tid.clone(),
+            chrome_pid,
+            created_at: now,
+            last_used: now,
+        };
+        // Atomic: a crash mid-write must not leave a torn entry that the next
+        // resolve can't parse — that would orphan the live context just created.
+        dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes())?;
+        Ok(tid)
+    }
+    .await;
 
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let entry = ContextEntry {
-        name: name.to_string(),
-        cwd,
-        browser_context_id: ctx_id,
-        target_id: tid.clone(),
-        chrome_pid,
-        created_at: now,
-        last_used: now,
-    };
-    // Atomic: a crash mid-write must not leave a torn entry that the next
-    // resolve can't parse — that would orphan the live context just created.
-    dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes())?;
-
-    Ok(tid)
+    if built.is_err() {
+        let _ = browser.dispose_browser_context(&ctx_id).await;
+    }
+    built
 }
 
 pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {

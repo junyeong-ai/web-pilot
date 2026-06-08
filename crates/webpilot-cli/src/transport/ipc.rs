@@ -1,6 +1,7 @@
 //! Transport over Unix domain socket → Native Messaging Host.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use webpilot::WebPilotError;
 use webpilot::ipc;
 use webpilot::protocol::{Command, Request, Response, ResponseData};
 
@@ -32,10 +33,19 @@ impl Transport for IpcTransport {
         // directly. The host returns a `ResponseData::Error { PolicyDenied }`
         // which surfaces below exactly like any other typed failure.
         let request = Request::new(self.ids.next(), command);
+        // Every way the host channel can fail — not running, socket closed,
+        // timeout, I/O — is infra, so it maps to ConnectionLost (exit 3), the
+        // documented bucket an agent retries on, never a generic Other (exit 1).
         let raw = ipc::send_request(&serde_json::to_value(&request)?)
             .await
-            .context("IPC dispatch failed (host not running?)")?;
-        let response: Response = serde_json::from_value(raw)?;
+            .map_err(|e| WebPilotError::ConnectionLost {
+                detail: format!("Native Messaging host unreachable: {e}"),
+            })?;
+        // A host reply that doesn't parse is the host misbehaving — also infra.
+        let response: Response =
+            serde_json::from_value(raw).map_err(|e| WebPilotError::ConnectionLost {
+                detail: format!("malformed reply from the Native Messaging host: {e}"),
+            })?;
         Ok(response.result)
     }
 }
