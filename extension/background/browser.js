@@ -196,9 +196,6 @@ async function handleFrameSwitch(selector) {
         break;
       }
     }
-    if (!matched) {
-      matched = httpFrames.find((f) => f.url?.includes(selector.value));
-    }
   } else if (selector.by === "url") {
     const needle = (selector.pattern || "").replace(/\*/g, "");
     matched = httpFrames.find((f) => f.url?.includes(needle));

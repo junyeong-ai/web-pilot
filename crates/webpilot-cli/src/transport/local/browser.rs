@@ -253,7 +253,6 @@ impl LocalTransport {
             FrameSelector::Name { value } => candidates
                 .iter()
                 .find(|f| f.name.as_deref() == Some(value.as_str()))
-                .or_else(|| candidates.iter().find(|f| f.url.contains(value)))
                 .copied(),
             FrameSelector::Url { pattern } => {
                 let needle = pattern.replace('*', "");
