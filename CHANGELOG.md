@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.29] - 2026-06-09
+
+### Fixed
+
+- **A CDP event-buffer overflow during a wait is reported as event loss, not a
+  Timeout.** `wait_for_event` silently swallowed a broadcast `Lagged` (a burst
+  larger than `cdp.event_buffer`); if the awaited event was among the dropped
+  messages, the wait ran to a generic Timeout that implied the page/event never
+  happened. It now reclassifies such a timeout as a typed `ConnectionLost` naming
+  the overflow ("retry, or raise cdp.event_buffer"), while still waiting through a
+  recoverable lag so a transient burst is not turned into a spurious failure.
+
 ## [0.4.28] - 2026-06-09
 
 ### Fixed
