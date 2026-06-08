@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.12] - 2026-06-08
+
+A design-quality pass removing two non-principled patterns.
+
+### Fixed
+
+- **`fetch` no longer forces `Content-Type: application/json`.** Both transports
+  hardcoded that header on every request — meaningless on a GET and silently
+  mislabeling any non-JSON body (a form or multipart body still went out as JSON).
+  `fetch` now sends only the headers the caller gives it via a repeatable
+  `--header NAME:VALUE`; a JSON body needs an explicit
+  `--header content-type:application/json`. `credentials: include` (the
+  authenticated-session contract) is unchanged.
+- **The browser annotation-paint delay is the configured setting**, not a
+  hardcoded 300ms that disagreed with headless's 200ms default. The host now
+  streams `annotation_paint_ms` over the settings handshake, so one setting tunes
+  both modes.
+
 ## [0.4.11] - 2026-06-08
 
 A design-quality pass: a side-effect-prone heuristic removed, monitor re-arm
