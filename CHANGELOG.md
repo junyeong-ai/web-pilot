@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.13] - 2026-06-08
+
+### Fixed
+
+- **`eval` distinguishes `undefined`/`NaN`/`Infinity` from `null`.** CDP omits a
+  result's `value` for anything JSON can't carry (`undefined`, `NaN`, `±Infinity`,
+  `-0`, `BigInt`, functions, symbols), and both modes had coerced that to `null` —
+  so `eval "el.onclick"` on a handler-less element returned `null`,
+  indistinguishable from a handler set to `null`, and `eval "1/0"` returned `null`
+  rather than `Infinity`. A shared decode now renders such results faithfully (the
+  `unserializableValue` literal, the bare `undefined`, or the object description),
+  while a genuine `null`/`0`/`false`/`""` is preserved.
+
 ## [0.4.12] - 2026-06-08
 
 A design-quality pass removing two non-principled patterns.
