@@ -218,11 +218,11 @@ impl LocalTransport {
         self.browser
             .send("Target.closeTarget", Some(json!({"targetId": tab_id})))
             .await?;
-        if super::read_persisted_active_tab(self.persisted_context_key()).as_deref() == Some(tab_id)
-        {
-            super::clear_persisted_active_tab(self.persisted_context_key());
-            super::clear_persisted_active_frame(self.persisted_context_key());
-        }
+        // Closing the active tab leaves its pin DEAD, not cleared. The next
+        // command then fails loud with TabNotFound (via `pick_active_target`), so
+        // the agent must re-pin explicitly with `tab switch` — never a silent
+        // retarget to a tab it has not seen. Browser mode does the same (its
+        // `handleTabClose` doesn't touch the pin either).
         Ok(action_success(None))
     }
 

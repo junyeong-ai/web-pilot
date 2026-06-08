@@ -1009,8 +1009,12 @@ async fn pick_active_target(
         if alive(&persisted) {
             return Ok(persisted);
         }
-        // The pinned tab closed. Drop the dead pin and fail loud rather than
-        // silently land the agent's next command on a different tab.
+        // The pinned tab closed. Fail loud with TabNotFound for THIS command, and
+        // drop the dead pin so the agent can recover: unlike browser mode (a
+        // persistent worker whose `tab switch` runs without the pin), every
+        // headless command re-opens a transport through this resolver, so a
+        // permanently-dead pin would block `tab switch` itself — there would be no
+        // way back. One loud failure, then the next command re-binds.
         clear_persisted_active_tab(browser_context_id);
         return Err(WebPilotError::TabNotFound { tab_id: persisted }.into());
     }
