@@ -8,10 +8,9 @@
 console.log("[WebPilot] Service Worker loaded");
 
 import { pruneCdpLock } from "./cdp.js";
-import { injectBridgeOnly } from "./content.js";
 import { connectToHost, isHostConnected } from "./host.js";
-import { RESTORED, monitoringState, pruneTabMonitoring } from "./session.js";
-import { injectConsoleMonitoring, injectNetworkMonitoring } from "./state.js";
+import { RESTORED, pruneTabMonitoring } from "./session.js";
+import { rearmMonitors } from "./state.js";
 
 // Every chrome.* event listener is registered HERE, synchronously, at the top
 // of the module graph — MV3 requires listener registration to complete during
@@ -47,15 +46,11 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
   // This fires independently of command processing, so it must also wait for
   // the post-restart restore before consulting `monitoringState` — otherwise a
   // navigation right after an SW restart would skip re-injecting a monitor the
-  // user had started.
+  // user had started. This is the BACKSTOP for monitor re-arm: the command paths
+  // (navigate/back/forward/reload/click-nav/`capture --url`) re-arm at settle,
+  // earlier than `load`, so a fetch the new page fires before `load` is caught.
   await RESTORED;
-  await injectBridgeOnly(tabId, 0);
-  if (monitoringState.console.has(tabId)) {
-    try { await injectConsoleMonitoring(tabId); } catch {}
-  }
-  if (monitoringState.network.has(tabId)) {
-    try { await injectNetworkMonitoring(tabId); } catch {}
-  }
+  await rearmMonitors(tabId);
 });
 
 connectToHost();

@@ -7,6 +7,7 @@ import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, settledActionUrl, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
+import { rearmMonitors } from "./state.js";
 
 // ── Action ─────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,9 @@ async function handleAction(command) {
       // A new document invalidates any switched-to frame — reset to main, as
       // the headless transport does on navigation.
       setActiveFrameId(0);
+      // Re-arm console/network hooks now, at settle — headless re-installs them
+      // the instant the navigation settles, not at the later `load` event.
+      await rearmMonitors(tab.id);
       const landed = await chrome.tabs.get(tab.id).catch(() => null);
       result = { type: "Action", success: true, url_changed: landed?.url || action.url };
       break;
@@ -114,6 +118,7 @@ async function handleAction(command) {
       // settles best-effort on history/reload.
       await waitNavigationSettled(tab.id, tab.url || "", watch, `history.${dir}()`).catch(() => {});
       setActiveFrameId(0);
+      await rearmMonitors(tab.id);
       result = { type: "Action", success: true };
       break;
     }
@@ -126,6 +131,7 @@ async function handleAction(command) {
       await chrome.tabs.reload(tab.id);
       await waitNavigationSettled(tab.id, tab.url || "", watch, "reload").catch(() => {});
       setActiveFrameId(0);
+      await rearmMonitors(tab.id);
       result = { type: "Action", success: true };
       break;
     }
@@ -299,7 +305,12 @@ async function dispatchActionToPage(tab, action) {
     // event loop so that event is delivered first. A single pre-settle check
     // would miss it and leave the pin silently on the opener.
     const settledUrl = await settledActionUrl(tab.id, urlBefore, navWatch);
-    if (settledUrl && settledUrl !== urlBefore) result.url_changed = settledUrl;
+    if (settledUrl && settledUrl !== urlBefore) {
+      result.url_changed = settledUrl;
+      // A click/key that navigated this tab built a new document — re-arm its
+      // monitors at settle, like a navigate action and like headless.
+      await rearmMonitors(tab.id);
+    }
 
     if (openedTabId != null) {
       const newTab = await chrome.tabs.get(openedTabId).catch(() => null);

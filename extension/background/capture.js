@@ -6,6 +6,7 @@ import { activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, slee
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
 import { waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
+import { rearmMonitors } from "./state.js";
 
 // ── Capture ────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,9 @@ async function handleCapture(command) {
       // headless `navigate_reconnect`, and keeps the `--annotate` main-frame
       // guard from firing on a frame id that no longer exists).
       setActiveFrameId(0);
+      // Re-arm monitors at settle (headless parity) so a fetch/console the new
+      // page fires before `load` is captured, not lost to the `onCompleted` gap.
+      await rearmMonitors(tabId);
     } else {
       const t = await resolveActiveTab();
       if (!t) return topErr(noPageErr());
@@ -118,7 +122,11 @@ async function handleCapture(command) {
     try {
       await ensureBridge(tabId, activeFrameId);
       const r = await sendToContent(tabId, { type: "extractText" }, activeFrameId, 5000);
-      if (r?.text) {
+      // `typeof === "string"`, not truthiness: a page with NO text yields `""`,
+      // which headless still preserves (`text_content: Some("")` + a snapshot
+      // shell). A truthiness check would drop the result entirely, returning no
+      // DOM at all for a text capture of a text-empty page.
+      if (typeof r?.text === "string") {
         result.dom = result.dom || emptyDom();
         result.dom.text_content = r.text;
         result.page_url = r.url || result.page_url;
@@ -249,6 +257,17 @@ async function handleCapture(command) {
       const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
       result.dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
     } catch {}
+  }
+
+  // A text/AX-only snapshot SHELL (emptyDom) carries blank page_url/title;
+  // headless builds its shell with the resolved URL/title (`empty_snapshot(&
+  // page_url, &page_title)`), so the snapshot itself — not only the top-level
+  // response — reports where it ran. Mirror the resolved metadata onto the shell.
+  // A real DOM pass already populated these from the snapshot, so the `||` keeps
+  // them.
+  if (result.dom) {
+    result.dom.page_url = result.dom.page_url || result.page_url || "";
+    result.dom.page_title = result.dom.page_title || result.page_title || "";
   }
 
   return result;

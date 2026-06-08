@@ -3,9 +3,32 @@
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
 import { activeFrameId, monitoringState, resolveActiveTab, saveMonitoringState } from "./session.js";
-import { ensureBridge, sendToContent } from "./content.js";
+import { ensureBridge, injectBridgeOnly, sendToContent } from "./content.js";
 
 // ── Console / network monitoring injection ─────────────────────────────────
+
+// Re-arm the bridge and any armed console/network hooks on `tabId`'s new main
+// document. Headless calls `reinstall_monitors()` the instant a navigation
+// settles (action.rs); browser must do the same right after
+// `waitNavigationSettled`, not wait for `webNavigation.onCompleted` (which fires
+// at `load`) — otherwise a `fetch`/`console` the new page emits after
+// DOMContentLoaded but before a slow `load` is lost from the buffer. The
+// `onCompleted` listener stays as a backstop. A re-arm is a no-op unless the tab
+// is in `monitoringState`, so a non-monitoring navigation pays only the bridge
+// re-inject the next command would need anyway.
+async function rearmMonitors(tabId) {
+  await injectBridgeOnly(tabId, 0);
+  if (monitoringState.console.has(tabId)) {
+    try {
+      await injectConsoleMonitoring(tabId);
+    } catch {}
+  }
+  if (monitoringState.network.has(tabId)) {
+    try {
+      await injectNetworkMonitoring(tabId);
+    } catch {}
+  }
+}
 
 async function injectConsoleMonitoring(tabId) {
   await chrome.scripting.executeScript({
@@ -356,4 +379,4 @@ async function handleSessionImport(rawData) {
   }
 }
 
-export { handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, injectConsoleMonitoring, injectNetworkMonitoring };
+export { handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, injectConsoleMonitoring, injectNetworkMonitoring, rearmMonitors };
