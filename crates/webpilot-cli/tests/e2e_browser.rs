@@ -144,15 +144,27 @@ fn wait_for<T>(deadline: Duration, what: &str, mut probe: impl FnMut() -> Option
 }
 
 fn spawn_chrome(chrome: &Path, home: &Path, user_data_dir: &Path, extension_dir: &Path) -> Child {
-    Command::new(chrome)
-        .args([
-            "--headless=new",
-            &format!("--user-data-dir={}", user_data_dir.display()),
-            &format!("--load-extension={}", extension_dir.display()),
-            "--remote-debugging-port=0",
-            "--no-first-run",
-            "about:blank",
-        ])
+    let mut cmd = Command::new(chrome);
+    cmd.args([
+        "--headless=new",
+        &format!("--user-data-dir={}", user_data_dir.display()),
+        &format!("--load-extension={}", extension_dir.display()),
+        "--remote-debugging-port=0",
+        "--no-first-run",
+    ]);
+    // Mirror the binary's WEBPILOT_CHROME_NO_SANDBOX opt-in: this harness spawns
+    // Chrome directly (not via the CLI), so it must add --no-sandbox itself to
+    // run in an unprivileged CI container.
+    if matches!(
+        std::env::var("WEBPILOT_CHROME_NO_SANDBOX")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    ) {
+        cmd.arg("--no-sandbox");
+    }
+    cmd.arg("about:blank")
         .env("WEBPILOT_HOME", home)
         .stdout(Stdio::null())
         .stderr(Stdio::null())

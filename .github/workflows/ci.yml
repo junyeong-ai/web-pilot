@@ -109,19 +109,33 @@ jobs:
         with:
           cache-key: e2e
 
+      # WebPilot targets Chrome for Testing: the browser-mode e2e loads the
+      # unpacked extension, which branded Chrome no longer allows. setup-chrome
+      # pulls in the system libraries Chrome needs on a headless runner; the
+      # @puppeteer/browsers install then fetches the matching Chrome for Testing
+      # binary the tests run against.
       - uses: browser-actions/setup-chrome@v2
+
+      - name: Install Chrome for Testing
         id: chrome
-        with:
-          chrome-version: stable
+        run: |
+          set -euo pipefail
+          out="$(npx --yes @puppeteer/browsers install chrome@stable)"
+          # `install` prints "chrome@<version> <path>"; take the path.
+          echo "path=${out##* }" >> "$GITHUB_OUTPUT"
 
       - name: cargo test --test e2e_headless
         env:
           WEBPILOT_E2E: "1"
-          WEBPILOT_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+          WEBPILOT_CHROME: ${{ steps.chrome.outputs.path }}
+          # The runner is an unprivileged container — Chrome's setuid sandbox
+          # can't initialise there, so opt into --no-sandbox for CI only.
+          WEBPILOT_CHROME_NO_SANDBOX: "1"
         run: cargo test -p webpilot-cli --locked --test e2e_headless -- --nocapture
 
       - name: cargo test --test e2e_browser
         env:
           WEBPILOT_E2E_BROWSER: "1"
-          WEBPILOT_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+          WEBPILOT_CHROME: ${{ steps.chrome.outputs.path }}
+          WEBPILOT_CHROME_NO_SANDBOX: "1"
         run: cargo test -p webpilot-cli --locked --test e2e_browser -- --nocapture

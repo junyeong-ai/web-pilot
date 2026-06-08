@@ -33,6 +33,11 @@ fails the build if they drift.
   auth cookie to its subdomains.
 - **`scripts/uninstall.sh`**: a curl-able one-shot symmetric to `install.sh`,
   delegating to `webpilot uninstall` (the single source of truth for artefact paths).
+- **`--no-sandbox` opt-in** for running headless Chrome in an unprivileged
+  container (Docker, CI, many cloud sandboxes), where Chrome's setuid sandbox
+  can't initialise and it otherwise never reports a DevTools port. Off by default
+  (it weakens the sandbox); enable with `WEBPILOT_CHROME_NO_SANDBOX=1` or
+  `[chrome] no_sandbox = true`.
 
 ### Changed
 

@@ -234,25 +234,32 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
     tracing::info!("Launching headless Chrome...");
 
     let (vw, vh) = headless_viewport();
-    let child = std::process::Command::new(&chrome)
-        .args([
-            "--headless=new",
-            "--remote-debugging-port=0",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-background-networking",
-            "--disable-component-update",
-            "--disable-default-apps",
-            "--disable-popup-blocking",
-            "--disable-sync",
-            "--disable-features=Translate",
-            "--enable-features=NetworkService,NetworkServiceInProcess",
-            "--password-store=basic",
-            "--use-mock-keychain",
-            &format!("--window-size={vw},{vh}"),
-            &format!("--user-data-dir={}", profile_dir.display()),
-            "about:blank",
-        ])
+    let mut cmd = std::process::Command::new(&chrome);
+    cmd.args([
+        "--headless=new",
+        "--remote-debugging-port=0",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-default-apps",
+        "--disable-popup-blocking",
+        "--disable-sync",
+        "--disable-features=Translate",
+        "--enable-features=NetworkService,NetworkServiceInProcess",
+        "--password-store=basic",
+        "--use-mock-keychain",
+        &format!("--window-size={vw},{vh}"),
+        &format!("--user-data-dir={}", profile_dir.display()),
+    ]);
+    // A sandboxed Chrome can't initialise its setuid sandbox in an unprivileged
+    // container (Docker, CI, many cloud sandboxes) and then never reports a
+    // DevTools port. Opt-in, off by default — it weakens Chrome's sandbox.
+    if webpilot::settings::get().chrome.no_sandbox {
+        cmd.arg("--no-sandbox");
+    }
+    let child = cmd
+        .arg("about:blank")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

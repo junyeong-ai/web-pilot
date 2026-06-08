@@ -68,6 +68,11 @@ pub struct Chrome {
     /// Headless launch viewport. `device reset` snaps the page back to this.
     pub viewport_width: u32,
     pub viewport_height: u32,
+    /// Launch Chrome with `--no-sandbox`. Off by default — it weakens Chrome's
+    /// process sandbox — but required to run headless in an unprivileged
+    /// container (Docker, CI, many cloud sandboxes), where the setuid sandbox
+    /// can't initialise and Chrome otherwise never reports a DevTools port.
+    pub no_sandbox: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +197,7 @@ impl Settings {
                 binary: string_var("WEBPILOT_CHROME").or(c.binary),
                 viewport_width: u32_var("WEBPILOT_VIEWPORT_WIDTH", c.viewport_width, 1280),
                 viewport_height: u32_var("WEBPILOT_VIEWPORT_HEIGHT", c.viewport_height, 720),
+                no_sandbox: bool_var("WEBPILOT_CHROME_NO_SANDBOX", c.no_sandbox, false),
             },
             context: Context {
                 ttl: Duration::from_secs(u64_var(
@@ -235,6 +241,19 @@ fn u32_var(env: &str, file: Option<u32>, default: u32) -> u32 {
 
 fn usize_var(env: &str, file: Option<usize>, default: usize) -> usize {
     pick(parse_env(env), file, default)
+}
+
+/// A boolean env override. `1` / `true` / `yes` / `on` (any case) are true; any
+/// other set value is false. Absent falls through to the config file, then the
+/// built-in default — the same precedence as every other tunable.
+fn bool_var(env: &str, file: Option<bool>, default: bool) -> bool {
+    let env_val = std::env::var(env).ok().map(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
+    pick(env_val, file, default)
 }
 
 /// Precedence: env override, then config file, then built-in default.
@@ -283,6 +302,7 @@ struct FileChrome {
     binary: Option<String>,
     viewport_width: Option<u32>,
     viewport_height: Option<u32>,
+    no_sandbox: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
