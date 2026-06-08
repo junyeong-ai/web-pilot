@@ -98,7 +98,12 @@ pub enum ScrollDir {
 }
 
 /// Modifier keys for `KeyPress`.
+// Every field is optional and defaults to false, so a misspelled key (an MCP
+// caller sending `control`/`command` instead of `ctrl`/`meta`) would otherwise be
+// silently dropped and the chord sent as a bare key with no error. Reject the
+// unknown field instead, so the caller learns the exact name to use.
 #[derive(Args, Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Modifiers {
     #[arg(long)]
     #[serde(default)]
@@ -204,6 +209,16 @@ mod tests {
         let mods = &v["modifiers"];
         assert_eq!(mods["ctrl"], false);
         assert_eq!(mods["shift"], false);
+    }
+
+    #[test]
+    fn modifiers_reject_a_misspelled_key_instead_of_dropping_it() {
+        // A correct field deserializes; a near-miss an MCP caller might send
+        // (`control` for `ctrl`) is an error, not a silently-bare key press.
+        let ok: Modifiers = serde_json::from_value(serde_json::json!({ "ctrl": true })).unwrap();
+        assert!(ok.ctrl);
+        let bad = serde_json::from_value::<Modifiers>(serde_json::json!({ "control": true }));
+        assert!(bad.is_err(), "unknown modifier key must be rejected");
     }
 
     #[test]
