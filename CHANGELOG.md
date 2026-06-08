@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.37] - 2026-06-09
+
+### Fixed
+
+- **A capture scoped to a since-removed frame is `FrameNotFound`, not a stale
+  success.** After `frame switch` into an iframe the page later removed, a
+  screenshot/PDF/accessibility-only capture returned success — the dead-frame check
+  ran only in the DOM pass (browser) and the metadata read swallowed the failure
+  into empty URL/title (headless). Both modes now validate the active frame for
+  every capture mode and surface `FrameNotFound`.
+
 ## [0.4.36] - 2026-06-09
 
 ### Fixed
