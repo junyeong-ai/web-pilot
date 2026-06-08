@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.22] - 2026-06-08
+
+### Fixed
+
+- **Browser/MCP mode resets the frame scope when an action navigates the tab.**
+  After `frame switch` into an iframe, a click or key that navigated the main tab
+  (a `_top` link or form submit) destroyed that iframe but left `activeFrameId`
+  pointing at it, so the `--capture` auto-snapshot and every later command
+  targeted a dead frame (`capture_error`/no fresh DOM). The settled-navigation
+  branch now drops to the main frame on `url_changed`, matching the explicit
+  navigate/back/reload cases and headless `clear_active_frame`.
+
 ## [0.4.21] - 2026-06-08
 
 ### Fixed
