@@ -193,14 +193,17 @@ async function handleConsoleStart() {
   }
 }
 
-async function handleConsoleRead() {
+async function handleConsoleRead(since) {
   const tab = await resolveActiveTab();
   if (!tab) return topErr(noPageErr());
   try {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
       world: "MAIN",
-      func: () => JSON.parse(JSON.stringify(window.__webpilot_console || [])),
+      args: [since || 0],
+      // Filter by `timestamp >= since` in-page (the incremental cursor), exactly
+      // as the network read does, then deep-clone for structured transfer.
+      func: (s) => JSON.parse(JSON.stringify((window.__webpilot_console || []).filter((e) => e.timestamp >= s))),
     });
     return { type: "ConsoleEntries", entries: r?.[0]?.result || [] };
   } catch (e) {

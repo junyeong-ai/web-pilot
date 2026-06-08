@@ -75,10 +75,13 @@ impl LocalTransport {
         Ok(ok_command_result())
     }
 
-    pub(super) async fn do_console_read(&self) -> Result<ResponseData> {
+    pub(super) async fn do_console_read(&self, since: Option<u64>) -> Result<ResponseData> {
         let result = self
             .page
-            .evaluate("window.__webpilot_console || []")
+            .evaluate(&format!(
+                "(window.__webpilot_console || []).filter(e => e.timestamp >= {})",
+                since.unwrap_or(0)
+            ))
             .await?;
         let entries: Vec<ConsoleEntry> = result
             .as_array()

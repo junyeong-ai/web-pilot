@@ -107,7 +107,13 @@ pub enum Command {
         name: String,
     },
     ConsoleStart,
-    ConsoleRead,
+    ConsoleRead {
+        /// Only entries with `timestamp >= since` (ms epoch) — the incremental
+        /// cursor that lets an agent poll without re-reading or a destructive
+        /// `console clear`. Same shape as `NetworkRead`.
+        #[serde(default)]
+        since: Option<u64>,
+    },
     ConsoleClear,
     NetworkStart,
     NetworkRead {
@@ -170,7 +176,7 @@ impl Command {
             | Command::TabSwitch { .. }
             | Command::DomGet { .. }
             | Command::FrameList
-            | Command::ConsoleRead
+            | Command::ConsoleRead { .. }
             | Command::ConsoleClear
             | Command::NetworkRead { .. }
             | Command::NetworkClear

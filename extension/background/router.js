@@ -99,7 +99,7 @@ async function processCommand(id, command, port) {
         break;
 
       case "ConsoleRead":
-        result = await handleConsoleRead();
+        result = await handleConsoleRead(command.since);
         break;
 
       case "ConsoleClear":

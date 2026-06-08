@@ -205,7 +205,7 @@ fn command_policy_key_gates_by_effect() {
         .policy_key(),
         None
     );
-    assert_eq!(Command::ConsoleRead.policy_key(), None);
+    assert_eq!(Command::ConsoleRead { since: None }.policy_key(), None);
     assert_eq!(Command::ConsoleClear.policy_key(), None);
     assert_eq!(Command::NetworkRead { since: None }.policy_key(), None);
     assert_eq!(Command::NetworkClear.policy_key(), None);

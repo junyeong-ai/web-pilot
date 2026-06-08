@@ -738,7 +738,7 @@ impl Transport for LocalTransport {
             }
             Command::CookieDelete { url, name } => self.do_cookie_delete(&url, &name).await,
             Command::ConsoleStart => self.do_console_start().await,
-            Command::ConsoleRead => self.do_console_read().await,
+            Command::ConsoleRead { since } => self.do_console_read(since).await,
             Command::ConsoleClear => self.do_console_clear().await,
             Command::NetworkStart => self.do_network_start().await,
             Command::NetworkRead { since } => self.do_network_read(since).await,

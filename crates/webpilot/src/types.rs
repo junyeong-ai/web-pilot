@@ -456,14 +456,17 @@ impl InteractiveElement {
 
     pub fn matches(&self, filter: &ElementFilter) -> bool {
         if let Some(ref role) = filter.role {
+            // Role matches an explicit ARIA `role` or the element's implicit role
+            // ONLY — never the raw tag name. `--role nav` must not match `<nav>`
+            // (its role is `navigation`), and `--role div` must not match every
+            // `<div>`; a tag query is `find --tag`.
             let role_lower = role.to_lowercase();
             let explicit = self
                 .role
                 .as_ref()
                 .is_some_and(|r| r.to_lowercase() == role_lower);
             let implicit = self.implicit_role().is_some_and(|r| r == role_lower);
-            let tag_match = self.tag.to_lowercase() == role_lower;
-            if !explicit && !implicit && !tag_match {
+            if !explicit && !implicit {
                 return false;
             }
         }

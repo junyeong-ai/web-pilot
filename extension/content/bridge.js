@@ -797,7 +797,16 @@
           if (idleTimer) clearTimeout(idleTimer);
           idleTimer = setTimeout(() => finish({ success: true }), 500);
         });
-        observer.observe(root, { childList: true, subtree: true });
+        // Watch attributes and character data as well as node insertion: a page
+        // still mutating only class/attribute (a spinner toggling `aria-busy`) or
+        // text (a live counter) is NOT idle, and a childList-only observer would
+        // declare it settled after the first 500ms quiet window.
+        observer.observe(root, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          characterData: true,
+        });
         idleTimer = setTimeout(() => finish({ success: true }), 500);
     }
   }

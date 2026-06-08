@@ -23,6 +23,10 @@ pub enum ConsoleCommand {
         /// Filter by level (log, error, warn, info, debug).
         #[arg(long)]
         level: Option<String>,
+        /// Only entries at or after this timestamp (ms epoch) — an incremental
+        /// cursor for polling without a destructive `console clear`.
+        #[arg(long)]
+        since: Option<u64>,
     },
     /// Clear captured entries.
     Clear,
@@ -31,7 +35,7 @@ pub enum ConsoleCommand {
 pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<CommandOutput> {
     let cmd = match &args.command {
         ConsoleCommand::Start => Command::ConsoleStart,
-        ConsoleCommand::Read { .. } => Command::ConsoleRead,
+        ConsoleCommand::Read { since, .. } => Command::ConsoleRead { since: *since },
         ConsoleCommand::Clear => Command::ConsoleClear,
     };
 
@@ -40,7 +44,9 @@ pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<C
     match result {
         ResponseData::ConsoleEntries { entries } => {
             let filtered = match &args.command {
-                ConsoleCommand::Read { level: Some(lvl) } => {
+                ConsoleCommand::Read {
+                    level: Some(lvl), ..
+                } => {
                     let target = lvl.parse::<ConsoleLevel>().map_err(|_| {
                         webpilot::WebPilotError::InvalidArgument {
                             detail: format!("unknown console level '{lvl}'"),
