@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.19] - 2026-06-08
+
+### Fixed
+
+- **`tab list` marks the agent's pinned tab active, not every CDP-attached one.**
+  It read the CDP `attached` flag (true for any debugger client), so an open
+  DevTools window or a second tool made tabs the agent never pinned read as active.
+  Active is now the tab this transport actually acts on.
+- **`wait navigation` preserves a typed infrastructure error** instead of mapping
+  every failure to `Timeout` — a dropped CDP socket now surfaces as
+  `ConnectionLost` (exit 3), not a misleading navigation `Timeout` (exit 5).
+- **`diff --screenshot` counts a size change as changed.** Two differently-sized
+  images with an identical overlapping region used to read as unchanged; the
+  `changed` flag now also trips when the dimensions differ.
+
 ## [0.4.18] - 2026-06-08
 
 ### Fixed
