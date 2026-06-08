@@ -38,7 +38,12 @@ impl LocalTransport {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                active: t.get("attached").and_then(|v| v.as_bool()).unwrap_or(false),
+                // Active = WebPilot's own pinned tab, not CDP `attached`. The
+                // `attached` flag is true for ANY debugger client on the target,
+                // so an open DevTools window or a second tool would mark a tab
+                // (or several) active that the agent never pinned. The pin is
+                // `self.target_id`, the one this transport acts on.
+                active: t.get("targetId").and_then(|v| v.as_str()) == Some(self.target_id.as_str()),
             })
             .collect();
         Ok(ResponseData::Tabs { tabs })

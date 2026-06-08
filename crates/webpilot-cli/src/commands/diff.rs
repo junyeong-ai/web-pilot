@@ -224,10 +224,13 @@ fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
 
     Ok(CommandOutput::Data {
         json: serde_json::json!({
-            // Explicit verdict: any differing pixel (above the per-pixel
-            // threshold) counts as changed. Mirrors the DOM diff; the exit code
-            // stays 0 (success) — it names an error class, not a domain result.
-            "changed": diff_count > 0,
+            // Explicit verdict: a differing pixel (above the per-pixel threshold)
+            // OR a size change is "changed" — two images of different dimensions
+            // are not the same image even if their overlapping region matches, so
+            // a cropped/resized page never reads as unchanged. Mirrors the DOM
+            // diff; the exit code stays 0 (success) — it names an error class,
+            // not a domain result.
+            "changed": diff_count > 0 || dimensions_differ,
             "changed_percent": format!("{:.1}", pct),
             "changed_pixels": diff_count,
             "total_pixels": total,

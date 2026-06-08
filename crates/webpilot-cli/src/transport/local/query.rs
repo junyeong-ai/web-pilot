@@ -98,12 +98,19 @@ impl LocalTransport {
                     success: true,
                     error: None,
                 }),
-                Err(_) => Ok(ResponseData::Wait {
+                Err(e) => Ok(ResponseData::Wait {
                     success: false,
-                    error: Some(WebPilotError::Timeout {
-                        kind: "navigation".into(),
-                        elapsed_ms: timeout_ms,
-                    }),
+                    // A typed infrastructure error (the CDP socket dropped) is
+                    // preserved as itself — only a genuine deadline expiry is a
+                    // navigation Timeout. Collapsing every error to Timeout told
+                    // the agent navigation merely didn't finish when in fact the
+                    // connection had died.
+                    error: Some(e.downcast::<WebPilotError>().unwrap_or_else(|_| {
+                        WebPilotError::Timeout {
+                            kind: "navigation".into(),
+                            elapsed_ms: timeout_ms,
+                        }
+                    })),
                 }),
             };
         }
