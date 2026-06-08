@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2026-06-08
+
+A convergence sweep of the last under-audited surfaces — cookie/session state and
+the embedded-asset version gate — closed a session-cookie data-loss bug and a
+silently-inert stale-extension gate.
+
+### Fixed
+
+- **`session export` → `session import` no longer drops session cookies.** CDP
+  marks a session cookie (no expiry) with the sentinel `expires: -1`, which was
+  stored verbatim and forwarded back on import as `expires: -1` — an absolute
+  timestamp one second before the epoch, already expired, so Chrome silently
+  dropped it. Exporting a logged-in session and importing it lost exactly the
+  cookies carrying the login. The sentinel now maps to "no expiry", so a session
+  cookie round-trips as one and `cookie list` shows it as a session cookie rather
+  than a 1969 expiry.
+- **The stale-extension version gate works again.** `extension/manifest.json` had
+  frozen at `1.0.0` while the binary advanced and the extension's own code changed
+  across releases, so the host's `VersionMismatch` check — which compares the
+  installed extension's version to the bundled one — always compared equal and
+  could never fire. A browser-mode user who upgraded the binary without reloading
+  the extension ran stale extension code silently. The manifest now tracks the
+  workspace version, enforced by a test that fails the build if the two drift, so
+  an outdated extension is caught at connect time as designed.
+
 ## [0.4.6] - 2026-06-08
 
 A comprehensive parallel sweep of the previously least-audited surfaces — the
