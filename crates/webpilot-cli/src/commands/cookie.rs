@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, ResponseData};
+use webpilot::types::line_safe;
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
@@ -67,13 +68,23 @@ pub async fn run<T: Transport>(transport: &mut T, args: CookieArgs) -> Result<Co
                     .collect::<Vec<_>>()
                     .join(",");
                     let preview: String = c.value.chars().take(40).collect();
-                    format!("{} = {} [{}] {}", c.name, preview, c.domain, flags)
+                    format!(
+                        "{} = {} [{}] {}",
+                        line_safe(&c.name),
+                        line_safe(&preview),
+                        line_safe(&c.domain),
+                        flags
+                    )
                 })
                 .collect();
 
             if name_filter.is_some() && filtered.len() == 1 {
                 return Ok(CommandOutput::Content {
-                    stdout: format!("{} = {}", filtered[0].name, filtered[0].value),
+                    stdout: format!(
+                        "{} = {}",
+                        line_safe(&filtered[0].name),
+                        line_safe(&filtered[0].value)
+                    ),
                     json: serde_json::to_value(&filtered[0])?,
                 });
             }

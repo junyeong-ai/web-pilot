@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, ResponseData};
 
+use webpilot::types::line_safe;
+
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
 
@@ -46,7 +48,12 @@ async fn list_tabs<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
                 .iter()
                 .map(|t| {
                     let marker = if t.active { "*" } else { " " };
-                    format!("{marker} [{}] {} — {}", t.id, t.title, t.url)
+                    format!(
+                        "{marker} [{}] {} — {}",
+                        t.id,
+                        line_safe(&t.title),
+                        line_safe(&t.url)
+                    )
                 })
                 .collect();
             Ok(CommandOutput::List {

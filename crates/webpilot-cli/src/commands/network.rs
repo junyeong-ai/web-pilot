@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, ResponseData};
 
+use webpilot::types::line_safe;
+
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
 
@@ -44,7 +46,11 @@ pub async fn run<T: Transport>(transport: &mut T, args: NetworkArgs) -> Result<C
                         .unwrap_or_else(|| r.error.clone().unwrap_or_else(|| "?".into()));
                     format!(
                         "{} {} {} → {} ({}ms)",
-                        r.req_type, r.method, r.url, status, r.duration_ms as u64
+                        r.req_type,
+                        line_safe(&r.method),
+                        line_safe(&r.url),
+                        status,
+                        r.duration_ms as u64
                     )
                 })
                 .collect();

@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, FrameSelector, ResponseData};
 
+use webpilot::types::line_safe;
+
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
 
@@ -60,7 +62,8 @@ async fn list_frames<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
                     let marker = if is_active { "*" } else { " " };
                     let main = if f.is_main { " [main]" } else { "" };
                     let id_short: String = f.frame_id.chars().take(8).collect();
-                    let url_short: String = f.url.chars().take(60).collect();
+                    let url_short =
+                        line_safe(&f.url.chars().take(60).collect::<String>()).into_owned();
                     format!("{marker} [{id_short}] {url_short}{main}")
                 })
                 .collect();

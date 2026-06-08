@@ -3,6 +3,8 @@ use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, ResponseData};
 use webpilot::types::ConsoleLevel;
 
+use webpilot::types::line_safe;
+
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
 
@@ -51,7 +53,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<C
 
             let human_lines: Vec<String> = filtered
                 .iter()
-                .map(|e| format!("[{}] {}", e.level, e.message))
+                .map(|e| format!("[{}] {}", e.level, line_safe(&e.message)))
                 .collect();
             Ok(CommandOutput::List {
                 items: serde_json::to_value(&filtered)?,
