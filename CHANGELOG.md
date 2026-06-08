@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.31] - 2026-06-09
+
+### Fixed
+
+- **A screenshot/PDF/accessibility-only capture reports which page it captured.**
+  The handler dropped `page_url`/`page_title`; a DOM capture still showed them in
+  its footer, but an artifact-only `capture --include screenshot`/`pdf` returned
+  just the path — so after a redirected `--url`, or with an iframe as the active
+  frame, the agent couldn't tell what page the artifact reflected. The no-DOM path
+  now surfaces the page URL/title in both the JSON and the human/MCP text.
+
 ## [0.4.30] - 2026-06-09
 
 ### Fixed
