@@ -669,7 +669,12 @@
         observer = new MutationObserver(() => {
           if (document.querySelector(cond.value)) finish({ success: true });
         });
-        observer.observe(root, { childList: true, subtree: true });
+        // `attributes: true` as well as `childList`: a selector can start
+        // matching not only when a node is inserted but when an existing node
+        // gains a class/attribute (`.active`, `[aria-expanded=true]`, …) — an
+        // attribute mutation the childList-only observer would never see, timing
+        // the wait out even though the element now matches.
+        observer.observe(root, { childList: true, subtree: true, attributes: true });
         break;
       case "text":
         if ((document.body?.innerText || "").includes(cond.value)) {
