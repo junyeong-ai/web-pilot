@@ -8,7 +8,7 @@ use webpilot::dirs;
 use webpilot::protocol::ResponseData;
 use webpilot::types::{DomSnapshot, ScrollInfo};
 
-use super::{LocalTransport, artifact_path};
+use super::LocalTransport;
 
 impl LocalTransport {
     pub(super) async fn do_capture(
@@ -144,7 +144,7 @@ impl LocalTransport {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("PDF generation failed: no data returned"))?;
             let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)?;
-            let path = artifact_path("capture", "pdf");
+            let path = dirs::artifact_path("capture", "pdf");
             std::fs::write(&path, &bytes)?;
             pdf_path = Some(path.to_string_lossy().into_owned());
         }
@@ -265,8 +265,7 @@ fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
 /// MAX_LONG_EDGE), so headless and browser screenshots are tokenwise
 /// interchangeable.
 fn save_screenshot(b64: &str) -> Result<String> {
-    let dir = dirs::artifacts_dir();
-    let info = webpilot::screenshot::process_and_save(b64, &dir)
+    let info = webpilot::screenshot::process_and_save(b64, &dirs::artifact_path("capture", "png"))
         .map_err(|e| anyhow::anyhow!("screenshot save failed: {e}"))?;
     tracing::debug!(
         path = %info.path.display(),

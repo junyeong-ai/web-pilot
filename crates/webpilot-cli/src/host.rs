@@ -196,8 +196,7 @@ fn process_nm_message(
         .and_then(|v| v.as_str())
         .map(str::to_string)
     {
-        let dir = dirs::artifacts_dir();
-        match webpilot::screenshot::process_and_save(&b64, &dir) {
+        match webpilot::screenshot::process_and_save(&b64, &dirs::artifact_path("capture", "png")) {
             Ok(info) => {
                 tracing::info!(
                     "Screenshot: {} ({}x{}, {}KB, ~{} tokens)",
@@ -237,9 +236,7 @@ fn process_nm_message(
         .and_then(|v| v.as_str())
         .map(str::to_string)
     {
-        let dir = dirs::artifacts_dir();
-        let ts = epoch_nanos();
-        let path = dir.join(format!("session_{ts}.json"));
+        let path = dirs::artifact_path("session", "json");
         match std::fs::write(&path, &data) {
             Ok(_) => {
                 if let Some(result) = msg.get_mut("result")
@@ -510,15 +507,6 @@ async fn reply_error<W: AsyncWriteExt + Unpin>(
     payload.push(b'\n');
     writer.write_all(&payload).await?;
     Ok(())
-}
-
-/// Nanosecond stamp for artifact filenames: same-millisecond writers must not
-/// share a name and silently overwrite each other.
-fn epoch_nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

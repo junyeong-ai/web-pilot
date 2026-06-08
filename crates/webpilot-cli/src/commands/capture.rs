@@ -46,14 +46,12 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             pdf_b64,
             ..
         } => {
-            let dir = webpilot::dirs::artifacts_dir();
-
             // Persist accessibility tree to a file when present.
             let mut ax_path: Option<String> = None;
             if let Some(ref snapshot) = dom
                 && let Some(ref ax_tree) = snapshot.accessibility_tree
             {
-                let path = dir.join(format!("accessibility_{}.json", epoch_nanos()));
+                let path = webpilot::dirs::artifact_path("accessibility", "json");
                 std::fs::write(&path, ax_tree).context("Cannot save accessibility tree")?;
                 ax_path = Some(path.to_string_lossy().into_owned());
             }
@@ -65,7 +63,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
                     b64.as_bytes(),
                 )
                 .context("Cannot decode PDF bytes")?;
-                let path = dir.join(format!("capture_{}.pdf", epoch_nanos()));
+                let path = webpilot::dirs::artifact_path("capture", "pdf");
                 std::fs::write(&path, bytes).context("Cannot save PDF")?;
                 Some(path.to_string_lossy().into_owned())
             } else {
@@ -99,11 +97,4 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
         ResponseData::Error { error } => Err(error.into()),
         _ => anyhow::bail!("Unexpected response shape"),
     }
-}
-
-fn epoch_nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
 }

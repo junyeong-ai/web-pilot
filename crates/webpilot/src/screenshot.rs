@@ -23,10 +23,7 @@ pub struct ScreenshotResult {
 }
 
 /// Process a base64-encoded screenshot: decode, resize, save to file.
-pub fn process_and_save(
-    b64_data: &str,
-    output_dir: &Path,
-) -> Result<ScreenshotResult, ScreenshotError> {
+pub fn process_and_save(b64_data: &str, dest: &Path) -> Result<ScreenshotResult, ScreenshotError> {
     // Decode base64
     let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64_data)
         .map_err(|e| ScreenshotError::Decode(e.to_string()))?;
@@ -63,24 +60,18 @@ pub fn process_and_save(
         encode_png(&img)?
     };
 
-    // Save to file
-    std::fs::create_dir_all(output_dir).map_err(|e| ScreenshotError::Save(e.to_string()))?;
-
-    // Nanosecond stamp: two captures in the same millisecond (parallel
-    // contexts) must not share a filename and silently overwrite each other.
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let filename = format!("capture_{ts}.png");
-    let path = output_dir.join(&filename);
-
-    std::fs::write(&path, &final_bytes).map_err(|e| ScreenshotError::Save(e.to_string()))?;
+    // Save to the caller-provided destination. The caller owns artifact naming
+    // (one authority, `dirs::artifact_path`); this function only processes and
+    // writes the bytes.
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| ScreenshotError::Save(e.to_string()))?;
+    }
+    std::fs::write(dest, &final_bytes).map_err(|e| ScreenshotError::Save(e.to_string()))?;
 
     let estimated_tokens = (new_w * new_h) / 750;
 
     Ok(ScreenshotResult {
-        path,
+        path: dest.to_path_buf(),
         width: new_w,
         height: new_h,
         bytes: final_bytes.len(),
@@ -146,6 +137,7 @@ mod tests {
     #[test]
     fn jpeg_capture_is_saved_as_png() {
         let dir = std::env::temp_dir().join(format!("wp_shot_jpeg_{}", std::process::id()));
+        let dest = dir.join("shot.png");
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
             120,
             80,
@@ -153,7 +145,7 @@ mod tests {
         ));
         let b64 = encode_b64(&img, image::ImageFormat::Jpeg);
 
-        let info = process_and_save(&b64, &dir).unwrap();
+        let info = process_and_save(&b64, &dest).unwrap();
 
         let bytes = std::fs::read(&info.path).unwrap();
         assert_eq!(
@@ -169,6 +161,7 @@ mod tests {
     #[test]
     fn extreme_aspect_ratio_keeps_min_dimension() {
         let dir = std::env::temp_dir().join(format!("wp_shot_thin_{}", std::process::id()));
+        let dest = dir.join("shot.png");
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
             5000,
             1,
@@ -176,7 +169,7 @@ mod tests {
         ));
         let b64 = encode_b64(&img, image::ImageFormat::Png);
 
-        let info = process_and_save(&b64, &dir).unwrap();
+        let info = process_and_save(&b64, &dest).unwrap();
 
         assert_eq!(
             info.width,
@@ -190,6 +183,7 @@ mod tests {
     #[test]
     fn oversized_capture_is_resized_and_png() {
         let dir = std::env::temp_dir().join(format!("wp_shot_big_{}", std::process::id()));
+        let dest = dir.join("shot.png");
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
             3000,
             1000,
@@ -197,7 +191,7 @@ mod tests {
         ));
         let b64 = encode_b64(&img, image::ImageFormat::Png);
 
-        let info = process_and_save(&b64, &dir).unwrap();
+        let info = process_and_save(&b64, &dest).unwrap();
 
         assert_eq!(
             info.width,

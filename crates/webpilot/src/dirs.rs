@@ -83,6 +83,23 @@ pub fn artifacts_dir() -> PathBuf {
     materialise(root().join(ARTIFACTS_SUBDIR), Owner::User)
 }
 
+/// A unique path under [`artifacts_dir`] for a freshly minted artifact —
+/// screenshot, PDF, accessibility tree, exported session. The artifacts
+/// directory is shared by every WebPilot process and context, so the name must
+/// be unique across processes, not merely within one: a `SystemTime` stamp's
+/// resolution is coarser than a nanosecond, so two agents capturing at the same
+/// instant can mint the same stamp and one would silently overwrite the other.
+/// The pid makes it cross-process unique; within a single process captures are
+/// sequential, so the stamp separates them. One definition, so every artifact
+/// kind names itself identically.
+pub fn artifact_path(prefix: &str, ext: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    artifacts_dir().join(format!("{prefix}_{}_{nanos}.{ext}", std::process::id()))
+}
+
 pub fn chrome_profile_dir() -> PathBuf {
     materialise(root().join(CHROME_PROFILE_SUBDIR), Owner::User)
 }

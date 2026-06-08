@@ -7,7 +7,7 @@ use webpilot::WebPilotError;
 use webpilot::protocol::ResponseData;
 use webpilot::types::{ConsoleEntry, ConsoleLevel, CookieInfo, NetworkEntry, SameSite};
 
-use super::{LocalTransport, artifact_path, epoch_ms};
+use super::{LocalTransport, epoch_ms};
 
 impl LocalTransport {
     // ── Cookies ──────────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ impl LocalTransport {
             "session_storage": storage.get("sessionStorage"),
         });
 
-        let path = artifact_path("session", "json");
+        let path = webpilot::dirs::artifact_path("session", "json");
         std::fs::write(&path, serde_json::to_string_pretty(&data)?)?;
 
         Ok(ResponseData::SessionExport {
