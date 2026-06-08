@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-06-08
+
+Hardening follow-up to 0.4.0. No behaviour change for a correctly-configured
+agent — internal robustness and a settings-precedence consistency fix.
+
+### Fixed
+
+- The post-navigation context retry (a capture or eval right after a renderer
+  swap) is keyed on a typed CDP error instead of matching the protocol error's
+  text, so an unrelated message can never be mistaken for it.
+- A boolean env override set to an empty string (e.g.
+  `WEBPILOT_CHROME_NO_SANDBOX=""`) now falls through to `config.toml` and the
+  default instead of forcing `false`, consistent with every other env tunable.
+- The release workflow publishes idempotently: a retried or re-pointed release
+  rebuilds the GitHub release rather than failing on "release already exists".
+
 ## [0.4.0] - 2026-06-08
 
 The release that makes browser mode a first-class peer of headless and hardens
