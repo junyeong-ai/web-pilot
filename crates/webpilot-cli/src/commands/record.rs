@@ -126,14 +126,24 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
                     url: None,
                 })
                 .await?;
-            if let ResponseData::Capture {
-                dom: Some(snapshot),
-                ..
-            } = r
-            {
-                let dom_path = dir.join(format!("frame_{ts}_{i:03}.dom.json"));
-                std::fs::write(&dom_path, serde_json::to_string(&snapshot)?)?;
-                dom_files.push(dom_path.to_string_lossy().into_owned());
+            // `--dom` promises a DOM snapshot per frame, so a frame that didn't
+            // produce one is a hard failure, not a silently shorter `dom_files`
+            // list reported as success.
+            match r {
+                ResponseData::Capture {
+                    dom: Some(snapshot),
+                    ..
+                } => {
+                    let dom_path = dir.join(format!("frame_{ts}_{i:03}.dom.json"));
+                    std::fs::write(&dom_path, serde_json::to_string(&snapshot)?)?;
+                    dom_files.push(dom_path.to_string_lossy().into_owned());
+                }
+                _ => {
+                    return Err(webpilot::WebPilotError::Other {
+                        detail: format!("record: frame {i} produced no DOM snapshot"),
+                    }
+                    .into());
+                }
             }
         }
 
