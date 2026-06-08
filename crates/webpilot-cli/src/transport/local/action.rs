@@ -173,22 +173,33 @@ impl LocalTransport {
         // arrow/text behaviour), but still flows through the navigation +
         // popup detection below because Enter can submit a form. Every other
         // page-mutating action runs in the page via the bridge.
-        match &action {
+        let nav_hint = match &action {
             Action::KeyPress { key, modifiers } => {
                 self.do_key_press(key, modifiers).await?;
+                // An Enter that submits a form navigates, but carries no
+                // bridge-side hint; its load events fall to the buffered drain.
+                false
             }
             _ => {
                 let action_json = serde_json::to_value(&action)?;
                 let raw = self
                     .invoke_bridge(&json!({"type": "executeAction", "action": action_json}))
                     .await?;
-                let _ = Self::parse_bridge_response(raw)?;
+                let resp = Self::parse_bridge_response(raw)?;
+                // The bridge sets `navigates: true` for a click it determined
+                // will load a new top-level document (a non-prevented link to a
+                // different http(s)/file URL in this frame).
+                resp.get("navigates")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
             }
-        }
+        };
 
         // Sample the acted-on page before any pin move, so `url_changed`
         // reports this tab's navigation, never the popup's URL.
-        let landed = self.settled_action_url(&mut page_events, &url_before).await;
+        let landed = self
+            .settled_action_url(&mut page_events, &url_before, nav_hint)
+            .await;
         let url_changed = (!landed.is_empty() && landed != url_before).then_some(landed);
         if url_changed.is_some() {
             // The action landed on a new document: a frame scope switched in
@@ -389,6 +400,7 @@ impl LocalTransport {
         &self,
         events: &mut tokio::sync::broadcast::Receiver<Value>,
         before: &str,
+        nav_hint: bool,
     ) -> String {
         use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
@@ -438,52 +450,58 @@ impl LocalTransport {
                 Err(_) => break,
             }
         }
-        // No load event buffered → this action started no navigation. This is
-        // sound, not merely a fast path: a synchronous navigation (a link
-        // click, a form submit via Enter) emits `frameStartedLoading` DURING
-        // the action's own CDP call, and CDP delivers an event that precedes a
-        // command response before that response — so it is already buffered
-        // when this drain runs, after the action returned. Only a navigation
-        // deferred to a later task (a click handler that calls `location=` from
-        // a timer/await) can arrive after the drain; that is inherently racy
-        // and is the agent's `wait` to resolve, in both modes.
+        // An empty buffer usually means the action started no navigation, and
+        // for most actions that is the whole truth — return now, pay nothing.
+        // But a link click QUEUES its navigation (HTML spec), so its
+        // `frameStartedLoading` can be emitted on a later task, AFTER the bridge
+        // click response, and miss this one-shot drain — the buffered-event
+        // assumption is optimistic, not guaranteed (CDP gives no ordering
+        // barrier between a Page event and the click's Runtime response). The
+        // bridge therefore reports `navigates` for a click it determined will
+        // load a new top-level document; when it does, fall through to the
+        // commit-wait rather than concluding "nothing happened". (A `location=`
+        // from a later timer carries no hint and stays the agent's `wait`.)
         if seq.is_empty() {
-            return immediate;
-        }
-
-        // Something loaded — now learn the main frame id to interpret the
-        // sequence. A start/stop pair only settles the MAIN frame, and replay
-        // IN ORDER (not set membership) is what makes `[priorStop, ourStart]`
-        // resolve to "still loading" instead of short-circuiting on the stale
-        // stop. (Unreadable tree → don't wait.)
-        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
-            return immediate;
-        };
-        let Some(main) = tree
-            .pointer("/frameTree/frame/id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-        else {
-            return immediate;
-        };
-        let mut committed: Option<String> = None;
-        let mut main_loading = false;
-        for e in seq {
-            match e {
-                Ev::Commit(u) => {
-                    committed = Some(u);
-                    main_loading = false;
-                }
-                Ev::Started(id) if id == main => main_loading = true,
-                Ev::Stopped(id) if id == main => main_loading = false,
-                _ => {}
+            if !nav_hint {
+                return immediate;
             }
-        }
-        if let Some(u) = committed {
-            return u;
-        }
-        if !main_loading {
-            return immediate;
+            // A navigation is expected but its first event has not landed yet —
+            // wait for the commit below (bounded by PROBE).
+        } else {
+            // Something loaded — learn the main frame id to interpret the
+            // sequence. A start/stop pair only settles the MAIN frame, and replay
+            // IN ORDER (not set membership) is what makes `[priorStop, ourStart]`
+            // resolve to "still loading" instead of short-circuiting on the stale
+            // stop. (Unreadable tree → don't wait.)
+            let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
+                return immediate;
+            };
+            let Some(main) = tree
+                .pointer("/frameTree/frame/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+            else {
+                return immediate;
+            };
+            let mut committed: Option<String> = None;
+            let mut main_loading = false;
+            for e in seq {
+                match e {
+                    Ev::Commit(u) => {
+                        committed = Some(u);
+                        main_loading = false;
+                    }
+                    Ev::Started(id) if id == main => main_loading = true,
+                    Ev::Stopped(id) if id == main => main_loading = false,
+                    _ => {}
+                }
+            }
+            if let Some(u) = committed {
+                return u;
+            }
+            if !main_loading {
+                return immediate;
+            }
         }
 
         let deadline = tokio::time::Instant::now() + super::PROBE;

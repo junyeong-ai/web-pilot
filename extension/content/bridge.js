@@ -538,6 +538,42 @@
     return r.error ? { error: r.error } : { target: r.el };
   }
 
+  // Whether a click on `el` will queue a top-level document navigation — the
+  // signal the settle logic needs because a link click's navigation is queued
+  // (HTML spec), so its frameStartedLoading can arrive AFTER the click response
+  // and miss a one-shot event drain. Deterministic and derived at click time:
+  // a non-prevented click on a self-targeting `a[href]` whose http(s)/file
+  // destination differs from the current document (a pure fragment change loads
+  // nothing). `notCanceled` is the click event's dispatch result, so a
+  // preventDefault'd SPA link correctly reports no navigation.
+  function clickNavigates(el, notCanceled) {
+    if (!notCanceled) return false;
+    if (window.top !== window) return false; // only a top-frame nav is url_changed
+    const a = el.closest("a[href]");
+    if (!a) return false;
+    const target = (a.target || "").trim().toLowerCase();
+    if (target && target !== "_self" && target !== "_top" && target !== "_parent") {
+      return false; // opens a new context (a popup), not a same-tab url_changed
+    }
+    let dest, cur;
+    try {
+      dest = new URL(a.href, location.href);
+      cur = new URL(location.href);
+    } catch {
+      return false;
+    }
+    if (dest.protocol !== "http:" && dest.protocol !== "https:" && dest.protocol !== "file:") {
+      return false; // javascript:/mailto:/tel:/… never load a document
+    }
+    // A change confined to the fragment is a same-document nav (no load event):
+    // hinting it would burn the settle's whole PROBE waiting for a commit that
+    // never comes.
+    if (dest.origin === cur.origin && dest.pathname === cur.pathname && dest.search === cur.search) {
+      return false;
+    }
+    return true;
+  }
+
   function reliableClick(el) {
     el.scrollIntoView({ block: "center", behavior: "instant" });
     const rect = el.getBoundingClientRect();
@@ -550,7 +586,8 @@
     el.dispatchEvent(new MouseEvent("mousedown", opts));
     el.dispatchEvent(new PointerEvent("pointerup", opts));
     el.dispatchEvent(new MouseEvent("mouseup", opts));
-    el.dispatchEvent(new MouseEvent("click", opts));
+    const notCanceled = el.dispatchEvent(new MouseEvent("click", opts));
+    return clickNavigates(el, notCanceled);
   }
 
   function reliableType(el, text, clear) {
@@ -597,8 +634,9 @@
         case "click": {
           const r = resolveTarget(action);
           if (r.error) return r.error;
-          reliableClick(r.target);
-          return { success: true };
+          // `navigates` tells the settle layer a top-level navigation is coming
+          // even before its (queued) frameStartedLoading is observable.
+          return { success: true, navigates: reliableClick(r.target) };
         }
 
         case "type": {
