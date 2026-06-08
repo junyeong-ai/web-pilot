@@ -83,12 +83,19 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
     }
 
     let dir = dirs::artifacts_dir();
-    // Nanosecond stamp so two `--context` recordings minted in the same
-    // millisecond don't collide on `frame_<ts>_000.png` and overwrite.
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    // pid + nanosecond stamp so two recordings — even concurrent ones in
+    // different processes or `--context`s — can't collide on
+    // `frame_<stamp>_000.png` and overwrite each other (a `SystemTime` stamp's
+    // resolution is coarser than a nanosecond; the pid makes it cross-process
+    // unique, matching `dirs::artifact_path`).
+    let ts = format!(
+        "{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
 
     let mut interval =
         tokio::time::interval(std::time::Duration::from_millis(args.interval as u64));

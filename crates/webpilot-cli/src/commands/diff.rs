@@ -195,14 +195,10 @@ fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
 
     // The diff is an artifact like any other capture output: timestamped under
     // artifacts/, never written into the input's directory under a fixed name
-    // where two diffs would silently clobber each other.
-    let diff_path = webpilot::dirs::artifacts_dir().join(format!(
-        "diff_{}.png",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+    // where two diffs would silently clobber each other. One naming authority
+    // (`dirs::artifact_path`), so the name carries the pid and is unique even
+    // across two concurrent diffs in different processes.
+    let diff_path = webpilot::dirs::artifact_path("diff", "png");
     diff_img
         .save(&diff_path)
         .context("Cannot save diff image")?;

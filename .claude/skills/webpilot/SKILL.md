@@ -249,7 +249,7 @@ Policies are a single local file (`artifacts/policies.json`) read identically in
 ```bash
 webpilot diff before.json after.json                # auto-detects: .json → DOM, .png → pixel
 webpilot diff --dom        a.json b.json
-webpilot diff --screenshot a.png  b.png             # writes diff.png
+webpilot diff --screenshot a.png  b.png             # writes a diff image; its path is in the output
 
 webpilot record --frames 10 --interval 500          # PNG sequence in artifacts dir
 webpilot record --duration 5 --interval 200 --dom   # 5 seconds, fractional allowed (`--duration 0.5`)
