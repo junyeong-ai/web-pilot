@@ -7,13 +7,25 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
-/// Open `path` (creating it and its parent directory) and take an exclusive
-/// advisory `flock`. The lock is held until the returned [`File`] is dropped.
+/// Exclusive (one holder) vs shared (many holders, but excludes any exclusive).
+/// The context store uses both: an exclusive lock serializes context creation,
+/// while a shared lock — held by every live transport — is the liveness signal
+/// the GC probes with a non-blocking *exclusive* attempt (it succeeds only when
+/// no transport holds the shared lock, i.e. the context is truly idle).
+#[derive(Clone, Copy)]
+pub enum FlockMode {
+    Exclusive,
+    Shared,
+}
+
+/// Open `path` (creating it and its parent directory) and take an advisory
+/// `flock` in `mode`. The lock is held until the returned [`File`] is dropped.
 ///
-/// With `nonblocking`, returns `Ok(None)` when another holder already owns the
-/// lock, rather than waiting; a blocking call always returns `Ok(Some(_))` or
-/// an error. Callers that block can therefore `.expect()` the `Some`.
-pub fn flock_exclusive(path: &Path, nonblocking: bool) -> std::io::Result<Option<File>> {
+/// With `nonblocking`, returns `Ok(None)` when an incompatible holder already
+/// owns the lock, rather than waiting; a blocking call always returns
+/// `Ok(Some(_))` or an error. Callers that block can therefore `.expect()` the
+/// `Some`.
+pub fn flock(path: &Path, mode: FlockMode, nonblocking: bool) -> std::io::Result<Option<File>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -23,7 +35,10 @@ pub fn flock_exclusive(path: &Path, nonblocking: bool) -> std::io::Result<Option
         .truncate(false)
         .open(path)?;
 
-    let mut op = libc::LOCK_EX;
+    let mut op = match mode {
+        FlockMode::Exclusive => libc::LOCK_EX,
+        FlockMode::Shared => libc::LOCK_SH,
+    };
     if nonblocking {
         op |= libc::LOCK_NB;
     }
@@ -38,4 +53,14 @@ pub fn flock_exclusive(path: &Path, nonblocking: bool) -> std::io::Result<Option
         return Err(err);
     }
     Ok(Some(file))
+}
+
+/// Take an exclusive advisory `flock` on `path`. See [`flock`].
+pub fn flock_exclusive(path: &Path, nonblocking: bool) -> std::io::Result<Option<File>> {
+    flock(path, FlockMode::Exclusive, nonblocking)
+}
+
+/// Take a shared advisory `flock` on `path`. See [`flock`].
+pub fn flock_shared(path: &Path, nonblocking: bool) -> std::io::Result<Option<File>> {
+    flock(path, FlockMode::Shared, nonblocking)
 }

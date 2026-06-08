@@ -82,13 +82,15 @@ pub struct LocalTransport {
     /// browser-mode service worker, which re-injects on `webNavigation`.
     pub(crate) console_monitoring: Arc<AtomicBool>,
     pub(crate) network_monitoring: Arc<AtomicBool>,
-    /// Exclusive lock on the named context's lock file, held for this
+    /// Shared lock on the named context's liveness file, held for this
     /// transport's whole lifetime (`None` for the default context). It is the
-    /// liveness signal a concurrent `gc_expired_contexts` probes with a
-    /// non-blocking `try_lock`: while this is held the sweep skips the context,
-    /// so a long-lived session (an MCP server reusing one transport past the
-    /// idle TTL) is never disposed out from under itself. Dropped with the
-    /// transport, which frees the context to be reaped once truly idle.
+    /// signal a concurrent `gc_expired_contexts` probes with a non-blocking
+    /// *exclusive* attempt: while any transport holds the shared lock the sweep
+    /// skips the context, so a long-lived session (an MCP server reusing one
+    /// transport past the idle TTL) is never disposed out from under itself.
+    /// Being shared, it never blocks another resolve — only the GC's disposal.
+    /// Dropped with the transport, which frees the context to be reaped once
+    /// truly idle.
     _context_lock: Option<std::fs::File>,
 }
 

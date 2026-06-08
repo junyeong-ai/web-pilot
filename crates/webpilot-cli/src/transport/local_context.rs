@@ -52,23 +52,42 @@ fn lock_store() -> Result<std::fs::File> {
     Ok(guard.expect("a blocking flock returns Some"))
 }
 
-/// The per-context advisory-lock file. Hashed so an arbitrary context name maps
-/// to a fixed, filesystem-safe path.
+/// The per-context serialization-lock file (held only across a resolve). Hashed
+/// so an arbitrary context name maps to a fixed, filesystem-safe path.
 fn context_lock_path(name: &str) -> std::path::PathBuf {
     dirs::contexts_dir().join(format!("ctx-{}.lock", context_hash(name)))
 }
 
-/// Non-blocking exclusive lock on a context. `Some` = acquired (the context is
-/// idle — no other process, and no concurrent resolve, holds it). `None` =
-/// would-block (a process is actively resolving/using it). GC uses this to
-/// never dispose a context that is in use: it holds `lock_store` then probes
-/// each context lock **without waiting**, so the store→name order it takes here
-/// (the reverse of resolve's name→store) cannot deadlock — a non-blocking probe
-/// never waits on a held name lock, it just skips it.
-fn try_lock_context(name: &str) -> Option<std::fs::File> {
+/// The per-context liveness-lock file. Distinct from the serialization lock so
+/// the two never contend: a live transport holds this *shared* for its whole
+/// lifetime, while resolves keep taking the serialization lock briefly and the
+/// GC probes this one exclusively — none of which blocks another resolve.
+fn context_live_path(name: &str) -> std::path::PathBuf {
+    dirs::contexts_dir().join(format!("ctx-{}.live", context_hash(name)))
+}
+
+/// Shared liveness lock on a context, held by a live transport for its entire
+/// lifetime. Shared, so any number of transports can hold it at once without
+/// blocking one another (it is *not* a mutex on the context); it exists purely
+/// so the GC's non-blocking *exclusive* probe fails while any transport is
+/// alive. Blocks only against the GC holding it exclusively mid-disposal — a
+/// brief wait, never another resolve.
+fn lock_context_live(name: &str) -> Result<std::fs::File> {
+    let guard = crate::lockfile::flock_shared(&context_live_path(name), false)
+        .with_context(|| format!("liveness-lock context '{name}'"))?;
+    Ok(guard.expect("a blocking flock returns Some"))
+}
+
+/// Non-blocking exclusive probe of the liveness lock. `Some` = acquired (no live
+/// transport holds the shared lock — the context is idle and can be disposed).
+/// `None` = would-block (at least one transport is alive). GC holds `lock_store`
+/// then probes each context **without waiting**, so the store→name order it
+/// takes here (the reverse of resolve's name→store) cannot deadlock — a
+/// non-blocking probe never waits on a held lock, it just skips it.
+fn try_lock_live(name: &str) -> Option<std::fs::File> {
     // `Err` (a real open/lock failure) and `Ok(None)` (held) both mean "don't
     // touch it" for a best-effort GC probe, so flatten them together.
-    crate::lockfile::flock_exclusive(&context_lock_path(name), true)
+    crate::lockfile::flock_exclusive(&context_live_path(name), true)
         .ok()
         .flatten()
 }
@@ -87,15 +106,13 @@ pub(crate) async fn resolve_context_target(
     browser: &CdpClient,
     name: &str,
 ) -> Result<(String, std::fs::File)> {
-    // Acquired here and handed back to the caller, which holds it for the whole
-    // lifetime of the transport bound to this context — not merely the
-    // resolution. Two things ride on it: concurrent same-name callers can't both
-    // create a context (double-checked: the existing-entry path below re-reads
-    // under the lock), AND it is a true liveness signal — a concurrent
-    // `gc_expired_contexts` `try_lock`s it, fails, and skips a live-but-idle
-    // context instead of disposing it out from under a long-lived session (an
-    // MCP server holds one transport well past the idle TTL).
-    let lock = lock_context(name)?;
+    // The serialization lock is held only for this resolution: concurrent
+    // same-name callers can't both create a context (double-checked: the
+    // existing-entry path below re-reads under the lock). It is dropped on
+    // return — the transport's liveness signal is the *separate* shared lock,
+    // acquired at each success path below, so a second resolve never blocks on a
+    // live transport.
+    let _lock = lock_context(name)?;
 
     let file_path = context_file_path(name);
     let now = now_secs();
@@ -125,7 +142,7 @@ pub(crate) async fn resolve_context_target(
                 entry.target_id = tid.clone();
                 entry.last_used = now;
                 let _ = dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes());
-                return Ok((tid, lock));
+                return Ok((tid, lock_context_live(name)?));
             } else {
                 super::local::clear_context_state(&entry.browser_context_id);
                 let _ = std::fs::remove_file(&file_path);
@@ -164,7 +181,7 @@ pub(crate) async fn resolve_context_target(
     // otherwise it leaks in Chrome with no record left to reach or close it
     // through. Build the rest under a guard that tears the context down on the
     // error path, and forgets it on success.
-    let built = async {
+    let built: Result<String> = async {
         let tid = browser
             .create_target_in_context(&ctx_id, "about:blank")
             .await?;
@@ -190,7 +207,8 @@ pub(crate) async fn resolve_context_target(
     if built.is_err() {
         let _ = browser.dispose_browser_context(&ctx_id).await;
     }
-    built.map(|tid| (tid, lock))
+    let tid = built?;
+    Ok((tid, lock_context_live(name)?))
 }
 
 pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
@@ -220,12 +238,12 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
             // Never dispose a context that is actively in use. `last_used` only
             // bounds *idle* time and is refreshed only at the resolve, so a
             // long-lived transport (an MCP server reusing one transport past the
-            // TTL) would otherwise look abandoned. The transport bound to a
-            // context holds this per-name lock for its whole lifetime, so it is
-            // a true liveness signal: if we can't take it without waiting, the
-            // context is live — skip it this sweep. Held through disposal so a
-            // resolve can't start mid-dispose.
-            let Some(_held) = try_lock_context(&ctx.name) else {
+            // TTL) would otherwise look abandoned. Every live transport holds the
+            // context's *shared* liveness lock for its whole lifetime, so this
+            // non-blocking *exclusive* probe succeeds only when none is alive: if
+            // it fails, the context is live — skip it. Held exclusively through
+            // disposal so a resolve can't bind mid-dispose.
+            let Some(_held) = try_lock_live(&ctx.name) else {
                 continue;
             };
             // Deleting the metadata is only safe once the CDP context is
