@@ -128,6 +128,14 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
                 Some(serde_json::json!({"userAgent": ""})),
             )
             .await?;
+            // Touch is a separate override; clearing the metrics alone would leave
+            // a previously-applied mobile preset's touch emulation on, so a desktop
+            // page after `device reset` would still report `maxTouchPoints > 0`.
+            cdp.send(
+                "Emulation.setTouchEmulationEnabled",
+                Some(serde_json::json!({"enabled": false})),
+            )
+            .await?;
             // Drop the persisted emulation so a later `open` doesn't re-apply it.
             clear_persisted_device(ctx.as_deref());
             Ok(CommandOutput::Ok("Device emulation cleared".into()))

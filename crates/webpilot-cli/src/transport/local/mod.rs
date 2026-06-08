@@ -819,7 +819,8 @@ pub(crate) struct DeviceState {
 }
 
 impl DeviceState {
-    /// Apply this emulation to a page session: metrics always, UA only when set.
+    /// Apply this emulation to a page session: metrics + touch always, UA only
+    /// when set.
     pub(crate) async fn apply(&self, page: &CdpClient) -> Result<()> {
         page.send(
             "Emulation.setDeviceMetricsOverride",
@@ -828,6 +829,18 @@ impl DeviceState {
                 "height": self.height,
                 "deviceScaleFactor": self.scale,
                 "mobile": self.mobile,
+            })),
+        )
+        .await?;
+        // Touch is a separate override from the metrics `mobile` flag: without it
+        // a mobile preset still reports `navigator.maxTouchPoints === 0`, so a
+        // page's touch detection serves the desktop layout. Match touch to the
+        // device — enabled (multi-touch) for mobile, off for desktop.
+        page.send(
+            "Emulation.setTouchEmulationEnabled",
+            Some(json!({
+                "enabled": self.mobile,
+                "maxTouchPoints": 5,
             })),
         )
         .await?;
