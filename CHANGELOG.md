@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-06-08
+
+A deep review of `bridge.js` — the content script shared by both modes and, until
+now, the least-audited critical file — turned up six reachable DOM-extraction and
+action defects. Each affects what an agent sees and where its actions land, in
+headless and browser mode alike. No wire or CLI change.
+
+### Fixed — DOM extraction & actions (both modes)
+
+- **A control under an `opacity:0` ancestor is no longer reported as actionable.**
+  `isVisible` checked only the element's own opacity, but opacity is not inherited
+  — a transparent ancestor (a faded-out modal/dropdown/animation) hides its whole
+  subtree while each child keeps opacity 1. The check now walks the element and
+  its ancestors, across open shadow boundaries, so an invisible control is no
+  longer emitted for the agent to click.
+- **`wait selector` now also fires on an attribute change**, not only on node
+  insertion. A selector that starts matching when an existing element gains a
+  class/attribute (`.active`, `[aria-expanded=true]`) was missed and the wait
+  timed out; the observer now watches `attributes` too.
+- **Every editable host is captured, not only `contenteditable="true"`.** A bare
+  `<div contenteditable>` and `contenteditable="plaintext-only"` are editable but
+  were dropped unless they carried another marker — comment boxes and rich-text
+  editors were invisible to the agent. The allowlist now matches any
+  `[contenteditable]` except an explicit `false`.
+- **Typing into a contenteditable fires `input`/`change`**, so a framework-bound
+  editor (Draft/Slate/ProseMirror, a React `onChange`) sees the edit instead of
+  going out of sync with the visible text.
+- **Snapshot indices follow document (reading) order**, not the order the three
+  collection passes ran. A clickable `<div onclick>` above a `<button>` was
+  indexed after it, breaking the agent's top-to-bottom spatial reasoning; the
+  deduped candidate set is now sorted by `compareDocumentPosition` before
+  indexing, and `state.snapshot` is reordered to match.
+- **`aria-labelledby` resolves within the element's shadow root**, not only the
+  document. A control inside a shadow root is labelled by a node in that same
+  root, where a document lookup returns null — the accessible name came back empty
+  and `find --label` couldn't match the component.
+
+### Documentation
+
+- Four stale code references in the rule docs are corrected to match the source:
+  `isVisible`'s real bare-`checkVisibility` predicate (not the option-dictionary
+  form), the `keyDescriptor`/`key_descriptor` key map (was `keyToCode`), the
+  `close_contexts` single-context dispose (was `quit_named_context`), and the
+  dropped `webpilot::OUTPUT_DIR` constant. A sweep confirms no doc references a
+  function absent from the code.
+
 ## [0.4.4] - 2026-06-08
 
 Completes the 0.4.3 hardening across the pure-local commands a transport-scoped
