@@ -35,12 +35,20 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
     // Toggle the domain so existing contexts re-announce into our listener.
     await cdpSend(tid, "Runtime.disable", {});
     await cdpSend(tid, "Runtime.enable", {});
-    await chrome.scripting.executeScript({
-      target: { tabId, frameIds: [frameId] },
-      world,
-      func: (k, n) => { window[k] = n; },
-      args: [key, nonce],
-    });
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        world,
+        func: (k, n) => { window[k] = n; },
+        args: [key, nonce],
+      });
+    } catch {
+      // The frame was removed (or its world is unreachable) before we could
+      // stamp it — surface as FrameNotFound (null → handleEval), matching the
+      // headless boundary, rather than letting the raw scripting error escape
+      // as a generic Other/exit 1.
+      return null;
+    }
     const deadline = Date.now() + PROBE_MS;
     const probed = new Set();
     while (Date.now() < deadline) {
