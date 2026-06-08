@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.28] - 2026-06-09
+
+### Fixed
+
+- **`console read`/`network read` flag a truncated buffer.** The MAIN-world monitor
+  buffers cap at 500 and silently evict the oldest, so a read after 500+ events
+  looked complete — a startup error before entry 501 read as a confident "no
+  error". A `truncated` flag (conservatively true when the buffer is at capacity)
+  now rides in both the JSON and the human/MCP text, so neither surface mistakes an
+  incomplete buffer for the whole story — matching the existing shadow-DOM-clip
+  warning pattern.
+
 ## [0.4.27] - 2026-06-08
 
 ### Fixed
