@@ -2,7 +2,7 @@
 // // Mirrors transport/local/capture.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
-import { activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
+import { activeFrameId, annotationPaintMs, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
 import { waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
@@ -166,7 +166,7 @@ async function handleCapture(command) {
       if (annotations.length > 0) {
         await ensureBridge(tabId, 0);
         await sendToContent(tabId, { type: "addAnnotations", elements: annotations }, 0);
-        await sleep(300);
+        await sleep(annotationPaintMs());
       }
     } catch (e) {
       return topErr(exceptionErr(e));

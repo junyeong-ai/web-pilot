@@ -67,15 +67,27 @@ function sleep(ms) {
 // behaviour before the first Config (or under an untuned install) is
 // unchanged; only an operator-tuned value diverges, and then both modes move
 // together. Unknown fields are ignored for forward compatibility.
-const hostConfig = { navigationTimeoutMs: 15000 };
+// Defaults match the headless settings defaults; the host overwrites them on
+// connect (and after an SW restart) with the operator's resolved settings, so a
+// single source of truth tunes both modes.
+const hostConfig = { navigationTimeoutMs: 15000, annotationPaintMs: 200 };
 
 function applyHostConfig(cfg) {
   const nav = cfg?.timeouts?.navigation_ms;
   if (Number.isFinite(nav) && nav > 0) hostConfig.navigationTimeoutMs = nav;
+  const paint = cfg?.timeouts?.annotation_paint_ms;
+  if (Number.isFinite(paint) && paint >= 0) hostConfig.annotationPaintMs = paint;
 }
 
 function navigationTimeoutMs() {
   return hostConfig.navigationTimeoutMs;
+}
+
+// Time to let the annotation overlay paint before the screenshot — the same
+// settings value headless uses (`timeouts.annotation_paint`), so the two modes
+// can never drift on a hardcoded magic number.
+function annotationPaintMs() {
+  return hostConfig.annotationPaintMs;
 }
 
 // Bounded window for an async browser event to be observed — a document to
@@ -111,4 +123,4 @@ async function resolveActiveTab() {
   return focused;
 }
 
-export { PROBE_MS, RESTORED, activeFrameId, activeTabId, applyHostConfig, monitoringState, navigationTimeoutMs, pruneTabMonitoring, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };
+export { PROBE_MS, RESTORED, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, monitoringState, navigationTimeoutMs, pruneTabMonitoring, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };

@@ -183,6 +183,8 @@ fn process_nm_message(
                 "timeouts": {
                     "navigation_ms":
                         webpilot::settings::timeouts().navigation.as_millis() as u64,
+                    "annotation_paint_ms":
+                        webpilot::settings::timeouts().annotation_paint.as_millis() as u64,
                 },
             },
         });
