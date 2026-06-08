@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.40] - 2026-06-09
+
+### Fixed
+
+- **`session import` fails `NoPage` when Web Storage can't be applied, matching
+  export.** The export-side guard had no import sibling: with no active http page
+  (e.g. a chrome:// pin), import silently skipped the file's local/sessionStorage
+  yet reported success. Import now refuses up front when the file carries storage
+  but no page is active, instead of dropping it quietly.
+
 ## [0.4.39] - 2026-06-09
 
 ### Fixed
