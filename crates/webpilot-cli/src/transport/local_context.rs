@@ -109,10 +109,15 @@ pub(crate) async fn resolve_context_target(
     // The serialization lock is held only for this resolution: concurrent
     // same-name callers can't both create a context (double-checked: the
     // existing-entry path below re-reads under the lock). It is dropped on
-    // return — the transport's liveness signal is the *separate* shared lock,
-    // acquired at each success path below, so a second resolve never blocks on a
-    // live transport.
+    // return — the transport's liveness signal is the *separate* shared lock.
     let _lock = lock_context(name)?;
+    // The shared liveness lock, taken now and handed to the caller for the whole
+    // transport lifetime. Held from here so a concurrent GC cannot dispose this
+    // context anywhere in the resolve — closing even the read-to-refresh window.
+    // Shared, so it never blocks another resolve; the GC's non-blocking
+    // exclusive probe simply fails while we hold it. Dropped (released) if this
+    // resolve errors before a transport is built.
+    let live_lock = lock_context_live(name)?;
 
     let file_path = context_file_path(name);
     let now = now_secs();
@@ -142,7 +147,7 @@ pub(crate) async fn resolve_context_target(
                 entry.target_id = tid.clone();
                 entry.last_used = now;
                 let _ = dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes());
-                return Ok((tid, lock_context_live(name)?));
+                return Ok((tid, live_lock));
             } else {
                 super::local::clear_context_state(&entry.browser_context_id);
                 let _ = std::fs::remove_file(&file_path);
@@ -208,7 +213,7 @@ pub(crate) async fn resolve_context_target(
         let _ = browser.dispose_browser_context(&ctx_id).await;
     }
     let tid = built?;
-    Ok((tid, lock_context_live(name)?))
+    Ok((tid, live_lock))
 }
 
 pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
