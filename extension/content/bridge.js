@@ -679,6 +679,16 @@
     return false;
   }
 
+  // The genuinely-focused element, descending through open shadow roots:
+  // `document.activeElement` only ever names the outermost shadow HOST, so a
+  // focused element INSIDE a shadow root is invisible to it. Walk the chain so a
+  // focus check can recognise a shadow-hosted control as focused.
+  function deepActiveElement() {
+    let el = document.activeElement;
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    return el;
+  }
+
   function executeAction(action) {
     try {
       switch (action.kind) {
@@ -767,12 +777,13 @@
           if (r.error) return r.error;
           r.target.focus();
           // `focus()` on a non-focusable element (a static div/span with no
-          // tabindex) is a silent no-op. Verify focus actually landed — on the
-          // element, or on a descendant for a delegating/shadow host (where
-          // `document.activeElement` is the host) — rather than report a focus
-          // that didn't happen and send the next key-press somewhere else.
-          const active = document.activeElement;
-          if (active !== r.target && !r.target.contains(active)) {
+          // tabindex) is a silent no-op. Verify focus actually landed before
+          // reporting success, accepting both shapes: the target IS the focused
+          // element (`document.activeElement`, which for a delegatesFocus host is
+          // the host itself), OR the target is a control inside a shadow root that
+          // took focus (where `document.activeElement` only names the host, so we
+          // descend the shadow-active chain to find it).
+          if (r.target !== document.activeElement && r.target !== deepActiveElement()) {
             return err(
               "InvalidArgument",
               `<${r.target.tagName.toLowerCase()}> took no focus — it is not a form control and has no tabindex`,
