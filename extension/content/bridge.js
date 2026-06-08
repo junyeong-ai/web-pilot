@@ -307,7 +307,12 @@
       return clip(el.labels[0].textContent.trim(), 80) || null;
     }
     if (el.id) {
-      const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      // A `label[for]` IDREF is tree-scoped, so a control inside a shadow root
+      // pairs with a label in that SAME root — query the element's root, not
+      // `document` (which would miss it), mirroring aria-labelledby/describedby.
+      // `el.labels` already covers standard labelable controls; this reaches a
+      // custom labelable element a shadow root can hold.
+      const label = el.getRootNode().querySelector(`label[for="${CSS.escape(el.id)}"]`);
       if (label) return clip(label.textContent.trim(), 80) || null;
     }
     const parent = el.closest("label");
