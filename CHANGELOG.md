@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.11] - 2026-06-08
+
+A design-quality pass: a side-effect-prone heuristic removed, monitor re-arm
+brought to parity and given a single responsibility, and the last text/AX capture
+parities closed.
+
+### Fixed
+
+- **`frame switch NAME` matches the frame name only — no silent fallback.** It
+  used to fall back to matching `NAME` as a URL substring, so a misspelled or
+  absent name quietly entered an unrelated iframe whose URL happened to contain
+  the string. `name` and `url` are now disjoint: a name with no exact match
+  returns a typed `FrameNotFound`, and URL matching is `frame url PATTERN`.
+- **Browser monitors re-arm the moment a navigation settles**, matching headless,
+  instead of only at the `load`-time `webNavigation.onCompleted`. A `fetch` or
+  `console` the new page emitted after DOMContentLoaded but before a slow `load`
+  was previously lost from the buffer.
+- **`capture --include text` of a text-empty page returns the empty string** (with
+  a snapshot shell), as headless does, instead of dropping the result; and a
+  text/AX-only snapshot shell now carries the resolved page URL/title.
+
+### Changed
+
+- `rearmMonitors` is now a single-responsibility helper (re-arm the MAIN-world
+  console/network hooks, a no-op when the tab is unmonitored); the bridge
+  re-inject a bfcache restore needs is its own explicit step in the navigation
+  listener, no longer entangled with monitor re-arm.
+
 ## [0.4.10] - 2026-06-08
 
 Completes the capture browser↔headless parity sweep the 0.4.9 annotate fix
