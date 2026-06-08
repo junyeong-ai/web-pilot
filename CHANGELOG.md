@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.30] - 2026-06-09
+
+### Fixed
+
+- **`find --click`/`--fill` surfaces the navigation or popup it caused.** The
+  chained action's `url_changed`/`new_tab` were discarded, so the `find --click`
+  shortcut on a link that navigates or opens a tab told the agent nothing changed —
+  while a direct `action click` reports both. `find` now appends them to the JSON
+  and human output, exactly like `action`.
+- **`webpilot --browser status` gives a specific connection diagnosis again.** It
+  went through a transport that flattened every `IpcError` into `ConnectionLost`,
+  so the diagnostic's `downcast` to `IpcError` could never match and every failure
+  read as a generic "Status query failed". It now keeps the typed error: with no
+  host the agent gets "Host not running" plus the `setup nm-host` / manifest hint.
+
 ## [0.4.29] - 2026-06-09
 
 ### Fixed
