@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-06-08
+
+A deep concurrency, lifecycle, isolation, and headless↔browser parity hardening
+pass. No behaviour change for a cooperative page and a correctly-configured
+agent — these close edge cases an adversarial page or a multi-agent / long-lived
+session could hit.
+
+### Security
+
+- **Agent-view newline injection is closed everywhere.** Completing the
+  line-safety rule: `status` (tab title/url), the action result (`url_changed`
+  and the click-opened `new_tab` url), `frame switch`, `tab new`, and `find` now
+  collapse control characters in page/server-controlled strings, so none can
+  embed a newline and forge an agent-visible line. `--json` stays exact.
+
+### Fixed — headless concurrency & lifecycle
+
+- The context GC no longer disposes a context that a live session is still using.
+  A live transport holds a *shared* liveness lock for its lifetime; the GC probes
+  it with a non-blocking exclusive attempt and skips while any session is alive —
+  with no resolve hang, deadlock, or read-to-dispose race (serialization and
+  liveness are now separate locks).
+- A `--context` resolve returns the browser-context id it resolved directly,
+  instead of re-reading metadata that could `.ok()`-degrade and bind a page
+  *outside* the requested context.
+- `context list` / `context close` no longer auto-create the `--context` they
+  were invoked with (and `close` stays reachable at the context cap).
+- Artifact filenames (screenshot/pdf/accessibility/session) carry the pid, so
+  two agents capturing at once can't mint the same name and overwrite — one
+  `dirs::artifact_path` authority.
+
+### Fixed — stale frame contexts (both modes)
+
+- A MAIN-world eval through an active frame whose context was just destroyed by a
+  navigation retries once against the fresh context, mirroring the bridge path —
+  covering `frame switch` into a since-navigated frame, frame self-navigation,
+  and `frame find`.
+- `frame find` settles and re-observes candidate contexts before judging them, so
+  a frame whose context lags a navigation is evaluated, not skipped.
+- A switched frame that was removed surfaces as `FrameNotFound` in browser mode
+  too, not a generic error.
+
+### Fixed — headless ↔ browser parity
+
+- `--capture` is honoured after every headless action — navigate, back, forward,
+  reload, drag, hover, upload — not only the bridge-routed ones, matching browser
+  mode's auto-capture.
+- `frame switch` targets only HTTP(S) subframes in both modes (the set the
+  subframe count surfaces).
+- A malformed tab id is a typed `TabNotFound` in browser mode, never a lenient
+  `parseInt` that closes the wrong tab.
+- A zero `wait` timeout stays nonblocking in browser mode (`??`, not `||`).
+
 ## [0.4.2] - 2026-06-08
 
 Security and robustness hardening from a deep multi-round adversarial review. No
