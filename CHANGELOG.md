@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.33] - 2026-06-09
+
+### Fixed
+
+- **Browser `console read` coerces a non-numeric timestamp to 0, matching
+  headless.** The sanitizer validated `level`/`message` but forwarded `timestamp`
+  as-is, so a page-injected numeric-string timestamp reached the CLI as a string
+  that wouldn't deserialize — a tampered entry became a malformed-reply error
+  rather than clean output. It now coerces like headless's `as_u64().unwrap_or(0)`,
+  keeping the entry; the two modes stay identical.
+
 ## [0.4.32] - 2026-06-09
 
 ### Fixed
