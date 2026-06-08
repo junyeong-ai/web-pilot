@@ -237,7 +237,16 @@ impl LocalTransport {
             collect_frame_records(t, &mut all);
         }
 
-        let candidates: Vec<&FrameRecord> = all.iter().filter(|f| !f.is_main).collect();
+        // Only HTTP(S) subframes are switch targets — the same scheme filter
+        // browser mode applies and the same one `count_http_subframes` uses to
+        // surface "N iframe(s) not shown". So the set an agent can switch into
+        // matches the set it is told about, and headless and browser agree:
+        // a named `about:blank` / `srcdoc` / `data:` / `file:` iframe is not a
+        // frame-switch target in either mode.
+        let candidates: Vec<&FrameRecord> = all
+            .iter()
+            .filter(|f| !f.is_main && f.url.starts_with("http"))
+            .collect();
 
         let matched: Option<&FrameRecord> = match &selector {
             FrameSelector::Main => unreachable!("handled above"),
