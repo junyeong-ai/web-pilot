@@ -199,6 +199,18 @@
       if (wrapsCollected) continue;
       add(el);
     }
+    // Indices must follow document (reading) order, not the order the three
+    // passes ran — semantic, then markers, then cursor:pointer. Otherwise a
+    // `<div onclick>` sitting ABOVE a `<button>` would be indexed AFTER it, so
+    // the agent's `[N]` no longer tracks top-to-bottom layout.
+    // `compareDocumentPosition` orders light-DOM nodes exactly and cross-tree
+    // (shadow) nodes consistently.
+    all.sort((a, b) => {
+      const pos = a.compareDocumentPosition(b);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
     return { all, shadowTruncated: budget.truncated };
   }
 
