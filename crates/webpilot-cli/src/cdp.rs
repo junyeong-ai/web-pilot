@@ -18,6 +18,22 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use webpilot::WebPilotError;
 
+/// CDP reported that the execution context a request targeted no longer exists
+/// — a renderer swapped the document out from under a `uniqueContextId` we still
+/// held. A typed marker (not a message string) so the caller can recognise the
+/// renderer-swap race and re-resolve the context, distinct from any other
+/// `-32000` server error or a JS exception.
+#[derive(Debug)]
+pub struct ContextGone;
+
+impl std::fmt::Display for ContextGone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("execution context no longer exists")
+    }
+}
+
+impl std::error::Error for ContextGone {}
+
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWriter = futures_util::stream::SplitSink<WsStream, Message>;
 
@@ -287,15 +303,22 @@ impl CdpClient {
             // InvalidArgument (exit 7) instead of a generic "CDP error" Other
             // (exit 1) that buries what the caller actually needs to fix.
             // Other codes are protocol/internal faults and stay Other.
-            if error.get("code").and_then(serde_json::Value::as_i64) == Some(-32602) {
-                let detail = error
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("invalid parameters");
+            let code = error.get("code").and_then(serde_json::Value::as_i64);
+            let message = error.get("message").and_then(|m| m.as_str());
+            if code == Some(-32602) {
                 return Err(WebPilotError::InvalidArgument {
-                    detail: detail.to_string(),
+                    detail: message.unwrap_or("invalid parameters").to_string(),
                 }
                 .into());
+            }
+            // A destroyed execution context: CDP's `-32000` plus this exact
+            // message (its stable protocol wording). Surface it as the typed
+            // `ContextGone` so the renderer-swap race is matched by type, never
+            // by re-parsing a stringified error downstream.
+            if code == Some(-32000)
+                && message.is_some_and(|m| m.contains("Cannot find context with specified id"))
+            {
+                return Err(ContextGone.into());
             }
             anyhow::bail!("CDP error: {error}");
         }

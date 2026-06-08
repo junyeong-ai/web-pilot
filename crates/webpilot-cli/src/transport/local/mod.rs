@@ -542,12 +542,12 @@ impl LocalTransport {
     }
 }
 
-/// Whether an error is CDP's "context destroyed" signal — the renderer swapped
-/// the document out from under a `uniqueContextId` the caller still held. Keyed
-/// on the CDP protocol's own wording (its stable contract, the same string
-/// Puppeteer and Playwright retry on), never on a WebPilot error message.
+/// Whether an error is the typed [`crate::cdp::ContextGone`] — the renderer
+/// swapped the document out from under a `uniqueContextId` the caller still
+/// held. Matched by type (the CDP layer interprets the raw protocol error once),
+/// never by re-parsing an error string here.
 fn is_stale_context(err: &anyhow::Error) -> bool {
-    format!("{err:#}").contains("Cannot find context with specified id")
+    err.downcast_ref::<crate::cdp::ContextGone>().is_some()
 }
 
 /// Per-probe time box: a context busy with an in-flight renderer swap can stall
