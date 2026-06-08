@@ -48,11 +48,11 @@ Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`
 
 ## Context isolation
 - `LocalTransport::open(Some("agent-1"))` resolves a named CDP browser context, creating one if absent. Per-user state under `dirs::contexts_dir()`.
-- `quit_named_context()` disposes a single context; `quit_session()` terminates Chrome (all contexts).
+- `context close NAME` (the `close_contexts` handler) disposes a single named context — or every one with `--all`; `quit_session()` terminates Chrome itself (all contexts at once).
 - `ensure_session()` uses `libc::flock` to serialize concurrent Chrome launches.
 
 ## Paths
-- All persistent state under `webpilot::dirs::root()` (per-user, mode 0700). Subdirs: `runtime/`, `contexts/`, `artifacts/`, `chrome-profile/`. **Never** use `/tmp/...` or `webpilot::OUTPUT_DIR` constants.
+- All persistent state under `webpilot::dirs::root()` (per-user, mode 0700). Subdirs: `runtime/`, `contexts/`, `artifacts/`, `chrome-profile/`. **Never** hard-code a `/tmp/...` path — always resolve through `webpilot::dirs`.
 
 ## Bridge calls
 - `self.invoke_bridge(&Value)` (a `LocalTransport` method) — pass a `Value`, not a string. It targets the bridge's isolated-world context, not the page.
