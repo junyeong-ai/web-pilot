@@ -458,10 +458,15 @@ if (!window.__webpilot_network_active) {
         return origFetch.apply(this, args).then(response => {
             entry.status = response.status;
             entry.duration_ms = Math.round(performance.now() - t0);
+            // Re-stamp at completion so `--since` polling, which filters on
+            // timestamp, sees the resolved entry; the in-flight start time would
+            // sit before a cursor taken after the request began.
+            entry.timestamp = Date.now();
             return response;
         }).catch(err => {
             entry.error = err.message;
             entry.duration_ms = Math.round(performance.now() - t0);
+            entry.timestamp = Date.now();
             throw err;
         });
     };
@@ -484,6 +489,7 @@ if (!window.__webpilot_network_active) {
             entry.status = this.status || undefined;
             entry.error = this.status === 0 ? "Network error" : undefined;
             entry.duration_ms = Math.round(performance.now() - t0);
+            entry.timestamp = Date.now();
         }, { once: true });
         return origSend.apply(this, a);
     };
