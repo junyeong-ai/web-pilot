@@ -162,14 +162,26 @@ impl LocalTransport {
                 // that DOM extraction would have used. Without this, a
                 // text-only or screenshot-only capture in an iframe context
                 // would silently surface the main-page URL.
-                let title = self
-                    .eval_in_active("document.title")
-                    .await
+                let url = self.eval_in_active("location.href").await;
+                // A scoped (non-main) frame whose metadata read fails has been
+                // removed — surface FrameNotFound, not a stale-looking success
+                // with empty URL/title. The DOM path already errors on a dead
+                // frame; this brings screenshot/PDF/AX-only captures to parity
+                // (and matches the browser capture's up-front frame check).
+                if url.is_err()
+                    && let Some(fid) = self.active_frame_id.lock().await.clone()
+                {
+                    return Err(WebPilotError::FrameNotFound {
+                        selector: format!("frame {fid}"),
+                    }
+                    .into());
+                }
+                let u = url
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_string))
                     .unwrap_or_default();
-                let u = self
-                    .eval_in_active("location.href")
+                let title = self
+                    .eval_in_active("document.title")
                     .await
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_string))

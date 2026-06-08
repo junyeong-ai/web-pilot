@@ -70,6 +70,19 @@ async function handleCapture(command) {
     page_title: "",
   };
 
+  // A scoped capture in ANY mode whose target frame has since been removed is a
+  // FrameNotFound, not a stale-context success — validate up front, before DOM /
+  // screenshot / PDF / AX alike. Only the DOM pass used to check, so a
+  // screenshot/PDF/AX of a since-removed iframe returned a stale main-frame
+  // result with no sign the scope was dead.
+  if (activeFrameId !== 0) {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
+    if (!frames.some((f) => f.frameId === activeFrameId && f.url?.startsWith("http"))) {
+      const sel = `frame ${activeFrameId}`;
+      return topErr(err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel }));
+    }
+  }
+
   // DOM extraction — scoped to the active frame (main by default), exactly
   // like the headless transport. Indices the agent sees resolve against the
   // same frame's bridge snapshot at action time, so every shown index is
@@ -80,18 +93,6 @@ async function handleCapture(command) {
   // headless `want_dom = want(Dom) || opts.annotate`.
   if (include.has("dom") || opts.annotate) {
     try {
-      const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => [{ frameId: 0 }]);
-
-      // A scoped capture whose target frame has since gone is a not-found
-      // error, not an empty success — mirror the headless FrameNotFound.
-      if (
-        activeFrameId !== 0 &&
-        !frames.some((f) => f.frameId === activeFrameId && f.url?.startsWith("http"))
-      ) {
-        const sel = `frame ${activeFrameId}`;
-        return topErr(err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel }));
-      }
-
       await ensureBridge(tabId, activeFrameId);
       const dom = await sendToContent(
         tabId,
