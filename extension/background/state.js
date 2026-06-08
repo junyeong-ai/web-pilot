@@ -382,6 +382,16 @@ async function handleSessionImport(rawData) {
     }
     const cookies = data.cookies || [];
     const cookiesTotal = cookies.length;
+    // Web Storage import needs an http page to run in. If the file carries
+    // storage but no such page is active (e.g. a chrome:// pin), fail up front —
+    // don't import the cookies and then silently drop the storage. The NoPage
+    // sibling of session export's own guard.
+    const hasStorage = Object.keys(data.local_storage || {}).length > 0
+      || Object.keys(data.session_storage || {}).length > 0;
+    const tab = await resolveActiveTab();
+    if (hasStorage && !tab) {
+      return { type: "SessionResult", success: false, error: noPageErr() };
+    }
     let cookiesFailed = 0;
     let cookiesMalformed = 0;
     for (const c of cookies) {
@@ -414,8 +424,7 @@ async function handleSessionImport(rawData) {
         cookiesFailed++;
       }
     }
-    const tab = await resolveActiveTab();
-    if (tab && (data.local_storage || data.session_storage)) {
+    if (tab && hasStorage) {
       // A storage import failure is propagated, not swallowed (headless
       // parity): the caller asked to restore it and must know it didn't.
       await ensureBridge(tab.id, activeFrameId);
