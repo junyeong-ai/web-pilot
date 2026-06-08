@@ -660,6 +660,25 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
+  // `<input>` types that hold user-typed text. Excludes the toggles/pickers
+  // (checkbox/radio/color/range), buttons (button/submit/reset/image), and
+  // file/hidden — typing into those just stamps a meaningless expando `.value`.
+  const TEXT_INPUT_TYPES = new Set([
+    "text", "search", "email", "url", "tel", "password", "number",
+    "date", "time", "datetime-local", "month", "week",
+  ]);
+
+  // Whether `action type` can meaningfully enter text here: a contenteditable, a
+  // textarea, or a text-admitting input. Anything else (a link, button, div,
+  // checkbox, select) would silently no-op while reporting success, so the caller
+  // rejects it instead.
+  function isTextEditable(el) {
+    if (el.isContentEditable) return true;
+    if (el.tagName === "TEXTAREA") return true;
+    if (el.tagName === "INPUT") return TEXT_INPUT_TYPES.has((el.type || "text").toLowerCase());
+    return false;
+  }
+
   function executeAction(action) {
     try {
       switch (action.kind) {
@@ -674,6 +693,14 @@
         case "type": {
           const r = resolveTarget(action);
           if (r.error) return r.error;
+          if (!isTextEditable(r.target)) {
+            return err(
+              "InvalidArgument",
+              `Cannot type into <${r.target.tagName.toLowerCase()}${
+                r.target.tagName === "INPUT" ? ` type=${r.target.type}` : ""
+              }>: not a text field — use action click for buttons/links, action select for dropdowns`,
+            );
+          }
           reliableType(r.target, action.text, action.clear);
           return { success: true };
         }
