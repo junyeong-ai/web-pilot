@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-06-08
+
+Completes the 0.4.3 hardening across the pure-local commands a transport-scoped
+sweep had under-covered, found by re-auditing each class across the whole
+codebase and by a full live exercise of every tool in both modes.
+
+### Fixed
+
+- `diff --screenshot`, `record`, and `profile` wrote their artifacts with
+  pid-less, collision-prone names — the three artifact writers outside the 0.4.3
+  consolidation (they are pure-local / headless-only, not transport handlers).
+  All three now flow through the single `dirs::artifact_path` authority, so every
+  artifact name carries the pid and two concurrent processes can't overwrite each
+  other. (An exhaustive every-write audit confirms no writer is left outside it.)
+- `record --dom` matched only a present DOM snapshot and silently dropped any
+  frame that produced none, reporting success with a `dom_files` list shorter than
+  the frame count. A frame with no DOM is now a hard error.
+
+### Documentation
+
+- The skill's `diff --screenshot` note no longer claims a fixed `diff.png`; it
+  writes a timestamped image whose path is in the output (which the skill already
+  teaches agents to trust over a guessed filename).
+
 ## [0.4.3] - 2026-06-08
 
 A deep concurrency, lifecycle, isolation, and headless↔browser parity hardening
