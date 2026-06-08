@@ -105,7 +105,7 @@ fn now_secs() -> u64 {
 pub(crate) async fn resolve_context_target(
     browser: &CdpClient,
     name: &str,
-) -> Result<(String, std::fs::File)> {
+) -> Result<(String, String, std::fs::File)> {
     // The serialization lock is held only for this resolution: concurrent
     // same-name callers can't both create a context (double-checked: the
     // existing-entry path below re-reads under the lock). It is dropped on
@@ -147,7 +147,7 @@ pub(crate) async fn resolve_context_target(
                 entry.target_id = tid.clone();
                 entry.last_used = now;
                 let _ = dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes());
-                return Ok((tid, live_lock));
+                return Ok((tid, entry.browser_context_id, live_lock));
             } else {
                 super::local::clear_context_state(&entry.browser_context_id);
                 let _ = std::fs::remove_file(&file_path);
@@ -213,7 +213,7 @@ pub(crate) async fn resolve_context_target(
         let _ = browser.dispose_browser_context(&ctx_id).await;
     }
     let tid = built?;
-    Ok((tid, live_lock))
+    Ok((tid, ctx_id, live_lock))
 }
 
 pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {

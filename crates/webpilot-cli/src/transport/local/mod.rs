@@ -866,20 +866,20 @@ async fn resolve_target(
         // user-issued `tab switch` may have moved the active tab to a
         // sibling page within the same browser context. Honour the
         // persisted active_tab first when it points to a still-live page.
-        let (initial, context_lock) =
+        // `resolve_context_target` already holds the live lock and knows the
+        // browser context it resolved or created, so take its id directly. A
+        // re-read of the metadata file here could fail (a torn read, a parse
+        // slip) and silently degrade to `None`, which would unlock the
+        // any-page fallback in `pick_active_target` and break context isolation.
+        let (initial, browser_context_id, context_lock) =
             local_context::resolve_context_target(browser, ctx_name).await?;
-        let file_path = local_context::context_file_path(ctx_name);
-        let browser_context_id = std::fs::read_to_string(&file_path)
-            .ok()
-            .and_then(|data| serde_json::from_str::<local_context::ContextEntry>(&data).ok())
-            .map(|e| e.browser_context_id);
 
-        let target_id = pick_active_target(browser, browser_context_id.as_deref(), Some(&initial))
+        let target_id = pick_active_target(browser, Some(&browser_context_id), Some(&initial))
             .await
             .unwrap_or(initial);
 
         let cdp = connect_to_page(ws_url, &target_id).await?;
-        Ok((cdp, browser_context_id, target_id, Some(context_lock)))
+        Ok((cdp, Some(browser_context_id), target_id, Some(context_lock)))
     } else {
         let target_id = pick_active_target(browser, None, None)
             .await
