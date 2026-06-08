@@ -251,8 +251,13 @@ async function handleDomGet(command) {
     const r = await sendToContent(tab.id, msg, activeFrameId);
     return {
       type: "CommandResult",
+      // `?? null`, not `|| null`: a DOM value can legitimately be the empty
+      // string — `getText` on an empty element, `getAttr` on a present-but-empty
+      // attribute (`disabled=""`) — and `""` must survive distinct from `null`
+      // (the attribute being absent). `||` would collapse both to `null`, losing
+      // the present-empty case and diverging from headless, which keeps `""`.
       success: r.success,
-      value: r.value || null,
+      value: r.value ?? null,
       error: r.error || null,
     };
   } catch (e) {
