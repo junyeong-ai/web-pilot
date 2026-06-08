@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2026-06-08
+
+A final convergence sweep across the wire types, command handlers, and a repo-wide
+falsy-collapse class sweep. Several small agent-facing correctness fixes; no
+behaviour change for the common path.
+
+### Fixed
+
+- **`status` keeps an empty tab title as `""`** in browser mode (a page with no
+  `<title>`), instead of collapsing it to `null` via `||` — matching headless,
+  which maps `document.title` straight through.
+- **A custom-select option with `data-value=""` reports its real empty value**,
+  not the visible text. `getAttribute("data-value") || clip(text)` discarded the
+  empty string; now `?? clip(text)`, so `action select` targets the right option.
+- **`action select` on a missing option lists the valid values in the error
+  message.** They were carried only in a structured field the Rust
+  `InvalidArgument` variant drops before JSON/MCP; the message is now
+  self-contained, so the retry guidance survives every surface.
+- **The DOM iframe footer points to `webpilot frame url <pattern>`**, the entry
+  path that resolves against the URL-listed subframes, rather than `frame switch`,
+  which matches a frame `name` an iframe usually lacks.
+
 ## [0.4.7] - 2026-06-08
 
 A convergence sweep of the last under-audited surfaces — cookie/session state and
