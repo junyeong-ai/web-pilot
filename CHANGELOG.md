@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.44] - 2026-06-09
+
+### Fixed
+
+- **A subframe's load-stop no longer ends the post-click navigation wait early.**
+  After a link click, the live wait returned on any `frameStoppedLoading`, so a
+  cross-origin iframe reloading on its own could end the wait before the main-frame
+  commit — `--capture` then snapshotted the pre-click page and the agent saw a
+  success at the old URL. The wait now ignores subframe start/stop, like its
+  buffered-replay path already did.
+- **key_press of an emoji works in both modes.** Headless accepted a single code
+  point; the browser used the UTF-16 length and rejected an astral character as
+  InvalidArgument. The browser now counts code points, so both modes agree.
+- **capture `annotate` + `full_page` is rejected in both modes.** Headless refused
+  the pair (annotations are viewport-only); the browser had no guard. It now
+  rejects it with the same message.
+
 ## [0.4.43] - 2026-06-09
 
 ### Fixed
