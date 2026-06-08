@@ -221,7 +221,11 @@ async function handleConsoleRead(since) {
             .map((e) => ({
               level: e.level,
               message: typeof e.message === "string" ? e.message : "",
-              timestamp: e.timestamp,
+              // Coerce a non-numeric timestamp to 0 rather than forward a string
+              // the CLI can't deserialize into `u64` — headless does the same via
+              // `as_u64().unwrap_or(0)`, so a tampered entry yields 0, not a
+              // malformed-reply error.
+              timestamp: typeof e.timestamp === "number" ? e.timestamp : 0,
             })),
           truncated: all.length >= cap,
         };
