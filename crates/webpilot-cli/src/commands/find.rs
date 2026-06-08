@@ -109,12 +109,13 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
         })
         .collect();
     let summary = format!("({} matches)", matches.len());
-    let items = serde_json::json!({"matches": matches, "count": matches.len()});
+    let mut items = serde_json::json!({"matches": matches, "count": matches.len()});
+    let mut human_lines = human_lines;
 
     let first_index = matches[0].index;
 
-    if args.click {
-        chain_action(transport, Action::Click { index: first_index }).await?;
+    let effect = if args.click {
+        chain_action(transport, Action::Click { index: first_index }).await?
     } else if let Some(text) = args.fill {
         chain_action(
             transport,
@@ -124,7 +125,24 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
                 clear: true,
             },
         )
-        .await?;
+        .await?
+    } else {
+        ChainEffect::default()
+    };
+
+    // Surface the chained action's navigation/popup just as a direct `action`
+    // does, in both the JSON and the human lines — so `find --click` never hides
+    // that the click left the page or opened a tab.
+    if let Some(ref url) = effect.url_changed {
+        items["url_changed"] = serde_json::json!(url);
+        human_lines.push(format!("→ URL changed: {}", line_safe(url)));
+    }
+    if let Some(ref tab) = effect.new_tab {
+        items["new_tab"] = serde_json::to_value(tab).unwrap_or(serde_json::Value::Null);
+        human_lines.push(format!(
+            "→ New tab opened: {} (switched automatically)",
+            line_safe(&tab.url)
+        ));
     }
 
     Ok(CommandOutput::List {
@@ -160,7 +178,17 @@ fn render_filter(filter: &webpilot::types::ElementFilter) -> String {
     }
 }
 
-async fn chain_action<T: Transport>(transport: &mut T, action: Action) -> Result<()> {
+/// The navigation/popup effects a chained `--click`/`--fill` produced, so `find`
+/// can surface them exactly as a direct `action` does — otherwise an agent using
+/// the `find --click` shortcut on a link that navigates or opens a tab would never
+/// learn it left the page.
+#[derive(Default)]
+struct ChainEffect {
+    url_changed: Option<String>,
+    new_tab: Option<webpilot::types::TabInfo>,
+}
+
+async fn chain_action<T: Transport>(transport: &mut T, action: Action) -> Result<ChainEffect> {
     let result = transport
         .send(Command::Action {
             action,
@@ -168,7 +196,19 @@ async fn chain_action<T: Transport>(transport: &mut T, action: Action) -> Result
         })
         .await?;
     match result {
-        ResponseData::Action { success, error, .. } => lift_error(success, error, ()),
+        ResponseData::Action {
+            success,
+            error,
+            url_changed,
+            new_tab,
+            ..
+        } => {
+            lift_error(success, error, ())?;
+            Ok(ChainEffect {
+                url_changed,
+                new_tab,
+            })
+        }
         ResponseData::Error { error } => Err(error.into()),
         _ => anyhow::bail!("Unexpected response shape"),
     }
