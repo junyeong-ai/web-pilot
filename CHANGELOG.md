@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.46] - 2026-06-09
+
+### Fixed
+
+- **Closing the active tab is `TabNotFound` next even before a pin was persisted.**
+  The v0.4.45 fix relied on a persisted pin going dead, but a fresh session acts on
+  its implicit target with no pin written — so closing it skipped the dead-pin path
+  and the next command silently rebound to an arbitrary tab. `do_tab_close` now
+  records the active target as the pin before closing it, so the next command fails
+  loud in that case too.
+- **Browser `cookie set` validates the URL scheme** like headless (where CDP
+  enforces http/https), returning a typed `InvalidArgument` instead of a less
+  specific exception with a different code.
+
 ## [0.4.45] - 2026-06-09
 
 ### Fixed
