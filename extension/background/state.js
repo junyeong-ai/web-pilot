@@ -326,21 +326,24 @@ async function handleSessionImport(rawData) {
     if (Object.hasOwn(data, "cookies") && !Array.isArray(data.cookies)) {
       return { type: "SessionResult", success: false, error: err("InvalidArgument", "session `cookies` must be an array") };
     }
-    let cookiesTotal = 0;
+    const cookies = data.cookies || [];
+    const cookiesTotal = cookies.length;
     let cookiesFailed = 0;
-    for (const c of data.cookies || []) {
-      // Skip an entry that headless would drop when deserializing CookieInfo,
-      // so one malformed entry never fails an otherwise-good import
-      // (cookiesFailed is for well-formed cookies the browser actually refused).
-      // CookieInfo requires name/value/domain/path strings AND a same_site that
-      // parses as the SameSite enum — match both, exactly.
+    let cookiesMalformed = 0;
+    for (const c of cookies) {
+      // A row headless would drop when deserializing CookieInfo is counted, not
+      // silently skipped — losing a cookie while reporting success hands the
+      // agent a session quietly missing part of what the file held. CookieInfo
+      // requires name/value/domain/path strings AND a same_site that parses as
+      // the SameSite enum — match both, exactly. (`cookiesFailed` is separate: a
+      // well-formed cookie the browser actually refused.)
       const SAME_SITE = ["strict", "lax", "none", "no_restriction", "unspecified"];
       if (c == null || typeof c.name !== "string" || typeof c.value !== "string"
           || typeof c.domain !== "string" || typeof c.path !== "string"
           || !SAME_SITE.includes(c.same_site)) {
+        cookiesMalformed++;
         continue;
       }
-      cookiesTotal++;
       try {
         await chrome.cookies.set({
           url: `http${c.secure ? "s" : ""}://${c.domain.replace(/^\./, "")}${c.path}`,
@@ -371,13 +374,19 @@ async function handleSessionImport(rawData) {
         return { type: "SessionResult", success: false, error: r.error || otherErr("storage import failed") };
       }
     }
-    // A well-formed cookie the browser refused to set is a partial failure the
-    // agent must see — never a success that imported less than the file held.
-    if (cookiesFailed > 0) {
+    // A cookie the browser refused, or a malformed row that couldn't be parsed,
+    // is a partial failure the agent must see — never a success that imported
+    // less than the file held. Mirrors headless do_session_import exactly.
+    if (cookiesFailed > 0 || cookiesMalformed > 0) {
+      const reasons = [];
+      if (cookiesFailed > 0) reasons.push(`${cookiesFailed} refused by the browser`);
+      if (cookiesMalformed > 0) reasons.push(`${cookiesMalformed} malformed`);
       return {
         type: "SessionResult",
         success: false,
-        error: otherErr(`${cookiesFailed} of ${cookiesTotal} cookies failed to set`),
+        error: otherErr(
+          `${cookiesFailed + cookiesMalformed} of ${cookiesTotal} cookies not imported (${reasons.join(", ")})`,
+        ),
       };
     }
     return { type: "SessionResult", success: true };

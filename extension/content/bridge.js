@@ -463,9 +463,16 @@
 
         const describedBy = el.getAttribute("aria-describedby");
         if (describedBy) {
+          // An `aria-describedby` IDREF is scoped to the element's own tree, so a
+          // control inside a shadow root references a description element in that
+          // SAME shadow root — `document.getElementById` would miss it and the
+          // agent would lose the field's help/constraint/error text. Resolve
+          // through the element's root, exactly as `aria-labelledby` does.
+          const root = el.getRootNode();
+          const scope = typeof root.getElementById === "function" ? root : document;
           const parts = describedBy
             .split(/\s+/)
-            .map((id) => document.getElementById(id)?.textContent?.trim())
+            .map((id) => scope.getElementById(id)?.textContent?.trim())
             .filter(Boolean);
           entry.description = clip(parts.join(" "), 120) || undefined;
         }
