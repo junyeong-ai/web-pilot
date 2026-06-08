@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.41] - 2026-06-09
+
+### Fixed
+
+- **`frame list` is `NoPage` on a non-http page, like `frame switch`.** It returned
+  an empty `{ frames: [] }` success on a chrome:// pin — read as "this page has no
+  iframes" rather than "there is no page". An http page with no iframes still
+  returns the empty list.
+- **A misspelled key-press modifier is rejected, not silently dropped.** The
+  `Modifiers` struct (every field optional) accepted unknown keys, so an MCP caller
+  sending `control`/`command` instead of `ctrl`/`meta` had the chord sent as a bare
+  key with no error. It now returns `InvalidArgument` naming the valid modifiers.
+
 ## [0.4.40] - 2026-06-09
 
 ### Fixed
