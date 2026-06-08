@@ -10,10 +10,11 @@
 //! rule a real boundary: another local process writing raw JSON to the socket
 //! still hits it.
 //!
-//! The store lives at `artifacts_dir()/policies.json` and is the *only* policy
-//! state — both privileged sinks read it through [`enforce`], so a `webpilot
-//! policy set` rule takes effect identically everywhere. The extension keeps no
-//! policy state of its own.
+//! The store lives at `policy_dir()/policies.json` — the DURABLE data root, not
+//! the evictable cache, so OS cache eviction can never silently reset deny rules
+//! to allow. It is the *only* policy state — both privileged sinks read it
+//! through [`enforce`], so a `webpilot policy set` rule takes effect identically
+//! everywhere. The extension keeps no policy state of its own.
 //!
 //! Fail closed: a store that exists but can't be read or parsed denies every
 //! gated operation rather than silently allowing it. An absent file is the
@@ -29,7 +30,7 @@ use webpilot::protocol::Command;
 use webpilot::types::{PolicyKey, PolicyVerdict};
 
 fn policy_file() -> PathBuf {
-    dirs::artifacts_dir().join("policies.json")
+    dirs::policy_dir().join("policies.json")
 }
 
 /// Enforce policy for a command before it reaches the browser. Returns the
@@ -171,10 +172,9 @@ pub fn clear() -> Result<()> {
 /// reads through `atomic_write`'s temp+rename, so it only ever sees a complete
 /// old-or-new store, never a torn one.
 fn with_store_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let _lock =
-        crate::lockfile::flock_exclusive(&dirs::artifacts_dir().join("policies.lock"), false)
-            .context("lock policy store")?
-            .expect("a blocking flock returns Some");
+    let _lock = crate::lockfile::flock_exclusive(&dirs::policy_dir().join("policies.lock"), false)
+        .context("lock policy store")?
+        .expect("a blocking flock returns Some");
     f()
     // `_lock` drops here, releasing the flock.
 }

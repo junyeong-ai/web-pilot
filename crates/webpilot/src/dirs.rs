@@ -40,6 +40,7 @@ const CONTEXTS_SUBDIR: &str = "contexts";
 const ARTIFACTS_SUBDIR: &str = "artifacts";
 const CHROME_PROFILE_SUBDIR: &str = "chrome-profile";
 const EXTENSION_SUBDIR: &str = "extension";
+const POLICY_SUBDIR: &str = "policy";
 
 const PID_FILENAME: &str = "headless.pid";
 const WS_URL_FILENAME: &str = "headless.ws";
@@ -178,6 +179,17 @@ pub fn extension_dir() -> PathBuf {
 /// Pure extension dir path — no filesystem side effects.
 pub fn extension_dir_path() -> PathBuf {
     data_root_path().join(EXTENSION_SUBDIR)
+}
+
+/// Directory holding the policy store. Policy is persistent security config, not
+/// a regenerable cache artifact, so it lives under the DURABLE data root — never
+/// the cache root, where OS cache eviction (or a cache cleaner) would silently
+/// drop every deny rule and fail open. `WEBPILOT_HOME`, the all-in-one override,
+/// still wins when set, so an explicit setup and the test suite stay
+/// self-contained instead of reaching into the real user data dir. Materialises.
+pub fn policy_dir() -> PathBuf {
+    let base = env_path("WEBPILOT_HOME").unwrap_or_else(data_root_path);
+    materialise(base.join(POLICY_SUBDIR), Owner::User)
 }
 
 // --- Resolution helpers -----------------------------------------------------

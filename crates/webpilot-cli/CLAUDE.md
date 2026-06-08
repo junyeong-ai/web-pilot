@@ -14,7 +14,8 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   both modes. Headless-only commands (`profile`/`record`/`device`/`context`) take
   `&mut LocalTransport` for raw CDP. Pure-local commands (`policy`/`setup`/`diff`/
   `uninstall`/`self`) take no transport.
-- `policy.rs` — single-file policy store (`artifacts/policies.json`) +
+- `policy.rs` — single-file policy store (`policy/policies.json`, durable data
+  root — not the evictable cache) +
   `enforce(&Command)` / `parse_and_enforce(&Value)`. Fail-closed: an unreadable
   or torn store denies. Writes are atomic (temp + rename). Enforced only at the
   **browser-reaching sink**: `LocalTransport::send` (headless) and the host

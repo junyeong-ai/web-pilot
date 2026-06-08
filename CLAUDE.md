@@ -86,7 +86,7 @@ appears when a shadow-component-heavy page exhausts the traversal budget
 |---|---|
 | Action | `{"kind": "click", "index": 7}` — one definition (clap + serde, snake_case) |
 | ActionKind | snake_case wire tag, matching `Action.kind` exactly |
-| PolicyKey | Policy-enforcement key, keyed by **effect**: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`}. `navigate` gates every URL-load effect — the `navigate` action + `capture --url` + `tab new URL`. `eval` gates all MAIN-world JS injection — `eval` + the `frame find` predicate + `console start`/`network start` (monitor-hook injection). `cookie_list` is gated even though read-only because it reads cookie values (session tokens). `Command::policy_key()` maps command → key (non-secret reads → `None`); the match is exhaustive so a new command must declare its gate. Enforcement (`policy::parse_and_enforce`) runs **at the privileged sink that reaches the browser** — `LocalTransport::send` (headless) and the **NM Host** (browser), never the CLI-side `IpcTransport`. The host parses the wire value into a typed `Command` before enforcing — a parse failure is rejected as `InvalidArgument`, blocking a "Rust rejects / JS coerces" bypass. Store is a single `artifacts/policies.json` shared by both modes; `webpilot policy` is a local file command (no browser round-trip). |
+| PolicyKey | Policy-enforcement key, keyed by **effect**: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`}. `navigate` gates every URL-load effect — the `navigate` action + `capture --url` + `tab new URL`. `eval` gates all MAIN-world JS injection — `eval` + the `frame find` predicate + `console start`/`network start` (monitor-hook injection). `cookie_list` is gated even though read-only because it reads cookie values (session tokens). `Command::policy_key()` maps command → key (non-secret reads → `None`); the match is exhaustive so a new command must declare its gate. Enforcement (`policy::parse_and_enforce`) runs **at the privileged sink that reaches the browser** — `LocalTransport::send` (headless) and the **NM Host** (browser), never the CLI-side `IpcTransport`. The host parses the wire value into a typed `Command` before enforcing — a parse failure is rejected as `InvalidArgument`, blocking a "Rust rejects / JS coerces" bypass. Store is a single `policy/policies.json` under the **durable data root** (not the evictable cache — OS cache eviction must never silently reset deny rules to allow) shared by both modes; `webpilot policy` is a local file command (no browser round-trip). |
 | Wait | `{"until": "selector", "value": ".loading"}` — one of `selector`/`text`/`navigation`/`idle` |
 | Capture | `{"include": ["dom","screenshot"], "opts": {...}}` |
 | Status | `{connected, mode: "headless"\|"browser", chrome_version, extension_version}` — per-mode semantics |
@@ -154,7 +154,11 @@ $XDG_RUNTIME_DIR/webpilot   Linux/BSD (tmpfs, mode 0700)
 ```
 
 Subdirectories: `runtime/` (sockets, PIDs, locks), `contexts/` (multi-agent),
-`artifacts/` (screenshots, PDFs, sessions, `policies.json`), `chrome-profile/`.
+`artifacts/` (screenshots, PDFs, sessions), `chrome-profile/`. The **policy store**
+(`policy/policies.json`) lives instead under the durable data root
+(`$WEBPILOT_DATA_HOME` / `~/Library/Application Support/webpilot` /
+`$XDG_DATA_HOME` / `~/.local/share/webpilot`), or under `$WEBPILOT_HOME` when set:
+a security config must survive the cache eviction the paths above are subject to.
 
 Settings resolve through one layer, `webpilot::settings`: **defaults <
 `config.toml` < env var**. Tune via `config.toml` (repo root, override with
