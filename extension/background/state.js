@@ -3,21 +3,19 @@
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
 import { activeFrameId, monitoringState, resolveActiveTab, saveMonitoringState } from "./session.js";
-import { ensureBridge, injectBridgeOnly, sendToContent } from "./content.js";
+import { ensureBridge, sendToContent } from "./content.js";
 
 // ── Console / network monitoring injection ─────────────────────────────────
 
-// Re-arm the bridge and any armed console/network hooks on `tabId`'s new main
-// document. Headless calls `reinstall_monitors()` the instant a navigation
-// settles (action.rs); browser must do the same right after
-// `waitNavigationSettled`, not wait for `webNavigation.onCompleted` (which fires
-// at `load`) — otherwise a `fetch`/`console` the new page emits after
-// DOMContentLoaded but before a slow `load` is lost from the buffer. The
-// `onCompleted` listener stays as a backstop. A re-arm is a no-op unless the tab
-// is in `monitoringState`, so a non-monitoring navigation pays only the bridge
-// re-inject the next command would need anyway.
+// Re-arm any ARMED console/network hooks on `tabId`'s new main document — the
+// MAIN-world fetch/console patches, independent of the bridge. Headless calls
+// `reinstall_monitors()` the instant a navigation settles; browser must do the
+// same right after `waitNavigationSettled`, not wait for the `load`-time
+// `webNavigation.onCompleted`, or a fetch/console the new page emits after
+// DOMContentLoaded but before a slow `load` is lost from the buffer. A no-op
+// unless the tab is actually being monitored, so a plain navigation pays
+// nothing.
 async function rearmMonitors(tabId) {
-  await injectBridgeOnly(tabId, 0);
   if (monitoringState.console.has(tabId)) {
     try {
       await injectConsoleMonitoring(tabId);
