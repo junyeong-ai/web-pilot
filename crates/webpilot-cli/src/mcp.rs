@@ -127,24 +127,32 @@ where
             "invalid request: JSON-RPC batches are not supported",
         ));
     }
-    // Absent id = notification (no response). Present id (including null) = a
-    // request that must be answered, echoing the id back.
-    let id = msg.get("id").cloned()?;
-    // JSON-RPC 2.0 requires `"jsonrpc": "2.0"`; a missing or different version
-    // is an invalid request (-32600).
+    // Validate the envelope BEFORE deciding notification-vs-request. A message
+    // is only a true notification if it is otherwise well-formed but carries no
+    // id; a malformed one (no `"jsonrpc": "2.0"`, no string `method`) must be
+    // answered with -32600 — using null when it carries no id — not silently
+    // dropped down the no-id path, where a client awaiting an answer would hang.
+    // This is the same "never silently drop a malformed request" rule the batch
+    // guard above applies. JSON-RPC 2.0 requires `"jsonrpc": "2.0"`.
     if msg.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
         return Some(error_reply(
-            id,
+            msg.get("id").cloned().unwrap_or(Value::Null),
             -32600,
             "invalid request: jsonrpc must be \"2.0\"",
         ));
     }
-    // A request carrying an id but no string `method` is malformed: JSON-RPC
-    // 2.0 answers that with -32600 (invalid request), distinct from -32601
-    // (a well-formed call to a method that does not exist).
+    // A string `method` is required; its absence is -32600 (invalid request),
+    // distinct from -32601 (a well-formed call to a method that does not exist).
     let Some(method) = msg.get("method").and_then(Value::as_str) else {
-        return Some(error_reply(id, -32600, "invalid request: missing method"));
+        return Some(error_reply(
+            msg.get("id").cloned().unwrap_or(Value::Null),
+            -32600,
+            "invalid request: missing method",
+        ));
     };
+    // Envelope is valid. Absent id now means a TRUE notification — process with
+    // no response. Present id (including an explicit null) is a request to echo.
+    let id = msg.get("id").cloned()?;
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
 
     match method {
