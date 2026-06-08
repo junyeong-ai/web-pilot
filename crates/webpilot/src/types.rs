@@ -531,7 +531,7 @@ fn line_safe(s: &str) -> std::borrow::Cow<'_, str> {
 
 impl DomSnapshot {
     /// Serialize to LLM-friendly text format. Every page-controlled string
-    /// passes through [`line_safe`].
+    /// passes through `line_safe`.
     pub fn to_text(&self) -> String {
         let mut out = String::with_capacity(self.elements.len() * 80);
 
