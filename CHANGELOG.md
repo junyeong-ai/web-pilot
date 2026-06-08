@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.27] - 2026-06-08
+
+### Fixed
+
+- **`capture --include text` shows the page text in the terminal and to MCP, not
+  only in `--json`.** `DomSnapshot::to_text` — the renderer behind both the human
+  output and the MCP `to_agent_text` — emitted the element index and footers but
+  never the captured `text_content`, so the requested page text was serialized to
+  JSON yet silently dropped from every agent-facing text path. It now renders a
+  `--- Page text ---` block when text was captured.
+
 ## [0.4.26] - 2026-06-08
 
 ### Fixed
