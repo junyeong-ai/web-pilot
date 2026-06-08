@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.23] - 2026-06-08
+
+### Fixed
+
+- **`aria-describedby` resolves through the element's root**, like `aria-labelledby`
+  does, so a control inside an open shadow root whose description element lives in
+  that same root now contributes its help/constraint/error text instead of an
+  empty `description`.
+- **Browser `session import` reports malformed cookie rows** instead of silently
+  dropping them and returning success — it now counts skipped rows and returns the
+  same partial-failure result (and message) as headless, so an import that lost a
+  cookie can't read as a full success.
+
 ## [0.4.22] - 2026-06-08
 
 ### Fixed
