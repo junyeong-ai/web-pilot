@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.17] - 2026-06-08
+
+### Fixed
+
+- **`tab new` settles on a ready page and reports its real URL/title**, like
+  `navigate`. It echoed the requested URL and returned before the tab loaded, so
+  a redirect made the reported URL wrong and the agent's next action could race
+  the load. Both modes now wait for the new tab to leave about:blank and parse,
+  then read the landed URL/title.
+- **`diff` reports an explicit `changed` boolean** (DOM and image output) so a
+  caller checks one field instead of inferring change from the counts. The exit
+  code stays 0 on success — a WebPilot exit code names an error class, not a
+  domain result.
+- **An unparseable boolean env var falls through instead of silently reading as
+  `false`.** `WEBPILOT_*=tru` (a typo) used to become `false` and override a
+  correct `config.toml`; only `1/true/yes/on` and `0/false/no/off` are recognized,
+  anything else is treated as unset.
+
 ## [0.4.16] - 2026-06-08
 
 ### Fixed
