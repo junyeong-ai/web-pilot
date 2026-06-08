@@ -716,6 +716,12 @@
         }
 
         case "scroll": {
+          // `amount` is optional (absent → 600). An explicit 0 is a no-op the
+          // tool schema forbids (minimum 1), so reject it rather than report a
+          // scroll that moved nothing.
+          if (action.amount === 0) {
+            return err("InvalidArgument", "scroll amount must be at least 1 pixel");
+          }
           const amt = action.amount ?? 600;
           const dy = action.direction === "up" ? -amt : amt;
           window.scrollBy(0, dy);

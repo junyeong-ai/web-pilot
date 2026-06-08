@@ -187,6 +187,12 @@ async function handleAction(command) {
         } else {
           result.capture_error = "no DOM snapshot from content script";
         }
+      } else {
+        // The pin landed on a non-http page (a popup that stayed about:blank, a
+        // chrome:// destination) — there is nothing to snapshot. Surface it as a
+        // capture_error so `--capture` never silently yields no snapshot and a
+        // clean success.
+        result.capture_error = noPageErr().message;
       }
     } catch (e) {
       result.capture_error = e?.message || String(e);
