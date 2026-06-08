@@ -150,9 +150,13 @@ impl WebPilotError {
             "FrameNotFound" => Self::FrameNotFound {
                 selector: str_field("selector").unwrap_or(w.message),
             },
-            "InvalidArgument" => Self::InvalidArgument { detail: w.message },
+            "InvalidArgument" => Self::InvalidArgument {
+                detail: str_field("detail").unwrap_or(w.message),
+            },
             "BridgeUnavailable" => Self::BridgeUnavailable,
-            "ConnectionLost" => Self::ConnectionLost { detail: w.message },
+            "ConnectionLost" => Self::ConnectionLost {
+                detail: str_field("detail").unwrap_or(w.message),
+            },
             "PolicyDenied" => Self::PolicyDenied {
                 operation: str_field("operation").unwrap_or(w.message),
             },
@@ -162,7 +166,9 @@ impl WebPilotError {
             "ContextNotFound" => Self::ContextNotFound {
                 name: str_field("name").unwrap_or(w.message),
             },
-            "Session" | "SessionError" => Self::Session { detail: w.message },
+            "Session" | "SessionError" => Self::Session {
+                detail: str_field("detail").unwrap_or(w.message),
+            },
             _ => Self::Other { detail: w.message },
         }
     }
@@ -203,6 +209,14 @@ impl WebPilotError {
             E::PolicyDenied { operation } => put("operation", operation.clone().into()),
             E::TabNotFound { tab_id } => put("tab_id", tab_id.clone().into()),
             E::ContextNotFound { name } => put("name", name.clone().into()),
+            // The detail-carrying variants whose Display PREFIXES `detail`
+            // ("Invalid argument: …", "Chrome connection lost: …", "Session
+            // error: …") must round-trip the RAW detail, not just the formatted
+            // `message`: `from_wire` rebuilds `detail` and Display re-prefixes it,
+            // so without the raw field the prefix would double on every hop.
+            E::InvalidArgument { detail }
+            | E::ConnectionLost { detail }
+            | E::Session { detail } => put("detail", detail.clone().into()),
             _ => {}
         }
         WireError {
@@ -272,6 +286,34 @@ mod tests {
 
         let recovered: WebPilotError = serde_json::from_value(json).unwrap();
         assert_eq!(recovered, original);
+    }
+
+    #[test]
+    fn detail_variants_round_trip_without_doubling_the_display_prefix() {
+        // The host emits e.g. `InvalidArgument { detail: "command is too large" }`;
+        // its wire `message` is the Display "Invalid argument: command is too
+        // large". `from_wire` must rebuild the RAW detail (carried as the `detail`
+        // field) so Display prefixes exactly once — never "Invalid argument:
+        // Invalid argument: …" on a wire hop (e.g. the NM host's size guard).
+        for original in [
+            WebPilotError::InvalidArgument {
+                detail: "command is too large".into(),
+            },
+            WebPilotError::ConnectionLost {
+                detail: "socket closed".into(),
+            },
+            WebPilotError::Session {
+                detail: "no session".into(),
+            },
+        ] {
+            let displayed_once = original.to_string();
+            let recovered = WebPilotError::from_wire(original.to_wire());
+            assert_eq!(
+                recovered.to_string(),
+                displayed_once,
+                "wire round-trip must not double the Display prefix"
+            );
+        }
     }
 
     #[test]
