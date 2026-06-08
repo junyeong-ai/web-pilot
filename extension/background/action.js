@@ -219,11 +219,15 @@ function keyDescriptor(key) {
   if (named[key]) return { code: named[key][0], vk: named[key][1] };
   const fn = /^F([1-9]|1[0-2])$/.exec(key);
   if (fn) return { code: key, vk: 111 + Number(fn[1]) };
-  if (key.length === 1) {
+  // `[...key].length`, not `key.length`: count Unicode code points, so an astral
+  // character (emoji) reads as one key, matching the headless `chars().count()`.
+  // Plain `.length` is the UTF-16 unit count, where `'😀'.length === 2` would
+  // wrongly fall through to the reject path the two modes must agree on.
+  if ([...key].length === 1) {
     if (/[a-zA-Z]/.test(key)) return { code: `Key${key.toUpperCase()}`, vk: key.toUpperCase().charCodeAt(0) };
     if (/[0-9]/.test(key)) return { code: `Digit${key}`, vk: key.charCodeAt(0) };
     // Any other single character carries no platform code/vk but types via its
-    // `text` (handled by printableKeyText) — `@`, `ñ`, `=`.
+    // `text` (handled by printableKeyText) — `@`, `ñ`, `=`, `😀`.
     return { code: "", vk: 0 };
   }
   // A multi-character string that is neither a named key nor F1–F12 is not a key
@@ -239,7 +243,9 @@ function keyDescriptor(key) {
 function printableKeyText(key) {
   if (key === "Enter") return "\r";
   if (key === "Space") return " ";
-  if (key.length === 1 && key.charCodeAt(0) >= 0x20) return key;
+  // Code-point count (so an emoji is one key) and `codePointAt` (so the astral
+  // code point, not its lone high surrogate, is range-checked).
+  if ([...key].length === 1 && key.codePointAt(0) >= 0x20) return key;
   return null;
 }
 

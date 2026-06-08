@@ -13,6 +13,17 @@ import { rearmMonitors } from "./state.js";
 async function handleCapture(command) {
   const include = new Set(command.include || ["dom"]);
   const opts = command.opts || {};
+  // Annotations are drawn at viewport coordinates, so they cannot combine with a
+  // full-page shot — reject the pair, matching headless `CaptureOpts::validate`
+  // (the same wording) instead of silently producing a misaligned capture.
+  if (opts.annotate && opts.full_page) {
+    return topErr(
+      err(
+        "InvalidArgument",
+        "`annotate` and `full_page` cannot be combined; annotations are viewport-only",
+      ),
+    );
+  }
   let tabId;
 
   try {
