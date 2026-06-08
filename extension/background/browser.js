@@ -118,8 +118,13 @@ async function handleStatus() {
     type: "Status",
     connected: isHostConnected(),
     mode: "browser",
-    tab_url: tab?.url || null,
-    tab_title: tab?.title || null,
+    // `?? null`, not `|| null`: a pinned tab with an empty title (a page with no
+    // `<title>`) keeps `""`, matching headless `do_status`, which maps
+    // `document.title` straight through as `Some("")`. `||` would report it as
+    // `null` — "no tab" — in browser mode only, a silent cross-mode divergence.
+    // `tab` being absent still yields `null` (optional chaining → undefined ?? null).
+    tab_url: tab?.url ?? null,
+    tab_title: tab?.title ?? null,
     chrome_version: m ? m[1] : null,
     extension_version: chrome.runtime.getManifest().version,
   };
