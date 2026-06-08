@@ -83,11 +83,19 @@ fn now_secs() -> u64 {
 /// Resolve a named context to a page target id. Creates the context + page
 /// if missing; revives the page if it was closed; surfaces a structured
 /// error if the cap is reached.
-pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> Result<String> {
-    // Held for the whole resolution so concurrent same-name callers can't both
+pub(crate) async fn resolve_context_target(
+    browser: &CdpClient,
+    name: &str,
+) -> Result<(String, std::fs::File)> {
+    // Acquired here and handed back to the caller, which holds it for the whole
+    // lifetime of the transport bound to this context — not merely the
+    // resolution. Two things ride on it: concurrent same-name callers can't both
     // create a context (double-checked: the existing-entry path below re-reads
-    // under the lock).
-    let _lock = lock_context(name)?;
+    // under the lock), AND it is a true liveness signal — a concurrent
+    // `gc_expired_contexts` `try_lock`s it, fails, and skips a live-but-idle
+    // context instead of disposing it out from under a long-lived session (an
+    // MCP server holds one transport well past the idle TTL).
+    let lock = lock_context(name)?;
 
     let file_path = context_file_path(name);
     let now = now_secs();
@@ -117,7 +125,7 @@ pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> R
                 entry.target_id = tid.clone();
                 entry.last_used = now;
                 let _ = dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes());
-                return Ok(tid);
+                return Ok((tid, lock));
             } else {
                 super::local::clear_context_state(&entry.browser_context_id);
                 let _ = std::fs::remove_file(&file_path);
@@ -182,7 +190,7 @@ pub(crate) async fn resolve_context_target(browser: &CdpClient, name: &str) -> R
     if built.is_err() {
         let _ = browser.dispose_browser_context(&ctx_id).await;
     }
-    built
+    built.map(|tid| (tid, lock))
 }
 
 pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
@@ -209,14 +217,14 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
             continue;
         }
         if now.saturating_sub(ctx.last_used) > ttl {
-            // Never dispose a context that is actively in use: `last_used` only
-            // bounds *idle* time, but a process re-using a long-idle context
-            // (or running a command longer than the TTL) refreshes it only at
-            // the resolve, so a concurrent sweep could otherwise read a stale
-            // timestamp and dispose a live context out from under it. The held
-            // per-name lock is the liveness signal; if we can't take it without
-            // waiting, the context is in use — skip it this sweep. Held through
-            // disposal so a resolve can't start mid-dispose.
+            // Never dispose a context that is actively in use. `last_used` only
+            // bounds *idle* time and is refreshed only at the resolve, so a
+            // long-lived transport (an MCP server reusing one transport past the
+            // TTL) would otherwise look abandoned. The transport bound to a
+            // context holds this per-name lock for its whole lifetime, so it is
+            // a true liveness signal: if we can't take it without waiting, the
+            // context is live — skip it this sweep. Held through disposal so a
+            // resolve can't start mid-dispose.
             let Some(_held) = try_lock_context(&ctx.name) else {
                 continue;
             };

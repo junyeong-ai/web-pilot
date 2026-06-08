@@ -82,6 +82,14 @@ pub struct LocalTransport {
     /// browser-mode service worker, which re-injects on `webNavigation`.
     pub(crate) console_monitoring: Arc<AtomicBool>,
     pub(crate) network_monitoring: Arc<AtomicBool>,
+    /// Exclusive lock on the named context's lock file, held for this
+    /// transport's whole lifetime (`None` for the default context). It is the
+    /// liveness signal a concurrent `gc_expired_contexts` probes with a
+    /// non-blocking `try_lock`: while this is held the sweep skips the context,
+    /// so a long-lived session (an MCP server reusing one transport past the
+    /// idle TTL) is never disposed out from under itself. Dropped with the
+    /// transport, which frees the context to be reaped once truly idle.
+    _context_lock: Option<std::fs::File>,
 }
 
 impl LocalTransport {
@@ -117,7 +125,7 @@ impl LocalTransport {
             )
             .await?;
 
-        let (page, browser_context_id, target_id) =
+        let (page, browser_context_id, target_id, context_lock) =
             resolve_target(&browser, &ws_url, context_name).await?;
 
         let main_frame_id = fetch_main_frame_id(&page).await?;
@@ -173,6 +181,7 @@ impl LocalTransport {
             active_frame_id: Arc::new(Mutex::new(restored_active)),
             console_monitoring: Arc::new(AtomicBool::new(console_armed)),
             network_monitoring: Arc::new(AtomicBool::new(network_armed)),
+            _context_lock: context_lock,
         })
     }
 
@@ -849,13 +858,14 @@ async fn resolve_target(
     browser: &CdpClient,
     ws_url: &str,
     context: Option<&str>,
-) -> Result<(CdpClient, Option<String>, String)> {
+) -> Result<(CdpClient, Option<String>, String, Option<std::fs::File>)> {
     if let Some(ctx_name) = context {
         // Context mode anchors on the context-entry's target id, but a
         // user-issued `tab switch` may have moved the active tab to a
         // sibling page within the same browser context. Honour the
         // persisted active_tab first when it points to a still-live page.
-        let initial = local_context::resolve_context_target(browser, ctx_name).await?;
+        let (initial, context_lock) =
+            local_context::resolve_context_target(browser, ctx_name).await?;
         let file_path = local_context::context_file_path(ctx_name);
         let browser_context_id = std::fs::read_to_string(&file_path)
             .ok()
@@ -867,13 +877,13 @@ async fn resolve_target(
             .unwrap_or(initial);
 
         let cdp = connect_to_page(ws_url, &target_id).await?;
-        Ok((cdp, browser_context_id, target_id))
+        Ok((cdp, browser_context_id, target_id, Some(context_lock)))
     } else {
         let target_id = pick_active_target(browser, None, None)
             .await
             .ok_or(WebPilotError::NoPage)?;
         let cdp = connect_to_page(ws_url, &target_id).await?;
-        Ok((cdp, None, target_id))
+        Ok((cdp, None, target_id, None))
     }
 }
 
