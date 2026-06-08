@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.10] - 2026-06-08
+
+Completes the capture browser↔headless parity sweep the 0.4.9 annotate fix
+started: three more fields where the browser handler diverged from headless.
+
+### Fixed
+
+- **`capture --include accessibility` returns the same shape in both modes.**
+  Headless serializes the whole `Accessibility.getFullAXTree` response
+  (`{ nodes: [...] }`, pretty-printed); browser had stringified only the inner
+  `nodes` array, compact. Browser now serializes the full response, pretty —
+  an agent parsing the tree sees one shape regardless of mode.
+- **A text- or accessibility-only capture reports the subframe count.** Headless
+  sets `subframes` on the snapshot shell even with no DOM pass, so the agent
+  still gets the "N iframe(s) not shown" hint; browser set it only on a full DOM
+  pass and now sets it on the shell too.
+- **A no-DOM capture scoped to an iframe reports the frame's title**, not the top
+  tab's. Headless reads the active frame's `document.title`; browser had used the
+  tab title, mislabeling a frame-scoped screenshot/PDF/AX capture.
+
 ## [0.4.9] - 2026-06-08
 
 A seam-level convergence pass (cross-mode parity, policy, error codes, resource
