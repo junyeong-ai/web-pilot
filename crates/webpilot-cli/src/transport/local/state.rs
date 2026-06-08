@@ -349,7 +349,18 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
         secure: c.get("secure").and_then(|v| v.as_bool()).unwrap_or(false),
         http_only: c.get("httpOnly").and_then(|v| v.as_bool()).unwrap_or(false),
         same_site,
-        expiration: c.get("expires").and_then(|v| v.as_f64()),
+        // CDP marks a session cookie (no expiry) with the sentinel `expires:
+        // -1`. Storing that verbatim is a data-loss trap: on `session import`
+        // `cookie_info_to_cdp` forwards a present `expiration` as `expires`, and
+        // `Network.setCookie` reads any `expires` as an ABSOLUTE time — -1 is
+        // epoch-minus-one-second, already expired — so Chrome drops the cookie.
+        // Map the sentinel (any negative) to `None`, so a session cookie
+        // round-trips as one (import then omits `expires`) and `cookie list`
+        // shows it as a session cookie, not a bogus 1969 expiry.
+        expiration: match c.get("expires").and_then(|v| v.as_f64()) {
+            Some(secs) if secs >= 0.0 => Some(secs),
+            _ => None,
+        },
     }
 }
 
