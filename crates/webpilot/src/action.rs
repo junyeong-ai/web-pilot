@@ -11,7 +11,7 @@ pub type ElementIndex = u32;
 
 /// Browser action.
 #[derive(Subcommand, Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     /// Click an element by index.
     Click { index: ElementIndex },

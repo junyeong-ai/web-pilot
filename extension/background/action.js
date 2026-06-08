@@ -216,8 +216,14 @@ function keyDescriptor(key) {
   if (key.length === 1) {
     if (/[a-zA-Z]/.test(key)) return { code: `Key${key.toUpperCase()}`, vk: key.toUpperCase().charCodeAt(0) };
     if (/[0-9]/.test(key)) return { code: `Digit${key}`, vk: key.charCodeAt(0) };
+    // Any other single character carries no platform code/vk but types via its
+    // `text` (handled by printableKeyText) — `@`, `ñ`, `=`.
+    return { code: "", vk: 0 };
   }
-  return { code: "", vk: 0 };
+  // A multi-character string that is neither a named key nor F1–F12 is not a key
+  // — `null` signals the caller to reject it instead of dispatching a no-op
+  // (e.g. a typo'd "Entr") that would report success while doing nothing.
+  return null;
 }
 
 // The text a key contributes to its keyDown, or null for a key that produces
@@ -233,10 +239,17 @@ function printableKeyText(key) {
 
 // Dispatch a key as a native CDP input event through the tab's debugger.
 async function dispatchKeyPress(tabId, action) {
+  const descriptor = keyDescriptor(action.key);
+  if (descriptor === null) {
+    return err(
+      "InvalidArgument",
+      `Unknown key: ${JSON.stringify(action.key)} — use a single character, a named key (Enter/Tab/Escape/Backspace/Delete/Arrow*/Home/End/PageUp/PageDown/Space/Insert/CapsLock), or F1–F12`,
+    );
+  }
   return withCdp(tabId, async (tid) => {
     const m = action.modifiers || {};
     const modifiers = (m.alt ? 1 : 0) | (m.ctrl ? 2 : 0) | (m.meta ? 4 : 0) | (m.shift ? 8 : 0);
-    const { code, vk } = keyDescriptor(action.key);
+    const { code, vk } = descriptor;
     const text = (!m.ctrl && !m.alt && !m.meta) ? printableKeyText(action.key) : null;
     // `nativeVirtualKeyCode` is omitted on purpose: it is platform-native
     // (macOS != Windows), and sending the Windows code on macOS mis-maps the

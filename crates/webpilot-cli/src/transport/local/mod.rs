@@ -957,30 +957,30 @@ async fn resolve_target(
         let (initial, browser_context_id, context_lock) =
             local_context::resolve_context_target(browser, ctx_name).await?;
 
-        let target_id = pick_active_target(browser, Some(&browser_context_id), Some(&initial))
-            .await
-            .unwrap_or(initial);
+        let target_id =
+            pick_active_target(browser, Some(&browser_context_id), Some(&initial)).await?;
 
         let cdp = connect_to_page(ws_url, &target_id).await?;
         Ok((cdp, Some(browser_context_id), target_id, Some(context_lock)))
     } else {
-        let target_id = pick_active_target(browser, None, None)
-            .await
-            .ok_or(WebPilotError::NoPage)?;
+        let target_id = pick_active_target(browser, None, None).await?;
         let cdp = connect_to_page(ws_url, &target_id).await?;
         Ok((cdp, None, target_id, None))
     }
 }
 
-/// Pick the active page target, honouring `runtime/active_tab_<key>.json`
-/// when its referent is still a live page; otherwise fall back to the
-/// supplied default (context anchor) or the first page in the listing.
+/// Pick the active page target. A still-live persisted active tab
+/// (`runtime/active_tab_<key>.json`) is the pin and wins. A persisted pin whose
+/// page has since closed is a typed `TabNotFound`, never a silent retarget onto
+/// some other tab — the same contract browser mode enforces; the agent must
+/// `tab switch`/`tab new` to choose a new one. With NO pin (a fresh attach), the
+/// context anchor or the first page in scope is taken.
 async fn pick_active_target(
     browser: &CdpClient,
     browser_context_id: Option<&str>,
     context_anchor: Option<&str>,
-) -> Option<String> {
-    let targets = browser.get_targets().await.ok()?;
+) -> Result<String> {
+    let targets = browser.get_targets().await?;
     let is_page = |t: &&Value| t.get("type").and_then(|v| v.as_str()) == Some("page");
     let in_ctx = |t: &&Value| match browser_context_id {
         Some(id) => t.get("browserContextId").and_then(|v| v.as_str()) == Some(id),
@@ -994,15 +994,18 @@ async fn pick_active_target(
 
     if let Some(persisted) = read_persisted_active_tab(browser_context_id) {
         if alive(&persisted) {
-            return Some(persisted);
+            return Ok(persisted);
         }
+        // The pinned tab closed. Drop the dead pin and fail loud rather than
+        // silently land the agent's next command on a different tab.
         clear_persisted_active_tab(browser_context_id);
+        return Err(WebPilotError::TabNotFound { tab_id: persisted }.into());
     }
 
     if let Some(anchor) = context_anchor
         && alive(anchor)
     {
-        return Some(anchor.to_string());
+        return Ok(anchor.to_string());
     }
 
     targets
@@ -1013,6 +1016,7 @@ async fn pick_active_target(
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         })
+        .ok_or_else(|| WebPilotError::NoPage.into())
 }
 
 pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<CdpClient> {

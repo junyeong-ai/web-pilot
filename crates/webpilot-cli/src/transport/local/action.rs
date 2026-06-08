@@ -33,7 +33,7 @@ fn modifier_mask(m: &webpilot::action::Modifiers) -> u32 {
 /// The DOM `code` and Windows virtual-key code for a key, so `Input.dispatchKeyEvent`
 /// fires real native behaviour (Tab traversal, Backspace deletion, arrow nav)
 /// that a synthetic `KeyboardEvent` cannot. Unknown keys carry no code (0).
-fn key_descriptor(key: &str) -> (String, u32) {
+fn key_descriptor(key: &str) -> Option<(String, u32)> {
     let named: Option<(&str, u32)> = match key {
         "Enter" => Some(("Enter", 13)),
         "Tab" => Some(("Tab", 9)),
@@ -54,24 +54,29 @@ fn key_descriptor(key: &str) -> (String, u32) {
         _ => None,
     };
     if let Some((code, vk)) = named {
-        return (code.to_string(), vk);
+        return Some((code.to_string(), vk));
     }
     if let Some(n) = key.strip_prefix('F').and_then(|d| d.parse::<u32>().ok())
         && (1..=12).contains(&n)
     {
-        return (format!("F{n}"), 111 + n);
+        return Some((format!("F{n}"), 111 + n));
     }
     let mut chars = key.chars();
     if let (Some(c), None) = (chars.next(), chars.next()) {
         if c.is_ascii_alphabetic() {
             let up = c.to_ascii_uppercase();
-            return (format!("Key{up}"), up as u32);
+            return Some((format!("Key{up}"), up as u32));
         }
         if c.is_ascii_digit() {
-            return (format!("Digit{c}"), c as u32);
+            return Some((format!("Digit{c}"), c as u32));
         }
+        // Any other single character carries no platform code/vk but types via
+        // its `text`.
+        return Some((String::new(), 0));
     }
-    (String::new(), 0)
+    // A multi-character string that is neither a named key nor F1–F12 is not a
+    // key — reject it rather than dispatch a no-op that reports success.
+    None
 }
 
 /// The text a key contributes to its `keyDown`, or `None` for a key that
@@ -635,7 +640,13 @@ impl LocalTransport {
     /// shortcut, not input).
     async fn do_key_press(&self, key: &str, mods: &webpilot::action::Modifiers) -> Result<()> {
         let modifiers = modifier_mask(mods);
-        let (code, vk) = key_descriptor(key);
+        let (code, vk) = key_descriptor(key).ok_or_else(|| WebPilotError::InvalidArgument {
+            detail: format!(
+                "Unknown key: {key:?} — use a single character, a named key \
+                 (Enter/Tab/Escape/Backspace/Delete/Arrow*/Home/End/PageUp/PageDown/Space/Insert/CapsLock), \
+                 or F1–F12"
+            ),
+        })?;
         let text = (!mods.ctrl && !mods.alt && !mods.meta)
             .then(|| printable_key_text(key))
             .flatten();
