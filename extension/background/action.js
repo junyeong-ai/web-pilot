@@ -320,8 +320,15 @@ async function dispatchActionToPage(tab, action) {
     const settledUrl = await settledActionUrl(tab.id, urlBefore, navWatch);
     if (settledUrl && settledUrl !== urlBefore) {
       result.url_changed = settledUrl;
-      // A click/key that navigated this tab built a new document — re-arm its
-      // monitors at settle, like a navigate action and like headless.
+      // A click/key that incidentally navigated this tab (a `_top` link or form
+      // submit from inside a switched iframe) built a new document — the old
+      // frame tree, that iframe included, is gone. Drop the frame scope to the
+      // main frame so the `--capture` auto-snapshot and the next command don't
+      // target a dead frame, exactly as the explicit navigate/back/reload cases
+      // above and as headless `clear_active_frame` on `url_changed`.
+      setActiveFrameId(0);
+      // Re-arm console/network hooks now, at settle — headless re-installs them
+      // the instant the navigation settles, not at the later `load` event.
       await rearmMonitors(tab.id);
     }
 
