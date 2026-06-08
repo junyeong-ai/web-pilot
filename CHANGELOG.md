@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.24] - 2026-06-08
+
+### Fixed
+
+- **Context GC deletes a record only on confirmed disposal.** The idle-context
+  sweep treated a FAILED `get_browser_contexts` re-list (CDP socket dropped
+  mid-sweep) as proof the context was gone and deleted its metadata, orphaning a
+  possibly-live Chrome context that leaked until Chrome quit. It now keeps the
+  record on an unknown result and retries next sweep.
+- **`label[for]` resolves through the element's shadow root**, completing the IDREF
+  sweep (with aria-labelledby/describedby): a custom labelable control whose label
+  lives in its own shadow root is no longer returned unlabeled.
+- **Browser `console`/`network read` sanitize entries to the headless wire shape** —
+  dropping a buffer entry with an unknown console level or an incomplete network
+  shape (the MAIN-world buffer is page-reachable) and coercing a console message to
+  a string, so both modes deserialize an identical typed result and a tampered
+  entry can't break the read.
+
 ## [0.4.23] - 2026-06-08
 
 ### Fixed
