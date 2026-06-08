@@ -515,15 +515,16 @@ impl LocalTransport {
     }
 
     /// `(target_id, url)` of the page WebPilot is bound to — the target it just
-    /// navigated, identified by `self.target_id`. Falls back to the context's
-    /// active page only if that target is gone (e.g. a swap replaced it), so a
-    /// sibling tab in the same context is never mistaken for this navigation.
+    /// navigated, identified by `self.target_id`. If that exact target is gone
+    /// (a swap replaced it), it falls back to the context's page ONLY when that
+    /// page is unique: with several pages, which one is this navigation's result
+    /// is unknowable, so it returns `None` rather than rebind to a sibling tab.
     async fn bound_target(&self) -> Option<(String, String)> {
         let targets = self.browser.get_targets().await.ok()?;
         let pick = targets
             .iter()
             .find(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(&self.target_id))
-            .or_else(|| find_page_in_context(&targets, self.browser_context_id.as_deref()))?;
+            .or_else(|| sole_page_in_context(&targets, self.browser_context_id.as_deref()))?;
         Some((
             pick.get("targetId").and_then(|v| v.as_str())?.to_string(),
             pick.get("url")
@@ -928,17 +929,27 @@ pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<Cdp
     Ok(cdp)
 }
 
-fn find_page_in_context<'a>(
+/// The *sole* page in the browsing context, or `None` when there are zero or
+/// more than one. `bound_target` uses this only as a fallback after its exact
+/// target id has vanished: with exactly one page left it is unambiguously the
+/// navigation's result, but with several there is no way to tell which is — so
+/// it refuses to guess rather than silently rebind to a sibling tab.
+fn sole_page_in_context<'a>(
     targets: &'a [Value],
     browser_context_id: Option<&str>,
 ) -> Option<&'a Value> {
-    targets.iter().find(|t| {
+    let mut pages = targets.iter().filter(|t| {
         t.get("type").and_then(|v| v.as_str()) == Some("page")
             && match browser_context_id {
                 Some(id) => t.get("browserContextId").and_then(|v| v.as_str()) == Some(id),
                 None => true,
             }
-    })
+    });
+    let only = pages.next()?;
+    if pages.next().is_some() {
+        return None;
+    }
+    Some(only)
 }
 
 pub(super) fn action_success(dom: Option<DomSnapshot>) -> ResponseData {
