@@ -70,17 +70,19 @@ async function handleCapture(command) {
     page_title: "",
   };
 
+  // The frame tree, fetched once — used to validate the active capture frame
+  // here and to count out-of-scope HTTP subframes for the snapshot below.
   // A scoped capture in ANY mode whose target frame has since been removed is a
-  // FrameNotFound, not a stale-context success — validate up front, before DOM /
-  // screenshot / PDF / AX alike. Only the DOM pass used to check, so a
-  // screenshot/PDF/AX of a since-removed iframe returned a stale main-frame
-  // result with no sign the scope was dead.
-  if (activeFrameId !== 0) {
-    const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
-    if (!frames.some((f) => f.frameId === activeFrameId && f.url?.startsWith("http"))) {
-      const sel = `frame ${activeFrameId}`;
-      return topErr(err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel }));
-    }
+  // FrameNotFound, not a stale-context success — only the DOM pass used to check,
+  // so a screenshot/PDF/AX of a since-removed iframe returned a stale result with
+  // no sign the scope was dead.
+  const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
+  if (
+    activeFrameId !== 0 &&
+    !frames.some((f) => f.frameId === activeFrameId && f.url?.startsWith("http"))
+  ) {
+    const sel = `frame ${activeFrameId}`;
+    return topErr(err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel }));
   }
 
   // DOM extraction — scoped to the active frame (main by default), exactly
@@ -255,7 +257,7 @@ async function handleCapture(command) {
   // `undefined` guard skips that case.
   if (result.dom && activeFrameId === 0 && result.dom.subframes === undefined) {
     try {
-      const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
+      // Reuse the frame tree fetched at the top of the capture.
       result.dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
     } catch {}
   }
