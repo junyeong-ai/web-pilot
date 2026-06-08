@@ -200,10 +200,21 @@ async function handleConsoleRead(since) {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
       world: "MAIN",
-      args: [since || 0],
-      // Filter by `timestamp >= since` in-page (the incremental cursor), exactly
-      // as the network read does, then deep-clone for structured transfer.
-      func: (s) => JSON.parse(JSON.stringify((window.__webpilot_console || []).filter((e) => e.timestamp >= s))),
+      args: [since || 0, ["log", "warn", "error", "info", "debug"]],
+      // Filter by `timestamp >= since` (the incremental cursor) AND sanitize to
+      // the same shape headless returns: drop any entry whose `level` is not a
+      // known ConsoleLevel (the MAIN-world buffer is page-reachable and only
+      // best-effort), and coerce `message` to a string — so the CLI deserializes
+      // an identical `Vec<ConsoleEntry>` in both modes and a tampered entry can't
+      // break the read or leak a wire shape headless would never emit.
+      func: (s, levels) =>
+        (window.__webpilot_console || [])
+          .filter((e) => e && levels.includes(e.level) && e.timestamp >= s)
+          .map((e) => ({
+            level: e.level,
+            message: typeof e.message === "string" ? e.message : "",
+            timestamp: e.timestamp,
+          })),
     });
     return { type: "ConsoleEntries", entries: r?.[0]?.result || [] };
   } catch (e) {
@@ -249,10 +260,22 @@ async function handleNetworkRead(since) {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
       world: "MAIN",
-      func: (s) => {
-        const all = window.__webpilot_network || [];
-        return s ? all.filter((e) => e.timestamp >= s) : [...all];
-      },
+      // Filter by `timestamp >= since` AND sanitize to the same shape headless
+      // returns: drop any entry missing a required NetworkEntry field (the
+      // MAIN-world buffer is page-reachable and best-effort), so the CLI
+      // deserializes an identical `Vec<NetworkEntry>` in both modes and a tampered
+      // entry can't break the read. `status`/`error` stay optional.
+      func: (s) =>
+        (window.__webpilot_network || []).filter(
+          (e) =>
+            e &&
+            e.timestamp >= s &&
+            typeof e.type === "string" &&
+            typeof e.url === "string" &&
+            typeof e.method === "string" &&
+            typeof e.duration_ms === "number" &&
+            typeof e.timestamp === "number",
+        ),
       args: [since || 0],
     });
     return { type: "NetworkEntries", entries: r?.[0]?.result || [] };
