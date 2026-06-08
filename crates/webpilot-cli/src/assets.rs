@@ -130,4 +130,21 @@ mod tests {
         assert!(EXTENSION.get_file("icons/icon16.png").is_some());
         assert!(EXTENSION.get_file("icons/icon128.png").is_some());
     }
+
+    #[test]
+    fn embedded_extension_version_tracks_the_binary() {
+        // The module contract ("matches the binary version exactly") and, more
+        // importantly, the host's stale-install gate depend on the extension
+        // version advancing with each release. It once froze at `1.0.0` while the
+        // binary moved to `0.4.x`, so every installed extension compared equal to
+        // the bundled one and `VersionMismatch` could never fire — a stale
+        // extension ran silently after an upgrade. This test fails the build if
+        // `extension/manifest.json` is left behind, forcing a lockstep bump.
+        assert_eq!(
+            expected_extension_version(),
+            env!("CARGO_PKG_VERSION"),
+            "extension/manifest.json version must match the workspace version — \
+             bump it in lockstep with Cargo.toml"
+        );
+    }
 }

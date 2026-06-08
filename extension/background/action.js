@@ -284,6 +284,11 @@ async function dispatchActionToPage(tab, action) {
       r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
     }
     const result = { type: "Action", ...r };
+    // `navigates` is an internal bridge hint for the HEADLESS settle layer, not
+    // part of the Action wire response. Headless reads it before it reaches the
+    // wire; browser mode resolves navigation from its own watch, so drop it here
+    // rather than leak a field the typed response never models.
+    delete result.navigates;
 
     // Report the settled destination of a same-tab navigation the action
     // triggered; a non-navigating action adds no url_changed and pays no wait.
