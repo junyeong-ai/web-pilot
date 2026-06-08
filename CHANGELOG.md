@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.42] - 2026-06-09
+
+### Fixed
+
+- **`scroll` with amount 0 is rejected instead of a no-op success.** It ran
+  `scrollBy(0, 0)` and returned success though the tool schema declares
+  `minimum: 1`. The shared bridge now rejects an explicit 0 with `InvalidArgument`;
+  an absent amount still defaults to 600.
+- **`action --capture` onto a non-http pin reports the missing snapshot.** When a
+  click-opened popup stayed about:blank (a non-http pin now resolves to null), the
+  auto-capture was skipped with no `capture_error`, so the agent got a clean
+  success and no DOM. It now sets `capture_error` (NoPage) like any capture failure.
+
 ## [0.4.41] - 2026-06-09
 
 ### Fixed
