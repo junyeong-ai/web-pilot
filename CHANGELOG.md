@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.18] - 2026-06-08
+
+### Fixed
+
+- **`frame find` surfaces a predicate's evaluation error** instead of disguising
+  it as `FrameNotFound`. Both modes swallowed a thrown predicate (a typo, a
+  reference error) and treated it as "didn't match"; the error is now returned
+  when nothing matches, so a broken predicate is distinguishable from one that
+  cleanly matched no frame.
+- **`frame url` matches with a real `*` glob, not star-stripping.** It removed all
+  `*` then did a substring check, so `foo*bar` searched for "foobar" and an empty
+  or all-`*` pattern silently matched the first frame. A shared `*`-glob replaces
+  it in both modes (`/auth/` stays a plain contains-match), and an empty or
+  all-wildcard pattern is rejected with `InvalidArgument`.
+
 ## [0.4.17] - 2026-06-08
 
 ### Fixed
