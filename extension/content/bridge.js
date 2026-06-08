@@ -211,12 +211,23 @@
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return false;
     if (!el.checkVisibility()) return false;
-    const style = getComputedStyle(el);
-    return (
-      style.visibility !== "hidden" &&
-      style.visibility !== "collapse" &&
-      parseFloat(style.opacity) > 0
-    );
+    const own = getComputedStyle(el);
+    // `visibility` is inherited, so the element's own computed value already
+    // accounts for an ancestor's `hidden`/`collapse`.
+    if (own.visibility === "hidden" || own.visibility === "collapse") return false;
+    // `opacity` is NOT inherited: an `opacity:0` ANCESTOR paints the whole
+    // subtree transparent without lowering the child's own opacity, so a bare
+    // own-opacity check would emit an invisible control as actionable. Walk up —
+    // across open shadow boundaries to the host, since extraction pierces shadow
+    // roots — and reject if any box is fully transparent. Done manually rather
+    // than via `checkVisibility`'s `opacityProperty` option, which is silently
+    // dropped on Chromes that predate it.
+    for (let node = el; node && node.nodeType === 1; ) {
+      if (parseFloat(getComputedStyle(node).opacity) <= 0) return false;
+      const root = node.getRootNode();
+      node = node.parentElement || (root instanceof ShadowRoot ? root.host : null);
+    }
+    return true;
   }
 
   // Resolve an element index against the stored snapshot.
