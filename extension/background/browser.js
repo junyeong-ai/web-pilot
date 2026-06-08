@@ -26,20 +26,45 @@ async function handleTabNew(url) {
   };
 }
 
+// chrome.tabs ids are non-negative integers. `parseInt` is too lenient — it
+// reads "123x" as 123 and would act on the wrong tab — so an id must match
+// exactly. A malformed id is a `TabNotFound` (exit 4), mirroring headless, where
+// it simply fails to match any target id; never a silent action on a coerced tab.
+function parseTabId(tabId) {
+  if (typeof tabId === "number" && Number.isInteger(tabId) && tabId >= 0) return tabId;
+  if (typeof tabId === "string" && /^\d+$/.test(tabId)) return Number(tabId);
+  return null;
+}
+
 async function handleTabClose(tabId) {
+  const id = parseTabId(tabId);
+  if (id === null) {
+    return tabNotFound(tabId);
+  }
   try {
-    await chrome.tabs.remove(parseInt(tabId, 10));
+    await chrome.tabs.remove(id);
     return { type: "Action", success: true };
   } catch (e) {
     // A bad or already-closed id is a not-found — typed to match headless
     // (`do_tab_close` → `TabNotFound`, exit 4) instead of a generic exception.
-    return { type: "Action", success: false, error: err("TabNotFound", e.message, { tab_id: tabId }) };
+    return { type: "Action", success: false, error: err("TabNotFound", e.message, { tab_id: String(tabId) }) };
   }
 }
 
+function tabNotFound(tabId) {
+  return {
+    type: "Action",
+    success: false,
+    error: err("TabNotFound", `invalid tab id: ${tabId}`, { tab_id: String(tabId) }),
+  };
+}
+
 async function handleTabSwitch(tabId) {
+  const target = parseTabId(tabId);
+  if (target === null) {
+    return tabNotFound(tabId);
+  }
   try {
-    const target = parseInt(tabId, 10);
     // Make it the active tab within its own window so a user looking at that
     // window sees what the agent drives — but never raise the window to the
     // OS foreground: that steals focus from whatever app the user is in, and
