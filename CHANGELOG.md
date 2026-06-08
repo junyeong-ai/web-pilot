@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.14] - 2026-06-08
+
+### Fixed
+
+- **An invalid CSS selector is a typed `InvalidArgument`**, not a silent
+  page-response timeout (browser mode) — `wait selector` and any selector
+  resolution now catch the `SyntaxError` and name the bad selector.
+- **The network monitor logs a `Request`-object `fetch` correctly** — it read
+  `String(resource)` (logging "[object Request]") and lost the method; it now
+  reads the `Request`'s own url/method, in both modes.
+- **`session import` surfaces malformed cookie rows** instead of silently dropping
+  them and reporting success — they are counted and reported as a partial failure.
+
 ## [0.4.13] - 2026-06-08
 
 ### Fixed
