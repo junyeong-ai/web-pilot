@@ -754,6 +754,18 @@
           const r = resolveTarget(action);
           if (r.error) return r.error;
           r.target.focus();
+          // `focus()` on a non-focusable element (a static div/span with no
+          // tabindex) is a silent no-op. Verify focus actually landed — on the
+          // element, or on a descendant for a delegating/shadow host (where
+          // `document.activeElement` is the host) — rather than report a focus
+          // that didn't happen and send the next key-press somewhere else.
+          const active = document.activeElement;
+          if (active !== r.target && !r.target.contains(active)) {
+            return err(
+              "InvalidArgument",
+              `<${r.target.tagName.toLowerCase()}> took no focus — it is not a form control and has no tabindex`,
+            );
+          }
           return { success: true };
         }
 
