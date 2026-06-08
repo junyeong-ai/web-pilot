@@ -117,8 +117,22 @@ async function cdpEval(tid, code, uniqueContextId) {
     const msg = ev.exceptionDetails.exception?.description || ev.exceptionDetails.text || "JS exception";
     return { success: false, error: otherErr(msg) };
   }
-  const v = ev.result?.value;
-  return { success: true, result: v !== undefined ? JSON.stringify(v) : null };
+  return { success: true, result: JSON.stringify(decodeRemoteObject(ev.result)) };
+}
+
+// Faithfully render a CDP RemoteObject. CDP omits `value` for results JSON
+// cannot carry — `undefined`, `NaN`/`±Infinity`/`-0`, `BigInt`, functions,
+// symbols. Collapsing them to `null` would tell the agent the page returned
+// `null` when it did not. Fall back to the engine's own rendering (the
+// `unserializableValue` literal, the bare `undefined`, or the `description`),
+// and only a genuinely empty object to `null`. Mirrors the headless
+// `decode_eval_result`. `"value" in remote` (not truthiness) keeps a real
+// `null`/`0`/`false`/`""` intact.
+function decodeRemoteObject(remote) {
+  if (remote && "value" in remote) return remote.value;
+  if (typeof remote?.unserializableValue === "string") return remote.unserializableValue;
+  if (remote?.type === "undefined") return "undefined";
+  return typeof remote?.description === "string" ? remote.description : null;
 }
 
 async function handleEval(command) {

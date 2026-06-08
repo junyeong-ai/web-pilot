@@ -348,7 +348,7 @@ impl LocalTransport {
     pub(super) async fn eval_in_active(&self, expression: &str) -> Result<Value> {
         let cid = self.active_context_id().await?;
         match self.eval_in_context(expression, cid.as_deref(), true).await {
-            Ok(result) => Ok(result.get("value").cloned().unwrap_or(Value::Null)),
+            Ok(result) => Ok(decode_eval_result(&result)),
             Err(e) if is_stale_context(&e) => {
                 // The active frame's MAIN-world context was destroyed by a
                 // navigation, but the map can still hand back that dead id until
@@ -364,7 +364,7 @@ impl LocalTransport {
                 let result = self
                     .eval_in_context(expression, fresh.as_deref(), true)
                     .await?;
-                Ok(result.get("value").cloned().unwrap_or(Value::Null))
+                Ok(decode_eval_result(&result))
             }
             Err(e) => Err(e),
         }
@@ -412,7 +412,7 @@ impl LocalTransport {
             .eval_in_context_with_timeout(&js, Some(&cid), true, timeout)
             .await
         {
-            Ok(result) => Ok(result.get("value").cloned().unwrap_or(Value::Null)),
+            Ok(result) => Ok(decode_eval_result(&result)),
             Err(e) if is_stale_context(&e) => {
                 // A navigation destroyed the isolated world this `cid` named, but
                 // the context map can still hand it back until the async
@@ -426,7 +426,7 @@ impl LocalTransport {
                 let result = self
                     .eval_in_context_with_timeout(&js, Some(&fresh), true, timeout)
                     .await?;
-                Ok(result.get("value").cloned().unwrap_or(Value::Null))
+                Ok(decode_eval_result(&result))
             }
             Err(e) => Err(e),
         }
@@ -605,6 +605,31 @@ impl LocalTransport {
             .map(|(_, url)| url)
             .unwrap_or_default()
     }
+}
+
+/// Decode a CDP `RemoteObject` into a faithful value. CDP omits `value` for
+/// results JSON cannot carry — `undefined`, `NaN`/`±Infinity`/`-0`, `BigInt`,
+/// functions, symbols. Collapsing all of those to `null` would tell the agent
+/// the page returned `null` when it did not (a property read that is `undefined`
+/// is not the same as one that is `null`). So fall back to the engine's own
+/// rendering: the `unserializableValue` literal (`"NaN"`, `"42n"`), the bare
+/// type name for `undefined`, or the object `description` (a function/symbol),
+/// and only a genuinely empty object to `null`.
+fn decode_eval_result(remote: &Value) -> Value {
+    if let Some(value) = remote.get("value") {
+        return value.clone();
+    }
+    if let Some(unserializable) = remote.get("unserializableValue").and_then(Value::as_str) {
+        return Value::String(unserializable.to_owned());
+    }
+    if remote.get("type").and_then(Value::as_str) == Some("undefined") {
+        return Value::String("undefined".to_owned());
+    }
+    remote
+        .get("description")
+        .filter(|d| d.is_string())
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 /// Whether an error is the typed [`crate::cdp::ContextGone`] — the renderer
