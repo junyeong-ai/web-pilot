@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.21] - 2026-06-08
+
+### Fixed
+
+- **`tab find --url` matches with the same `*` glob as `frame url`**, not the
+  star-stripping substring the latter just shed. `tab find --url '*'` reduced to
+  an empty needle that matched everything, silently switching to the first listed
+  tab, and a middle `*` matched the wrong URL. Both URL selectors now route
+  through one shared matcher (`webpilot::url_glob`), so they can't drift, and an
+  empty or all-wildcard pattern is rejected with `InvalidArgument`.
+
 ## [0.4.20] - 2026-06-08
 
 ### Fixed
