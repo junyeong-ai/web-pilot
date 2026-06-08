@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-06-08
+
+A comprehensive parallel sweep of the previously least-audited surfaces — the
+browser-mode service worker, the MCP server, the CDP client, and the action
+settle logic — turned up five reachable defects (one of them the intermittent CI
+flake). No wire or CLI change.
+
+### Fixed
+
+- **A link click reliably reports `url_changed`.** `settled_action_url` concluded
+  "no navigation" whenever its one-shot drain of buffered CDP events was empty,
+  on the optimistic assumption that a link click's `frameStartedLoading` is always
+  buffered by then. But following a hyperlink is a queued task, so the event can
+  arrive after the bridge click response — leaving `url_changed` (and the
+  `--capture` of the new page) intermittently missing. The bridge now derives a
+  deterministic `navigates` hint at click time (a non-prevented self-targeting
+  `a[href]` to a different http(s)/file document); when hinted, the settle waits
+  for the commit instead of reporting nothing. A non-navigating click — a button,
+  a `preventDefault`'d SPA link, a fragment link — sets no hint and still pays
+  zero. (This was the CI-only `headless_behavioral_flow` flake.)
+- **Browser mode adopts a click-opened tab after settle**, not by a single
+  pre-settle check. A `target=_blank` / `window.open` popup whose `tabs.onCreated`
+  arrived during the settle window was missed — `new_tab` absent, the pin silently
+  left on the opener. Adoption now runs after `settledActionUrl` (whose awaits
+  yield the event loop), matching headless. Adds the missing browser-mode popup
+  regression test.
+- **Browser `dom get` preserves an empty string value.** `r.value || null`
+  collapsed a legitimately empty value (`getText` on an empty element, `getAttr`
+  on `disabled=""`) to `null`, diverging from headless, which keeps `""`. Now
+  `?? null`, so present-but-empty stays distinct from absent.
+- **The MCP server answers a malformed request with -32600** rather than silently
+  dropping it: a `{}` with no `jsonrpc`/`method` was treated as a no-id
+  notification before the envelope was validated, so a client awaiting a reply
+  would hang. Validation now precedes the notification check.
+- **A CDP wait surfaces `ConnectionLost` immediately.** `wait_for_event` blocked
+  until its full deadline and then returned `Timeout` when Chrome died mid-wait —
+  the broadcast channel never closes while the struct holds the sender. It now
+  polls the liveness flag and returns a typed `ConnectionLost` at once, like
+  `send`.
+
 ## [0.4.5] - 2026-06-08
 
 A deep review of `bridge.js` — the content script shared by both modes and, until
