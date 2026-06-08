@@ -367,26 +367,42 @@ impl CdpClient {
     ) -> Result<Value> {
         let mut rx = self.events.subscribe();
         let target = method.to_string();
-        let target_for_err = target.clone();
-        match tokio::time::timeout(timeout, async move {
-            loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        if event.get("method").and_then(|v| v.as_str()) == Some(&target) {
-                            return Ok(event);
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => {
-                        anyhow::bail!("CDP event channel closed");
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            // A connection that dies mid-wait must surface immediately as
+            // ConnectionLost, not after the full deadline as a misleading
+            // Timeout. The reader sets `alive=false` on death, but the struct
+            // keeps the broadcast sender alive, so `recv()` never observes
+            // `Closed` — poll the flag between events so the wait unblocks within
+            // one tick of the drop. This mirrors `send`, which checks `alive`.
+            if !self.alive.load(Ordering::Acquire) {
+                return Err(WebPilotError::ConnectionLost {
+                    detail: format!("CDP reader exited while waiting for {target}"),
+                }
+                .into());
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                anyhow::bail!("Timeout waiting for {target}");
+            }
+            let tick = (deadline - now).min(std::time::Duration::from_millis(250));
+            match tokio::time::timeout(tick, rx.recv()).await {
+                Ok(Ok(event)) => {
+                    if event.get("method").and_then(|v| v.as_str()) == Some(&target) {
+                        return Ok(event);
                     }
                 }
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(broadcast::error::RecvError::Closed)) => {
+                    return Err(WebPilotError::ConnectionLost {
+                        detail: format!("CDP event channel closed while waiting for {target}"),
+                    }
+                    .into());
+                }
+                // Poll tick elapsed with no event — loop to re-check `alive` and
+                // the deadline.
+                Err(_) => continue,
             }
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => anyhow::bail!("Timeout waiting for {target_for_err}"),
         }
     }
 
