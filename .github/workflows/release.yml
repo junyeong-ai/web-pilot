@@ -137,6 +137,12 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG#v}"
+          # Idempotent publish: a re-run for a tag that already has a release
+          # (a retried publish, a moved tag) replaces it instead of failing on
+          # "release already exists". Keep the tag — only the release is rebuilt.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release delete "${TAG}" --yes --cleanup-tag=false
+          fi
           gh release create "${TAG}" \
             --title "WebPilot ${version}" \
             --generate-notes \

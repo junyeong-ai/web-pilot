@@ -244,15 +244,19 @@ fn usize_var(env: &str, file: Option<usize>, default: usize) -> usize {
 }
 
 /// A boolean env override. `1` / `true` / `yes` / `on` (any case) are true; any
-/// other set value is false. Absent falls through to the config file, then the
-/// built-in default — the same precedence as every other tunable.
+/// other non-empty value is false. Absent OR empty falls through to the config
+/// file, then the built-in default — empty is "unset" here just as it is for
+/// `string_var`, so the precedence is consistent across every tunable.
 fn bool_var(env: &str, file: Option<bool>, default: bool) -> bool {
-    let env_val = std::env::var(env).ok().map(|v| {
-        matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    });
+    let env_val = std::env::var(env)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        });
     pick(env_val, file, default)
 }
 
