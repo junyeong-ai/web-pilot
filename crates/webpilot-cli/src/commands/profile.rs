@@ -38,14 +38,10 @@ pub async fn run(local: &mut LocalTransport, args: ProfileArgs) -> Result<Comman
         .ok_or_else(|| webpilot::WebPilotError::Other {
             detail: "Profiler.stop returned no profile data".into(),
         })?;
-    let dir = dirs::artifacts_dir();
-    // Nanoseconds so two `--context` profiles in the same millisecond don't
-    // collide on the filename and overwrite.
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let path = dir.join(format!("profile_{ts}.cpuprofile"));
+    // One naming authority (`dirs::artifact_path`): the name carries the pid, so
+    // two profiles in the same SystemTime tick — even concurrent ones in
+    // different processes / contexts — can't collide and overwrite.
+    let path = dirs::artifact_path("profile", "cpuprofile");
     std::fs::write(&path, serde_json::to_string(&data)?)?;
 
     Ok(CommandOutput::Data {
