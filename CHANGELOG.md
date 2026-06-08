@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.26] - 2026-06-08
+
+### Fixed
+
+- **A button/image input is findable by its visible label.** `<input type=submit
+  value="Search">` (and `type=button`/`reset`, and `type=image` whose label is its
+  `alt`) carried its label only in `value`, but `find --text` searches `text`/`name` —
+  so the button was in the snapshot yet `find --text "Search"` matched nothing. The
+  snapshot now puts each input type's real label in `text`.
+- **Detail-carrying wire errors no longer double their Display prefix.**
+  `InvalidArgument`/`ConnectionLost`/`Session` round-tripped through the host
+  rebuilt `detail` from the already-prefixed `message`, yielding "Invalid argument:
+  Invalid argument: …" (reachable via the NM host's oversized-command guard). The
+  raw `detail` now travels as a structured field, so the prefix applies once.
+
 ## [0.4.25] - 2026-06-08
 
 ### Fixed
