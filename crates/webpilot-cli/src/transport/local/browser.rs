@@ -215,14 +215,19 @@ impl LocalTransport {
             return Ok(not_found);
         }
 
+        // Closing the tab this session is bound to: record it as the active pin
+        // FIRST, so the next command sees a DEAD pin and fails loud (TabNotFound
+        // via `pick_active_target`) instead of silently rebinding to an arbitrary
+        // tab — including the fresh-session case where no pin was persisted yet
+        // and the active tab is just the implicit `target_id`. `pick_active_target`
+        // clears the dead pin after that one loud failure, for recovery. Browser
+        // mode gets the same effect from its sticky pin.
+        if self.target_id.as_str() == tab_id {
+            super::write_persisted_active_tab(self.persisted_context_key(), tab_id);
+        }
         self.browser
             .send("Target.closeTarget", Some(json!({"targetId": tab_id})))
             .await?;
-        // Closing the active tab leaves its pin DEAD, not cleared. The next
-        // command then fails loud with TabNotFound (via `pick_active_target`), so
-        // the agent must re-pin explicitly with `tab switch` — never a silent
-        // retarget to a tab it has not seen. Browser mode does the same (its
-        // `handleTabClose` doesn't touch the pin either).
         Ok(action_success(None))
     }
 

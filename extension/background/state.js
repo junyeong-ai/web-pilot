@@ -143,6 +143,17 @@ async function handleCookieList(url) {
 }
 
 async function handleCookieSet(command) {
+  // The cookie URL must be http(s), as the headless CDP `Network.setCookie`
+  // enforces — surface it as a typed InvalidArgument (exit 7), not the less
+  // specific `chrome.cookies.set` exception (which would read as a generic
+  // failure with a different code in browser mode only).
+  if (!/^https?:\/\//i.test(command.url || "")) {
+    return {
+      type: "CookieResult",
+      success: false,
+      error: err("InvalidArgument", "cookie url must have scheme http or https"),
+    };
+  }
   try {
     await chrome.cookies.set({
       url: command.url,
