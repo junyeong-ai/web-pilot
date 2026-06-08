@@ -450,21 +450,18 @@ if (!window.__webpilot_network_active) {
         const url = isReq ? resource.url : String(resource);
         const method = config?.method || (isReq ? resource.method : "GET");
         const t0 = performance.now();
+        // Record in-flight immediately (no status, duration 0) so a read during a
+        // slow request sees it; fill in on completion by mutating this entry.
+        const entry = { type: "fetch", url, method, duration_ms: 0, timestamp: Date.now() };
+        window.__webpilot_network.push(entry);
+        if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
         return origFetch.apply(this, args).then(response => {
-            window.__webpilot_network.push({
-                type: "fetch", url, method, status: response.status,
-                duration_ms: Math.round(performance.now() - t0),
-                timestamp: Date.now(),
-            });
-            if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+            entry.status = response.status;
+            entry.duration_ms = Math.round(performance.now() - t0);
             return response;
         }).catch(err => {
-            window.__webpilot_network.push({
-                type: "fetch", url, method, error: err.message,
-                duration_ms: Math.round(performance.now() - t0),
-                timestamp: Date.now(),
-            });
-            if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+            entry.error = err.message;
+            entry.duration_ms = Math.round(performance.now() - t0);
             throw err;
         });
     };
@@ -478,16 +475,15 @@ if (!window.__webpilot_network_active) {
     };
     xhrProto.send = function(...a) {
         const t0 = performance.now();
+        const meta = xhrMeta.get(this) || {};
+        // Record in-flight at send (no status, duration 0), updated on loadend.
+        const entry = { type: "xhr", url: meta.url || "", method: meta.method || "GET", duration_ms: 0, timestamp: Date.now() };
+        window.__webpilot_network.push(entry);
+        if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
         this.addEventListener("loadend", () => {
-            const meta = xhrMeta.get(this) || {};
-            window.__webpilot_network.push({
-                type: "xhr", url: meta.url || "", method: meta.method || "GET",
-                status: this.status || undefined,
-                error: this.status === 0 ? "Network error" : undefined,
-                duration_ms: Math.round(performance.now() - t0),
-                timestamp: Date.now(),
-            });
-            if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+            entry.status = this.status || undefined;
+            entry.error = this.status === 0 ? "Network error" : undefined;
+            entry.duration_ms = Math.round(performance.now() - t0);
         }, { once: true });
         return origSend.apply(this, a);
     };
