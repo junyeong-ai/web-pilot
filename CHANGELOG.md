@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.43] - 2026-06-09
+
+### Fixed
+
+- **Device emulation drives touch, so a mobile preset is actually touch-capable.**
+  `device preset iphone-15` set metrics and UA but never touch emulation, leaving
+  `navigator.maxTouchPoints === 0` — a page using touch detection to serve its
+  mobile UI saw a desktop client. Apply now enables touch for mobile devices (and
+  disables it for desktop), and `device reset` turns it back off.
+
 ## [0.4.42] - 2026-06-09
 
 ### Fixed
