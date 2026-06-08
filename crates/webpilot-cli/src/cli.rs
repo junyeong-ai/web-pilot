@@ -163,7 +163,18 @@ async fn run_headless_mode(
         _ => {}
     }
 
-    let mut transport = LocalTransport::open(context.as_deref()).await?;
+    // Context-management commands operate on the context *store* at the browser
+    // level — they must not resolve (and so auto-create) the `--context` they
+    // were invoked with, or `context list` would create the very context it is
+    // meant to only report, and `context close` would be unreachable once the
+    // cap is hit. They open the default connection; every other headless command
+    // binds the requested context.
+    let open_context = if matches!(command, Cmd::Context(_)) {
+        None
+    } else {
+        context.as_deref()
+    };
+    let mut transport = LocalTransport::open(open_context).await?;
 
     let result = match command {
         // Headless-only commands take the LocalTransport directly for raw CDP access.
