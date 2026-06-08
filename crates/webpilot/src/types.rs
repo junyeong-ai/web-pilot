@@ -643,6 +643,18 @@ impl DomSnapshot {
             out.push('\n');
         }
 
+        // The captured page text (`--include text`) is content, not metadata —
+        // render it in the agent-facing text the same as JSON carries it.
+        // Without this, `capture --include text` showed the text in `--json`
+        // output but nothing in the terminal / MCP `to_agent_text` path, which
+        // both route through here. Kept multi-line (not `line_safe`d) — it is the
+        // page's own text.
+        if let Some(text) = &self.text_content
+            && !text.is_empty()
+        {
+            out.push_str(&format!("--- Page text ---\n{text}\n"));
+        }
+
         out.push_str(&format!(
             "--- Page: {} ({}) ---\n",
             line_safe(&self.page_title),
@@ -783,5 +795,30 @@ mod tests {
         let text = snap.to_text();
         assert!(text.contains("2 iframe(s) not shown"));
         assert!(text.contains("webpilot frame url"));
+    }
+
+    #[test]
+    fn to_text_renders_captured_page_text() {
+        let mut snap = DomSnapshot {
+            elements: Vec::new(),
+            total_nodes: 0,
+            page_url: "x".into(),
+            page_title: "y".into(),
+            scroll: ScrollInfo::default(),
+            scroll_percent: 0,
+            extraction_ms: 0,
+            subframes: 0,
+            shadow_truncated: false,
+            text_content: None,
+            accessibility_tree: None,
+        };
+        // Absent until `--include text` populates it.
+        assert!(!snap.to_text().contains("Page text"));
+        // Present: the captured text must reach the terminal / MCP text path,
+        // not only `--json` — it routes through `to_text` like everything else.
+        snap.text_content = Some("Hello from the page".into());
+        let text = snap.to_text();
+        assert!(text.contains("--- Page text ---"));
+        assert!(text.contains("Hello from the page"));
     }
 }
