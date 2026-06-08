@@ -368,6 +368,11 @@ impl CdpClient {
         let mut rx = self.events.subscribe();
         let target = method.to_string();
         let deadline = tokio::time::Instant::now() + timeout;
+        // Whether the event broadcast overflowed mid-wait (a burst larger than
+        // `cdp.event_buffer`). The awaited event may have been one of the dropped
+        // messages, so a subsequent deadline is NOT a confident "it never
+        // happened" — it is reported as lost events, never a plain Timeout.
+        let mut lagged = false;
         loop {
             // A connection that dies mid-wait must surface immediately as
             // ConnectionLost, not after the full deadline as a misleading
@@ -383,6 +388,19 @@ impl CdpClient {
             }
             let now = tokio::time::Instant::now();
             if now >= deadline {
+                if lagged {
+                    // Events were dropped during the wait and the awaited one
+                    // never arrived — surface the loss (retry, or raise
+                    // `cdp.event_buffer`) instead of a Timeout that would imply
+                    // the page/event simply didn't happen.
+                    return Err(WebPilotError::ConnectionLost {
+                        detail: format!(
+                            "CDP event buffer overflowed while waiting for {target} — \
+                             events were dropped; retry (or raise cdp.event_buffer)"
+                        ),
+                    }
+                    .into());
+                }
                 anyhow::bail!("Timeout waiting for {target}");
             }
             let tick = (deadline - now).min(std::time::Duration::from_millis(250));
@@ -392,7 +410,13 @@ impl CdpClient {
                         return Ok(event);
                     }
                 }
-                Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                    // Some events were dropped. The one we want may still arrive,
+                    // so keep waiting — but remember the gap so a final timeout is
+                    // reported as event loss, not a clean "never happened".
+                    lagged = true;
+                    continue;
+                }
                 Ok(Err(broadcast::error::RecvError::Closed)) => {
                     return Err(WebPilotError::ConnectionLost {
                         detail: format!("CDP event channel closed while waiting for {target}"),
