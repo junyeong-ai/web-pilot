@@ -257,10 +257,18 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
             let disposed = browser
                 .dispose_browser_context(&ctx.browser_context_id)
                 .await;
+            // Delete the record only when disposal is CONFIRMED: the call
+            // succeeded, or a re-list positively shows the context absent. A
+            // failed `get_browser_contexts` (the CDP socket wedged or dropped
+            // mid-sweep — e.g. a Chrome crash-restart between the two calls) is
+            // NOT proof it's gone; treating that error as "gone" would delete the
+            // only record that can close it, orphaning a possibly-live context
+            // that then leaks until Chrome quits. On an unknown result, keep the
+            // record and let the next sweep retry.
             let gone = disposed.is_ok()
-                || !matches!(
+                || matches!(
                     browser.get_browser_contexts().await,
-                    Ok(live) if live.contains(&ctx.browser_context_id)
+                    Ok(live) if !live.contains(&ctx.browser_context_id)
                 );
             if gone {
                 super::local::clear_context_state(&ctx.browser_context_id);
