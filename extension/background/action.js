@@ -285,6 +285,17 @@ async function dispatchActionToPage(tab, action) {
     }
     const result = { type: "Action", ...r };
 
+    // Report the settled destination of a same-tab navigation the action
+    // triggered; a non-navigating action adds no url_changed and pays no wait.
+    // Run this BEFORE reading `openedTabId`: a click-opened popup's
+    // `tabs.onCreated` / `onCreatedNavigationTarget` can be dispatched after the
+    // content-script response but while both listeners are still registered, and
+    // `settledActionUrl`'s `chrome.tabs.get`/`webNavigation` awaits yield the
+    // event loop so that event is delivered first. A single pre-settle check
+    // would miss it and leave the pin silently on the opener.
+    const settledUrl = await settledActionUrl(tab.id, urlBefore, navWatch);
+    if (settledUrl && settledUrl !== urlBefore) result.url_changed = settledUrl;
+
     if (openedTabId != null) {
       const newTab = await chrome.tabs.get(openedTabId).catch(() => null);
       if (newTab) {
@@ -301,12 +312,6 @@ async function dispatchActionToPage(tab, action) {
         };
       }
     }
-
-    // Report the settled destination of a navigation the action triggered (the
-    // popup case is handled above via `new_tab`); a non-navigating action adds
-    // no url_changed and pays no wait.
-    const settledUrl = await settledActionUrl(tab.id, urlBefore, navWatch);
-    if (settledUrl && settledUrl !== urlBefore) result.url_changed = settledUrl;
 
     return result;
   } catch (e) {

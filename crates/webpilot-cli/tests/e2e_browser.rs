@@ -720,5 +720,54 @@ fn browser_behavioral_flow() {
         stdout(&full)
     );
 
+    // 9. A click-opened tab (`rel=noopener`, so correlation can't lean on
+    //    `window.opener`) is reported as `new_tab` and the pin follows it —
+    //    mirroring headless. This is the regression guard for the adoption
+    //    race: the create event can be delivered during `settledActionUrl`, so
+    //    the adoption is read AFTER settle (whose awaits yield the event loop),
+    //    never by a single pre-settle check that would leave the pin on the
+    //    opener. Last in the flow: it intentionally leaves an extra tab, and
+    //    `drop(fx)` tears the session down.
+    let pop_nav = fx.run(&["action", "navigate", &base]);
+    assert_eq!(
+        code(&pop_nav),
+        0,
+        "navigate to base failed: {}",
+        stdout(&pop_nav)
+    );
+    let pop_cap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&pop_cap), 0);
+    let pop_snapshot: serde_json::Value =
+        serde_json::from_str(&stdout(&pop_cap)).expect("capture json");
+    let pop_index = pop_snapshot["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "pop")
+        .and_then(|e| e["index"].as_u64())
+        .expect("pop index")
+        .to_string();
+    let popped = fx.run(&["action", "click", &pop_index]);
+    assert_eq!(code(&popped), 0, "popup click failed: {}", stdout(&popped));
+    let popped_json: serde_json::Value =
+        serde_json::from_str(&stdout(&popped)).expect("action json");
+    assert!(
+        popped_json["new_tab"]["id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "browser popup must be reported as new_tab: {}",
+        stdout(&popped)
+    );
+    let pop_status = fx.run(&["status"]);
+    let pop_status_json: serde_json::Value =
+        serde_json::from_str(&stdout(&pop_status)).expect("status json");
+    assert!(
+        pop_status_json["tab_url"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("/second")),
+        "the popup must be the active tab after adoption: {}",
+        stdout(&pop_status)
+    );
+
     drop(fx);
 }
