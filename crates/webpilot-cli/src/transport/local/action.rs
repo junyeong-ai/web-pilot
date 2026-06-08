@@ -466,28 +466,29 @@ impl LocalTransport {
         // load a new top-level document; when it does, fall through to the
         // commit-wait rather than concluding "nothing happened". (A `location=`
         // from a later timer carries no hint and stays the agent's `wait`.)
-        if seq.is_empty() {
-            if !nav_hint {
-                return immediate;
-            }
-            // A navigation is expected but its first event has not landed yet —
-            // wait for the commit below (bounded by PROBE).
-        } else {
-            // Something loaded — learn the main frame id to interpret the
-            // sequence. A start/stop pair only settles the MAIN frame, and replay
-            // IN ORDER (not set membership) is what makes `[priorStop, ourStart]`
-            // resolve to "still loading" instead of short-circuiting on the stale
-            // stop. (Unreadable tree → don't wait.)
-            let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
-                return immediate;
-            };
-            let Some(main) = tree
-                .pointer("/frameTree/frame/id")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-            else {
-                return immediate;
-            };
+        // The common no-navigation case returns before any extra round-trip.
+        if seq.is_empty() && !nav_hint {
+            return immediate;
+        }
+        // Both the buffered replay and the live wait below only settle on the
+        // MAIN frame — a subframe's start/stop must never satisfy the wait, or a
+        // cross-origin iframe that reloads on its own would end the wait at the
+        // pre-click URL and DOM. Learn the main frame id once, for both.
+        // (Unreadable tree → don't wait.)
+        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
+            return immediate;
+        };
+        let Some(main) = tree
+            .pointer("/frameTree/frame/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            return immediate;
+        };
+        if !seq.is_empty() {
+            // Replay IN ORDER (not set membership) so `[priorStop, ourStart]`
+            // resolves to "still loading" instead of short-circuiting on the
+            // stale stop.
             let mut committed: Option<String> = None;
             let mut main_loading = false;
             for e in seq {
@@ -508,6 +509,8 @@ impl LocalTransport {
                 return immediate;
             }
         }
+        // Otherwise seq was empty but a navigation is expected (`nav_hint`): its
+        // first event has not landed yet — wait for the commit below (PROBE-bound).
 
         let deadline = tokio::time::Instant::now() + super::PROBE;
         loop {
@@ -520,9 +523,13 @@ impl LocalTransport {
                     if let Some(u) = main_frame_url(&ev) {
                         return u.to_string();
                     }
-                    // The load ended without a commit (cancelled, download):
-                    // nothing further to wait for.
+                    // The MAIN load ended without a commit (cancelled, download):
+                    // nothing further to wait for. A subframe's stop is ignored —
+                    // an unrelated iframe reloading must not end the main wait at
+                    // the pre-click page.
                     if ev.get("method").and_then(Value::as_str) == Some("Page.frameStoppedLoading")
+                        && ev.pointer("/params/frameId").and_then(Value::as_str)
+                            == Some(main.as_str())
                     {
                         return self.bound_target_url().await;
                     }
