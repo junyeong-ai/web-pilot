@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-06-08
+
+Security and robustness hardening from a deep multi-round adversarial review. No
+behaviour change for a cooperative page and a correctly-configured agent.
+
+### Security
+
+- **Newline injection into the agent's view is closed everywhere.** Every
+  renderer that turns a page- or server-controlled string into agent-facing
+  lines — cookie list/get, tab list, frame list, console read, network read, and
+  `find` — now collapses control characters through `line_safe`, not just the DOM
+  snapshot. A crafted cookie value, document title, or `console.log` can no longer
+  forge a row or inject text the agent reads as its own. (`--json` was already
+  safe via JSON escaping.)
+- A custom `device set --user-agent` with control characters (CR/LF/NUL) is
+  rejected rather than passed toward a request header.
+
+### Fixed
+
+- Browser-mode infrastructure failures (the Native Messaging host not running, a
+  closed socket, a timeout, a malformed reply) now surface as the typed
+  `ConnectionLost` (exit 3) instead of a generic `Other` (exit 1).
+- A `--context` resolve that created the CDP browser context, then failed
+  creating its page or persisting metadata, no longer orphans the context in
+  Chrome — it is disposed on any post-create error.
+- A vanished bound target no longer rebinds the session to an ambiguous sibling
+  tab: the fallback is taken only when the context has exactly one page.
+- The MCP server answers a JSON-RPC batch (a top-level array) with a -32600
+  invalid request instead of silently dropping it and hanging the client.
+- The frame-tree walk is depth-bounded, so a pathological nesting degrades to an
+  undercount rather than overflowing the stack.
+
+### Documentation
+
+- The console/network monitors' honest boundaries are documented: they are
+  MAIN-world and therefore evadable by a hostile page, and they capture from when
+  they are armed (a navigation's load-time events, before re-arm, are not
+  captured) — an agent must not read an empty buffer as "nothing happened."
+
 ## [0.4.1] - 2026-06-08
 
 Hardening follow-up to 0.4.0. No behaviour change for a correctly-configured
