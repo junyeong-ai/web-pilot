@@ -327,18 +327,22 @@ async function handleSessionExport() {
   try {
     const all = await chrome.cookies.getAll({});
     const tab = await resolveActiveTab();
-    let storage = { localStorage: {}, sessionStorage: {} };
-    if (tab) {
-      // A storage read that fails or comes back as a typed bridge error must
-      // fail the export (headless parity): writing empty storage would import
-      // back as silent data loss. A valid read carries a `localStorage` object.
-      await ensureBridge(tab.id, activeFrameId);
-      const s = await sendToContent(tab.id, { type: "exportStorage" }, activeFrameId);
-      if (!s || s.success === false || !s.localStorage) {
-        return topErr(s && s.error ? s.error : otherErr("storage export failed"));
-      }
-      storage = s;
+    // No http page (e.g. only chrome://newtab focused) means Web Storage can't be
+    // read at all — fail rather than write a session file with silently empty
+    // localStorage/sessionStorage that re-imports as data loss. Headless always
+    // has a bound page and so always reads it; this matches that.
+    if (!tab) {
+      return topErr(noPageErr());
     }
+    // A storage read that fails or comes back as a typed bridge error must
+    // fail the export (headless parity): writing empty storage would import
+    // back as silent data loss. A valid read carries a `localStorage` object.
+    await ensureBridge(tab.id, activeFrameId);
+    const s = await sendToContent(tab.id, { type: "exportStorage" }, activeFrameId);
+    if (!s || s.success === false || !s.localStorage) {
+      return topErr(s && s.error ? s.error : otherErr("storage export failed"));
+    }
+    const storage = s;
     const data = {
       version: 1,
       exported_at: Date.now(),

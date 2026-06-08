@@ -722,11 +722,23 @@
         case "select": {
           const r = resolveTarget(action);
           if (r.error) return r.error;
+          // Only a native `<select>` has a meaningful `.value`/`change` for this
+          // path. Other elements expose `.options` too (a `<datalist>`), and
+          // setting `.value` on them does nothing — so without this guard
+          // `action select` would report success while selecting nothing, the
+          // same silent-wrong-success class as `action type`/`focus` on a wrong
+          // element. A custom dropdown is driven with `action click`.
+          if (!(r.target instanceof HTMLSelectElement)) {
+            return err(
+              "InvalidArgument",
+              `<${r.target.tagName.toLowerCase()}> is not a <select> — use action click to open a custom dropdown, then click the option`,
+            );
+          }
           // Setting `.value` to a value no <option> carries silently leaves a
           // <select> at "" (selectedIndex -1). Firing `change` and returning
           // success then would report a selection that did not happen — so
           // verify the option exists and fail typed instead.
-          const opts = r.target.options ? [...r.target.options] : [];
+          const opts = [...r.target.options];
           if (!opts.some((o) => o.value === action.value)) {
             // Put the valid values IN the message, not only the data: the Rust
             // `InvalidArgument` variant carries just a string, so a structured
