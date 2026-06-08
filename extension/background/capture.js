@@ -132,12 +132,15 @@ async function handleCapture(command) {
   // Accessibility tree (CDP). Fatal on failure (headless parity).
   if (include.has("accessibility")) {
     try {
-      const ax = await withCdp(tabId, async (tid) => {
-        const { nodes } = await cdpSend(tid, "Accessibility.getFullAXTree");
-        return nodes;
-      });
+      // Stringify the WHOLE CDP response (`{ nodes: [...] }`), pretty-printed,
+      // not just the inner `nodes` array — headless serializes the full response
+      // with `to_string_pretty`, so an agent parsing the tree must see the same
+      // wrapper object and shape in both modes.
+      const ax = await withCdp(tabId, (tid) =>
+        cdpSend(tid, "Accessibility.getFullAXTree"),
+      );
       result.dom = result.dom || emptyDom();
-      result.dom.accessibility_tree = JSON.stringify(ax);
+      result.dom.accessibility_tree = JSON.stringify(ax, null, 2);
     } catch (e) {
       return topErr(exceptionErr(e));
     }
@@ -214,19 +217,37 @@ async function handleCapture(command) {
     }
   }
 
-  // A capture with no DOM (screenshot/pdf-only) still reports where it ran:
-  // the active frame's URL and the tab title (headless fills these via
-  // active-frame evals; the frames list serves the same scope here).
-  if (!result.page_url) {
+  // A capture with no DOM pass (screenshot/pdf/AX-only) still reports where it
+  // ran — from the ACTIVE FRAME, not the tab, so a frame-scoped capture shows the
+  // frame's own URL and title. Headless derives both via `eval_in_active`; a bare
+  // `tab.title` would mislabel an iframe capture with the top page's title.
+  if (!result.page_url || !result.page_title) {
     try {
-      const tab = await chrome.tabs.get(tabId);
       if (activeFrameId !== 0) {
-        const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
-        result.page_url = frames.find((f) => f.frameId === activeFrameId)?.url || tab.url || "";
+        const [hit] = await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [activeFrameId] },
+          func: () => [location.href, document.title],
+        });
+        const [u, t] = hit?.result || ["", ""];
+        result.page_url = result.page_url || u || "";
+        result.page_title = result.page_title || t || "";
       } else {
-        result.page_url = tab.url || "";
+        const tab = await chrome.tabs.get(tabId);
+        result.page_url = result.page_url || tab.url || "";
+        result.page_title = result.page_title || tab.title || "";
       }
-      result.page_title = result.page_title || tab.title || "";
+    } catch {}
+  }
+
+  // Surface the out-of-scope HTTP iframe count on a text/AX-only snapshot shell
+  // too — only from the main frame — exactly as headless sets `s.subframes` on
+  // its shell. Without it a text/AX capture drops the "N iframe(s) not shown"
+  // hint the agent needs. A real DOM pass already set it (line above), so the
+  // `undefined` guard skips that case.
+  if (result.dom && activeFrameId === 0 && result.dom.subframes === undefined) {
+    try {
+      const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
+      result.dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
     } catch {}
   }
 
