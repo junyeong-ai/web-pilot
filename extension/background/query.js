@@ -157,7 +157,10 @@ async function handleWait(command) {
   if (!tab) return { type: "Wait", success: false, error: noPageErr() };
 
   const cond = command.condition || { until: "idle" };
-  const timeoutMs = command.timeout_ms || 10000;
+  // `?? `, not `|| `: a zero timeout is a valid "poll once, don't wait" request
+  // that headless preserves, so coercing 0 to the 10s default here would make
+  // the two modes diverge.
+  const timeoutMs = command.timeout_ms ?? 10000;
 
   if (cond.until === "navigation") {
     // The main frame finished a document navigation — the headless
