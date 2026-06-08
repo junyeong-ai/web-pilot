@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-06-08
+
+A seam-level convergence pass (cross-mode parity, policy, error codes, resource
+leaks) plus a regression audit of the campaign's own changes — which came back
+clean. One reachable parity gap fixed.
+
+### Fixed
+
+- **`webpilot --browser capture --annotate` now returns the annotated
+  screenshot.** `--annotate` draws overlay boxes and captures them; headless
+  forces the DOM, bounds, and screenshot passes it needs when `--annotate` is
+  set, but the browser handler keyed each on `--include`. So `--annotate` without
+  an explicit `--include dom,screenshot` drew nothing and returned no image,
+  while headless returned the shot. The browser handler now forces all three for
+  `--annotate`, matching headless; the browser e2e exercises `--annotate` alone
+  and asserts a screenshot comes back.
+
 ## [0.4.8] - 2026-06-08
 
 A final convergence sweep across the wire types, command handlers, and a repo-wide
