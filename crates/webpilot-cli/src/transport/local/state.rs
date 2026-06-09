@@ -71,7 +71,7 @@ impl LocalTransport {
         self.page.evaluate(CONSOLE_INSTALL_JS).await?;
         self.console_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
-        super::persist_monitor_armed(super::Monitor::Console, self.persisted_context_key());
+        super::persist_monitor_armed(super::Monitor::Console, self.persisted_context_key())?;
         Ok(ok_command_result())
     }
 
@@ -131,7 +131,7 @@ impl LocalTransport {
         self.page.evaluate(NETWORK_INSTALL_JS).await?;
         self.network_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
-        super::persist_monitor_armed(super::Monitor::Network, self.persisted_context_key());
+        super::persist_monitor_armed(super::Monitor::Network, self.persisted_context_key())?;
         Ok(ok_command_result())
     }
 

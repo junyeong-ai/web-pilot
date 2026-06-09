@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.54] - 2026-06-09
+
+### Fixed
+
+- **A `console start` / `network start` whose armed-state marker fails to persist
+  now fails the command, instead of reporting success while the next process runs
+  with no monitor.** The marker file is what makes later CLI invocations re-arm the
+  monitor; its write was discarded with `let _ =`, so a failed write left the agent
+  believing monitoring was on when a separate `console read` later would silently
+  see an empty buffer. The write is now propagated — the same correctness the pin
+  writes got in 0.4.53. (The marker stays a plain presence file: an empty file
+  needs no atomic write, only an un-swallowed one.)
+
 ## [0.4.53] - 2026-06-09
 
 ### Fixed

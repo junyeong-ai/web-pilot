@@ -973,8 +973,15 @@ fn read_persisted_monitors(browser_context_id: Option<&str>) -> (bool, bool) {
     )
 }
 
-pub(super) fn persist_monitor_armed(kind: Monitor, browser_context_id: Option<&str>) {
-    let _ = std::fs::write(monitor_marker(kind, browser_context_id), b"");
+pub(super) fn persist_monitor_armed(
+    kind: Monitor,
+    browser_context_id: Option<&str>,
+) -> std::io::Result<()> {
+    // Presence is the whole signal (an empty file), so the write needs no
+    // atomicity — but it must not be swallowed: this marker is what makes later
+    // CLI processes re-arm the monitor, so a failed write means `console start`
+    // didn't persist and the next process would silently run with no monitor.
+    std::fs::write(monitor_marker(kind, browser_context_id), b"")
 }
 
 fn clear_persisted_monitors(browser_context_id: Option<&str>) {
