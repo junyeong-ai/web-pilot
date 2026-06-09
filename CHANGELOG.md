@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.117] - 2026-06-10
+
+### Fixed
+
+- **A browser-mode `status` / keepalive now refreshes the service worker's
+  console/network policy cache.** These bypass the command queue (a health check
+  must not block on a busy worker), and the queue was where the host's pushed
+  `eval` verdict was applied — so a `status` carrying a fresh deny left the cache
+  stale, and a page-initiated navigation between commands could re-arm the
+  MAIN-world monitor hooks under the old verdict. The verdict is now applied for
+  queue-exempt messages too, so a re-arm between commands sees the current policy
+  (matching headless, which reads the live store on every re-install); queued
+  commands still apply their own verdict in order.
+
 ## [0.4.116] - 2026-06-10
 
 ### Fixed

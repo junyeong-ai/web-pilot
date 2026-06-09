@@ -78,6 +78,12 @@ function handleHostMessage(request, port) {
   }
   if (!command) return;
   if (QUEUE_EXEMPT.has(command.type)) {
+    // Status/Ping skip the queue, but the host still stamps them with its latest
+    // monitor verdict. Apply it so a page-initiated re-arm BETWEEN commands sees
+    // the current `eval` policy, not the last queued command's (possibly stale)
+    // one — matching headless, which reads the live store on every re-install.
+    // Queued commands still apply their own verdict in order inside the queue.
+    if (monitor_policy) setMonitorPolicy(monitor_policy);
     processCommandWithKeepAlive(id, command, port);
     return;
   }
