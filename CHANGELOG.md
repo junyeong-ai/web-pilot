@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.85] - 2026-06-09
+
+### Fixed
+
+- **`click` on a disabled control fails loud instead of firing its handler.** A
+  synthetic `dispatchEvent` click runs a disabled control's listeners that a real
+  user (or `el.click()`) never could, so `action click` on a `:disabled` /
+  `aria-disabled` element reported success while mutating page state in a way the
+  page disallows. It now rejects with `InvalidArgument`, sharing one `isDisabled`
+  predicate with `type` (which also now catches a control disabled by an ancestor
+  `<fieldset disabled>`). Both modes.
+- **A second `device set` without `--user-agent` resets the UA instead of leaving a
+  stale one.** `device set` resets viewport, DPR, and touch unconditionally but
+  only sent a UA override when one was given — so going from a UA-bearing device
+  back to one without it kept the old UA active, contradicting the new device. The
+  UA override is now always applied (cleared with `""` when absent, as `device
+  reset` does), so a `device set` fully defines the device.
+
 ## [0.4.84] - 2026-06-09
 
 ### Fixed

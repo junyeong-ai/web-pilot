@@ -9,6 +9,7 @@ use std::process::Output;
 pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></head>
 <body>
 <button id="go" onclick="document.title='clicked'">Go</button>
+<button id="disabledbtn" disabled onclick="document.title='SHOULD-NOT-FIRE'">disabled</button>
 <input id="q" type="text" placeholder="Search">
 <input id="file" type="file">
 <button id="slownav" onclick="location.href='/slow'">slow nav</button>

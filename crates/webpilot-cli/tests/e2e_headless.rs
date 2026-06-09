@@ -137,6 +137,27 @@ fn headless_behavioral_flow() {
         stdout(&title)
     );
 
+    // 2-disabled. A disabled control can't be activated by a real user; a
+    //   synthetic click would fire its handler anyway, so the action must reject
+    //   it (InvalidArgument, exit 7) and the handler must NOT run — never a
+    //   phantom success that mutates page state a real user couldn't.
+    let disabled_idx = index_of(&cap, "disabledbtn");
+    let dclick = fx.run(&["action", "click", &disabled_idx]);
+    assert_eq!(
+        code(&dclick),
+        7,
+        "clicking a disabled control must be InvalidArgument (7): {}",
+        stdout(&dclick)
+    );
+    let dtitle = fx.run(&["eval", "document.title"]);
+    assert!(
+        !stdout(&dtitle).contains("SHOULD-NOT-FIRE"),
+        "a disabled control's click handler must never fire: {}",
+        stdout(&dtitle)
+    );
+    // Restore the title for any later step that might read it.
+    let _ = fx.run(&["eval", "document.title = 'clicked'"]);
+
     // 2a1. Free-text values that start with `-` are values, not flags
     //      (allow_hyphen_values): an agent evaluating a negative expression or
     //      typing a negative number must not hit a clap usage error — and a

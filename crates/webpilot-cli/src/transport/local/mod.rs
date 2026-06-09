@@ -968,8 +968,9 @@ pub(crate) struct DeviceState {
 }
 
 impl DeviceState {
-    /// Apply this emulation to a page session: metrics + touch always, UA only
-    /// when set.
+    /// Apply this emulation to a page session: metrics, touch, AND user agent are
+    /// all set unconditionally, so a `device set` fully defines the device and
+    /// never leaves a prior override's stale remnant behind.
     pub(crate) async fn apply(&self, page: &CdpClient) -> Result<()> {
         page.send(
             "Emulation.setDeviceMetricsOverride",
@@ -993,13 +994,17 @@ impl DeviceState {
             })),
         )
         .await?;
-        if let Some(ua) = &self.user_agent {
-            page.send(
-                "Emulation.setUserAgentOverride",
-                Some(json!({"userAgent": ua})),
-            )
-            .await?;
-        }
+        // Always set the UA override, like the metrics and touch above: a
+        // `device set` defines the WHOLE device, so an absent `--user-agent` means
+        // the default UA and must CLEAR any prior override (`""` clears it, the
+        // same value `device reset` sends) — not silently leave a stale one. Going
+        // from a UA-bearing preset back to one without it would otherwise keep the
+        // old UA active, contradicting the new device.
+        page.send(
+            "Emulation.setUserAgentOverride",
+            Some(json!({"userAgent": self.user_agent.as_deref().unwrap_or("")})),
+        )
+        .await?;
         Ok(())
     }
 }

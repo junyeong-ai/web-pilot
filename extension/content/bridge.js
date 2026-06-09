@@ -716,6 +716,17 @@
     return false;
   }
 
+  // Whether the control can't be activated by a real user. A synthetic
+  // `dispatchEvent` (click) or `.value` setter (type) would still fire on a
+  // disabled control, so both actions reject one — the agent must learn the
+  // control is inert, not get a phantom success with a handler firing in a state
+  // the page never allows. `:disabled` also catches a control disabled by an
+  // ancestor `<fieldset disabled>` (which the bare `.disabled` property misses);
+  // `aria-disabled` covers custom/ARIA controls.
+  function isDisabled(el) {
+    return el.matches(":disabled") || el.getAttribute("aria-disabled") === "true";
+  }
+
   // The genuinely-focused element, descending through open shadow roots:
   // `document.activeElement` only ever names the outermost shadow HOST, so a
   // focused element INSIDE a shadow root is invisible to it. Walk the chain so a
@@ -732,6 +743,15 @@
         case "click": {
           const r = resolveTarget(action);
           if (r.error) return r.error;
+          // A disabled control can't be activated by a real user, but the
+          // synthetic click below would fire its handlers anyway — reject rather
+          // than report a success the page would never produce.
+          if (isDisabled(r.target)) {
+            return err(
+              "InvalidArgument",
+              "Cannot click a disabled element — a real user can't activate it",
+            );
+          }
           // `navigates` tells the settle layer a TOP-level navigation is coming
           // (drives `url_changed`); `frame_navigates` tells it the CURRENT frame
           // will load a new document — the only signal for an iframe-internal
@@ -756,7 +776,7 @@
           // though a real user can't edit it — and the page then never submits a
           // disabled value, and resets or ignores a read-only one. Reject loudly
           // rather than report a success the page won't honor.
-          if (r.target.disabled || r.target.getAttribute("aria-disabled") === "true") {
+          if (isDisabled(r.target)) {
             return err(
               "InvalidArgument",
               "Cannot type into a disabled field — its value is never submitted",
