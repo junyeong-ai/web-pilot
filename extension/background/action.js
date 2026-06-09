@@ -393,7 +393,11 @@ async function handleUpload(tabId, action) {
           return { success: false, error: otherErr("upload: could not reach the content-script context") };
         }
         const ev = await cdpSend(tid, "Runtime.evaluate", {
-          expression: "window.__webpilot_state.uploadTarget",
+          // `isConnected` recheck, not a bare null check: a detached node keeps a
+          // live objectId, so a target the page removed between prepareUpload and
+          // here must resolve to null and become a StaleSnapshot, never a silent
+          // file-set on an orphaned input.
+          expression: "(()=>{const t=window.__webpilot_state.uploadTarget;return t&&t.isConnected?t:null;})()",
           uniqueContextId,
           returnByValue: false,
         });

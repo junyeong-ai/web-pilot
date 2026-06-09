@@ -356,12 +356,16 @@ impl LocalTransport {
     }
 
     /// Set `path` on the file input the bridge stashed as `state.uploadTarget`,
-    /// resolved to a CDP objectId in the active context. A missing objectId
-    /// means the stored element is no longer a live node — it left the DOM
-    /// between `prepareUpload` and here (typed `StaleSnapshot`).
+    /// resolved to a CDP objectId in the active context — but only while it is
+    /// still in the DOM. A detached node keeps a live objectId, so the
+    /// `isConnected` recheck (not a null check alone) is what turns a target the
+    /// page removed between `prepareUpload` and here into a typed `StaleSnapshot`,
+    /// never a silent file-set on an orphaned input.
     async fn set_upload_target_file(&self, index: u32, path: &std::path::Path) -> Result<()> {
         let object_id = self
-            .eval_object_id("window.__webpilot_state.uploadTarget")
+            .eval_object_id(
+                "(()=>{const t=window.__webpilot_state.uploadTarget;return t&&t.isConnected?t:null;})()",
+            )
             .await?
             .ok_or(WebPilotError::StaleSnapshot { index })?;
 

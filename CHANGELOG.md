@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.58] - 2026-06-09
+
+### Fixed
+
+- **`upload` no longer silently sets a file on a detached input.** A node the page
+  removed between `prepareUpload` and `DOM.setFileInputFiles` keeps a live CDP
+  objectId, so the existing null check passed it through and the file-set hit an
+  orphaned node with no effect. The target is now resolved through an
+  `isConnected` recheck, so a removed input becomes a typed `StaleSnapshot`. Both
+  modes.
+- **A navigation no longer silently rebinds to an unrelated tab if the navigated
+  tab is closed mid-flight.** When the bound tab vanished (closed by another
+  process) and exactly one sibling remained, `bound_target`'s sole-page fallback
+  resolved that sibling and the navigation rebound to it. A same-tab navigation
+  keeps its target id, so the rebind path now fails loud when the resolved target
+  id is not the one it set out to navigate.
+
 ## [0.4.57] - 2026-06-09
 
 ### Fixed

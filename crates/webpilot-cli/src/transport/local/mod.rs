@@ -581,6 +581,19 @@ impl LocalTransport {
         let loader = loader_id.as_deref();
         loop {
             if let Some((target_id, target_url)) = self.bound_target().await {
+                if target_id != self.target_id {
+                    // The tab being navigated is gone (closed by another process
+                    // mid-navigation) and `bound_target` fell back to an UNRELATED
+                    // sole sibling. A cross-tab id never names this navigation's
+                    // result, so rebinding to it would silently retarget the agent
+                    // — fail loud instead. (A same-tab nav, even cross-process,
+                    // keeps its target id, so the live navigation never trips this.)
+                    return Err(WebPilotError::NavigationFailed {
+                        url: before_url.to_string(),
+                        reason: "the tab being navigated was closed".into(),
+                    }
+                    .into());
+                }
                 if target_url != before_url {
                     // Cross-site or cross-page navigation: the renderer process
                     // may have swapped, leaving the old session's execution
