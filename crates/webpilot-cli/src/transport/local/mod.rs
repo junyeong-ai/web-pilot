@@ -157,8 +157,14 @@ impl LocalTransport {
 
         // Re-apply device emulation across CLI invocations: a UA override does
         // not survive the prior process's CDP disconnect, so without this the
-        // `device set --user-agent` an agent issued would be silently gone.
-        if let Some(dev) = read_persisted_device(browser_context_id.as_deref()) {
+        // `device set --user-agent` an agent issued would be silently gone. But
+        // honor the policy gate the `device` command itself respects: under
+        // `default deny` a previously-set emulation (UA spoof especially) must NOT
+        // be restored into a locked-down process — the persisted state stays on
+        // disk for when `device` is re-allowed.
+        if !crate::policy::denies(webpilot::types::PolicyKey::Device)
+            && let Some(dev) = read_persisted_device(browser_context_id.as_deref())
+        {
             let _ = dev.apply(&page).await;
         }
 

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.90] - 2026-06-09
+
+### Fixed
+
+- **The cross-process device re-apply now respects the device policy gate too.**
+  `device` emulation persists across CLI invocations by re-applying the stored
+  `DeviceState` at `LocalTransport::open`. That re-apply bypassed the gate added in
+  0.4.89, so a device set while allowed (a spoofed UA especially) would be restored
+  into a later process even after `policy ... device deny` — leaving the emulation
+  active under a policy that forbids it. `open` now skips the re-apply when `device`
+  is denied; the persisted state stays on disk and is restored once `device` is
+  re-allowed. Verified with a device-only deny (eval still readable): the UA is not
+  restored under deny, restored again when re-allowed.
+
 ## [0.4.89] - 2026-06-09
 
 ### Fixed
