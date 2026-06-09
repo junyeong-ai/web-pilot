@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.48] - 2026-06-09
+
+### Fixed
+
+- **Persisted pin/frame/device state is written atomically, so a concurrent
+  process can't read a torn pin and retarget silently.** `std::fs::write`
+  truncates-then-writes, so a second WebPilot process resolving the active tab
+  could read it mid-write — empty or torn — parse it as "no pin", and fall through
+  to a DIFFERENT tab than the one the agent pinned. These writes now use the
+  policy store's `atomic_write` (temp + rename); session export is atomic too.
+
 ## [0.4.47] - 2026-06-09
 
 ### Fixed
