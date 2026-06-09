@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.95] - 2026-06-10
+
+### Fixed
+
+- **Headless: a non-canonical function-key name is now rejected, matching
+  browser mode.** The headless `key-press` parser stripped the `F` and parsed
+  the rest as a number, so `F01` (a leading zero) or `F007` were silently
+  normalized to `F1`/`F7` and dispatched as a success — while browser mode's
+  strict `^F([1-9]|1[0-2])$` rejected the same name as `InvalidArgument`. An
+  agent that validated a key name against headless would then break in browser
+  mode. The headless parser now requires the canonical `F1`–`F12` (no leading
+  zeros or extra digits), so a malformed function key fails identically in both
+  modes instead of being normalized in one.
+
 ## [0.4.94] - 2026-06-10
 
 ### Fixed

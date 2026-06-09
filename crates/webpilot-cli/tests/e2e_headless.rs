@@ -253,6 +253,26 @@ fn headless_behavioral_flow() {
         stdout(&val)
     );
 
+    // 2b-fkey. A canonical function key (`F1`) is a valid key-press; a
+    //     non-canonical name (`F01`, a leading zero) is NOT a real DOM key code
+    //     and must be rejected as InvalidArgument (exit 7), not silently
+    //     normalized to F1 — matching the browser's strict `^F([1-9]|1[0-2])$`
+    //     so the same name never succeeds in one mode and fails in the other.
+    let fk_ok = fx.run(&["action", "key-press", "F1"]);
+    assert_eq!(
+        code(&fk_ok),
+        0,
+        "canonical F1 must be a valid key-press: {}",
+        stdout(&fk_ok)
+    );
+    let fk_bad = fx.run(&["action", "key-press", "F01"]);
+    assert_eq!(
+        code(&fk_bad),
+        7,
+        "a non-canonical F-key (F01) must be InvalidArgument, not normalized to F1: {}",
+        stdout(&fk_bad)
+    );
+
     // 2c. `upload` sets a file on the input the index addressed — resolved by
     //     snapshot identity and handed to CDP as an object reference, never a
     //     live document-order re-query a page could redirect. Prove the file

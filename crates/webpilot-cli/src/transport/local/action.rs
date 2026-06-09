@@ -56,8 +56,14 @@ fn key_descriptor(key: &str) -> Option<(String, u32)> {
     if let Some((code, vk)) = named {
         return Some((code.to_string(), vk));
     }
-    if let Some(n) = key.strip_prefix('F').and_then(|d| d.parse::<u32>().ok())
+    // F1–F12 only, in canonical form. A leading zero (`F01`) or extra digits
+    // (`F007`) are not real DOM key codes; reject them rather than normalize to
+    // F1, matching the browser regex `^F([1-9]|1[0-2])$` so a non-canonical name
+    // fails identically in both modes instead of succeeding only in headless.
+    if let Some(rest) = key.strip_prefix('F')
+        && let Ok(n) = rest.parse::<u32>()
         && (1..=12).contains(&n)
+        && rest == n.to_string()
     {
         return Some((format!("F{n}"), 111 + n));
     }
@@ -858,4 +864,24 @@ fn coord(resp: &Value, key: &str) -> Result<f64> {
         }
         .into()
     })
+}
+
+#[cfg(test)]
+mod key_descriptor_tests {
+    use super::key_descriptor;
+
+    #[test]
+    fn f_keys_accept_only_canonical_names() {
+        // Canonical F1–F12 map to their DOM `code` + Windows VK (111 + n).
+        assert_eq!(key_descriptor("F1"), Some(("F1".to_string(), 112)));
+        assert_eq!(key_descriptor("F9"), Some(("F9".to_string(), 120)));
+        assert_eq!(key_descriptor("F12"), Some(("F12".to_string(), 123)));
+        // A leading zero or extra digits are not real DOM key codes — rejected,
+        // not silently normalized to F1, so a non-canonical name fails the same
+        // way the browser regex `^F([1-9]|1[0-2])$` makes it fail in browser mode.
+        assert_eq!(key_descriptor("F01"), None);
+        assert_eq!(key_descriptor("F007"), None);
+        assert_eq!(key_descriptor("F0"), None);
+        assert_eq!(key_descriptor("F13"), None);
+    }
 }
