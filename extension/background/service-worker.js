@@ -10,7 +10,7 @@ console.log("[WebPilot] Service Worker loaded");
 import { pruneCdpLock } from "./cdp.js";
 import { injectBridgeOnly } from "./content.js";
 import { connectToHost, isHostConnected } from "./host.js";
-import { RESTORED, pruneTabMonitoring } from "./session.js";
+import { ensureRestored, pruneTabMonitoring } from "./session.js";
 import { rearmMonitors } from "./state.js";
 
 // Every chrome.* event listener is registered HERE, synchronously, at the top
@@ -47,8 +47,14 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
   // This fires independently of command processing, so it must also wait for
   // the post-restart restore before consulting `monitoringState` — otherwise a
   // navigation right after an SW restart would skip re-injecting a monitor the
-  // user had started.
-  await RESTORED;
+  // user had started. If the restore fails, skip the re-arm (it would consult an
+  // empty `monitoringState` and wrongly conclude no monitor was armed); the next
+  // command's restore will recover it.
+  try {
+    await ensureRestored();
+  } catch {
+    return;
+  }
   // Re-inject the bridge here: the manifest content script does not re-run on a
   // bfcache restore, so this refreshes its `onMessage` listener for the restored
   // document. Monitor re-arm is the BACKSTOP — the command paths (navigate /

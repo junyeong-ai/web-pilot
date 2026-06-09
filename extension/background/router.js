@@ -1,8 +1,8 @@
 // // Command router: one exhaustive dispatch over the wire `Command` tags —
 // // the JS twin of LocalTransport::send, guarded by tests/browser_parity.rs.
 
-import { exceptionErr, otherErr, topErr } from "./errors.js";
-import { RESTORED } from "./session.js";
+import { err, exceptionErr, otherErr, topErr } from "./errors.js";
+import { ensureRestored } from "./session.js";
 import { handleAction } from "./action.js";
 import { handleCapture } from "./capture.js";
 import { handleDomGet, handleDomSet, handleEval, handleFetch, handleWait } from "./query.js";
@@ -12,8 +12,6 @@ import { handleFrameList, handleFrameSwitch, handleStatus, handleTabClose, handl
 // ── Command dispatch ───────────────────────────────────────────────────────
 
 async function processCommand(id, command, port) {
-  // Never act on un-restored state after a service-worker restart.
-  await RESTORED;
   // Reply to the port that delivered this request, not the mutable global
   // `nmPort`. A disconnected port throws — drop the reply rather than risk
   // landing it on a reconnected host (the originating CLI already failed on its
@@ -23,6 +21,19 @@ async function processCommand(id, command, port) {
       port.postMessage({ id, result });
     } catch {}
   };
+  // Never act on un-restored state after a service-worker restart. If the
+  // restore can't be read, FAIL the command (ConnectionLost — retryable infra)
+  // rather than dispatch against default pins, which would silently retarget the
+  // agent onto the focused tab. The next command re-attempts the restore.
+  try {
+    await ensureRestored();
+  } catch (e) {
+    send({
+      type: "Error",
+      error: err("ConnectionLost", `session state could not be restored: ${e.message}`, {}),
+    });
+    return;
+  }
   try {
     let result;
     switch (command.type) {

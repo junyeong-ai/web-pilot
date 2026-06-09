@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.76] - 2026-06-09
+
+### Fixed
+
+- **A failed session-state restore no longer silently retargets the agent's pin.**
+  After a service-worker restart, the persisted active-tab/frame pins are restored
+  before any command runs. The restore swallowed a storage-read error and resolved
+  with default (empty) state — indistinguishable from "no session" — so a failure
+  made the next command re-pin to the focused tab's main frame, acting on the wrong
+  page. The restore now throws on an unreadable store; the command fails loud
+  (`ConnectionLost`, retryable) instead of dispatching against a guessed pin, and
+  the attempt is not cached so the next command retries (no worker wedge on a
+  transient hiccup). The `load`-time monitor re-arm likewise skips rather than
+  consult empty state.
+
 ## [0.4.75] - 2026-06-09
 
 ### Fixed

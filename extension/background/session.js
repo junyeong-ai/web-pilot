@@ -8,26 +8,43 @@ const monitoringState = { console: new Set(), network: new Set() };
 
 // An MV3 service worker is killed when idle and restarted on the next event,
 // losing in-memory state. `activeTabId`, `activeFrameId` and the monitoring
-// sets are persisted to session storage and reloaded here. `RESTORED` resolves
-// once all are back; `processCommand` awaits it so a command can never run
-// against un-restored state — otherwise the first command after a restart
-// would silently target the wrong tab or the main frame instead of the iframe
-// the agent had switched to.
-const RESTORED = (async () => {
-  try {
-    const data = await chrome.storage.session?.get([
-      "activeTabId",
-      "activeFrameId",
-      "monitoringTabs",
-    ]);
-    if (data?.activeTabId != null) activeTabId = data.activeTabId;
-    if (data?.activeFrameId != null) activeFrameId = data.activeFrameId;
-    if (data?.monitoringTabs) {
-      (data.monitoringTabs.console || []).forEach((id) => monitoringState.console.add(id));
-      (data.monitoringTabs.network || []).forEach((id) => monitoringState.network.add(id));
-    }
-  } catch {}
-})();
+// sets are persisted to session storage and restored here before any command
+// runs — otherwise the first command after a restart would silently target the
+// wrong tab or the main frame instead of the iframe the agent had switched to.
+//
+// `ensureRestored()` THROWS if the store is unreadable rather than resolving with
+// default (empty) state: a swallowed failure is indistinguishable from "no
+// session", so dispatching against it would silently retarget the pin onto the
+// focused tab — the very thing the restore exists to prevent. It is memoized once
+// it succeeds; a failed attempt is NOT cached, so the next caller retries instead
+// of wedging the worker on a transient storage hiccup.
+let sessionRestored = false;
+let restorePromise = null;
+
+function ensureRestored() {
+  if (sessionRestored) return Promise.resolve();
+  if (!restorePromise) {
+    restorePromise = (async () => {
+      const data = await chrome.storage.session.get([
+        "activeTabId",
+        "activeFrameId",
+        "monitoringTabs",
+      ]);
+      if (data?.activeTabId != null) activeTabId = data.activeTabId;
+      if (data?.activeFrameId != null) activeFrameId = data.activeFrameId;
+      if (data?.monitoringTabs) {
+        (data.monitoringTabs.console || []).forEach((id) => monitoringState.console.add(id));
+        (data.monitoringTabs.network || []).forEach((id) => monitoringState.network.add(id));
+      }
+      sessionRestored = true;
+    })().finally(() => {
+      // Drop the in-flight promise so a rejected attempt re-runs next time;
+      // a fulfilled one is gated out by `sessionRestored` above.
+      if (!sessionRestored) restorePromise = null;
+    });
+  }
+  return restorePromise;
+}
 
 function setActiveFrameId(id) {
   activeFrameId = id;
@@ -130,4 +147,4 @@ async function resolveActiveTab() {
   return focused;
 }
 
-export { PROBE_MS, RESTORED, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, monitoringState, navigationTimeoutMs, pruneTabMonitoring, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };
+export { PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, pruneTabMonitoring, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };
