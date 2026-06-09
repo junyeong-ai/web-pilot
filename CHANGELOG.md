@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.50] - 2026-06-09
+
+### Fixed
+
+- **`capture --include text` now flags when the page text was clipped.** The
+  bridge caps extracted text at 50,000 codepoints; previously a longer page was
+  silently truncated, so the visible prefix read as the whole page. The snapshot
+  now carries `text_truncated`, rendered as a footer (`--- page text clipped … ---`)
+  in human/MCP output and serialized in JSON — matching the existing
+  `shadow_truncated` / console / network truncation markers. Both modes.
+
 ## [0.4.49] - 2026-06-09
 
 ### Fixed

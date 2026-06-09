@@ -47,6 +47,7 @@ impl LocalTransport {
         let mut screenshot_path: Option<String> = None;
         let mut screenshot_error: Option<String> = None;
         let mut text_content: Option<String> = None;
+        let mut text_truncated = false;
         let mut pdf_path: Option<String> = None;
 
         if want_dom {
@@ -67,6 +68,10 @@ impl LocalTransport {
             let r = self.invoke_bridge(&json!({"type": "extractText"})).await?;
             if let Some(text) = r.get("text").and_then(|v| v.as_str()) {
                 text_content = Some(text.to_string());
+                text_truncated = r
+                    .get("truncated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
             }
         }
 
@@ -200,6 +205,7 @@ impl LocalTransport {
         }
         if let Some(s) = snapshot.as_mut() {
             s.text_content = text_content;
+            s.text_truncated = text_truncated;
             s.accessibility_tree = ax_tree_json;
             // Capture is scoped to the active frame; surface how many HTTP
             // iframes exist outside this scope so the agent knows `frame
@@ -269,6 +275,7 @@ fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
         subframes: 0,
         shadow_truncated: false,
         text_content: None,
+        text_truncated: false,
         accessibility_tree: None,
     }
 }

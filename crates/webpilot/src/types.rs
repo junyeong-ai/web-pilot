@@ -378,6 +378,11 @@ pub struct DomSnapshot {
     pub shadow_truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_content: Option<String>,
+    /// `text_content` hit the bridge's codepoint cap, so the page has more text
+    /// than is shown. Surfaced like `shadow_truncated` so a clipped capture can
+    /// never read as the whole page.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub text_truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accessibility_tree: Option<String>,
 }
@@ -653,6 +658,11 @@ impl DomSnapshot {
             && !text.is_empty()
         {
             out.push_str(&format!("--- Page text ---\n{text}\n"));
+            if self.text_truncated {
+                out.push_str(
+                    "--- page text clipped at the capture cap — the page has more text than shown ---\n",
+                );
+            }
         }
 
         out.push_str(&format!(
@@ -761,6 +771,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             text_content: None,
+            text_truncated: false,
             accessibility_tree: None,
         };
         let _ = snap.to_text(); // Must not panic
@@ -779,6 +790,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             text_content: None,
+            text_truncated: false,
             accessibility_tree: None,
         };
         assert!(!snap.to_text().contains("iframe"));
@@ -810,6 +822,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             text_content: None,
+            text_truncated: false,
             accessibility_tree: None,
         };
         // Absent until `--include text` populates it.
@@ -820,5 +833,13 @@ mod tests {
         let text = snap.to_text();
         assert!(text.contains("--- Page text ---"));
         assert!(text.contains("Hello from the page"));
+        // A clip is silent without the footer: the visible prefix would read as
+        // the whole page. The marker appears only once the cap is actually hit.
+        assert!(!text.contains("page text clipped"));
+        snap.text_truncated = true;
+        assert!(
+            snap.to_text()
+                .contains("page text clipped at the capture cap")
+        );
     }
 }

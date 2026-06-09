@@ -143,6 +143,7 @@ async function handleCapture(command) {
       if (typeof r?.text === "string") {
         result.dom = result.dom || emptyDom();
         result.dom.text_content = r.text;
+        result.dom.text_truncated = r.truncated === true;
         result.page_url = r.url || result.page_url;
         result.page_title = r.title || result.page_title;
       }

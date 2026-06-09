@@ -1059,14 +1059,20 @@
     switch (msg.type) {
       case "extractDom":
         return extractDom(msg.options || {});
-      case "extractText":
+      case "extractText": {
         // Capped here, in the one place both modes share, so a giant page
-        // costs the same bounded tokens everywhere (codepoint-safe).
+        // costs the same bounded tokens everywhere (codepoint-safe). `truncated`
+        // tells the agent the page has more text than shown — without it a clip
+        // is silent and the visible prefix reads as the whole page.
+        const full = document.body?.innerText || "";
+        const text = clip(full, 50000);
         return {
-          text: clip(document.body?.innerText || "", 50000),
+          text,
+          truncated: text !== full,
           url: location.href,
           title: document.title,
         };
+      }
       case "executeAction":
         return executeAction(msg.action);
       case "wait":
