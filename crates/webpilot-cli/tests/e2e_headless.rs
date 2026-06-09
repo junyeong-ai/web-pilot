@@ -108,6 +108,18 @@ fn headless_behavioral_flow() {
         snapshot["subframes"], 1,
         "the one http iframe must be reported as a subframe: {dom}"
     );
+    // A cursor:pointer wrapper carrying no semantic tag/role/marker is a click
+    // target only on the INNERMOST such element — but a hidden (`display:none`)
+    // interactive descendant, dropped from the snapshot, must not shadow it as a
+    // mere wrapper, or a real click target goes unaddressable.
+    assert!(
+        elements.iter().any(|e| e["id"] == "cardwrap"),
+        "a cursor:pointer wrapper with only a hidden interactive child must stay indexed: {dom}"
+    );
+    assert!(
+        !elements.iter().any(|e| e["id"] == "hiddenchild"),
+        "a display:none element must never be indexed: {dom}"
+    );
 
     let button_index = elements
         .iter()

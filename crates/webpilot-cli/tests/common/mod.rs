@@ -14,6 +14,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <button id="slownav" onclick="location.href='/slow'">slow nav</button>
 <a id="nav" href="/second">go second</a>
 <a id="pop" href="/second" target="_blank" rel="noopener">open popup</a>
+<div id="cardwrap" style="cursor:pointer">clickable card<input id="hiddenchild" style="display:none"></div>
 <div id="shadowhost"></div>
 <iframe src="/frame"></iframe>
 <script>

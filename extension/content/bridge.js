@@ -191,7 +191,11 @@
       if (!isVisible(el)) continue;
       let wrapsCollected = false;
       for (const c of seen) {
-        if (el.contains(c)) {
+        // Only a VISIBLE collected descendant makes this a mere wrapper. A hidden
+        // one (e.g. a `display:none` input) is dropped from the snapshot, so
+        // letting it mark the wrapper "not innermost" would leave a real
+        // cursor:pointer click target unindexed and unaddressable.
+        if (el.contains(c) && isVisible(c)) {
           wrapsCollected = true;
           break;
         }

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.57] - 2026-06-09
+
+### Fixed
+
+- **A cursor:pointer-only click target with a hidden interactive child is no longer
+  dropped.** The `cursor:pointer` pass surfaces only the innermost such element,
+  skipping any that wrap an already-collected control. But a `display:none`
+  interactive descendant — collected as a candidate, then dropped by the visibility
+  filter — still counted as "wrapped", so a clickable card containing e.g. a hidden
+  input was skipped AND its child dropped, leaving the card unindexed and
+  unaddressable. Only a VISIBLE collected descendant now marks an element a wrapper.
+
 ## [0.4.56] - 2026-06-09
 
 ### Changed
