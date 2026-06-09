@@ -196,9 +196,14 @@ impl LocalTransport {
         let (nav_hint, frame_navigates) = match &action {
             Action::KeyPress { key, modifiers } => {
                 self.do_key_press(key, modifiers).await?;
-                // An Enter that submits a form navigates, but carries no
-                // bridge-side hint; its load events fall to the buffered drain.
-                (false, false)
+                // Enter can submit a form, and that navigation is QUEUED (HTML
+                // spec) — its start event may land after the key-dispatch response,
+                // so the buffered drain alone can miss it and `--capture` would
+                // snapshot the pre-submit page. Hint `nav` conservatively for Enter
+                // so the settle waits (PROBE-bound) for the commit, exactly as a
+                // link click's `navigates` hint does. A non-submitting Enter just
+                // pays that short probe. Other keys never navigate.
+                (key == "Enter", false)
             }
             _ => {
                 let action_json = serde_json::to_value(&action)?;

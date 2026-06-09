@@ -733,6 +733,33 @@ fn headless_behavioral_flow() {
         stdout(&submitted)
     );
 
+    // Enter pressed in a form's text input submits it — a QUEUED navigation the
+    // settle must wait for via the native key_press nav hint (Enter is the only
+    // native key that loads a document), or `url_changed` is silently dropped and
+    // a following capture races the submitted page. Focus the input, press Enter,
+    // and the submit must report url_changed=/second.
+    let _ = fx.run(&["action", "navigate", &base]);
+    let enter_cap = fx.run(&["capture", "--include", "dom"]);
+    let forminput_idx = index_of(&enter_cap, "forminput");
+    let _ = fx.run(&["action", "focus", &forminput_idx]);
+    let entered = fx.run(&["action", "key-press", "Enter"]);
+    assert_eq!(
+        code(&entered),
+        0,
+        "key_press Enter failed: {}",
+        stdout(&entered)
+    );
+    let entered_json: serde_json::Value =
+        serde_json::from_str(&stdout(&entered)).expect("key_press json");
+    assert!(
+        entered_json["url_changed"]
+            .as_str()
+            .is_some_and(|u| u.contains("/second")),
+        "Enter in a form input must submit and report url_changed=/second — the settle waits for the queued form-submit nav via the Enter nav hint: {}",
+        stdout(&entered)
+    );
+
+    let _ = fx.run(&["action", "navigate", &base]);
     let logged = fx.run(&["eval", "console.log('e2e-monitor-marker')"]);
     assert_eq!(code(&logged), 0);
     let logs = fx.run(&["console", "read"]);

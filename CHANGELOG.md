@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.118] - 2026-06-10
+
+### Fixed
+
+- **`key_press Enter` that submits a form now settles the navigation, so the
+  click reports `url_changed` and `--capture` snapshots the submitted page.** A
+  form submit via Enter is a QUEUED navigation (HTML spec), so its start event can
+  land after the native key-dispatch response — and `key_press` hard-coded "no
+  navigation", letting the settle conclude nothing happened and return the
+  pre-submit document. Enter now carries a conservative nav hint in both modes
+  (the only native key that loads a document), so the settle waits PROBE-bound for
+  the commit, exactly as a link click's `navigates` hint does; a non-submitting
+  Enter pays only that short probe, and other keys never navigate.
+
 ## [0.4.117] - 2026-06-10
 
 ### Fixed

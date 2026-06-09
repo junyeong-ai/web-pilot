@@ -306,7 +306,11 @@ async function dispatchKeyPress(tabId, action) {
       ? { ...base, type: "keyDown", text }
       : { ...base, type: "keyDown" });
     await cdpSend(tid, "Input.dispatchKeyEvent", { ...base, type: "keyUp" });
-    return { success: true };
+    // Enter can submit a form, and that navigation is QUEUED — its commit may
+    // land after this response, so hint `navigates` for Enter (the only native
+    // key that loads a document) so `settledActionUrl` waits the PROBE for it
+    // instead of declaring "nothing navigated" and capturing the pre-submit page.
+    return { success: true, navigates: action.key === "Enter" };
   });
 }
 
