@@ -299,6 +299,22 @@ impl LocalTransport {
             .into());
         }
 
+        // A present storage map must be a plain object (or null). Validate it
+        // BEFORE the cookie loop so a malformed file rejects without first
+        // applying its cookies — the same fail-up-front order browser mode keeps,
+        // so a failed import leaves identical state in both.
+        for key in ["local_storage", "session_storage"] {
+            if let Some(v) = parsed.get(key)
+                && !v.is_null()
+                && !v.is_object()
+            {
+                return Err(WebPilotError::InvalidArgument {
+                    detail: format!("session `{key}` must be an object"),
+                }
+                .into());
+            }
+        }
+
         let mut cookies_failed = 0usize;
         let mut cookies_malformed = 0usize;
         let mut cookies_total = 0usize;

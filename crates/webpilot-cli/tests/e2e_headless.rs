@@ -1040,6 +1040,38 @@ fn headless_behavioral_flow() {
         stdout(&ns)
     );
 
+    // The `*`-new marker is suppressed for a fresh DOCUMENT (no baseline), but a
+    // same-document `pushState`/hash change keeps the baseline — so an element it
+    // inserts IS flagged new. Capture a baseline, then push a new URL state and
+    // add a button, and the next capture must mark that button `is_new`.
+    let star_base = fx.run(&["capture", "--include", "dom", "--url", &base]);
+    assert_eq!(
+        code(&star_base),
+        0,
+        "star baseline capture: {}",
+        stdout(&star_base)
+    );
+    let _ = fx.run(&[
+        "eval",
+        "history.pushState({}, '', '#section'); \
+         document.body.insertAdjacentHTML('beforeend', '<button id=\"freshbtn\">fresh</button>'); 'ok'",
+    ]);
+    let star_cap = fx.run(&["capture", "--include", "dom"]);
+    let star_json: serde_json::Value =
+        serde_json::from_str(&stdout(&star_cap)).expect("star capture json");
+    let freshbtn = star_json["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "freshbtn")
+        .expect("the pushState-inserted button is indexed");
+    assert_eq!(
+        freshbtn["is_new"],
+        true,
+        "an element added after a same-document pushState must be flagged new (*): {}",
+        stdout(&star_cap)
+    );
+
     // A `wait text` value starting with `-` is the value, not a flag
     // (allow_hyphen_values) — it must reach the bridge and time out, not be
     // rejected by clap (exit 2).

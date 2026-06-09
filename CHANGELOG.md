@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.105] - 2026-06-10
+
+### Fixed
+
+- **The `*`-new marker now appears after a same-document navigation.** It was
+  suppressed on *any* `location.href` change, so an element added by a
+  `pushState` or hash change — an SPA route, an in-page section — came back as
+  `[N]` instead of `*[N]`, hiding that it was new. The suppression existed to
+  keep a fresh page from reading as "all new", but a new document already starts
+  with no snapshot baseline, so the URL gate was redundant for real navigations
+  and wrong for same-document ones. It is removed: the baseline is simply the
+  previous snapshot when one exists, so same-document insertions are flagged and
+  a fresh document still is not.
+- **Headless `session import` validates storage shape before applying cookies.**
+  Browser mode (0.4.104) rejects a non-object `local_storage`/`session_storage`
+  up front, but headless rejected it only later via the bridge — after the cookie
+  loop had already set the cookies, so a malformed file left different state in
+  the two modes (cookies applied in headless, not in browser). Headless now runs
+  the same shape check before the cookie loop, so a malformed import fails up
+  front and leaves identical state in both modes.
+
 ## [0.4.104] - 2026-06-10
 
 ### Fixed

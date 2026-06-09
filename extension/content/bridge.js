@@ -21,11 +21,8 @@
   // baseline: an element is "new" when its node identity was absent from the
   // previous snapshot (see `extractDom`), so detection needs no separate
   // bookkeeping and cannot drift from what the agent actually saw.
-  // `lastUrl` — page identity at the last extraction; a change means the first
-  // capture of a new page, where "everything is new" would be noise.
   if (!window.__webpilot_state) {
     window.__webpilot_state = {
-      lastUrl: location.href,
       snapshot: null,
     };
   }
@@ -407,16 +404,15 @@
   function extractDom(options) {
     try {
       const start = performance.now();
-      const urlChanged = state.lastUrl !== location.href;
-      state.lastUrl = location.href;
       // New-element baseline by node identity: the previous snapshot holds the
       // exact elements the agent last saw, so "new" means absent from it.
       // Identity is collision-free (no two elements share it) and survives
-      // re-renders that keep the node. With no usable baseline — the first
-      // capture in this document, or the first after the URL changed — nothing
-      // is flagged (`prevNodes = null`): a fresh page is not "all new".
-      const prevNodes =
-        !urlChanged && state.snapshot ? new Set(state.snapshot) : null;
+      // re-renders that keep the node. With no baseline — the first capture in
+      // this document — nothing is flagged (`prevNodes = null`): a full
+      // navigation gets a fresh isolated-world state (`snapshot: null`), so a new
+      // page is never "all new". A same-document change (`pushState`, a hash)
+      // keeps the baseline, so the elements it actually adds are correctly `*`-ed.
+      const prevNodes = state.snapshot ? new Set(state.snapshot) : null;
       const { all, shadowTruncated } = collectInteractiveElements();
       if (shadowTruncated) {
         console.warn("[WebPilot] shadow-DOM traversal hit its host budget; some controls may be omitted");

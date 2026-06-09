@@ -72,8 +72,10 @@ time, and index actions resolve against that list. If there is no snapshot (no
 capture yet) or the element has left the DOM, the result is a typed
 `StaleSnapshot` error (exit 4), never a re-resolution against the live DOM.
 `*` marks an element new since the last capture — detected by **node identity**
-against the previous snapshot, suppressed on the first capture after a URL
-change (a fresh page is not "all new"). `@landmark` is semantic context.
+against the previous snapshot, suppressed on the first capture in a new document
+(a fresh page starts with no snapshot, so it is not "all new"; a same-document
+`pushState`/hash change keeps the baseline, so elements it adds are flagged).
+`@landmark` is semantic context.
 `--- N iframe(s) not shown ---` is the count of HTTP iframes outside the active
 frame (`DomSnapshot.subframes`); enter one with `frame switch`.
 `--- shadow DOM clipped (host budget exceeded) — some controls may be omitted ---`
