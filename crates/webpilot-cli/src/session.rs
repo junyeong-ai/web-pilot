@@ -318,8 +318,12 @@ pub fn get_existing_session() -> Option<String> {
     let pid: i32 = pid_str.trim().parse().ok()?;
 
     if !is_process_alive(pid) {
-        let _ = std::fs::remove_file(&ws_path);
-        let _ = std::fs::remove_file(&pid_path);
+        // Read-only on purpose: a dead pid means "no live session", but do NOT
+        // delete the files here. This runs BEFORE the launch lock, so between
+        // reading this (stale, dead) pid and deleting, a concurrent launcher could
+        // write a fresh pid/ws under the lock — and this delete would clobber them,
+        // orphaning the Chrome it just spawned. The stale files are reaped under
+        // the lock in `ensure_session`, where no write can race the delete.
         return None;
     }
 

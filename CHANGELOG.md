@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.72] - 2026-06-09
+
+### Fixed
+
+- **A concurrent launcher no longer reaps a Chrome another agent just spawned.**
+  `get_existing_session` deleted the pid/ws files when it read a dead pid — but it
+  runs BEFORE the launch lock, so between reading a stale dead pid and deleting,
+  another process could write fresh pid/ws under the lock; the unlocked delete then
+  clobbered them, orphaning the just-launched Chrome and surfacing as a random
+  connection loss or a needless relaunch. The dead-pid path is now read-only; the
+  stale files are reaped under the launch lock in `ensure_session`, where no write
+  can race the delete.
+
 ## [0.4.71] - 2026-06-09
 
 ### Fixed
