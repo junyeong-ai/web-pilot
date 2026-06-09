@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.69] - 2026-06-09
+
+### Fixed
+
+- **A transient `Target.getBrowserContexts` error no longer fails the common
+  tab-resolve fast paths.** Failing context-scope reads closed (0.4.68) is correct,
+  but the read was issued up front, so even resolving a still-pinned tab or the
+  exact bound target — paths that never consult the created-context list — aborted
+  on a CDP hiccup. The created-context list is now read only on the paths that
+  actually scope by it (a fresh attach's first-page pick, the sole-page navigation
+  fallback); the persisted-pin and exact-target fast paths resolve without it.
+
 ## [0.4.68] - 2026-06-09
 
 ### Fixed

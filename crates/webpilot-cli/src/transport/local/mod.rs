@@ -701,15 +701,20 @@ impl LocalTransport {
     /// is unknowable, so it returns `None` rather than rebind to a sibling tab.
     async fn bound_target(&self) -> Option<(String, String)> {
         let targets = self.browser.get_targets().await.ok()?;
-        // Fail closed (`.ok()?` → `None`): a fallback to an empty created list
-        // would let the default scope rebind onto an isolated context's tab.
-        let created = self.browser.get_browser_contexts().await.ok()?;
-        let pick = targets
+        let exact = targets
             .iter()
-            .find(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(&self.target_id))
-            .or_else(|| {
-                sole_page_in_context(&targets, self.browser_context_id.as_deref(), &created)
-            })?;
+            .find(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(&self.target_id));
+        let pick = match exact {
+            Some(t) => t,
+            None => {
+                // The exact target vanished — fall back to the sole page in our
+                // context. The created-context list is read only here (the fast
+                // path never needs it) and fails closed: a read error means scope
+                // can't be determined, so don't guess a sibling tab.
+                let created = self.browser.get_browser_contexts().await.ok()?;
+                sole_page_in_context(&targets, self.browser_context_id.as_deref(), &created)?
+            }
+        };
         Some((
             pick.get("targetId").and_then(|v| v.as_str())?.to_string(),
             pick.get("url")
@@ -1133,12 +1138,7 @@ async fn pick_active_target(
     context_anchor: Option<&str>,
 ) -> Result<String> {
     let targets = browser.get_targets().await?;
-    // Fail closed: if the created-context list can't be read, ABORT rather than
-    // fall back to an empty list — an empty list would make the default scope
-    // match every isolated context's tabs, re-opening the isolation breach.
-    let created = browser.get_browser_contexts().await?;
     let is_page = |t: &&Value| t.get("type").and_then(|v| v.as_str()) == Some("page");
-    let in_ctx = |t: &&Value| target_in_context(t, browser_context_id, &created);
     let alive = |id: &str| -> bool {
         targets
             .iter()
@@ -1165,9 +1165,13 @@ async fn pick_active_target(
         return Ok(anchor.to_string());
     }
 
+    // A fresh attach: take the first page in scope. The created-context list is
+    // read only here — the persisted-pin and anchor fast paths never need it — and
+    // fails closed: a read error aborts rather than widen scope to every context.
+    let created = browser.get_browser_contexts().await?;
     targets
         .iter()
-        .find(|t| is_page(t) && in_ctx(t))
+        .find(|t| is_page(t) && target_in_context(t, browser_context_id, &created))
         .and_then(|t| {
             t.get("targetId")
                 .and_then(|v| v.as_str())
