@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.98] - 2026-06-10
+
+### Fixed
+
+- **MCP server: an over-size request line no longer desyncs the JSON-RPC
+  stream.** The stdio read loop capped each line at 8 MiB but, on an over-cap
+  line, answered with a parse error and left the line's unread tail in the
+  buffer — so the next read parsed that residue as a fresh request, and every
+  frame after it was misaligned (a giant line followed by a valid `ping` could
+  return two replies, the second correlated to the wrong request). An over-cap
+  line is now drained through its terminating newline so the stream resyncs at
+  the next clean frame, matching the length-framed native-messaging and IPC
+  paths that never had this hazard. The framing logic moved into a testable
+  `read_frame` helper covered by unit tests.
+
 ## [0.4.97] - 2026-06-10
 
 ### Fixed

@@ -16,7 +16,7 @@ use std::future::Future;
 
 use anyhow::Result;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use webpilot::WebPilotError;
 use webpilot::action::Action;
 use webpilot::capture::{CaptureField, CaptureOpts};
@@ -55,45 +55,21 @@ where
 {
     // Bound each request line: a JSON-RPC message from the host is small, so a
     // line that grows past this cap — or never terminates — is malformed input,
-    // not a request. `read_until` on a `take`-limited reader keeps one read from
-    // growing memory without bound; an over-cap line is answered with a parse
-    // error and skipped rather than buffered whole.
+    // not a request.
     const MAX_LINE_BYTES: u64 = 8 * 1024 * 1024;
     let mut transport: Option<T> = None;
     let mut reader = BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::stdout();
-    let mut buf = Vec::new();
     loop {
-        buf.clear();
-        let n = (&mut reader)
-            .take(MAX_LINE_BYTES + 1)
-            .read_until(b'\n', &mut buf)
-            .await?;
-        if n == 0 {
-            break; // EOF
-        }
-        let over_cap = buf.len() as u64 > MAX_LINE_BYTES && buf.last() != Some(&b'\n');
-        let reply = if over_cap {
-            Some(error_reply(
-                Value::Null,
-                -32700,
-                "request exceeds size limit",
-            ))
-        } else {
-            // Strict UTF-8: a JSON-RPC frame is UTF-8 by spec, so decode rather
-            // than lossily coerce invalid bytes into U+FFFD and parse garbage.
-            match std::str::from_utf8(&buf) {
-                Ok(line) if line.trim().is_empty() => continue,
-                Ok(line) => handle_line(&connect, &mut transport, line).await,
-                Err(_) => Some(error_reply(
-                    Value::Null,
-                    -32700,
-                    "parse error: invalid UTF-8",
-                )),
-            }
-        };
-        let Some(reply) = reply else {
-            continue; // a notification — no response
+        let reply = match read_frame(&mut reader, MAX_LINE_BYTES).await? {
+            Frame::Eof => break,
+            Frame::Line(line) if line.trim().is_empty() => continue,
+            Frame::Line(line) => match handle_line(&connect, &mut transport, &line).await {
+                Some(reply) => reply,
+                None => continue, // a notification — no response
+            },
+            Frame::OverCap => error_reply(Value::Null, -32700, "request exceeds size limit"),
+            Frame::InvalidUtf8 => error_reply(Value::Null, -32700, "parse error: invalid UTF-8"),
         };
         let mut out = serde_json::to_string(&reply).expect("JSON-RPC reply serializes");
         out.push('\n');
@@ -101,6 +77,51 @@ where
         stdout.flush().await?;
     }
     Ok(())
+}
+
+/// One framing outcome from [`read_frame`]: a usable line, or one of the
+/// malformed inputs the loop answers with a parse error, or end of stream.
+#[cfg_attr(test, derive(Debug, PartialEq))]
+enum Frame {
+    Line(String),
+    OverCap,
+    InvalidUtf8,
+    Eof,
+}
+
+/// Read one newline-delimited JSON-RPC frame, bounded at `max` bytes. The `take`
+/// bound keeps one read from growing memory without limit. When a line exceeds
+/// the cap, its remaining bytes are **drained through the terminating newline**
+/// so the next read starts at a clean frame boundary — without this, the tail of
+/// a single over-cap line would be parsed as a fresh request and desync every
+/// frame after it (length-framed transports like native messaging and the IPC
+/// host don't share this hazard; this newline-framed stdin stream must drain
+/// explicitly).
+async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R, max: u64) -> Result<Frame> {
+    let mut buf = Vec::new();
+    let n = (&mut *reader)
+        .take(max + 1)
+        .read_until(b'\n', &mut buf)
+        .await?;
+    if n == 0 {
+        return Ok(Frame::Eof);
+    }
+    if buf.len() as u64 > max && buf.last() != Some(&b'\n') {
+        while buf.last() != Some(&b'\n') {
+            buf.clear();
+            let drained = (&mut *reader).take(max).read_until(b'\n', &mut buf).await?;
+            if drained == 0 {
+                break; // EOF mid-line — nothing left to resync to
+            }
+        }
+        return Ok(Frame::OverCap);
+    }
+    // Strict UTF-8: a JSON-RPC frame is UTF-8 by spec, so decode rather than
+    // lossily coerce invalid bytes into U+FFFD and parse garbage.
+    match String::from_utf8(buf) {
+        Ok(line) => Ok(Frame::Line(line)),
+        Err(_) => Ok(Frame::InvalidUtf8),
+    }
 }
 
 /// Route one JSON-RPC message. Returns `None` only for a notification — a
@@ -606,5 +627,56 @@ mod tests {
     fn build_action_rejects_wrong_types() {
         let err = build_action("browser_click", &json!({ "index": "not-a-number" }));
         assert!(matches!(err, Err(WebPilotError::InvalidArgument { .. })));
+    }
+
+    #[tokio::test]
+    async fn read_frame_drains_an_over_cap_line_so_the_next_frame_resyncs() {
+        use tokio::io::BufReader;
+        // An over-cap line (longer than the cap, no newline within it) followed
+        // by a valid frame: the over-cap line must report OverCap with its tail
+        // drained through the newline, and the NEXT read must return the valid
+        // frame cleanly — not the over-cap line's residue parsed as a request.
+        let max = 8u64;
+        let mut input = vec![b'X'; (max + 5) as usize]; // 13 bytes, no newline → over cap
+        input.push(b'\n');
+        input.extend_from_slice(b"ab\n");
+        let mut reader = BufReader::new(input.as_slice());
+
+        assert_eq!(
+            read_frame(&mut reader, max).await.unwrap(),
+            Frame::OverCap,
+            "the >cap line is reported as OverCap"
+        );
+        assert_eq!(
+            read_frame(&mut reader, max).await.unwrap(),
+            Frame::Line("ab\n".into()),
+            "the next read resyncs to the valid frame, not the drained residue"
+        );
+        assert_eq!(
+            read_frame(&mut reader, max).await.unwrap(),
+            Frame::Eof,
+            "then end of stream"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_frame_classifies_line_invalid_utf8_and_eof() {
+        use tokio::io::BufReader;
+        let data = b"hello\n\xff\xfe\nbye";
+        let mut reader = BufReader::new(&data[..]);
+        assert_eq!(
+            read_frame(&mut reader, 1024).await.unwrap(),
+            Frame::Line("hello\n".into())
+        );
+        assert_eq!(
+            read_frame(&mut reader, 1024).await.unwrap(),
+            Frame::InvalidUtf8
+        );
+        // A final unterminated but in-cap line is still a usable line.
+        assert_eq!(
+            read_frame(&mut reader, 1024).await.unwrap(),
+            Frame::Line("bye".into())
+        );
+        assert_eq!(read_frame(&mut reader, 1024).await.unwrap(), Frame::Eof);
     }
 }
