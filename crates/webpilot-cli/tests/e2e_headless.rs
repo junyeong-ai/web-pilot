@@ -158,6 +158,18 @@ fn headless_behavioral_flow() {
     // Restore the title for any later step that might read it.
     let _ = fx.run(&["eval", "document.title = 'clicked'"]);
 
+    // 2-disabled-select. The disabled-control rejection is consistent across
+    //   actions: selecting in a disabled <select> is also InvalidArgument (7),
+    //   never a phantom change event a real user couldn't trigger.
+    let dsel_idx = index_of(&cap, "dsel");
+    let dselect = fx.run(&["action", "select", &dsel_idx, "x"]);
+    assert_eq!(
+        code(&dselect),
+        7,
+        "selecting in a disabled <select> must be InvalidArgument (7): {}",
+        stdout(&dselect)
+    );
+
     // 2a1. Free-text values that start with `-` are values, not flags
     //      (allow_hyphen_values): an agent evaluating a negative expression or
     //      typing a negative number must not hit a clap usage error — and a

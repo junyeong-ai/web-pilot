@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.86] - 2026-06-09
+
+### Fixed
+
+- **`select` rejects a disabled `<select>` or a disabled/hidden `<option>`.**
+  Completing the disabled-control consistency (click/type already reject one),
+  `action select` set `.value` and fired `change` on a disabled select, or picked a
+  disabled/hidden option a real user can't choose — reporting a selection the page
+  forbids. It now rejects with `InvalidArgument`, sharing the `isDisabled`
+  predicate. Both modes.
+- **`session import` rejects a file from a newer schema instead of silently
+  dropping fields.** The export stamps a `version`; import ignored it, so a session
+  written by a future incompatible WebPilot would import as success while quietly
+  losing the fields this binary doesn't understand. Import now rejects a version
+  above what it supports (`InvalidArgument`); a missing version is still accepted as
+  the current schema. Both modes, from one `SESSION_SCHEMA_VERSION` per side.
+
 ## [0.4.85] - 2026-06-09
 
 ### Fixed

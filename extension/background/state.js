@@ -10,6 +10,10 @@ import { ensureBridge, sendToContent } from "./content.js";
 // buffer is at this cap, so the literal `500` in those scripts must match.
 const MONITOR_BUFFER_CAP = 500;
 
+// Session export schema version, enforced on import (a higher version is rejected
+// rather than half-applied). Mirrors headless SESSION_SCHEMA_VERSION.
+const SESSION_SCHEMA_VERSION = 1;
+
 // Latest console/network policy verdicts, pushed by the host alongside every
 // command (the service worker never reads the policy store — the host is the
 // sole sink). A denied monitor is NOT re-armed after a navigation, mirroring
@@ -388,7 +392,7 @@ async function handleSessionExport() {
     }
     const storage = s;
     const data = {
-      version: 1,
+      version: SESSION_SCHEMA_VERSION,
       exported_at: Date.now(),
       cookies: all.map(toCookieInfo),
       local_storage: storage.localStorage || {},
@@ -412,6 +416,13 @@ async function handleSessionImport(rawData) {
     return { type: "SessionResult", success: false, error: err("InvalidArgument", `session JSON parse error: ${e.message}`) };
   }
   try {
+    // Honor the export's `version`: a file from a newer schema may carry fields
+    // this binary can't apply, so reject it rather than silently drop them and
+    // report success. A missing version is a hand-written/legacy file — accepted
+    // as the current schema. Mirrors headless do_session_import.
+    if (typeof data.version === "number" && data.version > SESSION_SCHEMA_VERSION) {
+      return { type: "SessionResult", success: false, error: err("InvalidArgument", `session was exported by a newer WebPilot (schema v${data.version}); this binary supports up to v${SESSION_SCHEMA_VERSION} — upgrade to import it`) };
+    }
     // `cookies`, when present, must be an array — a string would iterate
     // character by character, and a null is a malformed present value. Use
     // `hasOwn` (not `!= null`) so a present `null` is rejected too, exactly as

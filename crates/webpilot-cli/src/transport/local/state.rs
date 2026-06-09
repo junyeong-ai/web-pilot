@@ -9,6 +9,12 @@ use webpilot::types::{ConsoleEntry, ConsoleLevel, CookieInfo, NetworkEntry, Same
 
 use super::{LocalTransport, epoch_ms};
 
+/// Schema version stamped into a session export and enforced on import: a file
+/// claiming a higher version may carry fields this binary can't apply, so import
+/// rejects it rather than silently dropping them. Bump when the export shape
+/// changes incompatibly.
+const SESSION_SCHEMA_VERSION: u64 = 1;
+
 impl LocalTransport {
     // ── Cookies ──────────────────────────────────────────────────────────
 
@@ -211,7 +217,7 @@ impl LocalTransport {
         let storage = Self::parse_bridge_response(storage)?;
 
         let data = json!({
-            "version": 1,
+            "version": SESSION_SCHEMA_VERSION,
             "exported_at": epoch_ms() as u64,
             "cookies": cookies,
             "local_storage": storage.get("localStorage"),
@@ -233,6 +239,23 @@ impl LocalTransport {
             serde_json::from_str(data).map_err(|e| WebPilotError::InvalidArgument {
                 detail: format!("session JSON parse error: {e}"),
             })?;
+
+        // Honor the `version` the export stamps: a file from a NEWER schema may
+        // carry fields this binary doesn't understand, so importing it would
+        // silently drop them and report success — handing the agent a session
+        // quietly missing state. Reject a version above what we support rather
+        // than half-apply it. (A missing version is a hand-written/legacy file;
+        // accept it as the current schema.)
+        if let Some(v) = parsed.get("version").and_then(Value::as_u64)
+            && v > SESSION_SCHEMA_VERSION
+        {
+            return Err(WebPilotError::InvalidArgument {
+                detail: format!(
+                    "session was exported by a newer WebPilot (schema v{v}); this binary supports up to v{SESSION_SCHEMA_VERSION} — upgrade to import it"
+                ),
+            }
+            .into());
+        }
 
         // `cookies`, when present, must be an array — a non-array would be
         // silently dropped here and iterated character by character in browser

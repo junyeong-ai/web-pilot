@@ -831,12 +831,22 @@
               `<${r.target.tagName.toLowerCase()}> is not a <select> — use action click to open a custom dropdown, then click the option`,
             );
           }
+          // A disabled <select> can't be changed by a real user; the `.value`
+          // setter below would change it anyway and fire `change` — reject, like
+          // click/type, rather than report a selection the page disallows.
+          if (isDisabled(r.target)) {
+            return err(
+              "InvalidArgument",
+              "Cannot select in a disabled <select> — a real user can't change it",
+            );
+          }
           // Setting `.value` to a value no <option> carries silently leaves a
           // <select> at "" (selectedIndex -1). Firing `change` and returning
           // success then would report a selection that did not happen — so
           // verify the option exists and fail typed instead.
           const opts = [...r.target.options];
-          if (!opts.some((o) => o.value === action.value)) {
+          const match = opts.find((o) => o.value === action.value);
+          if (!match) {
             // Put the valid values IN the message, not only the data: the Rust
             // `InvalidArgument` variant carries just a string, so a structured
             // `available` field is dropped on the way to JSON/MCP. A
@@ -852,6 +862,15 @@
               "InvalidArgument",
               `No <option> with value "${action.value}" in this <select>. Available: ${shown}${more}`,
               { value: action.value, available },
+            );
+          }
+          // The option exists but a real user can't pick a disabled or hidden one;
+          // assigning `.value` to it would select it anyway — reject instead of
+          // reporting a choice the page forbids.
+          if (match.disabled || match.hidden) {
+            return err(
+              "InvalidArgument",
+              `<option> "${action.value}" is ${match.disabled ? "disabled" : "hidden"} — a real user can't select it`,
             );
           }
           r.target.value = action.value;
