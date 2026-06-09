@@ -639,6 +639,29 @@ impl LocalTransport {
         clear_persisted_active_frame(self.persisted_context_key());
     }
 
+    /// Whether the switched-into frame is still in the tree. `true` when no frame
+    /// is active (nothing to lose) or it is still present; `false` only when a
+    /// frame was switched and the document that held it is gone — so the caller
+    /// resets the scope instead of resolving a dead context. An unreadable tree
+    /// returns `true`: don't tear down a live scope on an uncertain read.
+    async fn active_frame_still_present(&self) -> bool {
+        let Some(fid) = self.active_frame_id.lock().await.clone() else {
+            return true;
+        };
+        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
+            return true;
+        };
+        fn contains(node: &Value, fid: &str) -> bool {
+            node.pointer("/frame/id").and_then(Value::as_str) == Some(fid)
+                || node
+                    .get("childFrames")
+                    .and_then(Value::as_array)
+                    .is_some_and(|kids| kids.iter().any(|k| contains(k, fid)))
+        }
+        tree.get("frameTree")
+            .is_some_and(|root| contains(root, &fid))
+    }
+
     /// `(target_id, url)` of the page WebPilot is bound to — the target it just
     /// navigated, identified by `self.target_id`. If that exact target is gone
     /// (a swap replaced it), it falls back to the context's page ONLY when that

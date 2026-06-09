@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.61] - 2026-06-09
+
+### Fixed
+
+- **A same-URL main-frame navigation from a switched iframe no longer leaves the
+  agent stuck on a dead frame.** Clicking a `target=_top` link to the current URL
+  (or otherwise reloading the top) from inside a `frame switch`ed iframe destroys
+  that iframe without changing the URL, so the `url_changed`-gated frame reset
+  missed it: every later command then resolved a dead frame context
+  (StaleSnapshot/FrameNotFound) until an explicit `frame switch`. The action now
+  also resets to the main frame when the switched-into frame has vanished — checked
+  only when a frame is actually switched and the URL didn't change, so the common
+  path is unaffected. Both modes.
+
 ## [0.4.60] - 2026-06-09
 
 ### Fixed

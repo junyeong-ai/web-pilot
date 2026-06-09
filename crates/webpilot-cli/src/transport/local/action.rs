@@ -206,7 +206,15 @@ impl LocalTransport {
             .settled_action_url(&mut page_events, &url_before, nav_hint)
             .await;
         let url_changed = (!landed.is_empty() && landed != url_before).then_some(landed);
-        if url_changed.is_some() {
+        // Reset the frame scope + re-arm when the main frame committed a new
+        // document. `url_changed` catches the common case, but a same-URL
+        // main-frame navigation from a SWITCHED iframe — a `target=_top` link to
+        // the current URL, a reload — destroys that iframe without changing the
+        // URL, so its context is now dead while `url_changed` is None. If the
+        // active frame has vanished, reset too, rather than leave every later
+        // command resolving a dead frame context. (Checked only when `url_changed`
+        // is None and a frame is actually switched, so the common path pays nothing.)
+        if url_changed.is_some() || !self.active_frame_still_present().await {
             // The action landed on a new document: a frame scope switched in
             // the old document died with it (same contract as `navigate`),
             // and the `window` monitor hooks are gone — the commit has been

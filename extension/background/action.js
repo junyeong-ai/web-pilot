@@ -342,6 +342,20 @@ async function dispatchActionToPage(tab, action) {
       // Re-arm console/network hooks now, at settle — headless re-installs them
       // the instant the navigation settles, not at the later `load` event.
       await rearmMonitors(tab.id);
+    } else if (activeFrameId !== 0) {
+      // Same-URL main-frame nav from a SWITCHED iframe (a `target=_top` link to
+      // the current URL, a reload) destroys that iframe without changing the URL,
+      // so the check above can't see it. If the active frame is gone, drop to main
+      // rather than leave the next command on a dead frame — headless
+      // `active_frame_still_present`. Only when a frame is actually switched, so a
+      // plain click pays nothing.
+      const frames = await chrome.webNavigation
+        .getAllFrames({ tabId: tab.id })
+        .catch(() => null);
+      if (frames && !frames.some((f) => f.frameId === activeFrameId)) {
+        setActiveFrameId(0);
+        await rearmMonitors(tab.id);
+      }
     }
 
     if (openedTabId != null) {
