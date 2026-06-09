@@ -240,17 +240,19 @@ impl LocalTransport {
         }
         let has_active_frame = self.active_frame_id.lock().await.is_some();
         if frame_vanished || (!has_active_frame && url_changed.is_some()) {
-            // A new MAIN document: its `window` monitor hooks died with it, so
-            // re-arm. The CDP page session survives a cross-site renderer swap (the
+            // A new MAIN document: its `window` monitor hooks died with it. The
+            // CDP page session survives a cross-site renderer swap (the
             // /devtools/page endpoint lives browser-side — verified against a
-            // file://→http:// process swap), so no rebind. The fresh isolated
-            // bridge world can briefly resolve the transitional pre-commit context
-            // (an empty DOM), so wait for the live parsed document before the
-            // auto-capture (and the next command) read it. (A top-only pushState
-            // with no switched frame lands here too; await_live is a no-op when the
-            // document didn't actually change.)
-            self.reinstall_monitors().await;
+            // file://→http:// process swap), so no rebind. Wait for the live parsed
+            // document FIRST: the fresh main world can briefly still be the
+            // transitional pre-commit context, and re-arming the monitors onto that
+            // would install the `window` hooks on a document about to be replaced —
+            // leaving the monitor silently dead for the new page. Await the live
+            // document, THEN re-arm onto it (and the auto-capture reads it too). (A
+            // top-only pushState with no switched frame lands here; await_live is a
+            // no-op when the document didn't actually change.)
             self.await_live_bridge_context().await;
+            self.reinstall_monitors().await;
         } else if has_active_frame && frame_navigates {
             // A click inside the switched iframe that navigated THAT iframe built a
             // new document in it without touching the top URL — invisible to the

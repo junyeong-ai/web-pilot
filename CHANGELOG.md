@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.80] - 2026-06-09
+
+### Fixed
+
+- **After a click that navigates, the console/network monitors re-arm onto the new
+  document, not a transitional one.** The url_changed reset re-installed the monitor
+  hooks BEFORE waiting for the live committed document, so the `window` hooks could
+  land on the about-to-be-replaced pre-commit context and be lost — leaving the
+  monitor silently dead for the new page until the next re-arm, so an agent reading
+  console/network after the navigation saw an empty buffer and wrongly concluded the
+  page was quiet. The live-document wait now runs FIRST, then the re-arm installs
+  onto the real document. (The other re-arm sites already waited for readiness —
+  reconnect via `rebind_page_world`, history via `await_document_ready`, reload via
+  the load event; browser mode uses `chrome.scripting` which targets the
+  current document, so neither needed the swap.)
+
 ## [0.4.79] - 2026-06-09
 
 ### Fixed
