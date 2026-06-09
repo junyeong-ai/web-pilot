@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.64] - 2026-06-09
+
+### Fixed
+
+- **`scroll` reports the true landing position on a smooth-scrolling page.** The
+  relative scroll used the bare `window.scrollBy(0, dy)`, which inherits a page's
+  `scroll-behavior: smooth` and animates — returning before the scroll finishes, so
+  the auto-capture footer reported a mid-animation `scroll_y` that didn't match
+  where the page actually came to rest. It now forces `behavior: "instant"`, the
+  same as `scroll_to`, so the position is final by the time the snapshot reads it.
+
 ## [0.4.63] - 2026-06-09
 
 ### Fixed

@@ -761,7 +761,11 @@
           }
           const amt = action.amount ?? 600;
           const dy = action.direction === "up" ? -amt : amt;
-          window.scrollBy(0, dy);
+          // `behavior: "instant"` (not the bare positional form, which inherits the
+          // page's `scroll-behavior: smooth`): a CSS-animated scroll returns before
+          // it finishes, so the auto-capture would report a mid-animation scroll_y
+          // that doesn't match where the page lands. `scroll_to` already forces it.
+          window.scrollBy({ top: dy, left: 0, behavior: "instant" });
           return { success: true };
         }
 
