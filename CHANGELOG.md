@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.49] - 2026-06-09
+
+### Fixed
+
+- **Browser-mode session export is written atomically too**, matching headless.
+  The NM host wrote the exported session JSON with `std::fs::write`; it now uses
+  `atomic_write` (temp + rename) like the headless path, so the two modes are
+  consistent and an interrupted export never leaves a partial file behind.
+
 ## [0.4.48] - 2026-06-09
 
 ### Fixed

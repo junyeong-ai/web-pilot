@@ -239,7 +239,7 @@ fn process_nm_message(
         .map(str::to_string)
     {
         let path = dirs::artifact_path("session", "json");
-        match std::fs::write(&path, &data) {
+        match dirs::atomic_write(&path, data.as_bytes()) {
             Ok(_) => {
                 if let Some(result) = msg.get_mut("result")
                     && let Some(obj) = result.as_object_mut()
