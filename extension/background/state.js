@@ -487,8 +487,13 @@ async function handleSessionImport(rawData) {
     // storage but no such page is active (e.g. a chrome:// pin), fail up front —
     // don't import the cookies and then silently drop the storage. The NoPage
     // sibling of session export's own guard.
-    const hasStorage = Object.keys(data.local_storage || {}).length > 0
-      || Object.keys(data.session_storage || {}).length > 0;
+    //
+    // Gate on PRESENCE (`hasOwn`), not non-emptiness: a present but malformed
+    // value like `"local_storage":1` has no own keys, so an `Object.keys` gate
+    // would skip the bridge and report success while silently dropping it —
+    // where headless forwards any present field to the bridge, which rejects a
+    // non-object. Forwarding it below lets that same validator run in this mode.
+    const hasStorage = Object.hasOwn(data, "local_storage") || Object.hasOwn(data, "session_storage");
     const tab = await resolveActiveTab();
     if (hasStorage && !tab) {
       return { type: "SessionResult", success: false, error: noPageErr() };
@@ -541,8 +546,12 @@ async function handleSessionImport(rawData) {
       await ensureBridge(tab.id, activeFrameId);
       const r = await sendToContent(tab.id, {
         type: "importStorage",
-        localStorage: data.local_storage || {},
-        sessionStorage: data.session_storage || {},
+        // Forward the ACTUAL present value — not `|| {}`, which would coerce a
+        // falsy non-object like `""` or `0` into `{}` and mask it — so the bridge
+        // validates the shape exactly as headless does. An absent field is `{}`
+        // (a no-op), matching headless's `unwrap_or_else(|| json!({}))`.
+        localStorage: Object.hasOwn(data, "local_storage") ? data.local_storage : {},
+        sessionStorage: Object.hasOwn(data, "session_storage") ? data.session_storage : {},
       }, activeFrameId);
       if (r && r.success === false) {
         return { type: "SessionResult", success: false, error: r.error || otherErr("storage import failed") };

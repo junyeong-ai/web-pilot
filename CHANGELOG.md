@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.103] - 2026-06-10
+
+### Fixed
+
+- **Browser mode: `session import` no longer silently drops a malformed storage
+  field.** Storage import was gated on `Object.keys(local_storage).length > 0`,
+  so a present but non-object value — `"local_storage": 1`, or a falsy `""` that
+  the `|| {}` fallback then masked — produced zero keys, skipped the bridge, and
+  reported success while importing nothing. Headless forwards any present
+  `local_storage`/`session_storage` to the bridge, which rejects a non-object as
+  `InvalidArgument`. Browser now gates on field *presence* and forwards the
+  actual value (no `|| {}` coercion), so the same validator runs in both modes:
+  a non-object storage field is a typed error, an object (even empty) imports,
+  and an absent field is a no-op.
+
 ## [0.4.102] - 2026-06-10
 
 ### Fixed

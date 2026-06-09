@@ -635,6 +635,24 @@ fn browser_behavioral_flow() {
         stdout(&bs)
     );
 
+    // 4e-storage. A present-but-non-object storage field (`local_storage: 1`) is
+    //     forwarded to the bridge validator and rejected (InvalidArgument), the
+    //     way headless forwards any present field — not silently skipped as a
+    //     no-op success. The pin is an http page here, so the bridge runs.
+    let bad_storage = fx.home.join("bad-storage.json");
+    std::fs::write(
+        &bad_storage,
+        br#"{"version":1,"cookies":[],"local_storage":1}"#,
+    )
+    .expect("write bad storage fixture");
+    let bst = fx.run(&["session", "import", bad_storage.to_str().unwrap()]);
+    assert_eq!(
+        code(&bst),
+        7,
+        "a non-object storage field must be InvalidArgument in browser mode too, not silent success: {}",
+        stdout(&bst)
+    );
+
     // 4f. A malformed cookie URL with a valid scheme prefix but no host
     //     (`http://`) is a typed InvalidArgument (exit 7) — matching headless,
     //     which rejects it at the CDP sink — not the generic chrome.cookies.set
