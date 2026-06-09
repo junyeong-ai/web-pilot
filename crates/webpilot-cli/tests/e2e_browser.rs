@@ -625,6 +625,35 @@ fn browser_behavioral_flow() {
         "eval must run in the switched frame: {}",
         stdout(&href)
     );
+    // A click on a link that navigates ONLY the switched iframe (not the top URL)
+    // must settle the ACTIVE frame's own navigation: the auto-capture lands on the
+    // iframe's new document, never the pre-click page. The top URL never moves, so
+    // the main-frame settle can't see it — `frame_navigates` + waitActiveFrameSettled
+    // do. (Headless parity: the same fixture + assertion in e2e_headless.)
+    let frame_cap = fx.run(&["capture", "--include", "dom"]);
+    let frame_snap: serde_json::Value =
+        serde_json::from_str(&stdout(&frame_cap)).expect("frame capture json");
+    let framenav_index = frame_snap["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "framenav")
+        .and_then(|e| e["index"].as_u64())
+        .expect("framenav index")
+        .to_string();
+    let framenav_click = fx.run(&["action", "click", &framenav_index, "--capture"]);
+    assert_eq!(
+        code(&framenav_click),
+        0,
+        "iframe-internal nav click failed: {}",
+        stdout(&framenav_click)
+    );
+    assert!(
+        stdout(&framenav_click).contains("framed2btn"),
+        "auto-capture after an iframe-internal navigation must show the new frame \
+         document (framed2btn), not the pre-click page: {}",
+        stdout(&framenav_click)
+    );
     // A `--url` capture navigates to a fresh document, which drops the frame
     // scope — so `--annotate` here must succeed on the new main frame, not
     // false-fail against the stale switched-frame id. It also leaves us back on

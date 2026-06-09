@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.63] - 2026-06-09
+
+### Fixed
+
+- **A click inside a switched iframe that navigates that iframe no longer captures
+  the pre-click page.** The action settle watched only the main frame, but a click
+  that navigates an embedded iframe (an internal link, a paginated widget) never
+  moves the top URL — so the auto-capture, and the next command, read the iframe's
+  OLD document. The bridge now reports a current-frame navigation hint
+  (`frame_navigates`) beside the top-frame one, and the action waits for the
+  switched frame's new document to commit and parse (a fresh execution context;
+  documentId in browser mode) before capturing. Both modes, guarded by an
+  iframe-internal-nav fixture in both e2e suites.
+- **A same-document top-URL change from a switched iframe no longer drops a live
+  frame.** The frame-scope reset keyed off the top URL changing, so a click inside
+  an iframe that ran `history.pushState` on the top reset the still-live frame —
+  every later command then resolved a dead scope. The reset now distinguishes a new
+  main document (the iframe is gone — reset) from a same-document URL change (the
+  iframe is intact — leave it), resetting only when the switched frame has actually
+  vanished.
+
 ## [0.4.62] - 2026-06-09
 
 ### Fixed

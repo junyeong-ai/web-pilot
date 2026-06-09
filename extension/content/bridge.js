@@ -598,14 +598,18 @@
   // destination differs from the current document (a pure fragment change loads
   // nothing). `notCanceled` is the click event's dispatch result, so a
   // preventDefault'd SPA link correctly reports no navigation.
-  function clickNavigates(el, notCanceled) {
+  // True when this click loads a new document IN THE CURRENT FRAME — a
+  // non-prevented link to a different http(s)/file URL (not a fragment, not a
+  // popup target). The frame may be the top frame or a switched iframe; the
+  // settle layer uses this to wait for an iframe-internal navigation the
+  // top-frame `navigates` signal can't see.
+  function frameNavigates(el, notCanceled) {
     if (!notCanceled) return false;
-    if (window.top !== window) return false; // only a top-frame nav is url_changed
     const a = el.closest("a[href]");
     if (!a) return false;
     const target = (a.target || "").trim().toLowerCase();
     if (target && target !== "_self" && target !== "_top" && target !== "_parent") {
-      return false; // opens a new context (a popup), not a same-tab url_changed
+      return false; // opens a new context (a popup), not a same-frame load
     }
     let dest, cur;
     try {
@@ -626,6 +630,12 @@
     return true;
   }
 
+  // `navigates` is the TOP-frame subset of `frameNavigates`: only a top-level
+  // navigation is `url_changed`, the signal driving the main-frame settle.
+  function clickNavigates(el, notCanceled) {
+    return window.top === window && frameNavigates(el, notCanceled);
+  }
+
   function reliableClick(el) {
     el.scrollIntoView({ block: "center", behavior: "instant" });
     const rect = el.getBoundingClientRect();
@@ -639,7 +649,10 @@
     el.dispatchEvent(new PointerEvent("pointerup", opts));
     el.dispatchEvent(new MouseEvent("mouseup", opts));
     const notCanceled = el.dispatchEvent(new MouseEvent("click", opts));
-    return clickNavigates(el, notCanceled);
+    return {
+      navigates: clickNavigates(el, notCanceled),
+      frameNavigates: frameNavigates(el, notCanceled),
+    };
   }
 
   function reliableType(el, text, clear) {
@@ -715,9 +728,13 @@
         case "click": {
           const r = resolveTarget(action);
           if (r.error) return r.error;
-          // `navigates` tells the settle layer a top-level navigation is coming
-          // even before its (queued) frameStartedLoading is observable.
-          return { success: true, navigates: reliableClick(r.target) };
+          // `navigates` tells the settle layer a TOP-level navigation is coming
+          // (drives `url_changed`); `frame_navigates` tells it the CURRENT frame
+          // will load a new document — the only signal for an iframe-internal
+          // navigation under a switched frame — even before the queued
+          // frameStartedLoading is observable.
+          const nav = reliableClick(r.target);
+          return { success: true, navigates: nav.navigates, frame_navigates: nav.frameNavigates };
         }
 
         case "type": {

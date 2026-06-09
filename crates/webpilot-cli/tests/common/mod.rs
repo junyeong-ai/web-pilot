@@ -24,7 +24,15 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 </body></html>"#;
 
 pub const FRAME: &str = r##"<!doctype html><html><head><title>frame</title></head>
-<body><a id="link" href="#">inner link</a></body></html>"##;
+<body><a id="link" href="#">inner link</a>
+<a id="framenav" href="/framed2">go framed2</a></body></html>"##;
+
+/// The destination of the iframe-internal `#framenav` link: a click on it while
+/// switched INTO the iframe navigates only that iframe, never the top URL — so a
+/// post-click capture that lands here (button `framed2btn`) proves the action
+/// settled the active frame's own navigation, not just the main frame's.
+pub const FRAMED2: &str = r##"<!doctype html><html><head><title>framed2</title></head>
+<body><button id="framed2btn">on framed2</button></body></html>"##;
 
 /// A page whose `Content-Security-Policy` forbids dynamic evaluation
 /// (`unsafe-eval`): the parity bar for `eval` inside a switched frame. Both
@@ -64,7 +72,9 @@ pub fn spawn_server() -> String {
                 let mut buf = [0u8; 1024];
                 let n = stream.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]);
-                let (body, extra_headers) = if req.starts_with("GET /frame") {
+                let (body, extra_headers) = if req.starts_with("GET /framed2") {
+                    (FRAMED2, "")
+                } else if req.starts_with("GET /frame") {
                     (FRAME, "")
                 } else if req.starts_with("GET /cspframe") {
                     (CSP_FRAME, CSP_HEADER)

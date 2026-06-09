@@ -184,4 +184,33 @@ async function documentReady(tabId, timeoutMs) {
   }
 }
 
-export { adoptedDocumentReady, documentReady, settledActionUrl, waitNavigationSettled, watchMainFrameCommit };
+// After a click navigated the switched iframe, wait — bounded — until that frame
+// holds a NEW committed document (its `documentId` differs from `beforeDocId`)
+// that has parsed. An iframe-internal navigation never touches the top URL the
+// main settle watches, so without this the post-action capture reads the
+// pre-click document. The browser analogue of headless
+// `await_live_active_frame_context`; the documentId is the SW's stand-in for the
+// frame's execution-context identity.
+async function waitActiveFrameSettled(tabId, frameId, beforeDocId) {
+  const deadline = Date.now() + navigationTimeoutMs();
+  while (Date.now() < deadline) {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+    const f = frames?.find((x) => x.frameId === frameId);
+    if (f && f.documentId !== beforeDocId) {
+      const [probe] = await chrome.scripting
+        .executeScript({ target: { tabId, frameIds: [frameId] }, func: () => document.readyState })
+        .catch(() => []);
+      if (probe?.result && probe.result !== "loading") return;
+    }
+    await sleep(50);
+  }
+}
+
+export {
+  adoptedDocumentReady,
+  documentReady,
+  settledActionUrl,
+  waitActiveFrameSettled,
+  waitNavigationSettled,
+  watchMainFrameCommit,
+};

@@ -380,6 +380,27 @@ fn headless_behavioral_flow() {
         stdout(&annotate_in_frame)
     );
 
+    // 2i. A click on a link that navigates ONLY the switched iframe (not the top
+    //     URL) must settle the ACTIVE frame's own navigation: the auto-capture
+    //     lands on the iframe's new document, never the pre-click one. The top
+    //     URL never moves, so the main-frame settle can't see this — it is the
+    //     `frame_navigates` + active-frame-context wait that catches it.
+    let frame_cap2 = fx.run(&["capture", "--include", "dom"]);
+    let framenav_idx = index_of(&frame_cap2, "framenav");
+    let framenav_click = fx.run(&["action", "click", &framenav_idx, "--capture"]);
+    assert_eq!(
+        code(&framenav_click),
+        0,
+        "iframe-internal nav click failed: {}",
+        stdout(&framenav_click)
+    );
+    assert!(
+        stdout(&framenav_click).contains("framed2btn"),
+        "auto-capture after an iframe-internal navigation must show the new frame \
+         document (framed2btn), not the pre-click page: {}",
+        stdout(&framenav_click)
+    );
+
     let back = fx.run(&["frame", "main"]);
     assert_eq!(code(&back), 0, "frame main failed: {}", stdout(&back));
 

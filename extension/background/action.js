@@ -5,7 +5,7 @@ import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
-import { adoptedDocumentReady, documentReady, settledActionUrl, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
+import { adoptedDocumentReady, documentReady, settledActionUrl, waitActiveFrameSettled, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
 import { rearmMonitors } from "./state.js";
 
@@ -301,6 +301,15 @@ async function dispatchActionToPage(tab, action) {
   // post-action `tabs.get` would miss a navigation still in flight and let the
   // auto-capture snapshot the dying page.
   const navWatch = watchMainFrameCommit(tab.id);
+  // Snapshot the switched iframe's committed document id before the action: a
+  // click that navigates that iframe replaces its document, and a different
+  // documentId is how the settle below knows to wait for the new page rather than
+  // capture the old one — the active-frame analogue of the main-frame navWatch.
+  let activeFrameDocId = null;
+  if (activeFrameId !== 0) {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null);
+    activeFrameDocId = frames?.find((f) => f.frameId === activeFrameId)?.documentId ?? null;
+  }
 
   try {
     // `key_press` dispatches a native CDP key event so Tab/Backspace/arrow/
@@ -315,11 +324,14 @@ async function dispatchActionToPage(tab, action) {
       r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
     }
     const result = { type: "Action", ...r };
-    // `navigates` is an internal bridge hint for the HEADLESS settle layer, not
-    // part of the Action wire response. Headless reads it before it reaches the
-    // wire; browser mode resolves navigation from its own watch, so drop it here
-    // rather than leak a field the typed response never models.
+    // `navigates` / `frame_navigates` are internal bridge hints (a top-frame and a
+    // current-frame navigation), not part of the Action wire response. Browser
+    // mode resolves a top navigation from its own watch, but still needs
+    // `frame_navigates` to settle an iframe-internal one; read it, then drop both
+    // rather than leak fields the typed response never models.
+    const frameNavigates = r.frame_navigates === true;
     delete result.navigates;
+    delete result.frame_navigates;
 
     // Report the settled destination of a same-tab navigation the action
     // triggered; a non-navigating action adds no url_changed and pays no wait.
@@ -332,30 +344,33 @@ async function dispatchActionToPage(tab, action) {
     const settledUrl = await settledActionUrl(tab.id, urlBefore, navWatch);
     if (settledUrl && settledUrl !== urlBefore) {
       result.url_changed = settledUrl;
-      // A click/key that incidentally navigated this tab (a `_top` link or form
-      // submit from inside a switched iframe) built a new document — the old
-      // frame tree, that iframe included, is gone. Drop the frame scope to the
-      // main frame so the `--capture` auto-snapshot and the next command don't
-      // target a dead frame, exactly as the explicit navigate/back/reload cases
-      // above and as headless `clear_active_frame` on `url_changed`.
+    }
+    // Three distinct outcomes the top URL conflates (mirrors headless do_action):
+    //   • the switched iframe VANISHED — a main-frame nav destroyed it (whether or
+    //     not the URL changed: a `target=_top` link to the same URL, a reload).
+    //     Drop the dead scope and re-arm the new main document.
+    //   • no switched frame and the main URL changed — re-arm main.
+    //   • a switched iframe is still LIVE — an iframe-only navigation (settle the
+    //     active frame below), or a top pushState that left it intact. A
+    //     same-document URL change is not a new document, so resetting on the URL
+    //     here would wrongly drop a live frame.
+    let frameVanished = false;
+    if (activeFrameId !== 0) {
+      const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null);
+      frameVanished = frames !== null && !frames.some((f) => f.frameId === activeFrameId);
+    }
+    if (frameVanished) {
       setActiveFrameId(0);
-      // Re-arm console/network hooks now, at settle — headless re-installs them
-      // the instant the navigation settles, not at the later `load` event.
+    }
+    if (frameVanished || (activeFrameId === 0 && settledUrl && settledUrl !== urlBefore)) {
+      // Re-arm console/network hooks at settle — headless re-installs them the
+      // instant the navigation settles, not at the later `load` event.
       await rearmMonitors(tab.id);
-    } else if (activeFrameId !== 0) {
-      // Same-URL main-frame nav from a SWITCHED iframe (a `target=_top` link to
-      // the current URL, a reload) destroys that iframe without changing the URL,
-      // so the check above can't see it. If the active frame is gone, drop to main
-      // rather than leave the next command on a dead frame — headless
-      // `active_frame_still_present`. Only when a frame is actually switched, so a
-      // plain click pays nothing.
-      const frames = await chrome.webNavigation
-        .getAllFrames({ tabId: tab.id })
-        .catch(() => null);
-      if (frames && !frames.some((f) => f.frameId === activeFrameId)) {
-        setActiveFrameId(0);
-        await rearmMonitors(tab.id);
-      }
+    } else if (activeFrameId !== 0 && frameNavigates) {
+      // A click inside the switched iframe that navigated THAT iframe built a new
+      // document without touching the top URL — invisible to the main settle. Wait
+      // for it before the auto-capture, or the snapshot is the pre-click page.
+      await waitActiveFrameSettled(tab.id, activeFrameId, activeFrameDocId);
     }
 
     if (openedTabId != null) {

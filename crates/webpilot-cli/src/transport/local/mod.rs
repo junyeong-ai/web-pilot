@@ -518,6 +518,38 @@ impl LocalTransport {
         }
     }
 
+    /// After a click navigated the switched iframe, wait until its bridge context
+    /// names a NEW, parsed document. The navigation replaced the frame's execution
+    /// context, so a context id different from `before` with a `readyState` past
+    /// `loading` is the signal the new page is ready — without it the snapshot is
+    /// the pre-click document, since an iframe-internal navigation never touches
+    /// the top URL the main settle watches. Bounded by the navigation budget.
+    async fn await_live_active_frame_context(&self, before: Option<String>) {
+        let deadline = std::time::Instant::now() + webpilot::settings::timeouts().navigation;
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            if let Ok(cid) = self.bridge_context_id().await
+                && Some(&cid) != before.as_ref()
+            {
+                let parsed = self
+                    .eval_in_context_with_timeout("document.readyState", Some(&cid), true, PROBE)
+                    .await
+                    .ok()
+                    .and_then(|v| decode_eval_result(&v).as_str().map(str::to_owned))
+                    .is_some_and(|s| s != "loading");
+                if parsed {
+                    return;
+                }
+                // A transitional context that hasn't parsed — drop it so the next
+                // poll re-resolves once the listener records the committed one.
+                self.bridge_contexts.lock().await.retain(|_, v| *v != cid);
+            }
+            tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
+        }
+    }
+
     pub(super) async fn navigate_reconnect(&mut self, url: &str) -> Result<()> {
         let before_url = self.bound_target_url().await;
 

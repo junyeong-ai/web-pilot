@@ -171,6 +171,15 @@ impl LocalTransport {
         // the browser registers after the action's round-trip is reported by
         // the next capture.
         let url_before = self.bound_target_url().await;
+        // Snapshot the switched iframe's bridge context before the action: a click
+        // that navigates that iframe replaces its document (a new execution
+        // context), and a context id different from this one is how the settle
+        // below knows to wait for the new page rather than capture the old one.
+        let active_cid_before = if self.active_frame_id.lock().await.is_some() {
+            self.bridge_context_id().await.ok()
+        } else {
+            None
+        };
         let mut target_events = self.browser.subscribe_events();
         let mut page_events = self.page.subscribe_events();
 
@@ -178,12 +187,12 @@ impl LocalTransport {
         // arrow/text behaviour), but still flows through the navigation +
         // popup detection below because Enter can submit a form. Every other
         // page-mutating action runs in the page via the bridge.
-        let nav_hint = match &action {
+        let (nav_hint, frame_navigates) = match &action {
             Action::KeyPress { key, modifiers } => {
                 self.do_key_press(key, modifiers).await?;
                 // An Enter that submits a form navigates, but carries no
                 // bridge-side hint; its load events fall to the buffered drain.
-                false
+                (false, false)
             }
             _ => {
                 let action_json = serde_json::to_value(&action)?;
@@ -191,12 +200,19 @@ impl LocalTransport {
                     .invoke_bridge(&json!({"type": "executeAction", "action": action_json}))
                     .await?;
                 let resp = Self::parse_bridge_response(raw)?;
-                // The bridge sets `navigates: true` for a click it determined
-                // will load a new top-level document (a non-prevented link to a
-                // different http(s)/file URL in this frame).
-                resp.get("navigates")
+                // `navigates`: a click that will load a new TOP document (drives
+                // `url_changed` + the main settle). `frame_navigates`: the same for
+                // the CURRENT frame — the only signal for an iframe-internal nav
+                // under a switched frame, which the top URL never reflects.
+                let navigates = resp
+                    .get("navigates")
                     .and_then(Value::as_bool)
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                let frame_navigates = resp
+                    .get("frame_navigates")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                (navigates, frame_navigates)
             }
         };
 
@@ -206,32 +222,42 @@ impl LocalTransport {
             .settled_action_url(&mut page_events, &url_before, nav_hint)
             .await;
         let url_changed = (!landed.is_empty() && landed != url_before).then_some(landed);
-        // Reset the frame scope + re-arm when the main frame committed a new
-        // document. `url_changed` catches the common case, but a same-URL
-        // main-frame navigation from a SWITCHED iframe — a `target=_top` link to
-        // the current URL, a reload — destroys that iframe without changing the
-        // URL, so its context is now dead while `url_changed` is None. If the
-        // active frame has vanished, reset too, rather than leave every later
-        // command resolving a dead frame context. (Checked only when `url_changed`
-        // is None and a frame is actually switched, so the common path pays nothing.)
-        if url_changed.is_some() || !self.active_frame_still_present().await {
-            // The action landed on a new document: a frame scope switched in
-            // the old document died with it (same contract as `navigate`),
-            // and the `window` monitor hooks are gone — the commit has been
-            // observed, so re-arm here. The CDP page session itself survives
-            // a cross-site renderer swap (the /devtools/page endpoint lives
-            // browser-side — verified against a file://→http:// process
-            // swap), so no session rebind is needed. A navigation that
-            // outlives the bounded settle window resumes recording at the
-            // next WebPilot navigation or tab command.
+
+        // The top URL alone conflates three distinct post-click outcomes; settle
+        // each correctly rather than keying everything off `url_changed`:
+        //   1. the switched iframe VANISHED — a main-frame nav destroyed it
+        //      (whether or not the URL changed: a `target=_top` link to the same
+        //      URL, a reload), or the page removed it. Drop the dead scope and
+        //      settle the new main document.
+        //   2. no switched frame and the MAIN URL changed — settle main.
+        //   3. a switched iframe is still LIVE — an iframe-only navigation (the
+        //      active-frame settle below), or a top-frame pushState that left the
+        //      iframe intact. A same-document URL change is not a new document, so
+        //      resetting on `url_changed` here would wrongly drop a live frame.
+        let frame_vanished = !self.active_frame_still_present().await;
+        if frame_vanished {
             self.clear_active_frame().await;
+        }
+        let has_active_frame = self.active_frame_id.lock().await.is_some();
+        if frame_vanished || (!has_active_frame && url_changed.is_some()) {
+            // A new MAIN document: its `window` monitor hooks died with it, so
+            // re-arm. The CDP page session survives a cross-site renderer swap (the
+            // /devtools/page endpoint lives browser-side — verified against a
+            // file://→http:// process swap), so no rebind. The fresh isolated
+            // bridge world can briefly resolve the transitional pre-commit context
+            // (an empty DOM), so wait for the live parsed document before the
+            // auto-capture (and the next command) read it. (A top-only pushState
+            // with no switched frame lands here too; await_live is a no-op when the
+            // document didn't actually change.)
             self.reinstall_monitors().await;
-            // The session survives, but the new document's isolated bridge world
-            // is a fresh execution context, and for a poll cycle the context map
-            // can still hand back the transitional pre-commit one — which extracts
-            // an empty DOM. Wait until the bridge context names the live, parsed
-            // document before the auto-capture (and the next command) reads it.
             self.await_live_bridge_context().await;
+        } else if has_active_frame && frame_navigates {
+            // A click inside the switched iframe that navigated THAT iframe built a
+            // new document in it without touching the top URL — invisible to the
+            // main settle. Wait for the active frame's bridge context to name the
+            // new live document, or the snapshot is the pre-click page.
+            self.await_live_active_frame_context(active_cid_before)
+                .await;
         }
 
         // Adopt a click-opened tab BEFORE the capture: the pin moves to the
