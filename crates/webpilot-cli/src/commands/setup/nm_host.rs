@@ -21,11 +21,16 @@ pub struct NmHostArgs {
 pub fn run(args: NmHostArgs) -> Result<CommandOutput> {
     let ext_id = args.extension_id.trim().to_owned();
     if !is_valid_extension_id(&ext_id) {
-        anyhow::bail!(
-            "Invalid extension ID: {ext_id}\n  \
-             Expected 32 characters in [a-p]. Find it at chrome://extensions \
-             with Developer mode enabled."
-        );
+        // A malformed extension ID is user input — a typed InvalidArgument (exit 7),
+        // not a generic Other (exit 1): exit codes name the error class, never
+        // inferred from a message.
+        return Err(webpilot::WebPilotError::InvalidArgument {
+            detail: format!(
+                "invalid extension ID: {ext_id} — expected 32 characters in [a-p], \
+                 found at chrome://extensions with Developer mode enabled"
+            ),
+        }
+        .into());
     }
 
     // Chrome's NM API requires an absolute path; a relative `webpilot` would

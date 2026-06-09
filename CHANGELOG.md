@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.75] - 2026-06-09
+
+### Fixed
+
+- **`setup nm-host` returns `InvalidArgument` (exit 7) for a malformed extension
+  ID.** A bad `--extension-id` used `anyhow::bail!`, surfacing as a generic exit 1
+  instead of the user-error exit code the rest of the CLI uses for bad input —
+  exit codes name the error class, never inferred from a message.
+
 ## [0.4.74] - 2026-06-09
 
 ### Fixed
