@@ -375,10 +375,13 @@ async function handleNetworkRead(since) {
       target: { tabId: tab.id, frameIds: [0] },
       world: "MAIN",
       // Filter by `timestamp >= since` AND sanitize to the same shape headless
-      // returns: drop any entry missing a required NetworkEntry field (the
+      // returns: drop any entry whose fields don't match `NetworkEntry` (the
       // MAIN-world buffer is page-reachable and best-effort), so the CLI
       // deserializes an identical `Vec<NetworkEntry>` in both modes and a tampered
-      // entry can't break the read. `status`/`error` stay optional.
+      // entry can't break the read. The OPTIONAL `status`/`error` are type-checked
+      // too — a present-but-wrong-typed `status:"200"` (string) or out-of-`u32`
+      // value would otherwise pass and fail the CLI's `Option<u32>` decode as a
+      // misleading ConnectionLost, where headless's per-entry `.ok()` just drops it.
       func: (s, cap) => {
         const all = window.__webpilot_network || [];
         return {
@@ -390,7 +393,10 @@ async function handleNetworkRead(since) {
               typeof e.url === "string" &&
               typeof e.method === "string" &&
               typeof e.duration_ms === "number" &&
-              typeof e.timestamp === "number",
+              typeof e.timestamp === "number" &&
+              (e.status == null ||
+                (Number.isInteger(e.status) && e.status >= 0 && e.status <= 0xffffffff)) &&
+              (e.error == null || typeof e.error === "string"),
           ),
           truncated: all.length >= cap,
         };

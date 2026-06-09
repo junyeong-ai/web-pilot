@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.113] - 2026-06-10
+
+### Fixed
+
+- **A malformed entry in the page-reachable network buffer no longer breaks
+  browser-mode `network read`.** The sanitizing filter checked the required
+  `NetworkEntry` fields but not the OPTIONAL `status`/`error` types, so a
+  tampered or quirky `status: "200"` (string, or an out-of-`u32` value) passed
+  through and failed the CLI's `Option<u32>` decode — surfacing as a misleading
+  `ConnectionLost` (exit 3) instead of the clean read headless returns. The
+  filter now type-checks `status` (null or a `u32`-range integer) and `error`
+  (null or string) and drops a bad entry, matching headless's per-entry `.ok()`.
+
 ## [0.4.112] - 2026-06-10
 
 ### Fixed

@@ -538,6 +538,38 @@ fn browser_behavioral_flow() {
         stdout(&logs)
     );
 
+    // 4b-net. A tampered/malformed entry in the page-reachable MAIN-world network
+    //         buffer must NOT break `network read`: the optional `status`/`error`
+    //         are type-checked and a bad entry is DROPPED (matching headless's
+    //         per-entry `.ok()`), never surfaced as a misleading ConnectionLost.
+    //         Inject a string-`status` entry beside a valid one; the read succeeds
+    //         and carries only the good one.
+    let nstart = fx.run(&["network", "start"]);
+    assert_eq!(
+        code(&nstart),
+        0,
+        "network start failed: {}",
+        stdout(&nstart)
+    );
+    let _ = fx.run(&[
+        "eval",
+        "window.__webpilot_network.push(\
+           {type:'fetch',url:'http://x/badstatus',method:'GET',status:'200',duration_ms:1,timestamp:Date.now()},\
+           {type:'fetch',url:'http://x/goodstatus',method:'GET',status:200,duration_ms:1,timestamp:Date.now()}); 'ok'",
+    ]);
+    let nread = fx.run(&["network", "read"]);
+    assert_eq!(
+        code(&nread),
+        0,
+        "a malformed network buffer entry must be dropped, not surface as ConnectionLost: {}",
+        stdout(&nread)
+    );
+    assert!(
+        stdout(&nread).contains("/goodstatus") && !stdout(&nread).contains("/badstatus"),
+        "network read must keep the valid entry and drop the string-status one: {}",
+        stdout(&nread)
+    );
+
     // 4c. The eval gate covers monitor RE-injection in browser mode too: a deny
     //     landing after `console start` must stop the service worker re-arming the
     //     MAIN-world hooks on the next document (the host attaches the verdict;
