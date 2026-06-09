@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.59] - 2026-06-09
+
+### Fixed
+
+- **A click that opens a popup now reports the new tab on the text/MCP channel,
+  not only in JSON.** `new_tab` is an object (the adopted popup), which the
+  string-keyed extras table skipped, so terminal/MCP output showed the new page's
+  URL via `page_url` but never that the working tab had MOVED to a freshly opened
+  one. Its URL is now rendered as a `New tab:` line.
+- **MCP tool errors carry the typed error code.** A failed tool returned only the
+  guidance text with `isError:true`, dropping the `{code, …data}` the CLI exposes
+  via `--json`. The wire error is now in `structuredContent`, so a client can
+  branch on `ElementNotFound` vs `Timeout` vs `PolicyDenied` instead of parsing prose.
+- **A drag coordinate exactly on the right/bottom viewport edge is rejected, not
+  dispatched off-target.** The in-viewport check used inclusive bounds, but the
+  viewport is half-open `[0, innerWidth)` — a centre on `innerWidth`/`innerHeight`
+  (an element straddling the edge) would dispatch onto nothing. Now strict bounds.
+
 ## [0.4.58] - 2026-06-09
 
 ### Fixed

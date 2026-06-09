@@ -225,9 +225,15 @@ where
 
     let result = match outcome {
         Ok(content) => json!({ "content": content, "isError": false }),
+        // The text block carries the agent-facing guidance (parity with the CLI's
+        // human output); `structuredContent` carries the typed `{code, ...data}`
+        // wire error (parity with the CLI's `--json`), so a client can branch on
+        // `ElementNotFound` vs `Timeout` vs `PolicyDenied` instead of parsing prose.
         Err(e) => json!({
             "content": [{ "type": "text", "text": format!("{e}") }],
             "isError": true,
+            "structuredContent": serde_json::to_value(e.to_wire())
+                .expect("WireError serializes"),
         }),
     };
     ok_reply(id, result)

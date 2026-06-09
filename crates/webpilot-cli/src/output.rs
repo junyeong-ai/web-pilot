@@ -62,7 +62,7 @@ const DOM_EXTRA_LABELS: [(&str, &str); 6] = [
 /// The single source for the CLI renderer, the MCP text block, and the capture
 /// handler's no-DOM path.
 pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
-    DOM_EXTRA_LABELS
+    let mut lines: Vec<String> = DOM_EXTRA_LABELS
         .iter()
         .filter_map(|(key, label)| {
             extra
@@ -70,7 +70,20 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
                 .and_then(|v| v.as_str())
                 .map(|v| format!("{label}: {v}"))
         })
-        .collect()
+        .collect();
+    // `new_tab` is the adopted popup — an object, not a string, so the label
+    // table skips it and the JSON channel alone would carry it. Surface it: the
+    // snapshot's `page_url` shows WHERE the agent landed, but only this tells it
+    // the working tab MOVED to a freshly opened one (a click that opened a popup),
+    // not that the same tab navigated.
+    if let Some(url) = extra
+        .get("new_tab")
+        .and_then(|t| t.get("url"))
+        .and_then(|v| v.as_str())
+    {
+        lines.push(format!("New tab: {url}"));
+    }
+    lines
 }
 
 impl CommandOutput {
@@ -187,5 +200,33 @@ pub fn render_error(err: &WebPilotError, mode: OutputMode) {
                 ),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dom_extra_lines;
+    use serde_json::json;
+
+    #[test]
+    fn new_tab_surfaces_on_the_text_channel_not_only_json() {
+        // A click that opens a popup carries `new_tab` (an object) — the human/MCP
+        // text path must render its URL, not leave it to the JSON channel alone.
+        let extra = json!({
+            "page_url": "http://x/popup",
+            "new_tab": { "id": "T1", "url": "http://x/popup", "title": "p" },
+        });
+        let lines = dom_extra_lines(extra.as_object().unwrap());
+        assert!(
+            lines.iter().any(|l| l == "New tab: http://x/popup"),
+            "new_tab must reach the text channel: {lines:?}"
+        );
+        // No popup → no phantom line.
+        let plain = json!({ "page_url": "http://x/" });
+        assert!(
+            !dom_extra_lines(plain.as_object().unwrap())
+                .iter()
+                .any(|l| l.starts_with("New tab")),
+        );
     }
 }

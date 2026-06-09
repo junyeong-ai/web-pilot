@@ -1063,7 +1063,11 @@
     // If the two centres can't share the viewport (different scroll containers,
     // or too far apart for one gesture), a coordinate drag would miss. Fail
     // loud instead of reporting a success that did nothing.
-    const inView = (x, y) => x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight;
+    // Half-open bounds: the viewport spans pixels [0, innerWidth) × [0,
+    // innerHeight), so a centre exactly on `innerWidth`/`innerHeight` (an element
+    // straddling the right/bottom edge) is OUTSIDE the hit-test region — CDP would
+    // dispatch the drag onto nothing. Reject it here rather than miss silently.
+    const inView = (x, y) => x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
     if (!inView(sx, sy) || !inView(tx, ty)) {
       return err(
         "InvalidArgument",
