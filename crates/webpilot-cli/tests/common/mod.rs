@@ -18,8 +18,18 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <div id="shadowhost"></div>
 <iframe src="/frame"></iframe>
 <script>
+  // A DOCUMENT-level delegated click listener: it fires for a click inside the
+  // shadow root only if the synthetic event is `composed` (crosses the boundary).
+  // `e.target` is retargeted to the host once it leaves the shadow root, so the
+  // real button is found via `composedPath()` — which is populated only for a
+  // composed event that actually crossed the boundary.
+  document.addEventListener('click', function (e) {
+    if (e.composedPath().some((n) => n && n.id === 'shadowbtn')) {
+      document.title = 'shadow-delegated';
+    }
+  });
   const sr = document.getElementById('shadowhost').attachShadow({ mode: 'open' });
-  sr.innerHTML = '<input id="shadowfile" type="file">';
+  sr.innerHTML = '<input id="shadowfile" type="file"><button id="shadowbtn">shadow</button>';
 </script>
 </body></html>"#;
 

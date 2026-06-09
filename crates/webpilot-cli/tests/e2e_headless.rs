@@ -282,6 +282,26 @@ fn headless_behavioral_flow() {
         stdout(&scount)
     );
 
+    // 2f. A click on a control inside an open shadow root must dispatch a
+    //     `composed` event so it crosses the shadow boundary: the page's
+    //     document-level delegated click listener only fires for the shadow
+    //     button if the event escapes the shadow root. Without `composed:true`
+    //     the click would be a silent no-op for any host/document delegation.
+    let shadow_btn = index_of(&cap_up, "shadowbtn");
+    let shadow_click = fx.run(&["action", "click", &shadow_btn]);
+    assert_eq!(
+        code(&shadow_click),
+        0,
+        "shadow-root button click failed: {}",
+        stdout(&shadow_click)
+    );
+    let title_after = fx.run(&["eval", "document.title"]);
+    assert!(
+        stdout(&title_after).contains("shadow-delegated"),
+        "a shadow-root click must reach the document's delegated listener (composed event): {}",
+        stdout(&title_after)
+    );
+
     // 2e. `fetch` runs as a debugger-routed MAIN-world eval in both modes (no
     //     contextId, CSP-exempt) and returns the response body — a same-origin
     //     GET against the fixture server must come back with the page markup.

@@ -68,12 +68,16 @@ pub async fn run(args: DiffArgs) -> Result<CommandOutput> {
             (Some(Kind::Screenshot), Some(Kind::Screenshot)) => {
                 diff_screenshot(&args.file_a, &args.file_b)
             }
-            (Some(_), Some(_)) => {
-                anyhow::bail!(
-                    "Both files must be the same kind (two JSON snapshots or two images)."
-                )
+            (Some(_), Some(_)) => Err(webpilot::WebPilotError::InvalidArgument {
+                detail: "both files must be the same kind (two JSON snapshots or two images)"
+                    .into(),
             }
-            _ => anyhow::bail!("Cannot detect file type. Use --dom or --screenshot."),
+            .into()),
+            _ => Err(webpilot::WebPilotError::InvalidArgument {
+                detail: "cannot detect file type from the extensions — use --dom or --screenshot"
+                    .into(),
+            }
+            .into()),
         }
     }
 }

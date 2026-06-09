@@ -126,13 +126,18 @@ async function handleTabList() {
 
 async function handleStatus() {
   // Report the pinned tab when one is set — that is the tab commands will act
-  // on. Status is read-only, so it never pins as a side effect; without a pin
-  // it shows the focused window's active tab (what a first command would pin).
+  // on. Status is read-only, so it never pins as a side effect.
   let tab = null;
   if (activeTabId != null) {
+    // A pin is set: report THAT tab, or nothing if it has died. Do NOT fall
+    // through to the focused tab — `resolveActiveTab` throws TabNotFound for a
+    // dead pin, so every other command fails on it; status showing a healthy
+    // focused tab instead would tell the agent it is somewhere its commands
+    // can't reach. A null tab here mirrors that "the pinned tab is gone".
     tab = await chrome.tabs.get(activeTabId).catch(() => null);
-  }
-  if (!tab) {
+  } else {
+    // No pin: show the focused window's active tab — what a first command would
+    // pin. (resolveActiveTab pins the same tab; status just doesn't persist it.)
     [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   }
   // Chrome version derives from the user agent (no direct API in MV3 SW).

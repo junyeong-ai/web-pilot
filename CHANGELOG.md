@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.73] - 2026-06-09
+
+### Fixed
+
+- **A click on a control inside an open shadow root now crosses the shadow
+  boundary.** The synthetic click events lacked `composed: true`, so a click on a
+  shadow-DOM button (which capture indexes via `queryAllDeep`) stopped at its
+  shadow root and never reached a host/document delegated `click` listener — a
+  silent no-op for the common web-component delegation pattern. Both modes.
+- **MCP `browser_screenshot` reports the page it captured.** It returned only the
+  image and `Screenshot: {path}`, dropping the `page_url`/`page_title` the CLI adds
+  for a DOM-less capture — so an MCP client couldn't tell which page (after a
+  redirect or in a switched iframe) the image shows. It now carries the same
+  `Page:`/`Title:` lines.
+- **Browser-mode `status` no longer shows a healthy focused tab when the pinned
+  tab has died.** A dead pin fell through to the focused window's active tab, while
+  every other command fails that pin with `TabNotFound` — so status disagreed with
+  what the agent's commands would do. Status now reports the pinned tab or nothing
+  if it is gone; the focused-tab fallback applies only when no tab is pinned.
+- **`diff` returns `InvalidArgument` (exit 7) for a bad file pairing.** Mismatched
+  or undetectable input kinds used `anyhow::bail!`, surfacing as a generic exit 1
+  instead of the user-error exit code the rest of the CLI uses.
+
 ## [0.4.72] - 2026-06-09
 
 ### Fixed

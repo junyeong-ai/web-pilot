@@ -642,7 +642,11 @@
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
     const opts = {
-      bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, view: window,
+      // `composed: true` so the event crosses shadow boundaries: capture indexes
+      // controls inside open shadow roots (queryAllDeep), and a non-composed event
+      // dispatched on one stops at its shadow root — a host/document delegated
+      // click listener would never fire, making the click a silent no-op.
+      bubbles: true, composed: true, cancelable: true, clientX: x, clientY: y, button: 0, view: window,
     };
     el.dispatchEvent(new PointerEvent("pointerdown", opts));
     el.dispatchEvent(new MouseEvent("mousedown", opts));

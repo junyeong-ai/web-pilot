@@ -389,9 +389,17 @@ fn screenshot_content(output: &CommandOutput) -> std::result::Result<Vec<Value>,
         detail: format!("failed to read screenshot {path}: {e}"),
     })?;
     let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+    // Reuse the capture renderer so the text block carries the SAME identity lines
+    // the CLI prints — `Page:`/`Title:` alongside `Screenshot:`. A screenshot has
+    // no DOM footer, so without this an MCP client holding the image can't tell
+    // which page (after a redirect, or a switched iframe) it actually shows.
+    let text = crate::output::dom_extra_lines(data.as_object().ok_or(WebPilotError::Other {
+        detail: "screenshot output was not an object".into(),
+    })?)
+    .join("\n");
     Ok(vec![
         json!({ "type": "image", "data": encoded, "mimeType": "image/png" }),
-        json!({ "type": "text", "text": format!("Screenshot: {path}") }),
+        json!({ "type": "text", "text": text }),
     ])
 }
 
