@@ -109,20 +109,21 @@ async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R, max: u64) -> Result
     if buf.len() as u64 > max && buf.last() != Some(&b'\n') {
         // Drain the over-cap line through its terminating newline so the stream
         // resyncs at a clean frame instead of parsing this line's tail as a fresh
-        // request. Bound the drain so a never-terminating line can't spin here
-        // forever: past the limit, return `OverCap` and let the next read
-        // continue — the loop stays responsive (one `OverCap` per limit) rather
-        // than hanging. The limit is far beyond any real frame, so a genuinely
-        // over-cap-but-finite line still drains in this one call.
-        let drain_limit = max.saturating_mul(32);
-        let mut discarded: u64 = 0;
-        while buf.last() != Some(&b'\n') && discarded < drain_limit {
+        // request. Each iteration awaits I/O and discards at most `max` bytes (the
+        // buffer is cleared every time), so this neither busy-spins nor grows
+        // memory: a finite over-cap line drains to its newline and the stream
+        // resyncs (O(line length), no arbitrary cap to leave a misparsed tail),
+        // and an infinite one — a client streaming bytes with no newline — is
+        // drained until EOF, which is unavoidable and harmless: that one line IS
+        // the whole stdin stream, so there is nothing else to process meanwhile.
+        // (Length-framed transports — native messaging, the IPC host — consume an
+        // exact byte count and so never face an unterminated frame.)
+        while buf.last() != Some(&b'\n') {
             buf.clear();
             let drained = (&mut *reader).take(max).read_until(b'\n', &mut buf).await?;
             if drained == 0 {
                 break; // EOF mid-line — nothing left to resync to
             }
-            discarded = discarded.saturating_add(drained as u64);
         }
         return Ok(Frame::OverCap);
     }
@@ -713,31 +714,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_frame_bounds_the_drain_so_a_long_unterminated_line_cannot_hang() {
+    async fn read_frame_drains_a_long_unterminated_line_to_eof() {
         use tokio::io::BufReader;
-        // A line far longer than the per-call drain limit (max*32 = 128 here),
-        // with no newline, then EOF: read_frame must keep returning OverCap with
-        // bounded work per call and reach Eof — never spin forever in one call.
+        // A line far longer than the cap, with no newline, then EOF: read_frame
+        // drains it fully (in `max`-sized chunks, awaiting I/O each time) and
+        // terminates on EOF — one OverCap, then Eof — never spinning and never
+        // leaving an undrained tail a later read would misparse as a request.
         let max = 4u64;
         let data = vec![b'X'; 600];
         let mut reader = BufReader::new(data.as_slice());
-        let mut overcaps = 0;
-        let mut reached_eof = false;
-        for _ in 0..1000 {
-            match read_frame(&mut reader, max).await.unwrap() {
-                Frame::OverCap => overcaps += 1,
-                Frame::Eof => {
-                    reached_eof = true;
-                    break;
-                }
-                other => panic!("unexpected frame: {other:?}"),
-            }
-        }
-        assert!(
-            overcaps >= 1,
-            "the unterminated line is reported as OverCap"
+        assert_eq!(
+            read_frame(&mut reader, max).await.unwrap(),
+            Frame::OverCap,
+            "the unterminated line is reported once as OverCap"
         );
-        assert!(reached_eof, "the bounded drain terminates and reaches EOF");
+        assert_eq!(
+            read_frame(&mut reader, max).await.unwrap(),
+            Frame::Eof,
+            "the drain consumed to EOF, so the next read is end-of-stream"
+        );
     }
 
     #[test]

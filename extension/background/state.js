@@ -503,9 +503,19 @@ async function handleSessionImport(rawData) {
       // the SameSite enum — match both, exactly. (`cookiesFailed` is separate: a
       // well-formed cookie the browser actually refused.)
       const SAME_SITE = ["strict", "lax", "none", "no_restriction", "unspecified"];
+      // Match headless `serde_json::from_value::<CookieInfo>` field-for-field: a
+      // present `secure`/`http_only`/`host_only` must be a boolean and a present
+      // `expiration` a number, exactly as their Rust types demand. Without this a
+      // truthy string like `"host_only":"false"` would coerce a domain cookie into
+      // a host-only one (dropping `domain`), corrupting scope while reporting
+      // success — where headless rejects the same row.
       if (c == null || typeof c.name !== "string" || typeof c.value !== "string"
           || typeof c.domain !== "string" || typeof c.path !== "string"
-          || !SAME_SITE.includes(c.same_site)) {
+          || !SAME_SITE.includes(c.same_site)
+          || (c.secure !== undefined && typeof c.secure !== "boolean")
+          || (c.http_only !== undefined && typeof c.http_only !== "boolean")
+          || (c.host_only !== undefined && typeof c.host_only !== "boolean")
+          || (c.expiration != null && typeof c.expiration !== "number")) {
         cookiesMalformed++;
         continue;
       }

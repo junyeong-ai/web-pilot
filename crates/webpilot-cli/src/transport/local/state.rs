@@ -270,11 +270,14 @@ impl LocalTransport {
         // Honor the `version` the export stamps: a file from a NEWER schema may
         // carry fields this binary doesn't understand, so importing it would
         // silently drop them and report success — handing the agent a session
-        // quietly missing state. Reject a version above what we support rather
-        // than half-apply it. (A missing version is a hand-written/legacy file;
-        // accept it as the current schema.)
-        if let Some(v) = parsed.get("version").and_then(Value::as_u64)
-            && v > SESSION_SCHEMA_VERSION
+        // quietly missing state. Reject any numeric version above what we support
+        // rather than half-apply it. Read it as `f64`, not `as_u64`: a non-integer
+        // like `1.5` is `None` to `as_u64` and would slip through as "absent",
+        // while the browser's plain numeric `>` comparison rejects it — so the two
+        // modes would disagree. (A missing or non-numeric version is a
+        // hand-written/legacy file; accept it as the current schema.)
+        if let Some(v) = parsed.get("version").and_then(Value::as_f64)
+            && v > SESSION_SCHEMA_VERSION as f64
         {
             return Err(WebPilotError::InvalidArgument {
                 detail: format!(

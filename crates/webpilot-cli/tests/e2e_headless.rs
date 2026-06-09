@@ -1025,6 +1025,20 @@ fn headless_behavioral_flow() {
         "a non-object session file must be a typed InvalidArgument, not a false success: {}",
         stdout(&bs)
     );
+    // A NEWER schema version is rejected even when written as a non-integer like
+    // `1.5`: read as a number (not `as_u64`, which would see `1.5` as absent and
+    // let it through), so a too-new file fails identically to browser mode, which
+    // compares the version numerically.
+    let newer_session = home.join("newer-session.json");
+    std::fs::write(&newer_session, br#"{"version":1.5,"cookies":[]}"#)
+        .expect("write newer session fixture");
+    let ns = fx.run(&["session", "import", newer_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&ns),
+        7,
+        "a newer (even non-integer) schema version must be rejected: {}",
+        stdout(&ns)
+    );
 
     // A `wait text` value starting with `-` is the value, not a flag
     // (allow_hyphen_values) — it must reach the bridge and time out, not be

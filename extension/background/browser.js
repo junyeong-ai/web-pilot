@@ -198,6 +198,15 @@ async function handleFrameList() {
     frames[idx].name = await readFrameName(tab.id, f.frameId);
   }));
 
+  // A persisted active-frame id can outlive its frame — the page changed while
+  // the MV3 service worker was suspended, so the restored scope points at a frame
+  // the tree no longer has. Drop it back to main rather than report a scope that
+  // does not exist, mirroring headless, which validates the persisted active
+  // frame against the live tree on open (`frame_exists` → clear).
+  if (activeFrameId !== 0 && !all.some((f) => f.frameId === activeFrameId)) {
+    setActiveFrameId(0);
+  }
+
   return { type: "Frames", frames, active_frame_id: activeFrameIdWire() };
 }
 

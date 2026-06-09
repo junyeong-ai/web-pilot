@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.102] - 2026-06-10
+
+### Fixed
+
+- **`session import` validates the schema version and cookie field types
+  identically in both modes.** Headless read the version with `as_u64`, so a
+  non-integer like `1.5` looked *absent* and a too-new file slipped through —
+  while browser mode's numeric `>` rejected it; the headless check now reads the
+  version as a number so both reject any version above what this binary supports.
+  Conversely, browser mode validated only a cookie row's string fields, so a
+  truthy non-boolean like `"host_only":"false"` coerced a domain cookie into a
+  host-only one (dropping `domain`) and reported success — where headless's
+  `CookieInfo` deserialization rejects it; browser now type-checks
+  `secure`/`http_only`/`host_only` (boolean) and `expiration` (number) to match.
+- **Browser mode: `frame list` no longer reports a stale active frame.** A
+  persisted active-frame id could outlive its frame across a service-worker
+  suspend/restart; `frame list` reported it even when the frame was gone from the
+  live tree. It is now validated against the current frames and dropped back to
+  main if absent, mirroring headless, which validates the persisted active frame
+  on open.
+- **MCP server: the over-cap line drain is no longer bounded.** The 0.4.99 bound
+  (32× the cap) could leave the tail of a line longer than that to be misparsed
+  as a fresh request. The drain again runs to the terminating newline: it awaits
+  I/O and discards in capped chunks, so it neither busy-spins nor grows memory,
+  and a never-terminating line is the client monopolizing the single stdin stream
+  (drained until EOF) — there is nothing else to process meanwhile, so no tail is
+  ever left to misframe.
+
 ## [0.4.101] - 2026-06-10
 
 ### Fixed
