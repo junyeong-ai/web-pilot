@@ -174,16 +174,30 @@ async function handleCookieList(url) {
   };
 }
 
+// A well-formed http(s) URL. Parses (not just prefix-matches) so a bare scheme
+// like `http://` is rejected, matching what CDP `Network.setCookie` refuses.
+function isHttpUrl(url) {
+  try {
+    const u = new URL(url || "");
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function handleCookieSet(command) {
-  // The cookie URL must be http(s), as the headless CDP `Network.setCookie`
-  // enforces — surface it as a typed InvalidArgument (exit 7), not the less
-  // specific `chrome.cookies.set` exception (which would read as a generic
-  // failure with a different code in browser mode only).
-  if (!/^https?:\/\//i.test(command.url || "")) {
+  // The cookie URL must be a valid http(s) URL, as the headless CDP
+  // `Network.setCookie` enforces — it rejects a malformed URL (`http://` with no
+  // host, a bare scheme) as InvalidArgument (exit 7). A prefix-only regex would
+  // pass `http://` and let `chrome.cookies.set` throw a generic exception that
+  // reads as `Other` (exit 1) in browser mode only. Parse it so the rejection —
+  // and its exit code — matches headless for every malformed URL, not just a
+  // missing scheme.
+  if (!isHttpUrl(command.url)) {
     return {
       type: "CookieResult",
       success: false,
-      error: err("InvalidArgument", "cookie url must have scheme http or https"),
+      error: err("InvalidArgument", "cookie url must be a valid http or https URL"),
     };
   }
   try {

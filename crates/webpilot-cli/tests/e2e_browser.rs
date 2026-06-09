@@ -607,6 +607,18 @@ fn browser_behavioral_flow() {
         stdout(&bs)
     );
 
+    // 4f. A malformed cookie URL with a valid scheme prefix but no host
+    //     (`http://`) is a typed InvalidArgument (exit 7) — matching headless,
+    //     which rejects it at the CDP sink — not the generic chrome.cookies.set
+    //     exception (Other, exit 1) a prefix-only scheme check used to let pass.
+    let bad_cookie_url = fx.run(&["cookie", "set", "http://", "k", "v"]);
+    assert_eq!(
+        code(&bad_cookie_url),
+        7,
+        "a malformed cookie URL must be InvalidArgument in browser mode too, not Other: {}",
+        stdout(&bad_cookie_url)
+    );
+
     // 5. Deterministic tab binding: commands act on the pinned tab, and a
     //    vanished pin is a typed TabNotFound — never a silent retarget to
     //    whatever tab happens to be focused. `tab new` re-pins.
@@ -730,6 +742,38 @@ fn browser_behavioral_flow() {
     assert!(
         ax_tree.contains("inner link"),
         "AX tree while switched into the iframe must be scoped to it (carry its own 'inner link'), not the root document"
+    );
+    // An ACTION's own --capture while switched into the iframe must scope the
+    // subframe count to the active frame too — not just a standalone `capture`.
+    // A click that stays in the frame (a same-document `#` fragment link) must
+    // still report the nested /nested iframe (subframes: 1); a main-frame-only
+    // gate would drop it to 0 and hide the nested iframe from the agent. Headless
+    // `capture_action_snapshot` counts unconditionally; this holds browser to it.
+    let link_cap = fx.run(&["capture", "--include", "dom"]);
+    let link_snap: serde_json::Value =
+        serde_json::from_str(&stdout(&link_cap)).expect("link capture json");
+    let link_index = link_snap["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "link")
+        .and_then(|e| e["index"].as_u64())
+        .expect("inner fragment link indexed")
+        .to_string();
+    let act_cap = fx.run(&["action", "click", &link_index, "--capture"]);
+    assert_eq!(
+        code(&act_cap),
+        0,
+        "in-frame fragment click --capture failed: {}",
+        stdout(&act_cap)
+    );
+    let act_snap: serde_json::Value =
+        serde_json::from_str(&stdout(&act_cap)).expect("action capture json");
+    assert_eq!(
+        act_snap["subframes"],
+        1,
+        "an action's --capture while switched into the iframe must scope subframes to it (count /nested), not 0: {}",
+        stdout(&act_cap)
     );
     // A click on a link that navigates ONLY the switched iframe (not the top URL)
     // must settle the ACTIVE frame's own navigation: the auto-capture lands on the

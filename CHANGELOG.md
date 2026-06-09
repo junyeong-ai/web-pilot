@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.94] - 2026-06-10
+
+### Fixed
+
+- **Browser mode: an action's `--capture` while switched into an iframe now
+  reports nested iframes.** The post-action snapshot only set
+  `DomSnapshot.subframes` when on the main frame, so after a `frame switch` an
+  `action … --capture` always reported `subframes: 0` — hiding any HTTP iframe
+  nested inside the active frame, so the agent's "N iframe(s) not shown" footer
+  vanished and a deeper frame became undiscoverable after an action. The count is
+  now computed unconditionally and scoped to the active frame via the shared
+  `countHttpSubframes`, matching the standalone `capture` path and headless
+  `capture_action_snapshot` (which was already unconditional).
+- **Browser mode: a malformed cookie URL is now a typed `InvalidArgument`.**
+  `cookie set` validated the URL with a scheme-prefix regex, so a well-prefixed
+  but malformed URL (`http://` with no host) slipped through to
+  `chrome.cookies.set` and surfaced as a generic `Other` (exit 1) — while
+  headless rejected the same URL at the CDP sink as `InvalidArgument` (exit 7).
+  The URL is now parsed (`new URL`) and required to be http(s), so every
+  malformed URL is rejected with the same code in both modes, not just a missing
+  scheme.
+
 ## [0.4.93] - 2026-06-10
 
 ### Added

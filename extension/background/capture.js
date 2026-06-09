@@ -335,4 +335,4 @@ function emptyDom() {
   };
 }
 
-export { handleCapture };
+export { countHttpSubframes, handleCapture };

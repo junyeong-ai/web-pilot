@@ -7,6 +7,7 @@ import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, settledActionUrl, waitActiveFrameSettled, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
+import { countHttpSubframes } from "./capture.js";
 import { rearmMonitors } from "./state.js";
 
 // ── Action ─────────────────────────────────────────────────────────────────
@@ -184,12 +185,13 @@ async function handleAction(command) {
         // deserialize, losing the successful action — so discriminate on the
         // snapshot shape and surface a failure as `capture_error`.
         if (dom && Array.isArray(dom.elements)) {
-          // Mirror standalone capture: report out-of-scope http iframes so the
-          // agent's subframe logic works the same after an action.
-          if (activeFrameId === 0) {
-            const frames = await chrome.webNavigation.getAllFrames({ tabId: t.id }).catch(() => []);
-            dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
-          }
+          // Mirror standalone capture: report out-of-scope http iframes, scoped
+          // to the active frame, so the agent's subframe logic works the same
+          // after an action — including while switched into an iframe, where a
+          // main-frame-only gate would drop the count to 0 and hide a nested
+          // iframe. Headless `capture_action_snapshot` is likewise unconditional.
+          const frames = await chrome.webNavigation.getAllFrames({ tabId: t.id }).catch(() => []);
+          dom.subframes = countHttpSubframes(frames, activeFrameId);
           result.dom = dom;
         } else if (dom && dom.error) {
           result.capture_error = dom.error.message || JSON.stringify(dom.error);
