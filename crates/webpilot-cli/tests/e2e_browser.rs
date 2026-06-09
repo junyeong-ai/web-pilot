@@ -729,6 +729,13 @@ fn browser_behavioral_flow() {
         "csp frame switch by name failed: {}",
         stdout(&sw)
     );
+    // Parity with headless: the browser switch response must also carry the
+    // matched frame's name (resolved from the live document).
+    assert!(
+        stdout(&sw).contains("cspframe"),
+        "frame switch must report the matched frame's name: {}",
+        stdout(&sw)
+    );
     let title = fx.run(&["eval", "document.title"]);
     assert_eq!(code(&title), 0, "csp frame eval failed: {}", stdout(&title));
     assert!(

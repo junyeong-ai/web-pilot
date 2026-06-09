@@ -273,6 +273,10 @@ async function handleFrameSwitch(selector) {
       type: "FrameSwitched",
       success: true,
       frame_id: String(matched.frameId),
+      // Resolve the frame's name from the live document (headless reads it from
+      // the frame tree): the switch response carries it so `frame switch by name`
+      // is discoverable, and so both modes return the same shape.
+      name: (await readFrameName(tab.id, matched.frameId)) || null,
       url: matched.url,
     };
   }

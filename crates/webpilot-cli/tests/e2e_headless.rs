@@ -674,6 +674,13 @@ fn headless_behavioral_flow() {
         "csp frame switch by name failed: {}",
         stdout(&sw)
     );
+    // The switch response carries the frame's name, so the agent can re-address it
+    // by `frame switch <name>` — and both modes now populate it identically.
+    assert!(
+        stdout(&sw).contains("cspframe"),
+        "frame switch must report the matched frame's name: {}",
+        stdout(&sw)
+    );
     let title = fx.run(&["eval", "document.title"]);
     assert_eq!(code(&title), 0, "csp frame eval failed: {}", stdout(&title));
     assert!(

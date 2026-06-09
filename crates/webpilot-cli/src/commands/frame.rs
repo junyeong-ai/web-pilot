@@ -76,7 +76,16 @@ async fn list_frames<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
                     let id_short: String = f.frame_id.chars().take(8).collect();
                     let url_short =
                         line_safe(&f.url.chars().take(60).collect::<String>()).into_owned();
-                    format!("{marker} [{id_short}] {url_short}{main}")
+                    // Show the name when the frame has one: it is the argument to
+                    // `frame switch <name>`, so surfacing it is how that addressing
+                    // mode becomes discoverable rather than guess-only.
+                    let name = match f.name.as_deref() {
+                        Some(n) if !n.is_empty() => {
+                            format!(" name={}", line_safe(n))
+                        }
+                        _ => String::new(),
+                    };
+                    format!("{marker} [{id_short}] {url_short}{name}{main}")
                 })
                 .collect();
             let summary = match &active_frame_id {
@@ -109,16 +118,22 @@ async fn switch_frame<T: Transport>(
         ResponseData::FrameSwitched {
             success,
             frame_id,
+            name,
             url,
             error,
-            ..
         } => {
             lift_error(success, error, ())?;
             let target = frame_id.as_deref().unwrap_or("main");
+            // Surface the name so the agent learns the handle it can re-`switch` by
+            // (and so the JSON carries the same field both modes now populate).
+            let name_suffix = match name.as_deref() {
+                Some(n) if !n.is_empty() => format!(" name={}", line_safe(n)),
+                _ => String::new(),
+            };
             Ok(CommandOutput::Data {
-                json: serde_json::json!({"success": true, "frame_id": frame_id, "url": url}),
+                json: serde_json::json!({"success": true, "frame_id": frame_id, "name": name, "url": url}),
                 human: format!(
-                    "Switched to frame {target} ({})",
+                    "Switched to frame {target} ({}){name_suffix}",
                     line_safe(&url.unwrap_or_default())
                 ),
             })

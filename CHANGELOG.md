@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.74] - 2026-06-09
+
+### Fixed
+
+- **A switched frame's name is now reported, and identically in both modes.** The
+  frame name was collected on both the `frame` list and `frame switch` (headless)
+  but rendered nowhere, and browser mode omitted it from the switch response
+  entirely — so `frame switch <name>`, a real addressing mode, was undiscoverable
+  (the agent could switch by a name it had no way to see) and the two modes
+  diverged. `frame` and `frame switch` now surface a frame's name when it has one
+  (`name=<value>`, JSON `name`), and browser mode resolves and returns it on switch
+  for full parity.
 ## [0.4.73] - 2026-06-09
 
 ### Fixed
