@@ -219,7 +219,9 @@ impl LocalTransport {
         });
 
         let path = webpilot::dirs::artifact_path("session", "json");
-        std::fs::write(&path, serde_json::to_string_pretty(&data)?)?;
+        // Atomic temp+rename so a crash mid-write can't leave a torn session file
+        // that a later `session import` would read as malformed.
+        webpilot::dirs::atomic_write(&path, serde_json::to_string_pretty(&data)?.as_bytes())?;
 
         Ok(ResponseData::SessionExport {
             path: path.to_string_lossy().into_owned(),

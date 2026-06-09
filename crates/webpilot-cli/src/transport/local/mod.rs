@@ -814,7 +814,7 @@ fn read_persisted_active_frame(browser_context_id: Option<&str>) -> Option<Strin
 pub(super) fn write_persisted_active_frame(browser_context_id: Option<&str>, frame_id: &str) {
     let path = active_frame_file(browser_context_id);
     if let Ok(s) = serde_json::to_string(frame_id) {
-        let _ = std::fs::write(&path, s);
+        let _ = dirs::atomic_write(&path, s.as_bytes());
     }
 }
 
@@ -838,7 +838,10 @@ pub(super) fn read_persisted_active_tab(browser_context_id: Option<&str>) -> Opt
 pub(super) fn write_persisted_active_tab(browser_context_id: Option<&str>, target_id: &str) {
     let path = active_tab_file(browser_context_id);
     if let Ok(s) = serde_json::to_string(target_id) {
-        let _ = std::fs::write(&path, s);
+        // Atomic temp+rename: a concurrent process resolving the active tab
+        // (`pick_active_target`) must never read a torn/empty pin — that would
+        // parse as `None` and silently retarget the command to a different tab.
+        let _ = dirs::atomic_write(&path, s.as_bytes());
     }
 }
 
@@ -915,7 +918,7 @@ fn read_persisted_device(browser_context_id: Option<&str>) -> Option<DeviceState
 
 pub(crate) fn write_persisted_device(browser_context_id: Option<&str>, state: &DeviceState) {
     if let Ok(s) = serde_json::to_string(state) {
-        let _ = std::fs::write(device_state_file(browser_context_id), s);
+        let _ = dirs::atomic_write(&device_state_file(browser_context_id), s.as_bytes());
     }
 }
 
