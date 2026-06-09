@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.106] - 2026-06-10
+
+### Fixed
+
+- **`total_nodes` now counts shadow-DOM nodes, matching the indexed elements.**
+  The capture indexes interactive elements through open shadow roots, but the
+  `from N nodes` footer counted only the light DOM (`querySelectorAll("*")`), so
+  a shadow-heavy page (web components) reported a node total smaller than the
+  tree it actually scanned. The deep-traversal that finds the elements already
+  scans every visited root, so it now sums those into the node total at no extra
+  cost — light DOM plus every open shadow root walked — keeping the count
+  consistent with the elements it reports.
+
 ## [0.4.105] - 2026-06-10
 
 ### Fixed

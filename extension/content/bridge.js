@@ -94,7 +94,13 @@
       selectors.forEach((sel, i) => {
         for (const el of r.querySelectorAll(sel)) results[i].push(el);
       });
-      for (const host of r.querySelectorAll("*")) {
+      // The same `*` scan that finds shadow hosts also counts this root's
+      // elements, so `budget.nodes` ends up the DEEP node total — light DOM plus
+      // every open shadow root visited — matching the shadow-piercing element
+      // index, with no extra traversal.
+      const here = r.querySelectorAll("*");
+      budget.nodes = (budget.nodes || 0) + here.length;
+      for (const host of here) {
         if (!host.shadowRoot) continue;
         if (budget.hosts <= 0) {
           budget.truncated = true;
@@ -109,7 +115,7 @@
   }
 
   function collectInteractiveElements() {
-    const budget = { hosts: SHADOW_HOST_BUDGET, truncated: false };
+    const budget = { hosts: SHADOW_HOST_BUDGET, truncated: false, nodes: 0 };
 
     // Explicit interaction markers. `tabindex` qualifies only when >= 0: a
     // tabindex of -1 is script-only focus (route announcers, modal roots,
@@ -212,7 +218,7 @@
       if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
       return 0;
     });
-    return { all, shadowTruncated: budget.truncated };
+    return { all, shadowTruncated: budget.truncated, totalNodes: budget.nodes };
   }
 
   // Single visibility predicate shared by extraction and action-time
@@ -413,11 +419,10 @@
       // page is never "all new". A same-document change (`pushState`, a hash)
       // keeps the baseline, so the elements it actually adds are correctly `*`-ed.
       const prevNodes = state.snapshot ? new Set(state.snapshot) : null;
-      const { all, shadowTruncated } = collectInteractiveElements();
+      const { all, shadowTruncated, totalNodes } = collectInteractiveElements();
       if (shadowTruncated) {
         console.warn("[WebPilot] shadow-DOM traversal hit its host budget; some controls may be omitted");
       }
-      const totalNodes = document.querySelectorAll("*").length;
       const elements = [];
       const picked = [];
       let idx = 1;
