@@ -105,14 +105,18 @@ impl LocalTransport {
         // session is dead, not that the command is impossible — discard it and
         // relaunch once before giving up, so a transient teardown doesn't
         // surface as a hard failure.
-        let browser = match CdpClient::connect(&ws_url).await {
-            Ok(browser) => browser,
+        let (browser, ws_url) = match CdpClient::connect(&ws_url).await {
+            Ok(browser) => (browser, ws_url),
             Err(_) => {
                 // Invalidate only if this is still the session we failed on —
                 // a concurrent `open` may have already relaunched a fresh one.
                 session::invalidate_session_if_current(&ws_url);
+                // Carry the RELAUNCHED url out of the match: it is the one
+                // `browser` just connected to, so resolve_target's page connection
+                // and the stored `ws_url` must use it, not the dead session's URL.
                 let ws_url = session::ensure_session().await?;
-                CdpClient::connect(&ws_url).await?
+                let browser = CdpClient::connect(&ws_url).await?;
+                (browser, ws_url)
             }
         };
 

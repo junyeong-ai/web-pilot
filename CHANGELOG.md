@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.71] - 2026-06-09
+
+### Fixed
+
+- **Reconnecting after a transient Chrome teardown now uses the relaunched
+  session, not the dead one.** When the first CDP connect failed (Chrome exited
+  between the liveness check and connect), `open` relaunched and reconnected the
+  browser client to a fresh URL — but that fresh URL was bound inside the match arm
+  and shadowed, so the rest of `open` (the page connection and the URL stored on
+  the transport for every later page attach) kept using the dead session's URL. The
+  recovery the path exists to provide therefore failed at the next step. The match
+  now carries the connected URL out, so a relaunch is fully adopted.
+
 ## [0.4.70] - 2026-06-09
 
 ### Fixed
