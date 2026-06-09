@@ -5,7 +5,7 @@ import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, sendToContent } from "./content.js";
-import { adoptedDocumentReady, documentReady, settledActionUrl, waitActiveFrameSettled, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
+import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
 import { countHttpSubframes } from "./capture.js";
 import { rearmMonitors } from "./state.js";
@@ -28,27 +28,36 @@ async function handleAction(command) {
   // content call times out, with no recovery (headless mode needs no override:
   // headless Chrome auto-dismisses dialogs in every frame). The override is
   // idempotent, so re-installing into the main frame each time is a no-op.
-  const tab = await resolveActiveTab();
-  if (!tab) {
+  // `navigate` resolves its own target (the bound tab whatever its scheme, or a
+  // fresh one) via `navigateBoundTab` below — it is how an agent REACHES an http
+  // page, so it must NOT require one to start from. Every OTHER action needs an
+  // injectable http page now, so it goes through the http-required
+  // `resolveActiveTab`. (`navigate` also needs no dialog override: it runs no
+  // page JS that could call alert/confirm/prompt, and a beforeunload prompt is a
+  // separate native dialog the override can't suppress anyway.)
+  const tab = action.kind === "navigate" ? null : await resolveActiveTab();
+  if (!tab && action.kind !== "navigate") {
     return { type: "Action", success: false, error: noPageErr() };
   }
-  try {
-    await chrome.scripting.executeScript({
-      target: {
-        tabId: tab.id,
-        frameIds: activeFrameId === 0 ? [0] : [0, activeFrameId],
-      },
-      world: "MAIN",
-      func: () => {
-        if (!window.__webpilot_dialogs) {
-          window.__webpilot_dialogs = [];
-          window.alert = (msg) => { window.__webpilot_dialogs.push({ type: "alert", message: String(msg) }); };
-          window.confirm = (msg) => { window.__webpilot_dialogs.push({ type: "confirm", message: String(msg) }); return true; };
-          window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return def || ""; };
-        }
-      },
-    });
-  } catch {}
+  if (tab) {
+    try {
+      await chrome.scripting.executeScript({
+        target: {
+          tabId: tab.id,
+          frameIds: activeFrameId === 0 ? [0] : [0, activeFrameId],
+        },
+        world: "MAIN",
+        func: () => {
+          if (!window.__webpilot_dialogs) {
+            window.__webpilot_dialogs = [];
+            window.alert = (msg) => { window.__webpilot_dialogs.push({ type: "alert", message: String(msg) }); };
+            window.confirm = (msg) => { window.__webpilot_dialogs.push({ type: "confirm", message: String(msg) }); return true; };
+            window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return def || ""; };
+          }
+        },
+      });
+    } catch {}
+  }
 
   // Viewport-coordinate / main-document actions cannot target an iframe: their
   // CDP path uses page-level coordinates or a main-document node lookup. Reject
@@ -70,17 +79,23 @@ async function handleAction(command) {
   // SW-handled action kinds (navigation + upload).
   switch (action.kind) {
     case "navigate": {
-      const watch = watchMainFrameCommit(tab.id);
-      await chrome.tabs.update(tab.id, { url: action.url, active: true });
-      await waitNavigationSettled(tab.id, tab.url || "", watch, action.url);
-      // A new document invalidates any switched-to frame — reset to main, as
-      // the headless transport does on navigation.
-      setActiveFrameId(0);
-      // Re-arm console/network hooks now, at settle — headless re-installs them
-      // the instant the navigation settles, not at the later `load` event.
-      await rearmMonitors(tab.id);
-      const landed = await chrome.tabs.get(tab.id).catch(() => null);
-      result = { type: "Action", success: true, url_changed: landed?.url || action.url };
+      // navigateBoundTab resolves-or-creates the target, settles, resets the
+      // frame scope, and re-arms monitors — the same path `capture --url` uses.
+      // A typed failure (TabNotFound for a vanished pin) keeps its code; a raw
+      // navigation error becomes NavigationFailed.
+      try {
+        const tabId = await navigateBoundTab(action.url);
+        const landed = await chrome.tabs.get(tabId).catch(() => null);
+        result = { type: "Action", success: true, url_changed: landed?.url || action.url };
+      } catch (e) {
+        result = {
+          type: "Action",
+          success: false,
+          error: e?.code
+            ? exceptionErr(e)
+            : err("NavigationFailed", e.message, { url: action.url, reason: e.message }),
+        };
+      }
       break;
     }
 

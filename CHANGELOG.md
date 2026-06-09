@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.100] - 2026-06-10
+
+### Fixed
+
+- **Browser mode: `action navigate` works from a non-http tab.** Navigate went
+  through the same http-required tab resolution as click/type, so issuing it
+  while the bound (or focused) tab was a fresh `about:blank` / `chrome://newtab`
+  returned `No web page open` — even though navigate is precisely how an agent
+  *reaches* an http page (headless navigates its bound `about:blank` directly).
+  Navigate now resolves its own target through the same shared `navigateBoundTab`
+  path `capture --url` uses: it reuses the bound http tab or pins a fresh one,
+  whatever the current scheme, so it never false-fails with NoPage. The two
+  navigation entry points now share one implementation, so they cannot drift.
+
 ## [0.4.99] - 2026-06-10
 
 ### Fixed

@@ -1,7 +1,8 @@
 // // Navigation settle: commit watch, settled-wait, and document readiness.
 // // Mirrors the navigation half of transport/local/mod.rs.
 
-import { navigationTimeoutMs, sleep } from "./session.js";
+import { navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
+import { rearmMonitors } from "./state.js";
 
 // ── Navigation settle ───────────────────────────────────────────────────────
 // One predicate for every navigation this worker performs, mirroring the
@@ -206,9 +207,44 @@ async function waitActiveFrameSettled(tabId, frameId, beforeDocId) {
   }
 }
 
+// Navigate the bound tab to `url`, or create + pin a fresh tab when there is no
+// injectable http tab to reuse (a chrome://newtab focus, an about: page, a
+// vanished page). This is the single tab-resolution path for a top-level
+// navigation, shared by `action navigate` and `capture --url` so the two can't
+// drift: navigate is how an agent REACHES an http page, so it must succeed from
+// a non-http start exactly as headless navigates its bound about:blank — never a
+// `NoPage`. Resets the frame scope and re-arms monitors at settle, mirroring the
+// headless `navigate_reconnect`. Returns the settled tab id.
+async function navigateBoundTab(url) {
+  const existing = await resolveActiveTab();
+  let tabId;
+  let beforeUrl = "";
+  let watch;
+  if (existing) {
+    tabId = existing.id;
+    beforeUrl = existing.url || "";
+    watch = watchMainFrameCommit(tabId);
+    await chrome.tabs.update(tabId, { url, active: true });
+  } else {
+    const t = await chrome.tabs.create({ url, active: true });
+    tabId = t.id;
+    setActiveTabId(tabId);
+    watch = watchMainFrameCommit(tabId);
+  }
+  await waitNavigationSettled(tabId, beforeUrl, watch, url);
+  // A fresh document has a new frame tree — drop any stale frame scope so a
+  // capture after `frame switch` then a navigate is main-frame-scoped.
+  setActiveFrameId(0);
+  // Re-arm console/network hooks at settle (headless parity) so traffic the new
+  // page fires before `load` is captured, not lost to the `onCompleted` gap.
+  await rearmMonitors(tabId);
+  return tabId;
+}
+
 export {
   adoptedDocumentReady,
   documentReady,
+  navigateBoundTab,
   settledActionUrl,
   waitActiveFrameSettled,
   waitNavigationSettled,

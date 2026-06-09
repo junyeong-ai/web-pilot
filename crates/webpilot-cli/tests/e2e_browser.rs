@@ -451,6 +451,34 @@ fn browser_behavioral_flow() {
         stdout(&back_to_base)
     );
 
+    // 2b. `action navigate` must work even when the bound tab is a non-http page
+    //     (a fresh about:blank, a chrome:// tab) — navigate is how an agent
+    //     REACHES an http page, so requiring one to start from is the bug. Drive
+    //     the bound tab to about:blank out-of-band (so this doesn't depend on
+    //     about:blank settling through the navigation pipeline), then navigate to
+    //     base: it must succeed (0), not NoPage (8), and land on base. (Headless
+    //     navigates its bound about:blank directly; this holds browser mode to it.)
+    let _ = fx.run(&["eval", "window.location.href = 'about:blank'"]);
+    std::thread::sleep(Duration::from_millis(600));
+    let from_blank = fx.run(&["action", "navigate", &base]);
+    assert_eq!(
+        code(&from_blank),
+        0,
+        "navigate from a non-http bound tab must succeed, not NoPage: {}",
+        stdout(&from_blank)
+    );
+    let landed = fx.run(&["eval", "location.href"]);
+    let lj: serde_json::Value = serde_json::from_str(&stdout(&landed)).expect("eval json");
+    // `eval` returns the JS string value JSON-encoded, so `location.href` comes
+    // back quoted (`"http://…"`); assert base is present rather than the prefix.
+    assert!(
+        lj["result"]
+            .as_str()
+            .is_some_and(|u| u.contains(base.as_str())),
+        "after navigating off a non-http tab the agent must be on base: {}",
+        stdout(&landed)
+    );
+
     // 3. Stale-snapshot guard (the bridge is shared, so the typed error must
     //    hold in this mode too).
     let recap = fx.run(&["capture", "--include", "dom"]);

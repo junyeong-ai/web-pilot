@@ -2,12 +2,11 @@
 // // Mirrors transport/local/capture.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
-import { activeFrameId, annotationPaintMs, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
+import { activeFrameId, annotationPaintMs, resolveActiveTab, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { resolveFrameWorld } from "./query.js";
 import { ensureBridge, sendToContent } from "./content.js";
-import { waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
-import { rearmMonitors } from "./state.js";
+import { navigateBoundTab } from "./navigation.js";
 
 // ── Capture ────────────────────────────────────────────────────────────────
 
@@ -52,31 +51,12 @@ async function handleCapture(command) {
 
   try {
     if (command.url) {
-      // Navigate the pinned tab (or pin a fresh one) — never whatever tab the
-      // user happens to be looking at.
-      const existing = await resolveActiveTab();
-      let beforeUrl = "";
-      let watch;
-      if (existing) {
-        tabId = existing.id;
-        beforeUrl = existing.url || "";
-        watch = watchMainFrameCommit(tabId);
-        await chrome.tabs.update(tabId, { url: command.url, active: true });
-      } else {
-        const t = await chrome.tabs.create({ url: command.url, active: true });
-        tabId = t.id;
-        setActiveTabId(tabId);
-        watch = watchMainFrameCommit(tabId);
-      }
-      await waitNavigationSettled(tabId, beforeUrl, watch, command.url);
-      // A fresh document has a new frame tree — drop any stale frame scope, so
-      // a capture after `frame switch` + `--url` is main-frame-scoped (matches
-      // headless `navigate_reconnect`, and keeps the `--annotate` main-frame
-      // guard from firing on a frame id that no longer exists).
-      setActiveFrameId(0);
-      // Re-arm monitors at settle (headless parity) so a fetch/console the new
-      // page fires before `load` is captured, not lost to the `onCompleted` gap.
-      await rearmMonitors(tabId);
+      // Navigate the bound tab (or pin a fresh one) to the requested URL via the
+      // shared path `action navigate` also uses — never whatever tab the user
+      // happens to be looking at. It resets the frame scope and re-arms monitors
+      // at settle, so a capture after `frame switch` + `--url` is main-frame
+      // scoped, exactly as headless `navigate_reconnect`.
+      tabId = await navigateBoundTab(command.url);
     } else {
       const t = await resolveActiveTab();
       if (!t) return topErr(noPageErr());
