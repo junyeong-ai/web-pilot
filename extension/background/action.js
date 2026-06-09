@@ -253,10 +253,18 @@ function printableKeyText(key) {
 async function dispatchKeyPress(tabId, action) {
   const descriptor = keyDescriptor(action.key);
   if (descriptor === null) {
-    return err(
-      "InvalidArgument",
-      `Unknown key: ${JSON.stringify(action.key)} — use a single character, a named key (Enter/Tab/Escape/Backspace/Delete/Arrow*/Home/End/PageUp/PageDown/Space/Insert/CapsLock), or F1–F12`,
-    );
+    // Return the wrapped Action shape (`{success:false, error}`) the caller
+    // spreads into the response — a bare `err(...)` would spread to
+    // `{type:"Action", code, message}` with no success/error field, which the
+    // Rust side can't parse as an Action and mislabels ConnectionLost instead of
+    // the InvalidArgument headless returns for the same unknown key.
+    return {
+      success: false,
+      error: err(
+        "InvalidArgument",
+        `Unknown key: ${JSON.stringify(action.key)} — use a single character, a named key (Enter/Tab/Escape/Backspace/Delete/Arrow*/Home/End/PageUp/PageDown/Space/Insert/CapsLock), or F1–F12`,
+      ),
+    };
   }
   return withCdp(tabId, async (tid) => {
     const m = action.modifiers || {};

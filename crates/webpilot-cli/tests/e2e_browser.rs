@@ -315,6 +315,18 @@ fn browser_behavioral_flow() {
         stdout(&title)
     );
 
+    // 2a-key. An unknown key must return the typed InvalidArgument (exit 7), like
+    //     headless — not ConnectionLost. The worker's error must be the wrapped
+    //     `{success:false, error}` Action shape; a bare error object would parse as
+    //     a malformed Action and mislabel exit 3.
+    let badkey = fx.run(&["action", "key-press", "NotARealKey123"]);
+    assert_eq!(
+        code(&badkey),
+        7,
+        "an unknown key-press must be InvalidArgument (7), not ConnectionLost: {}",
+        stdout(&badkey)
+    );
+
     // 2b. Hover rides the CDP input path in this mode too (bridge resolves the
     //     element centre, the worker moves the real cursor) — exercising the
     //     coordinate handoff end-to-end, same as headless `do_hover`.

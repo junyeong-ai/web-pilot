@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.87] - 2026-06-09
+
+### Fixed
+
+- **Browser-mode `key-press` with an unknown key returns `InvalidArgument`, not
+  `ConnectionLost`.** `dispatchKeyPress` returned a bare error object for an
+  unrecognized key; spread into the Action response it became
+  `{type:"Action", code, message}` with no `success`/`error` field, which the Rust
+  side couldn't parse and mislabeled as exit 3. It now returns the wrapped
+  `{success:false, error}` shape, so the exit code matches headless (7). Guarded in
+  the browser e2e.
+- **`type --clear` on a contenteditable no longer clobbers a rich editor's
+  structure.** It cleared via `innerHTML = ""`, a raw DOM wipe that destroys nested
+  `<p>`/`<span>` structure and desyncs a framework managing its own DOM
+  (Draft/Slate/ProseMirror). It now clears through the editing pipeline
+  (select-all + delete), which fires the `beforeinput`/`input` events the framework
+  observes; a plain contenteditable is emptied just the same.
+
 ## [0.4.86] - 2026-06-09
 
 ### Fixed
