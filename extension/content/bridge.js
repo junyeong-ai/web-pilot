@@ -606,28 +606,45 @@
   function frameNavigates(el, notCanceled) {
     if (!notCanceled) return false;
     const a = el.closest("a[href]");
-    if (!a) return false;
-    const target = (a.target || "").trim().toLowerCase();
-    if (target && target !== "_self" && target !== "_top" && target !== "_parent") {
-      return false; // opens a new context (a popup), not a same-frame load
+    if (a) {
+      const target = (a.target || "").trim().toLowerCase();
+      if (target && target !== "_self" && target !== "_top" && target !== "_parent") {
+        return false; // opens a new context (a popup), not a same-frame load
+      }
+      let dest, cur;
+      try {
+        dest = new URL(a.href, location.href);
+        cur = new URL(location.href);
+      } catch {
+        return false;
+      }
+      if (dest.protocol !== "http:" && dest.protocol !== "https:" && dest.protocol !== "file:") {
+        return false; // javascript:/mailto:/tel:/… never load a document
+      }
+      // A change confined to the fragment is a same-document nav (no load event):
+      // hinting it would burn the settle's whole PROBE waiting for a commit that
+      // never comes.
+      if (dest.origin === cur.origin && dest.pathname === cur.pathname && dest.search === cur.search) {
+        return false;
+      }
+      return true;
     }
-    let dest, cur;
-    try {
-      dest = new URL(a.href, location.href);
-      cur = new URL(location.href);
-    } catch {
-      return false;
+    // A submit control submits its associated form on click → a new document
+    // loads in this frame, but it carries no `href` so the link path above misses
+    // it. (A form submit always navigates — even to the same URL — so the link's
+    // fragment-only exclusion does not apply.) `type=button`/`reset` don't submit;
+    // a `<button>` with no type defaults to submit.
+    const btn = el.closest('button, input[type="submit"], input[type="image"]');
+    if (btn && btn.form && (btn.tagName !== "BUTTON" || btn.type === "submit")) {
+      const t = (btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "")
+        .trim()
+        .toLowerCase();
+      if (t && t !== "_self" && t !== "_top" && t !== "_parent") {
+        return false; // submits into a new context (a popup), not this frame
+      }
+      return true;
     }
-    if (dest.protocol !== "http:" && dest.protocol !== "https:" && dest.protocol !== "file:") {
-      return false; // javascript:/mailto:/tel:/… never load a document
-    }
-    // A change confined to the fragment is a same-document nav (no load event):
-    // hinting it would burn the settle's whole PROBE waiting for a commit that
-    // never comes.
-    if (dest.origin === cur.origin && dest.pathname === cur.pathname && dest.search === cur.search) {
-      return false;
-    }
-    return true;
+    return false;
   }
 
   // `navigates` is the TOP-frame subset of `frameNavigates`: only a top-level

@@ -527,6 +527,31 @@ fn headless_behavioral_flow() {
         "--capture after a navigation must return the new page's DOM elements, not an empty pre-load snapshot: {}",
         stdout(&navd)
     );
+
+    // A submit-button click navigates with no href, so the settle must catch it
+    // via the `frame_navigates` hint, not just a link's. Go back to the form page,
+    // click the submit button, and the auto-capture must land on the submitted
+    // document (/second), not the pre-submit page.
+    let _ = fx.run(&["action", "navigate", &base]);
+    let form_cap = fx.run(&["capture", "--include", "dom"]);
+    let submit_index = index_of(&form_cap, "formsubmit");
+    let submitted = fx.run(&["action", "click", &submit_index, "--capture"]);
+    assert_eq!(
+        code(&submitted),
+        0,
+        "submit-button click failed: {}",
+        stdout(&submitted)
+    );
+    let submitted_json: serde_json::Value =
+        serde_json::from_str(&stdout(&submitted)).expect("action json");
+    assert!(
+        submitted_json["page_url"]
+            .as_str()
+            .is_some_and(|u| u.contains("/second")),
+        "a submit-button click must settle on the submitted document: {}",
+        stdout(&submitted)
+    );
+
     let logged = fx.run(&["eval", "console.log('e2e-monitor-marker')"]);
     assert_eq!(code(&logged), 0);
     let logs = fx.run(&["console", "read"]);

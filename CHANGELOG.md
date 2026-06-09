@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.88] - 2026-06-09
+
+### Fixed
+
+- **A click on a form's submit button settles its navigation instead of racing
+  it.** The bridge's navigation hint only recognized `<a href>` clicks, so a
+  `<button type=submit>` / `<input type=submit>` click — which submits the form and
+  loads a new document with no href — got no hint, and the settle relied on the
+  buffered load event alone (a race the link hint exists to close). A submit
+  control now produces the same `frame_navigates` / `navigates` hint, so the
+  post-submit auto-capture lands on the submitted document, not the pre-submit page.
+  Verified 5/5 on a GET form. (Enter-triggered implicit submission stays on the
+  buffered-event path: detecting it precisely is the spec's ambiguous heuristic, so
+  it's left to the documented best-effort rather than a guess.)
+
 ## [0.4.87] - 2026-06-09
 
 ### Fixed
