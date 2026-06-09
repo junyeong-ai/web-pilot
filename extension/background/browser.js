@@ -1,7 +1,7 @@
 // // Browser-level commands: tabs, frames, status.
 // // Mirrors transport/local/browser.rs.
 
-import { err, noPageErr, topErr } from "./errors.js";
+import { err, exceptionErr, noPageErr, topErr } from "./errors.js";
 import { activeFrameId, activeTabId, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { cdpEval, frameWorldContextId } from "./query.js";
@@ -240,7 +240,17 @@ async function handleFrameSwitch(selector) {
       for (const f of httpFrames) {
         const uniqueContextId = await frameWorldContextId(tid, tab.id, f.frameId, "MAIN");
         if (uniqueContextId == null) continue;
-        const r = await cdpEval(tid, selector.js, uniqueContextId).catch(() => null);
+        let r;
+        try {
+          r = await cdpEval(tid, selector.js, uniqueContextId);
+        } catch (e) {
+          // The eval itself faulted (not a clean false). Remember it and surface
+          // it after the loop, never swallow it into a FrameNotFound — only an
+          // unreachable frame (null context, above) is a silent skip, matching the
+          // success===false path and headless behaviour.
+          error = exceptionErr(e);
+          continue;
+        }
         if (r && r.success === false && r.error) { error = r.error; continue; }
         if (r?.success && r.result && JSON.parse(r.result) === true) return { frame: f };
       }

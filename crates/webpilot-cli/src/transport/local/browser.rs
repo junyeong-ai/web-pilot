@@ -15,7 +15,7 @@ impl LocalTransport {
     pub(super) async fn do_tab_list(&self) -> Result<ResponseData> {
         let targets = self.browser.get_targets().await?;
         let ctx = self.browser_context_id.as_deref();
-        let created = super::created_browser_contexts(&self.browser).await;
+        let created = self.browser.get_browser_contexts().await?;
         let tabs: Vec<TabInfo> = targets
             .into_iter()
             .filter(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
@@ -54,7 +54,7 @@ impl LocalTransport {
     async fn ensure_tab_exists(&self, tab_id: &str) -> Result<Option<ResponseData>> {
         let ctx = self.browser_context_id.as_deref();
         let targets = self.browser.get_targets().await?;
-        let created = super::created_browser_contexts(&self.browser).await;
+        let created = self.browser.get_browser_contexts().await?;
         let exists = targets.iter().any(|t| {
             t.get("targetId").and_then(|v| v.as_str()) == Some(tab_id)
                 && t.get("type").and_then(|v| v.as_str()) == Some("page")

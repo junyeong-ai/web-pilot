@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.68] - 2026-06-09
+
+### Fixed
+
+- **Context isolation fails closed, not open.** The created-context list that
+  scopes the default agent away from isolated `--context` tabs was read
+  best-effort: a `Target.getBrowserContexts` error became an empty list, which
+  made the default scope match every context's tabs again — the very leak the
+  scope exists to prevent. The four lookups now propagate that error (abort, or
+  resolve no target) rather than silently widen scope, reusing the existing
+  `get_browser_contexts` (which already validates its response) instead of a
+  swallow-and-default duplicate.
+- **`frame find` surfaces a predicate evaluation fault instead of reporting no
+  match.** A `cdpEval` rejection in the per-frame probe was caught into `null` and
+  the frame silently skipped, so a faulting predicate looked like `FrameNotFound`
+  (no frame matched) rather than the real error. The fault is now remembered and
+  surfaced, matching the clean-`false` path and headless behaviour; only an
+  unreachable frame is a silent skip.
+
 ## [0.4.67] - 2026-06-09
 
 ### Fixed
