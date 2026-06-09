@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.92] - 2026-06-09
+
+### Fixed
+
+- **Browser mode: a dialog from a switched iframe no longer wedges the session.**
+  The `alert`/`confirm`/`prompt` override that keeps a native modal from blocking
+  the page was injected only into the main frame. After `frame switch`, an action
+  runs in the active iframe — and a `confirm()` its click handler fires opened a
+  real modal that blocked the page thread until the action timed out, with no
+  recovery. The override is now installed into the active frame as well as the main
+  frame before each action, so a dialog in the frame the agent is acting on is
+  suppressed too. (Headless needs no override — headless Chrome auto-dismisses
+  dialogs in every frame.)
+
 ## [0.4.91] - 2026-06-09
 
 ### Fixed

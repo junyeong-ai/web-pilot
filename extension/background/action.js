@@ -20,14 +20,23 @@ async function handleAction(command) {
   // a socket writer and is deliberately NOT a gate; writing the socket
   // directly would bypass it, which is why the host re-validates.)
 
-  // Inject dialog override before any action runs in the page.
+  // Inject the dialog override before any action runs in the page. Cover the
+  // MAIN frame AND the active frame: an action runs in `activeFrameId`, so a
+  // click/keypress that triggers `alert`/`confirm`/`prompt` fires in THAT frame's
+  // window — and a native modal there blocks the page thread until the action's
+  // content call times out, with no recovery (headless mode needs no override:
+  // headless Chrome auto-dismisses dialogs in every frame). The override is
+  // idempotent, so re-installing into the main frame each time is a no-op.
   const tab = await resolveActiveTab();
   if (!tab) {
     return { type: "Action", success: false, error: noPageErr() };
   }
   try {
     await chrome.scripting.executeScript({
-      target: { tabId: tab.id, frameIds: [0] },
+      target: {
+        tabId: tab.id,
+        frameIds: activeFrameId === 0 ? [0] : [0, activeFrameId],
+      },
       world: "MAIN",
       func: () => {
         if (!window.__webpilot_dialogs) {
