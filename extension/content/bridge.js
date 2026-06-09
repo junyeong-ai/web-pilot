@@ -475,7 +475,7 @@
           placeholder: el.placeholder || undefined,
           href: el.getAttribute("href") || undefined,
           input_type: tag === "input" ? (el.type || undefined) : undefined,
-          disabled: el.disabled || el.getAttribute("aria-disabled") === "true" || false,
+          disabled: isDisabled(el),
           focused: document.activeElement === el,
           checked: (el.type === "checkbox" || el.type === "radio") ? el.checked : undefined,
           expanded:
@@ -891,10 +891,10 @@
           // The option exists but a real user can't pick a disabled or hidden one;
           // assigning `.value` to it would select it anyway — reject instead of
           // reporting a choice the page forbids.
-          if (match.disabled || match.hidden) {
+          if (isDisabled(match) || match.hidden) {
             return err(
               "InvalidArgument",
-              `<option> "${action.value}" is ${match.disabled ? "disabled" : "hidden"} — a real user can't select it`,
+              `<option> "${action.value}" is ${isDisabled(match) ? "disabled" : "hidden"} — a real user can't select it`,
             );
           }
           r.target.value = action.value;

@@ -122,24 +122,31 @@ fn validate(settings: &Settings) -> std::result::Result<(), String> {
     if settings.capture.screenshot_max_long_edge == 0 {
         return Err("capture.screenshot_max_long_edge must be greater than 0".into());
     }
-    // A zero navigation timeout would fail every navigation instantly — and
-    // worse, inconsistently: the browser extension (which receives this value
-    // over the Config handshake) guards against non-positive values, so the
-    // two modes would silently diverge. Reject the misconfiguration loudly.
-    if settings.timeouts.navigation.is_zero() {
-        return Err("timeouts.navigation_ms must be greater than 0".into());
-    }
-    // A zero CDP-send timeout makes every request expire instantly; a zero poll
-    // interval or heartbeat turns the wait/poll loops into busy spins. Reject
-    // all of them up front rather than degrade to a broken session.
-    if settings.timeouts.cdp_send.is_zero() {
-        return Err("timeouts.cdp_send_ms must be greater than 0".into());
-    }
-    if settings.timeouts.poll_interval.is_zero() {
-        return Err("timeouts.poll_interval_ms must be greater than 0".into());
-    }
-    if settings.timeouts.heartbeat.is_zero() {
-        return Err("timeouts.heartbeat_ms must be greater than 0".into());
+    // Every deadline/interval below bounds an operation that must make progress:
+    // at zero it either fails instantly (an immediate timeout on navigation, a
+    // CDP send, an IPC reply, a Chrome launch, a history/reload settle, the
+    // version handshake) or busy-spins (a zero poll/heartbeat interval). The
+    // browser extension guards the same values over the Config handshake, so a
+    // zero here would also silently diverge the two modes. Reject every one up
+    // front rather than degrade to a broken session. (`annotation_paint` is a
+    // deliberate pre-screenshot paint delay, not a deadline — zero just means
+    // "no delay", a valid choice — so it is intentionally absent.)
+    let t = &settings.timeouts;
+    let positive: [(&str, std::time::Duration); 9] = [
+        ("timeouts.navigation_ms", t.navigation),
+        ("timeouts.cdp_send_ms", t.cdp_send),
+        ("timeouts.reload_wait_ms", t.reload_wait),
+        ("timeouts.back_forward_ms", t.back_forward),
+        ("timeouts.poll_interval_ms", t.poll_interval),
+        ("timeouts.ipc_response_ms", t.ipc_response),
+        ("timeouts.chrome_launch_ms", t.chrome_launch),
+        ("timeouts.heartbeat_ms", t.heartbeat),
+        ("timeouts.version_handshake_ms", t.version_handshake),
+    ];
+    for (name, duration) in positive {
+        if duration.is_zero() {
+            return Err(format!("{name} must be greater than 0"));
+        }
     }
     Ok(())
 }

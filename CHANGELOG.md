@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.96] - 2026-06-10
+
+### Fixed
+
+- **A control disabled by an ancestor `<fieldset disabled>` is now captured as
+  disabled.** The snapshot read the `.disabled` IDL property, which reflects only
+  an element's own attribute — not the disabled state it inherits from a
+  `<fieldset disabled>` ancestor — so such a control was indexed without the
+  `[disabled]` marker, and an agent that acted on it hit a confusing rejection
+  from the action guard (which correctly uses `:disabled`). Capture now uses the
+  same `isDisabled` helper as the action guards, so the snapshot and the
+  enforcement agree. The same `:disabled` fix covers selecting an `<option>`
+  inside a disabled `<optgroup>`, which is now rejected rather than silently set.
+- **Every session-breaking timeout is validated at startup, not just some.**
+  Settings validation rejected a zero `navigation`/`cdp_send`/`poll_interval`/
+  `heartbeat` but silently accepted a zero `ipc_response`, `chrome_launch`,
+  `reload_wait`, `back_forward`, or `version_handshake` — each of which makes its
+  operation fail instantly. All deadline/interval timeouts are now checked
+  uniformly (a paint-delay tuning value that is legitimately zero is excluded),
+  so a misconfiguration fails loudly at load instead of degrading the session.
+
 ## [0.4.95] - 2026-06-10
 
 ### Fixed

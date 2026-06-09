@@ -11,6 +11,8 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <button id="go" onclick="document.title='clicked'">Go</button>
 <button id="disabledbtn" disabled onclick="document.title='SHOULD-NOT-FIRE'">disabled</button>
 <select id="dsel" disabled><option value="x">x</option></select>
+<fieldset disabled><input id="fsfield" type="text"></fieldset>
+<select id="ogsel"><optgroup label="g" disabled><option value="ogx">ogx</option></optgroup><option value="ogy">ogy</option></select>
 <input id="q" type="text" placeholder="Search">
 <input id="file" type="file">
 <button id="slownav" onclick="location.href='/slow'">slow nav</button>

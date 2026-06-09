@@ -88,6 +88,21 @@ fn headless_behavioral_flow() {
         "a zero cdp_send timeout must be refused at startup: {}",
         stdout(&bad_cfg)
     );
+    // The same guard covers every deadline that breaks at zero, not just
+    // cdp_send: a zero IPC-reply or Chrome-launch timeout would also fail the
+    // session instantly, so validation must reject each one up front.
+    for var in [
+        "WEBPILOT_IPC_TIMEOUT_MS",
+        "WEBPILOT_CHROME_LAUNCH_TIMEOUT_MS",
+    ] {
+        let bad = fx.run_env(&["status"], &[(var, "0")]);
+        assert_eq!(
+            code(&bad),
+            7,
+            "a zero {var} must be refused at startup: {}",
+            stdout(&bad)
+        );
+    }
 
     // 1. Capture the page: button + input are indexed, the iframe is surfaced
     //    as an out-of-scope subframe (capture is main-frame scoped).
@@ -168,6 +183,39 @@ fn headless_behavioral_flow() {
         7,
         "selecting in a disabled <select> must be InvalidArgument (7): {}",
         stdout(&dselect)
+    );
+
+    // 2-disabled-inherited. Disabled state inherited from an ancestor (a
+    //   `<fieldset disabled>` control, an `<option>` in a disabled `<optgroup>`)
+    //   is real disabled state — the IDL `.disabled` property misses it, so the
+    //   `:disabled`-based check must be used everywhere. The snapshot must mark
+    //   the fieldset-disabled input disabled (so the agent sees it), and a select
+    //   of an option inside a disabled optgroup must be rejected (7) while the
+    //   sibling enabled option still selects (0).
+    let fsfield = snapshot["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "fsfield")
+        .expect("the fieldset-disabled input is indexed");
+    assert_eq!(
+        fsfield["disabled"], true,
+        "a control inside <fieldset disabled> must be captured as disabled: {dom}"
+    );
+    let ogsel_idx = index_of(&cap, "ogsel");
+    let og_disabled = fx.run(&["action", "select", &ogsel_idx, "ogx"]);
+    assert_eq!(
+        code(&og_disabled),
+        7,
+        "selecting an <option> inside a disabled <optgroup> must be InvalidArgument (7): {}",
+        stdout(&og_disabled)
+    );
+    let og_enabled = fx.run(&["action", "select", &ogsel_idx, "ogy"]);
+    assert_eq!(
+        code(&og_enabled),
+        0,
+        "the sibling enabled <option> must still select: {}",
+        stdout(&og_enabled)
     );
 
     // 2a1. Free-text values that start with `-` are values, not flags
