@@ -221,11 +221,11 @@ impl LocalTransport {
             s.text_truncated = text_truncated;
             s.accessibility_tree = ax_tree_json;
             // Capture is scoped to the active frame; surface how many HTTP
-            // iframes exist outside this scope so the agent knows `frame
-            // switch` is the way in. Only meaningful from the main frame.
-            if self.active_frame_id.lock().await.is_none() {
-                s.subframes = self.count_http_subframes().await;
-            }
+            // iframes are nested inside it (and so not shown) so the agent knows
+            // `frame switch` is the way deeper. Scoped per active frame inside
+            // `count_http_subframes` — correct from the main frame AND a switched
+            // one.
+            s.subframes = self.count_http_subframes().await;
         }
 
         Ok(ResponseData::Capture {
@@ -241,6 +241,12 @@ impl LocalTransport {
     }
 
     /// Number of HTTP(S) subframes in the page's frame tree (main excluded).
+    /// HTTP iframes nested inside the ACTIVE frame's document but not included in
+    /// its capture — the count behind the "N iframe(s) not shown" hint. Scoped to
+    /// the active frame: from the main frame it counts every HTTP iframe in the
+    /// page; from a switched iframe it counts that frame's own HTTP descendants,
+    /// so going deeper stays discoverable (without this a nested iframe inside a
+    /// switched frame was invisible, contradicting the field's contract).
     pub(super) async fn count_http_subframes(&self) -> u32 {
         let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
             return 0;
@@ -250,27 +256,53 @@ impl LocalTransport {
         // depth limit well above any genuine page keeps a pathological tree from
         // overflowing the stack — it degrades to an undercount, never a crash.
         const MAX_FRAME_DEPTH: u32 = 256;
-        fn walk(node: &serde_json::Value, is_root: bool, depth: u32, count: &mut u32) {
+
+        // The node whose `/frame/id` matches `fid`, anywhere in the tree.
+        fn find<'a>(node: &'a serde_json::Value, fid: &str) -> Option<&'a serde_json::Value> {
+            if node.pointer("/frame/id").and_then(|v| v.as_str()) == Some(fid) {
+                return Some(node);
+            }
+            node.get("childFrames")
+                .and_then(|v| v.as_array())
+                .and_then(|kids| kids.iter().find_map(|k| find(k, fid)))
+        }
+        // Count this node and its descendants that are HTTP frames.
+        fn count_http(node: &serde_json::Value, depth: u32, count: &mut u32) {
             if depth > MAX_FRAME_DEPTH {
                 return;
             }
-            if !is_root
-                && node
-                    .pointer("/frame/url")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|u| u.starts_with("http"))
+            if node
+                .pointer("/frame/url")
+                .and_then(|v| v.as_str())
+                .is_some_and(|u| u.starts_with("http"))
             {
                 *count += 1;
             }
             if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
                 for child in children {
-                    walk(child, false, depth + 1, count);
+                    count_http(child, depth + 1, count);
                 }
             }
         }
+
+        let Some(root) = tree.get("frameTree") else {
+            return 0;
+        };
+        // The subtree to look under: the active frame's node, or the whole tree
+        // from the main frame. Count the HTTP frames strictly BELOW it — the
+        // subtree root is the frame the capture already shows.
+        let active = self.active_frame_id.lock().await.clone();
+        let subtree = match &active {
+            Some(fid) => find(root, fid),
+            None => Some(root),
+        };
         let mut count = 0;
-        if let Some(root) = tree.get("frameTree") {
-            walk(root, true, 0, &mut count);
+        if let Some(node) = subtree
+            && let Some(children) = node.get("childFrames").and_then(|v| v.as_array())
+        {
+            for child in children {
+                count_http(child, 1, &mut count);
+            }
         }
         count
     }

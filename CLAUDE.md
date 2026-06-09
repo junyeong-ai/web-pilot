@@ -161,7 +161,8 @@ Subdirectories: `runtime/` (sockets, PIDs, locks), `contexts/` (multi-agent),
 a security config must survive the cache eviction the paths above are subject to.
 
 Settings resolve through one layer, `webpilot::settings`: **defaults <
-`config.toml` < env var**. Tune via `config.toml` (repo root, override with
-`WEBPILOT_CONFIG`) sections `[timeouts]`/`[chrome]`/`[context]`/`[cdp]`/
-`[capture]`, or `WEBPILOT_*` env vars (e.g. `WEBPILOT_NAVIGATION_TIMEOUT_MS`).
+`config.toml` < env var**. Tune via `config.toml` (under the cache root —
+`dirs::config_file_path()` — override the path with `WEBPILOT_CONFIG`) sections
+`[timeouts]`/`[chrome]`/`[context]`/`[cdp]`/`[capture]`, or `WEBPILOT_*` env vars
+(e.g. `WEBPILOT_NAVIGATION_TIMEOUT_MS`).
 Only path resolution is env/platform-specific (`dirs`, to avoid cycles).

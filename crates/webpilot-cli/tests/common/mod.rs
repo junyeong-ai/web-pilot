@@ -35,7 +35,14 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 
 pub const FRAME: &str = r##"<!doctype html><html><head><title>frame</title></head>
 <body><a id="link" href="#">inner link</a>
-<a id="framenav" href="/framed2">go framed2</a></body></html>"##;
+<a id="framenav" href="/framed2">go framed2</a>
+<iframe src="/nested"></iframe></body></html>"##;
+
+/// An HTTP iframe nested INSIDE `/frame`. Switching into `/frame` and capturing
+/// must report `subframes: 1` for this — a scoped capture's subframe count is
+/// the active frame's own descendants, not just the main frame's.
+pub const NESTED: &str = r##"<!doctype html><html><head><title>nested</title></head>
+<body><p id="deep">deepest frame</p></body></html>"##;
 
 /// The destination of the iframe-internal `#framenav` link: a click on it while
 /// switched INTO the iframe navigates only that iframe, never the top URL — so a
@@ -84,6 +91,8 @@ pub fn spawn_server() -> String {
                 let req = String::from_utf8_lossy(&buf[..n]);
                 let (body, extra_headers) = if req.starts_with("GET /framed2") {
                     (FRAMED2, "")
+                } else if req.starts_with("GET /nested") {
+                    (NESTED, "")
                 } else if req.starts_with("GET /frame") {
                     (FRAME, "")
                 } else if req.starts_with("GET /cspframe") {

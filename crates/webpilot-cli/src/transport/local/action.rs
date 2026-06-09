@@ -306,9 +306,9 @@ impl LocalTransport {
             serde_json::from_value(r).map_err(|e| WebPilotError::Other {
                 detail: format!("malformed DOM snapshot from bridge: {e}"),
             })?;
-        if self.active_frame_id.lock().await.is_none() {
-            snapshot.subframes = self.count_http_subframes().await;
-        }
+        // Scoped to the active frame inside `count_http_subframes` (correct from
+        // the main frame and a switched one), so no main-frame gate here.
+        snapshot.subframes = self.count_http_subframes().await;
         Ok(snapshot)
     }
 

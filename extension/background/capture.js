@@ -11,6 +11,29 @@ import { rearmMonitors } from "./state.js";
 
 // ── Capture ────────────────────────────────────────────────────────────────
 
+// HTTP iframes nested inside the active frame but not shown in its capture — the
+// "N iframe(s) not shown" count. Scoped to the active frame from the flat
+// `getAllFrames` list via `parentFrameId`: from the main frame (0) it counts
+// every HTTP iframe in the tab; from a switched frame it counts that frame's own
+// HTTP descendants, so a nested iframe inside a switched frame stays discoverable
+// (the headless `count_http_subframes` does the same on the CDP frame tree).
+function countHttpSubframes(frames, rootFrameId) {
+  const childrenOf = new Map();
+  for (const f of frames) {
+    if (!childrenOf.has(f.parentFrameId)) childrenOf.set(f.parentFrameId, []);
+    childrenOf.get(f.parentFrameId).push(f);
+  }
+  let count = 0;
+  const stack = [...(childrenOf.get(rootFrameId) || [])];
+  while (stack.length) {
+    const f = stack.pop();
+    if (f.url?.startsWith("http")) count += 1;
+    const kids = childrenOf.get(f.frameId);
+    if (kids) stack.push(...kids);
+  }
+  return count;
+}
+
 async function handleCapture(command) {
   const include = new Set(command.include || ["dom"]);
   const opts = command.opts || {};
@@ -119,9 +142,7 @@ async function handleCapture(command) {
       // which propagates the same bridge error.
       if (dom?.success === false && dom.error) return topErr(dom.error);
       if (!dom?.elements) return topErr(otherErr("DOM extraction returned no snapshot"));
-      if (activeFrameId === 0) {
-        dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
-      }
+      dom.subframes = countHttpSubframes(frames, activeFrameId);
       result.dom = dom;
       result.page_url = dom.page_url || "";
       result.page_title = dom.page_title || "";
@@ -283,16 +304,13 @@ async function handleCapture(command) {
     } catch {}
   }
 
-  // Surface the out-of-scope HTTP iframe count on a text/AX-only snapshot shell
-  // too — only from the main frame — exactly as headless sets `s.subframes` on
-  // its shell. Without it a text/AX capture drops the "N iframe(s) not shown"
-  // hint the agent needs. A real DOM pass already set it (line above), so the
-  // `undefined` guard skips that case.
-  if (result.dom && activeFrameId === 0 && result.dom.subframes === undefined) {
-    try {
-      // Reuse the frame tree fetched at the top of the capture.
-      result.dom.subframes = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http")).length;
-    } catch {}
+  // Surface the nested HTTP iframe count on a text/AX-only snapshot shell too —
+  // scoped to the active frame, exactly as headless sets `s.subframes` on its
+  // shell. Without it a text/AX capture drops the "N iframe(s) not shown" hint
+  // the agent needs. A real DOM pass already set it, so the `undefined` guard
+  // skips that case.
+  if (result.dom && result.dom.subframes === undefined) {
+    result.dom.subframes = countHttpSubframes(frames, activeFrameId);
   }
 
   // A text/AX-only snapshot SHELL (emptyDom) carries blank page_url/title;

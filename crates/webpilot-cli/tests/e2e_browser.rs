@@ -274,7 +274,7 @@ fn browser_behavioral_flow() {
     let mut snapshot: serde_json::Value =
         serde_json::from_str(&stdout(&cap)).expect("capture json");
     for _ in 0..15 {
-        if snapshot["subframes"] == 1 {
+        if snapshot["subframes"] == 2 {
             break;
         }
         cap = fx.run(&["capture", "--include", "dom"]);
@@ -294,8 +294,8 @@ fn browser_behavioral_flow() {
     );
     assert_eq!(
         snapshot["subframes"],
-        1,
-        "the one http iframe must be reported as a subframe: {}",
+        2,
+        "from the main frame, subframes counts every nested http iframe — the /frame iframe and the /nested iframe inside it: {}",
         stdout(&cap)
     );
     let button_index = elements
@@ -624,6 +624,25 @@ fn browser_behavioral_flow() {
         stdout(&href).contains("/frame"),
         "eval must run in the switched frame: {}",
         stdout(&href)
+    );
+    // The subframe count is scoped to the ACTIVE frame (headless parity): switched
+    // into /frame, it must report the one http iframe nested inside it (/nested),
+    // not 0. Poll for the nested frame to register in webNavigation.
+    let mut sf_cap = fx.run(&["capture", "--include", "dom"]);
+    let mut sf_snap: serde_json::Value =
+        serde_json::from_str(&stdout(&sf_cap)).expect("frame capture json");
+    for _ in 0..15 {
+        if sf_snap["subframes"] == 1 {
+            break;
+        }
+        sf_cap = fx.run(&["capture", "--include", "dom"]);
+        sf_snap = serde_json::from_str(&stdout(&sf_cap)).expect("frame capture json");
+    }
+    assert_eq!(
+        sf_snap["subframes"],
+        1,
+        "a switched frame's capture must count its OWN nested http iframes: {}",
+        stdout(&sf_cap)
     );
     // The accessibility tree must follow the active frame (headless parity): while
     // switched into the iframe it must describe the iframe's own controls, scoping

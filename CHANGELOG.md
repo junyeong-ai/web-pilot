@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.77] - 2026-06-09
+
+### Fixed
+
+- **A capture scoped to a switched iframe now reports the iframes nested inside
+  it.** `DomSnapshot.subframes` — the "N iframe(s) not shown" count — was only
+  populated from the main frame, so after `frame switch` into an iframe that itself
+  contained HTTP sub-iframes, the count was silently zero and the agent never
+  learned it could go deeper. The count is now scoped to the active frame's own
+  HTTP descendants (the whole page from the main frame, the frame's subtree from a
+  switched one), in both modes. Guarded by a nested-iframe fixture in both e2e
+  suites.
+
+### Changed
+
+- **Docs:** the project guide said `config.toml` is read from the repo root; it is
+  actually resolved under the cache root (`dirs::config_file_path()`, override the
+  path with `WEBPILOT_CONFIG`) — a repo-root/cwd-relative config would be fragile
+  for a globally-invoked CLI. Corrected the doc to match the code.
+
 ## [0.4.76] - 2026-06-09
 
 ### Fixed

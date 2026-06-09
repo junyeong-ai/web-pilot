@@ -105,8 +105,8 @@ fn headless_behavioral_flow() {
         "input must be indexed: {dom}"
     );
     assert_eq!(
-        snapshot["subframes"], 1,
-        "the one http iframe must be reported as a subframe: {dom}"
+        snapshot["subframes"], 2,
+        "from the main frame, subframes counts every nested http iframe — the /frame iframe and the /nested iframe inside it: {dom}"
     );
     // A cursor:pointer wrapper carrying no semantic tag/role/marker is a click
     // target only on the INNERMOST such element — but a hidden (`display:none`)
@@ -377,6 +377,17 @@ fn headless_behavioral_flow() {
         code(&frame_cap),
         0,
         "capture inside iframe failed: {}",
+        stdout(&frame_cap)
+    );
+    // The subframe count is scoped to the ACTIVE frame: switched into /frame, it
+    // must report the one http iframe nested inside it (/nested), not 0 — a nested
+    // iframe inside a switched frame must stay discoverable.
+    let frame_snap: serde_json::Value =
+        serde_json::from_str(&stdout(&frame_cap)).expect("frame capture json");
+    assert_eq!(
+        frame_snap["subframes"],
+        1,
+        "a switched frame's capture must count its OWN nested http iframes: {}",
         stdout(&frame_cap)
     );
     // The accessibility tree must follow the active frame, like DOM/screenshot do:
