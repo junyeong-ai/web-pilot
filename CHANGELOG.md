@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.84] - 2026-06-09
+
+### Fixed
+
+- **The subframe-count walk's depth bound now fires at the same level as every
+  other frame walk.** `count_http` was entered at depth 1 for the active frame's
+  children, so its guard fired one level later (257) than the sibling walks (256).
+  Each child is the entry of its own count, so it now starts at depth 0 like every
+  other walk — the depth only bounds the stack and never affects the count, which
+  is unchanged.
+
 ## [0.4.83] - 2026-06-09
 
 ### Fixed

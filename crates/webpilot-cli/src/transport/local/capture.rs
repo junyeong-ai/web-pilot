@@ -304,8 +304,12 @@ impl LocalTransport {
         if let Some(node) = subtree
             && let Some(children) = node.get("childFrames").and_then(|v| v.as_array())
         {
+            // Each child is the entry of its own count, so it starts at depth 0 —
+            // same as every other frame walk's entry, so the shared depth bound
+            // fires at the same level across all of them (the depth only bounds the
+            // stack; it never affects the count).
             for child in children {
-                count_http(child, 1, &mut count);
+                count_http(child, 0, &mut count);
             }
         }
         count
