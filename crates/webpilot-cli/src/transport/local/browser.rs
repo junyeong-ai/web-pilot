@@ -131,24 +131,43 @@ impl LocalTransport {
             Ok(ResponseData::Action { success: true, .. }) => {}
             _ => return None,
         }
-        // The creation event usually carries `about:blank`; the pin has moved,
-        // so the bound target reports where the popup actually is by now.
-        let url = match self.bound_target_url().await {
-            u if u.is_empty() => info
-                .get("url")
+        // The creation event carries about:blank and an empty title; the pin has
+        // moved, so wait for the popup to commit and parse, then read its settled
+        // identity from the live target. A slow or redirecting popup would
+        // otherwise describe the tab the agent is now pinned to as a page it has
+        // already left. (This settle also lets the auto-capture skip its own.)
+        let mut popup_events = self.page.subscribe_events();
+        self.await_adopted_document(&mut popup_events).await;
+        let settled = self
+            .browser
+            .send("Target.getTargetInfo", Some(json!({ "targetId": id })))
+            .await
+            .ok();
+        let from_settled = |key: &str| -> Option<String> {
+            settled
+                .as_ref()
+                .and_then(|v| v.pointer(&format!("/targetInfo/{key}")))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        let url = from_settled("url")
+            .filter(|u| !u.is_empty() && u != "about:blank")
+            .unwrap_or_else(|| {
+                info.get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            });
+        let title = from_settled("title").unwrap_or_else(|| {
+            info.get("title")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
-                .to_string(),
-            u => u,
-        };
+                .to_string()
+        });
         Some(TabInfo {
             id,
             url,
-            title: info
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            title,
             active: true,
         })
     }

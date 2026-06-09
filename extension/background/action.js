@@ -381,10 +381,17 @@ async function dispatchActionToPage(tab, action) {
         // follows it, and drop any frame scope (a new tab's tree is its own).
         setActiveTabId(newTab.id);
         setActiveFrameId(0);
+        // Read the tab's identity only AFTER it leaves about:blank and commits its
+        // destination: a slow or redirecting target=_blank popup reports
+        // about:blank / its pre-redirect URL the instant it's created, which would
+        // describe the agent's newly pinned tab as a page it is not. (The caller's
+        // pre-capture settle then no-ops on the already-ready tab.)
+        await adoptedDocumentReady(newTab.id, PROBE_MS);
+        const settled = (await chrome.tabs.get(newTab.id).catch(() => null)) || newTab;
         result.new_tab = {
-          id: String(newTab.id),
-          url: newTab.url || "",
-          title: newTab.title || "",
+          id: String(settled.id),
+          url: settled.url || "",
+          title: settled.title || "",
           active: true,
         };
       }

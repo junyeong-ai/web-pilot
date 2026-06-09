@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.65] - 2026-06-09
+
+### Fixed
+
+- **`type` into a disabled or read-only field now fails loud instead of reporting a
+  phantom success.** A `.value` write succeeds via JS even on a field a real user
+  can't edit — and the page then never submits a disabled value and resets or
+  ignores a read-only one. `type` now rejects `disabled` / `aria-disabled` / `readOnly`
+  targets with `InvalidArgument`, so the agent learns the edit won't take rather
+  than believing it did. Both modes.
+- **A click-opened tab reports its settled URL and title, not `about:blank`.** The
+  new tab's identity was read the instant it was created, so a slow or redirecting
+  `target=_blank` popup was described as `about:blank` (and an empty title) while
+  the agent was already pinned to it — and the auto-capture, which waited, showed a
+  different page. The adopt step now waits for the popup to commit and parse, then
+  reads its identity from the live target. Both modes.
+
 ## [0.4.64] - 2026-06-09
 
 ### Fixed

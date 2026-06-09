@@ -748,6 +748,22 @@
               }>: not a text field — use action click for buttons/links, action select for dropdowns`,
             );
           }
+          // A `.value` setter succeeds on a disabled/read-only field via JS even
+          // though a real user can't edit it — and the page then never submits a
+          // disabled value, and resets or ignores a read-only one. Reject loudly
+          // rather than report a success the page won't honor.
+          if (r.target.disabled || r.target.getAttribute("aria-disabled") === "true") {
+            return err(
+              "InvalidArgument",
+              "Cannot type into a disabled field — its value is never submitted",
+            );
+          }
+          if (r.target.readOnly) {
+            return err(
+              "InvalidArgument",
+              "Cannot type into a read-only field — the page rejects edits to it",
+            );
+          }
           reliableType(r.target, action.text, action.clear);
           return { success: true };
         }

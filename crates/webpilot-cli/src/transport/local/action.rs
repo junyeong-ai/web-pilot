@@ -272,15 +272,10 @@ impl LocalTransport {
         // effect is done, and a retry would run it twice — so it is reported
         // alongside the success as `capture_error`.
         let (dom, capture_error) = if capture {
-            if new_tab.is_some() {
-                // Fresh subscription: readiness of the adopted tab, not the
-                // opener that `page_events` is bound to. A popup often exists
-                // as `about:blank` (readyState complete) before its
-                // destination commits — wait past the blank document first so
-                // the snapshot is the page the click actually opened.
-                let mut popup_events = self.page.subscribe_events();
-                self.await_adopted_document(&mut popup_events).await;
-            } else if url_changed.is_some() {
+            // An adopted popup is already settled — `adopt_click_opened_target`
+            // waited past about:blank to read its identity. Only a same-tab
+            // navigation still needs a readiness wait before the snapshot.
+            if new_tab.is_none() && url_changed.is_some() {
                 self.await_document_ready(&mut page_events).await;
             }
             match self.capture_action_snapshot().await {
@@ -643,7 +638,10 @@ impl LocalTransport {
     /// for the main frame to commit to a real URL, then for it to parse. A
     /// popup genuinely opened to `about:blank` settles at the deadline (its
     /// real, blank result).
-    async fn await_adopted_document(&self, events: &mut tokio::sync::broadcast::Receiver<Value>) {
+    pub(super) async fn await_adopted_document(
+        &self,
+        events: &mut tokio::sync::broadcast::Receiver<Value>,
+    ) {
         use tokio::sync::broadcast::error::RecvError;
 
         fn main_committed_real_url(ev: &Value) -> bool {
