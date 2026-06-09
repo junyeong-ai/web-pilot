@@ -107,12 +107,22 @@ async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R, max: u64) -> Result
         return Ok(Frame::Eof);
     }
     if buf.len() as u64 > max && buf.last() != Some(&b'\n') {
-        while buf.last() != Some(&b'\n') {
+        // Drain the over-cap line through its terminating newline so the stream
+        // resyncs at a clean frame instead of parsing this line's tail as a fresh
+        // request. Bound the drain so a never-terminating line can't spin here
+        // forever: past the limit, return `OverCap` and let the next read
+        // continue — the loop stays responsive (one `OverCap` per limit) rather
+        // than hanging. The limit is far beyond any real frame, so a genuinely
+        // over-cap-but-finite line still drains in this one call.
+        let drain_limit = max.saturating_mul(32);
+        let mut discarded: u64 = 0;
+        while buf.last() != Some(&b'\n') && discarded < drain_limit {
             buf.clear();
             let drained = (&mut *reader).take(max).read_until(b'\n', &mut buf).await?;
             if drained == 0 {
                 break; // EOF mid-line — nothing left to resync to
             }
+            discarded = discarded.saturating_add(drained as u64);
         }
         return Ok(Frame::OverCap);
     }
@@ -205,6 +215,21 @@ fn initialize_result() -> Value {
     })
 }
 
+/// The `-32602` reason a `tools/call` params object is structurally malformed,
+/// or `None` when its shape is valid: `name` must be a string and `arguments`,
+/// when present, an object. A structurally-valid call that then fails at
+/// execution (unknown tool, a bad argument value, element not found) is a
+/// separate `isError` tool result, not a request error.
+fn tool_call_param_error(params: &Value) -> Option<&'static str> {
+    if params.get("name").and_then(Value::as_str).is_none() {
+        return Some("invalid params: `name` must be a string");
+    }
+    if params.get("arguments").is_some_and(|a| !a.is_object()) {
+        return Some("invalid params: `arguments` must be an object");
+    }
+    None
+}
+
 /// A tool failure is reported as a successful JSON-RPC response carrying
 /// `isError: true`, so the model sees the message and can react, per the MCP
 /// tool-call contract. Only malformed requests use JSON-RPC-level errors.
@@ -219,10 +244,17 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
+    // Honor the contract above: a malformed REQUEST is a JSON-RPC-level error,
+    // not a tool-execution failure. A non-string `name` or a non-object
+    // `arguments` would otherwise reach a tool and surface as a misleading
+    // "missing <field>" `isError` result instead of `-32602 invalid params`.
+    if let Some(reason) = tool_call_param_error(params) {
+        return error_reply(id, -32602, reason);
+    }
     let name = params
         .get("name")
         .and_then(Value::as_str)
-        .unwrap_or_default();
+        .expect("validated by tool_call_param_error");
     let args = params
         .get("arguments")
         .cloned()
@@ -678,5 +710,66 @@ mod tests {
             Frame::Line("bye".into())
         );
         assert_eq!(read_frame(&mut reader, 1024).await.unwrap(), Frame::Eof);
+    }
+
+    #[tokio::test]
+    async fn read_frame_bounds_the_drain_so_a_long_unterminated_line_cannot_hang() {
+        use tokio::io::BufReader;
+        // A line far longer than the per-call drain limit (max*32 = 128 here),
+        // with no newline, then EOF: read_frame must keep returning OverCap with
+        // bounded work per call and reach Eof — never spin forever in one call.
+        let max = 4u64;
+        let data = vec![b'X'; 600];
+        let mut reader = BufReader::new(data.as_slice());
+        let mut overcaps = 0;
+        let mut reached_eof = false;
+        for _ in 0..1000 {
+            match read_frame(&mut reader, max).await.unwrap() {
+                Frame::OverCap => overcaps += 1,
+                Frame::Eof => {
+                    reached_eof = true;
+                    break;
+                }
+                other => panic!("unexpected frame: {other:?}"),
+            }
+        }
+        assert!(
+            overcaps >= 1,
+            "the unterminated line is reported as OverCap"
+        );
+        assert!(reached_eof, "the bounded drain terminates and reaches EOF");
+    }
+
+    #[test]
+    fn tool_call_param_error_flags_malformed_shape_only() {
+        // Valid shapes carry no param error.
+        assert_eq!(
+            tool_call_param_error(&json!({ "name": "browser_snapshot" })),
+            None
+        );
+        assert_eq!(
+            tool_call_param_error(&json!({ "name": "browser_eval", "arguments": { "code": "1" } })),
+            None
+        );
+        // A well-formed but UNKNOWN tool name is NOT a param error — it passes the
+        // shape check and becomes an isError tool result at execution.
+        assert_eq!(
+            tool_call_param_error(&json!({ "name": "browser_unknown" })),
+            None
+        );
+        // Structurally malformed requests are -32602 param errors.
+        assert!(tool_call_param_error(&json!({})).is_some(), "missing name");
+        assert!(
+            tool_call_param_error(&json!({ "name": 5 })).is_some(),
+            "non-string name"
+        );
+        assert!(
+            tool_call_param_error(&json!({ "name": "x", "arguments": "nope" })).is_some(),
+            "non-object arguments"
+        );
+        assert!(
+            tool_call_param_error(&json!({ "name": "x", "arguments": [1, 2] })).is_some(),
+            "array arguments"
+        );
     }
 }

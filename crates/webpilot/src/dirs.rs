@@ -87,18 +87,25 @@ pub fn artifacts_dir() -> PathBuf {
 /// A unique path under [`artifacts_dir`] for a freshly minted artifact —
 /// screenshot, PDF, accessibility tree, exported session. The artifacts
 /// directory is shared by every WebPilot process and context, so the name must
-/// be unique across processes, not merely within one: a `SystemTime` stamp's
-/// resolution is coarser than a nanosecond, so two agents capturing at the same
-/// instant can mint the same stamp and one would silently overwrite the other.
-/// The pid makes it cross-process unique; within a single process captures are
-/// sequential, so the stamp separates them. One definition, so every artifact
-/// kind names itself identically.
+/// be unique both across processes AND within one: the browser-mode host serves
+/// each agent's request in its own spawned task, so two captures can run
+/// concurrently in a single process, and a `SystemTime` stamp (coarser than a
+/// nanosecond) can't separate them — they would mint the same name and one would
+/// silently overwrite the other, handing an agent the other's screenshot. The
+/// pid gives cross-process uniqueness, a process-wide atomic counter gives
+/// within-process uniqueness, and the stamp stays as a human-readable ordering
+/// hint. One definition, so every artifact kind names itself identically.
 pub fn artifact_path(prefix: &str, ext: &str) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    artifacts_dir().join(format!("{prefix}_{}_{nanos}.{ext}", std::process::id()))
+    artifacts_dir().join(format!(
+        "{prefix}_{}_{nanos}_{seq}.{ext}",
+        std::process::id()
+    ))
 }
 
 pub fn chrome_profile_dir() -> PathBuf {

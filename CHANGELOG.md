@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.99] - 2026-06-10
+
+### Fixed
+
+- **Concurrent captures no longer collide on an artifact filename.** The
+  browser-mode host serves each agent's request in its own spawned task, so two
+  `capture --include screenshot` calls can run at once in a single process — yet
+  the artifact name was `prefix_<pid>_<nanos>`, and a `SystemTime` stamp is
+  coarser than a nanosecond, so the two could mint the same name and one
+  overwrite the other, handing an agent the other's screenshot. The name now
+  carries a process-wide atomic counter (`prefix_<pid>_<nanos>_<seq>`),
+  guaranteeing uniqueness within a process as well as across them.
+- **MCP server: a never-terminating request line can no longer spin the read
+  loop.** The over-cap drain (added in 0.4.98) looped until it found a newline;
+  an unbounded non-newline stream would loop forever. The drain is now bounded —
+  far beyond any real frame, so a genuinely over-cap-but-finite line still drains
+  in one call — and past the bound it returns and lets the next read continue, so
+  the loop stays responsive instead of hanging.
+- **MCP server: a structurally malformed `tools/call` is a JSON-RPC error, not a
+  tool result.** A non-string `name` or a non-object `arguments` was passed
+  through to a tool and surfaced as a misleading "missing <field>" `isError`
+  result. Such a request is now rejected up front with `-32602 invalid params`,
+  matching the server's documented contract that only tool *execution* failures
+  use `isError` (an unknown but well-formed tool name stays an `isError` result,
+  per the MCP spec).
+
 ## [0.4.98] - 2026-06-10
 
 ### Fixed
