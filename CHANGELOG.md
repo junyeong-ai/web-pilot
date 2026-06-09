@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.47] - 2026-06-09
+
+### Fixed
+
+- **A capture taken immediately after a navigation no longer races to an empty
+  DOM.** After a link click, `action navigate`, or `capture --url` committed a new
+  document, the snapshot could come back with the correct `page_url` but ZERO
+  elements: the new document's isolated bridge world is a fresh execution context,
+  and for a poll cycle the context map still handed back the transitional
+  pre-commit document, which extracts empty. The transport now waits until the
+  bridge context names the live, committed, parsed document — verifying the
+  context's own `location.href` and `readyState` — before reading through it. The
+  headless e2e now asserts the post-navigation capture's ELEMENTS, not just its
+  URL, so the race can't silently return.
+
 ## [0.4.46] - 2026-06-09
 
 ### Fixed

@@ -397,6 +397,18 @@ fn headless_behavioral_flow() {
         "--capture must return the document the click landed on: {}",
         stdout(&navd)
     );
+    // ...with its actual ELEMENTS, not an empty snapshot. The new document's
+    // isolated bridge world is a fresh execution context, and for a poll cycle the
+    // context map can still hand back the transitional pre-commit document — a
+    // capture through it returns the right `page_url` but no elements. Asserting
+    // page_url alone let that race slip; assert the content too.
+    assert!(
+        navd_json["elements"]
+            .as_array()
+            .is_some_and(|els| !els.is_empty()),
+        "--capture after a navigation must return the new page's DOM elements, not an empty pre-load snapshot: {}",
+        stdout(&navd)
+    );
     let logged = fx.run(&["eval", "console.log('e2e-monitor-marker')"]);
     assert_eq!(code(&logged), 0);
     let logs = fx.run(&["console", "read"]);

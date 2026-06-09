@@ -467,7 +467,55 @@ impl LocalTransport {
         self.main_frame_id = fetch_main_frame_id(&self.page).await?;
         let _ = self.page.send("Runtime.disable", None).await;
         let _ = self.page.send("Runtime.enable", None).await;
+        self.await_live_bridge_context().await;
         Ok(())
+    }
+
+    /// Block until the main frame's bridge-world context names the COMMITTED,
+    /// PARSED document. Right after a navigation the `executionContextCreated`
+    /// for the new document's bridge world can land a poll-cycle after the
+    /// transitional pre-commit context, and `await_context` returns whichever is
+    /// mapped first — so a snapshot fired the instant a navigation settles can run
+    /// against the empty pre-load document and come back blank. Resolve the bridge
+    /// context, verify its OWN `location.href` matches the live frame and its
+    /// document has parsed, and drop any context that does not so the resolver
+    /// re-waits for the real one. Bounded by the navigation budget.
+    async fn await_live_bridge_context(&self) {
+        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
+            return;
+        };
+        let Some(want) = tree
+            .pointer("/frameTree/frame/url")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let deadline = std::time::Instant::now() + webpilot::settings::timeouts().navigation;
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            if let Ok(cid) = self.bridge_context_id().await {
+                let live = self
+                    .eval_in_context_with_timeout(
+                        "JSON.stringify([location.href, document.readyState])",
+                        Some(&cid),
+                        true,
+                        PROBE,
+                    )
+                    .await
+                    .ok()
+                    .and_then(|v| decode_eval_result(&v).as_str().map(str::to_owned))
+                    .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+                    .is_some_and(|a| a.len() == 2 && a[0] == want && a[1] != "loading");
+                if live {
+                    return;
+                }
+                self.bridge_contexts.lock().await.retain(|_, v| *v != cid);
+            }
+            tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
+        }
     }
 
     pub(super) async fn navigate_reconnect(&mut self, url: &str) -> Result<()> {

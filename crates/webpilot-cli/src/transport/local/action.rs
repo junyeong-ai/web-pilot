@@ -218,6 +218,12 @@ impl LocalTransport {
             // next WebPilot navigation or tab command.
             self.clear_active_frame().await;
             self.reinstall_monitors().await;
+            // The session survives, but the new document's isolated bridge world
+            // is a fresh execution context, and for a poll cycle the context map
+            // can still hand back the transitional pre-commit one — which extracts
+            // an empty DOM. Wait until the bridge context names the live, parsed
+            // document before the auto-capture (and the next command) reads it.
+            self.await_live_bridge_context().await;
         }
 
         // Adopt a click-opened tab BEFORE the capture: the pin moves to the
