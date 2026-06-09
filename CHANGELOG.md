@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.108] - 2026-06-10
+
+### Fixed
+
+- **Browser-mode top navigation now preserves a switched frame across a
+  same-document (`#fragment` / `pushState`) navigation, matching headless.**
+  `navigateBoundTab` unconditionally reset the active frame to main after every
+  settle; a fragment or history navigation leaves the document and its frame tree
+  intact, so a frame the agent had switched into stayed valid in headless but was
+  silently dropped in browser mode. The commit watch now distinguishes a
+  cross-document commit (`onCommitted`) from a same-document one
+  (`onHistoryStateUpdated` / `onReferenceFragmentUpdated`) and only resets the
+  frame scope for the former.
+- **Browser-mode navigation that starts but never finishes parsing now returns
+  `Timeout` (exit 5 → retry), not `NavigationFailed` (exit 8), matching
+  headless.** The settle-deadline path always threw `NavigationFailed`; it now
+  reserves that for a recorded navigation error (a hard `onErrorOccurred`, or an
+  `ERR_ABORTED` that never settled) and returns a typed `Timeout` for a clean
+  start that simply didn't parse in time. Hard navigation errors also now fail
+  fast, as headless does off the `Page.navigate` response.
+- **`frameVanishedError` is null-safe.** `chrome.webNavigation.getAllFrames`
+  resolves `null` (not a rejection) when the tab is gone, which the `.catch`
+  alone did not guard — a non-main active frame would have thrown a `TypeError`
+  (surfacing as `Other`, exit 1) instead of `FrameNotFound` (exit 4). Any
+  non-array result is now treated as an unconfirmable frame.
+
 ## [0.4.107] - 2026-06-10
 
 ### Fixed

@@ -90,7 +90,9 @@ async function handleCapture(command) {
   // in ANY mode whose target frame has since been removed is a FrameNotFound, not
   // a stale-context success: every pass (DOM, screenshot, PDF, AX) checks the
   // scope through this one tree.
-  const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
+  // `|| []` coalesces the tab-gone `null` resolve (not a rejection) so the frame
+  // check and the subframe count below both see an array, never null.
+  const frames = (await chrome.webNavigation.getAllFrames({ tabId }).catch(() => [])) || [];
   const frameGone = await frameVanishedError(tabId, activeFrameId, frames);
   if (frameGone) return topErr(frameGone);
 

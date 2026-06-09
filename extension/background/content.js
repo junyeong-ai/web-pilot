@@ -15,8 +15,12 @@ import { err } from "./errors.js";
 // an unmapped active frame.
 async function frameVanishedError(tabId, frameId, frames = null) {
   if (frameId === 0) return null;
-  const list = frames || (await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []));
-  if (list.some((f) => f.frameId === frameId && f.url?.startsWith("http"))) return null;
+  // getAllFrames resolves `null` (not a rejection) when the tab is gone, so the
+  // `.catch` alone would not guard it — the `list &&` does. Any non-array result
+  // means the frame can't be confirmed present, which for a non-main active
+  // frame is FrameNotFound (exit 4 → recapture), never a thrown TypeError.
+  const list = frames || (await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null));
+  if (list && list.some((f) => f.frameId === frameId && f.url?.startsWith("http"))) return null;
   const sel = `frame ${frameId}`;
   return err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel });
 }

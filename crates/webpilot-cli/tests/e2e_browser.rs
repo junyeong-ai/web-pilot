@@ -923,6 +923,42 @@ fn browser_behavioral_flow() {
         stdout(&href_main)
     );
 
+    // 7a-frag. A SAME-DOCUMENT top navigation (a `#fragment`) leaves the document
+    //          and its frame tree intact, so a frame the agent switched into stays
+    //          the active scope — headless returns early for this case without
+    //          clearing the active frame, and browser must match (not reset to
+    //          main). Switch into /frame, navigate the top to a fragment, and
+    //          confirm eval still runs in the iframe. (A capture primes the frame's
+    //          webNavigation registration, as the switch above relies on.)
+    let _ = fx.run(&["capture", "--include", "dom"]);
+    let fsw = fx.run(&["frame", "url", "/frame"]);
+    assert_eq!(
+        code(&fsw),
+        0,
+        "frame switch for fragment test failed: {}",
+        stdout(&fsw)
+    );
+    let frag = fx.run(&["action", "navigate", &format!("{base}/#fragtest")]);
+    assert_eq!(
+        code(&frag),
+        0,
+        "same-document fragment navigate failed: {}",
+        stdout(&frag)
+    );
+    let href_frag = fx.run(&["eval", "location.href"]);
+    assert_eq!(
+        code(&href_frag),
+        0,
+        "post-fragment eval failed: {}",
+        stdout(&href_frag)
+    );
+    assert!(
+        stdout(&href_frag).contains("/frame"),
+        "a same-document (#fragment) top navigation must preserve the switched frame scope, not reset to main: {}",
+        stdout(&href_frag)
+    );
+    let _ = fx.run(&["frame", "main"]);
+
     // 7b. A CSP-strict iframe (`script-src 'self'`, no unsafe-eval) keeps the
     //     full frame surface working: switching by NAME (a precompiled
     //     `window.name` read no CSP can refuse), eval inside the frame, and a
