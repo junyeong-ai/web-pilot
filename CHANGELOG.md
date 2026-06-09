@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.116] - 2026-06-10
+
+### Fixed
+
+- **Headless `session import` is now atomic on a vanished active frame, matching
+  browser mode.** Storage imports through the active frame's bridge, but headless
+  applied cookies FIRST and only hit the gone frame at the storage step — leaving
+  cookies mutated behind a `FrameNotFound`. It now resolves the active frame's
+  bridge context BEFORE the cookie loop (only when non-empty storage is present),
+  so a gone frame fails up front and never half-imports. Empty/absent storage is
+  a no-op that touches neither the bridge nor the frame (matching browser's
+  `hasStorage` gate).
+- **`network read` human output now `line_safe`s every page-derived field.** The
+  formatter guarded `method` and `url` but rendered `req_type` and the error-branch
+  status string raw — a crafted (or tampered-buffer) value could inject a forged
+  line into the agent-facing output. Both now pass through `line_safe`, like the
+  other fields and the console formatter.
+
 ## [0.4.115] - 2026-06-10
 
 ### Fixed

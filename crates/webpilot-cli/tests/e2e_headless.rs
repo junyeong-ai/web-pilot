@@ -626,6 +626,29 @@ fn headless_behavioral_flow() {
          not a silent main-frame run: {}",
         stdout(&stale_eval)
     );
+    // A `session import` carrying STORAGE runs in the active frame's bridge, so a
+    // vanished frame must FrameNotFound (exit 4) — AND, because the frame preflight
+    // runs BEFORE the cookie loop, the import must NOT apply its cookies (atomicity:
+    // no half-import behind a storage that can't land).
+    let vanish_session = home.join("vanish-session.json");
+    std::fs::write(
+        &vanish_session,
+        br#"{"version":1,"cookies":[{"name":"vanish_canary","value":"x","domain":"127.0.0.1","path":"/","same_site":"lax","host_only":true}],"local_storage":{"k":"v"}}"#,
+    )
+    .expect("write vanish session fixture");
+    let vsi = fx.run(&["session", "import", vanish_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&vsi),
+        4,
+        "session import (with storage) on a vanished active frame must be FrameNotFound (exit 4): {}",
+        stdout(&vsi)
+    );
+    assert!(
+        !stdout(&fx.run(&["cookie", "list", &base])).contains("vanish_canary"),
+        "session import must NOT apply cookies when the active frame vanished — the preflight gates BEFORE the cookie loop (atomicity): {}",
+        stdout(&fx.run(&["cookie", "list", &base]))
+    );
+
     let recover = fx.run(&["frame"]);
     assert_eq!(
         code(&recover),

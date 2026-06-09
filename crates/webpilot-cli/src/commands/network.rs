@@ -43,13 +43,19 @@ pub async fn run<T: Transport>(transport: &mut T, args: NetworkArgs) -> Result<C
             let mut human: String = requests
                 .iter()
                 .map(|r| {
-                    let status = r
-                        .status
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| r.error.clone().unwrap_or_else(|| "?".into()));
+                    // The error branch is a page-derived string (a fetch rejection
+                    // message, or a tampered buffer entry), so it passes through
+                    // `line_safe` like every other agent-facing field — a numeric
+                    // status is already injection-safe.
+                    let status = r.status.map(|s| s.to_string()).unwrap_or_else(|| {
+                        r.error
+                            .as_deref()
+                            .map(|e| line_safe(e).into_owned())
+                            .unwrap_or_else(|| "?".into())
+                    });
                     format!(
                         "{} {} {} → {} ({}ms)",
-                        r.req_type,
+                        line_safe(&r.req_type),
                         line_safe(&r.method),
                         line_safe(&r.url),
                         status,

@@ -326,6 +326,22 @@ impl LocalTransport {
             }
         }
 
+        // Storage to actually apply — an empty/absent map is a no-op (matching the
+        // browser `hasStorage` gate), so it needs neither the bridge nor the frame.
+        let local_storage = parsed.get("local_storage");
+        let session_storage = parsed.get("session_storage");
+        let has_storage = [local_storage, session_storage]
+            .into_iter()
+            .flatten()
+            .any(|v| v.as_object().is_some_and(|m| !m.is_empty()));
+        // Storage imports through the active frame's bridge, so a switched frame
+        // that vanished is FrameNotFound. Resolve its context BEFORE the cookie loop
+        // so a gone frame fails up front and never half-imports — cookies committed
+        // behind a storage that can't land — matching the browser session guard.
+        if has_storage {
+            self.bridge_context_id().await?;
+        }
+
         let mut cookies_failed = 0usize;
         let mut cookies_malformed = 0usize;
         let mut cookies_total = 0usize;
@@ -350,9 +366,7 @@ impl LocalTransport {
                 }
             }
         }
-        let local_storage = parsed.get("local_storage");
-        let session_storage = parsed.get("session_storage");
-        if local_storage.is_some() || session_storage.is_some() {
+        if has_storage {
             // A storage write the page rejected (quota) is surfaced by the
             // bridge as a typed error — parse it rather than treating any
             // non-throwing reply as success.
