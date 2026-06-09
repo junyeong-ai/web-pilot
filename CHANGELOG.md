@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.60] - 2026-06-09
+
+### Fixed
+
+- **`wait text` now catches text revealed by an attribute change.** It matched on
+  visible `innerText` but observed only `childList`/`characterData`, so text that
+  appears when an element loses `display:none` via a style/class change (a common
+  reveal pattern) never fired the observer and the wait timed out. It now also
+  observes `attributes` and polls — the same belt-and-suspenders the selector wait
+  already used.
+- **An aborted or timed-out XHR is labeled accurately, not "Network error".** The
+  network monitor mapped every `status===0` loadend to "Network error", so a
+  request the page itself cancelled (`xhr.abort()`) or one that timed out was
+  reported as a network failure. It now reads the actual terminal event
+  (`abort`/`timeout`/`error`). Both modes.
+
 ## [0.4.59] - 2026-06-09
 
 ### Fixed

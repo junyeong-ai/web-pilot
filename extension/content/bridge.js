@@ -905,17 +905,30 @@
         }, 100);
         break;
       }
-      case "text":
-        if ((document.body?.innerText || "").includes(cond.value)) {
+      case "text": {
+        const hasText = () => (document.body?.innerText || "").includes(cond.value);
+        if (hasText()) {
           return finish({ success: true });
         }
         observer = new MutationObserver(() => {
-          if ((document.body?.innerText || "").includes(cond.value)) {
-            finish({ success: true });
-          }
+          if (hasText()) finish({ success: true });
         });
-        observer.observe(root, { childList: true, subtree: true, characterData: true });
+        // `attributes` too: `innerText` gains the text when an element stops being
+        // `display:none` via a style/class change — an attribute mutation, not a
+        // childList/characterData one. The poll alongside catches visibility driven
+        // by a stylesheet rule, which fires no mutation at all — the same
+        // belt-and-suspenders the selector wait uses for state it can't observe.
+        observer.observe(root, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+          attributes: true,
+        });
+        pollTimer = setInterval(() => {
+          if (hasText()) finish({ success: true });
+        }, 100);
         break;
+      }
       case "navigation":
         // Caller (Rust) listens for Page.loadEventFired; bridge merely waits.
         finish({ success: true });

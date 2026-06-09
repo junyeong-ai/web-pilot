@@ -487,9 +487,17 @@ if (!window.__webpilot_network_active) {
         const entry = { type: "xhr", url: meta.url || "", method: meta.method || "GET", duration_ms: 0, timestamp: Date.now() };
         window.__webpilot_network.push(entry);
         if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+        // status===0 covers abort, timeout AND network/CORS failure alike, so
+        // read the actual terminal event instead of labelling every one a
+        // "Network error" — an aborted request the page itself cancelled is not a
+        // network failure.
+        let terminalError;
+        this.addEventListener("abort", () => { terminalError = "aborted"; }, { once: true });
+        this.addEventListener("timeout", () => { terminalError = "timeout"; }, { once: true });
+        this.addEventListener("error", () => { terminalError = "Network error"; }, { once: true });
         this.addEventListener("loadend", () => {
             entry.status = this.status || undefined;
-            entry.error = this.status === 0 ? "Network error" : undefined;
+            entry.error = terminalError;
             entry.duration_ms = Math.round(performance.now() - t0);
             entry.timestamp = Date.now();
         }, { once: true });
