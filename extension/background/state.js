@@ -187,13 +187,21 @@ async function handleCookieSet(command) {
     };
   }
   try {
-    await chrome.cookies.set({
+    const params = {
       url: command.url,
       name: command.name,
       value: command.value,
       httpOnly: command.http_only || false,
       secure: command.secure || false,
-    });
+    };
+    // `unspecified` (and an omitted flag) means "no SameSite attribute" — leave
+    // it off so Chrome applies its default. Mirrors headless do_cookie_set.
+    if (command.same_site && command.same_site !== "unspecified") {
+      params.sameSite = chromeSameSite(command.same_site);
+    }
+    // Absolute Unix-epoch expiry; omitted = a session cookie. Mirrors headless.
+    if (command.expires != null) params.expirationDate = command.expires;
+    await chrome.cookies.set(params);
     return { type: "CookieResult", success: true };
   } catch (e) {
     return { type: "CookieResult", success: false, error: exceptionErr(e) };
@@ -416,6 +424,14 @@ async function handleSessionImport(rawData) {
     return { type: "SessionResult", success: false, error: err("InvalidArgument", `session JSON parse error: ${e.message}`) };
   }
   try {
+    // An exported session is a JSON object. An array/string/number reaches every
+    // field read as absent and would fall through to `success: true`; a `null`
+    // would throw a TypeError the outer catch mislabels `Other`. Reject a
+    // non-object root loudly as InvalidArgument, matching headless
+    // do_session_import.
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      return { type: "SessionResult", success: false, error: err("InvalidArgument", "session must be a JSON object") };
+    }
     // Honor the export's `version`: a file from a newer schema may carry fields
     // this binary can't apply, so reject it rather than silently drop them and
     // report success. A missing version is a hand-written/legacy file — accepted

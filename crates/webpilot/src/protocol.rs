@@ -10,7 +10,7 @@ use crate::action::Action;
 use crate::capture::{CaptureField, CaptureOpts};
 use crate::error::WebPilotError;
 use crate::types::{
-    ConsoleEntry, CookieInfo, DomSnapshot, FrameInfo, NetworkEntry, PolicyKey, TabInfo,
+    ConsoleEntry, CookieInfo, DomSnapshot, FrameInfo, NetworkEntry, PolicyKey, SameSite, TabInfo,
 };
 use crate::wait::WaitCondition;
 
@@ -109,6 +109,14 @@ pub enum Command {
         http_only: bool,
         #[serde(default)]
         secure: bool,
+        /// SameSite attribute. Omitted leaves it off so Chrome applies its
+        /// default — the read side (`cookie list`) reports it, so a set must be
+        /// able to specify it for a faithful round-trip.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        same_site: Option<SameSite>,
+        /// Absolute expiry as Unix-epoch seconds. Omitted = a session cookie.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires: Option<f64>,
     },
     CookieDelete {
         url: String,

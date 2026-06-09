@@ -863,6 +863,101 @@ fn headless_behavioral_flow() {
         stdout(&bad_cookie)
     );
 
+    // `cookie set` can specify SameSite and an expiry, and `cookie list` reports
+    // them back — a faithful round-trip the read side already supported but the
+    // write side could not. A `--expires` makes a persistent cookie (carries an
+    // expiration); omitting it stays a session cookie (no expiration field).
+    let cset = fx.run(&[
+        "cookie",
+        "set",
+        &base,
+        "sess",
+        "tok",
+        "--same-site",
+        "lax",
+        "--expires",
+        "1900000000",
+        "--httponly",
+    ]);
+    assert_eq!(
+        code(&cset),
+        0,
+        "cookie set with attributes failed: {}",
+        stdout(&cset)
+    );
+    let clist = fx.run(&["cookie", "list", &base]);
+    let cj: serde_json::Value = serde_json::from_str(&stdout(&clist)).expect("cookie list json");
+    let sess = cj
+        .as_array()
+        .expect("cookie list is a JSON array")
+        .iter()
+        .find(|c| c["name"] == "sess")
+        .expect("the cookie just set is present");
+    assert_eq!(
+        sess["same_site"].as_str(),
+        Some("lax"),
+        "cookie set --same-site must round-trip through cookie list: {}",
+        stdout(&clist)
+    );
+    assert!(
+        sess["expiration"].is_number(),
+        "a cookie set with --expires must be persistent (carry an expiration): {}",
+        stdout(&clist)
+    );
+    assert_eq!(
+        sess["http_only"].as_bool(),
+        Some(true),
+        "cookie set --httponly must round-trip: {}",
+        stdout(&clist)
+    );
+    let cset2 = fx.run(&[
+        "cookie",
+        "set",
+        &base,
+        "ses2",
+        "v2",
+        "--same-site",
+        "strict",
+    ]);
+    assert_eq!(
+        code(&cset2),
+        0,
+        "session-cookie set failed: {}",
+        stdout(&cset2)
+    );
+    let clist2 = fx.run(&["cookie", "list", &base]);
+    let cj2: serde_json::Value = serde_json::from_str(&stdout(&clist2)).expect("cookie list json");
+    let ses2 = cj2
+        .as_array()
+        .expect("cookie list is a JSON array")
+        .iter()
+        .find(|c| c["name"] == "ses2")
+        .expect("the session cookie is present");
+    assert_eq!(
+        ses2["same_site"].as_str(),
+        Some("strict"),
+        "strict SameSite must round-trip: {}",
+        stdout(&clist2)
+    );
+    assert!(
+        ses2["expiration"].is_null(),
+        "a cookie set without --expires must stay a session cookie (no expiration): {}",
+        stdout(&clist2)
+    );
+
+    // `session import` of a non-object JSON (here an array) is a typed
+    // InvalidArgument (exit 7), never a false `success` reporting an import that
+    // applied nothing.
+    let bad_session = home.join("bad-session.json");
+    std::fs::write(&bad_session, b"[]").expect("write bad session fixture");
+    let bs = fx.run(&["session", "import", bad_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&bs),
+        7,
+        "a non-object session file must be a typed InvalidArgument, not a false success: {}",
+        stdout(&bs)
+    );
+
     // A `wait text` value starting with `-` is the value, not a flag
     // (allow_hyphen_values) — it must reach the bridge and time out, not be
     // rejected by clap (exit 2).

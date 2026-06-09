@@ -40,6 +40,11 @@ pub enum SameSite {
     Unspecified,
 }
 
+// `cookie set --same-site lax` parses through the same wire spelling the JSON
+// uses — one source, no hand-written match.
+serde_plain::derive_display_from_serialize!(SameSite);
+serde_plain::derive_fromstr_from_deserialize!(SameSite);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CookieInfo {
     pub name: String,

@@ -552,6 +552,61 @@ fn browser_behavioral_flow() {
         stdout(&clist)
     );
 
+    // 4d. Browser-mode parity for the cookie attributes: `cookie set` carries
+    //     SameSite and an expiry through chrome.cookies.set, and cookie list
+    //     reports them back — the same round-trip the headless path covers. A
+    //     `--expires` makes a persistent cookie (carries an expiration).
+    let cset_attr = fx.run(&[
+        "cookie",
+        "set",
+        &base,
+        "wp_attr",
+        "v2",
+        "--same-site",
+        "lax",
+        "--expires",
+        "1900000000",
+    ]);
+    assert_eq!(
+        code(&cset_attr),
+        0,
+        "cookie set with attributes failed: {}",
+        stdout(&cset_attr)
+    );
+    let clist_attr = fx.run(&["cookie", "list", &base]);
+    let caj: serde_json::Value =
+        serde_json::from_str(&stdout(&clist_attr)).expect("cookie list json");
+    let attr = caj
+        .as_array()
+        .expect("cookie list is a JSON array")
+        .iter()
+        .find(|c| c["name"] == "wp_attr")
+        .expect("the attribute cookie is present");
+    assert_eq!(
+        attr["same_site"].as_str(),
+        Some("lax"),
+        "browser cookie set --same-site must round-trip: {}",
+        stdout(&clist_attr)
+    );
+    assert!(
+        attr["expiration"].is_number(),
+        "browser cookie set --expires must be persistent (carry an expiration): {}",
+        stdout(&clist_attr)
+    );
+
+    // 4e. Browser-mode parity for the session-import guard: a non-object JSON is
+    //     a typed InvalidArgument (exit 7), not a false success reporting an
+    //     import that applied nothing.
+    let bad_session = fx.home.join("bad-session.json");
+    std::fs::write(&bad_session, b"[]").expect("write bad session fixture");
+    let bs = fx.run(&["session", "import", bad_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&bs),
+        7,
+        "a non-object session file must be InvalidArgument in browser mode too: {}",
+        stdout(&bs)
+    );
+
     // 5. Deterministic tab binding: commands act on the pinned tab, and a
     //    vanished pin is a typed TabNotFound — never a silent retarget to
     //    whatever tab happens to be focused. `tab new` re-pins.

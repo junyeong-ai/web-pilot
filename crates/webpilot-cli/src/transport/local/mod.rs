@@ -878,9 +878,19 @@ impl Transport for LocalTransport {
                 value,
                 http_only,
                 secure,
+                same_site,
+                expires,
             } => {
-                self.do_cookie_set(&url, &name, &value, http_only, secure)
-                    .await
+                self.do_cookie_set(state::CookieSetSpec {
+                    url: &url,
+                    name: &name,
+                    value: &value,
+                    http_only,
+                    secure,
+                    same_site,
+                    expires,
+                })
+                .await
             }
             Command::CookieDelete { url, name } => self.do_cookie_delete(&url, &name).await,
             Command::ConsoleStart => self.do_console_start().await,

@@ -15,6 +15,20 @@ use super::{LocalTransport, epoch_ms};
 /// changes incompatibly.
 const SESSION_SCHEMA_VERSION: u64 = 1;
 
+/// The writable attributes of `cookie set`, grouped so the call site names each
+/// one — two adjacent bools (`http_only`/`secure`) are easy to transpose
+/// positionally — and the handler signature stays a single argument, mirroring
+/// how `do_capture` takes a `CaptureOpts` rather than a long flag list.
+pub(super) struct CookieSetSpec<'a> {
+    pub url: &'a str,
+    pub name: &'a str,
+    pub value: &'a str,
+    pub http_only: bool,
+    pub secure: bool,
+    pub same_site: Option<SameSite>,
+    pub expires: Option<f64>,
+}
+
 impl LocalTransport {
     // ── Cookies ──────────────────────────────────────────────────────────
 
@@ -32,26 +46,27 @@ impl LocalTransport {
         Ok(ResponseData::Cookies { cookies: parsed })
     }
 
-    pub(super) async fn do_cookie_set(
-        &self,
-        url: &str,
-        name: &str,
-        value: &str,
-        http_only: bool,
-        secure: bool,
-    ) -> Result<ResponseData> {
-        self.page
-            .send(
-                "Network.setCookie",
-                Some(json!({
-                    "url": url,
-                    "name": name,
-                    "value": value,
-                    "httpOnly": http_only,
-                    "secure": secure,
-                })),
-            )
-            .await?;
+    pub(super) async fn do_cookie_set(&self, spec: CookieSetSpec<'_>) -> Result<ResponseData> {
+        let mut params = json!({
+            "url": spec.url,
+            "name": spec.name,
+            "value": spec.value,
+            "httpOnly": spec.http_only,
+            "secure": spec.secure,
+        });
+        // `Unspecified` (and an omitted flag) means "no SameSite attribute" —
+        // leave it off so Chrome applies its own default rather than pinning one.
+        if let Some(ss) = spec.same_site {
+            let wire = same_site_to_cdp(&ss);
+            if !wire.is_empty() {
+                params["sameSite"] = wire.into();
+            }
+        }
+        // Absolute Unix-epoch expiry; omitted = a session cookie (CDP's default).
+        if let Some(exp) = spec.expires {
+            params["expires"] = exp.into();
+        }
+        self.page.send("Network.setCookie", Some(params)).await?;
         Ok(ResponseData::CookieResult {
             success: true,
             error: None,
@@ -240,6 +255,18 @@ impl LocalTransport {
                 detail: format!("session JSON parse error: {e}"),
             })?;
 
+        // An exported session is a JSON object. An array/string/number/null
+        // parses fine but reaches every `parsed.get(...)` as `None`, so without
+        // this guard it would fall straight through to `success: true` — telling
+        // the agent the session imported while nothing was applied. Reject the
+        // shape loudly, identically in both modes.
+        if !parsed.is_object() {
+            return Err(WebPilotError::InvalidArgument {
+                detail: "session must be a JSON object".into(),
+            }
+            .into());
+        }
+
         // Honor the `version` the export stamps: a file from a NEWER schema may
         // carry fields this binary doesn't understand, so importing it would
         // silently drop them and report success — handing the agent a session
@@ -347,13 +374,20 @@ fn ok_command_result() -> ResponseData {
     }
 }
 
-fn cookie_info_to_cdp(c: &CookieInfo) -> Value {
-    let same_site = match c.same_site {
+/// CDP `Network.setCookie` spells SameSite as `Strict`/`Lax`/`None`, with an
+/// empty string meaning "omit the attribute" (`Unspecified`). One source for
+/// both the manual `cookie set` and a session import's per-cookie write.
+fn same_site_to_cdp(s: &SameSite) -> &'static str {
+    match s {
         SameSite::Strict => "Strict",
         SameSite::Lax => "Lax",
         SameSite::None => "None",
         SameSite::Unspecified => "",
-    };
+    }
+}
+
+fn cookie_info_to_cdp(c: &CookieInfo) -> Value {
+    let same_site = same_site_to_cdp(&c.same_site);
     let mut params = json!({
         "name": c.name,
         "value": c.value,

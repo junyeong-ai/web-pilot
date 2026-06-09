@@ -28,6 +28,12 @@ pub enum CookieCommand {
         httponly: bool,
         #[arg(long)]
         secure: bool,
+        /// SameSite attribute: strict, lax, or none. Omit for Chrome's default.
+        #[arg(long)]
+        same_site: Option<webpilot::types::SameSite>,
+        /// Absolute expiry as Unix-epoch seconds. Omit for a session cookie.
+        #[arg(long)]
+        expires: Option<f64>,
     },
     /// Delete a cookie.
     Delete { url: String, name: String },
@@ -101,6 +107,8 @@ pub async fn run<T: Transport>(transport: &mut T, args: CookieArgs) -> Result<Co
             value,
             httponly,
             secure,
+            same_site,
+            expires,
         } => {
             simple(
                 transport,
@@ -110,6 +118,8 @@ pub async fn run<T: Transport>(transport: &mut T, args: CookieArgs) -> Result<Co
                     value,
                     http_only: httponly,
                     secure,
+                    same_site,
+                    expires,
                 },
                 "Cookie set",
             )

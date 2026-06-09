@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.93] - 2026-06-10
+
+### Added
+
+- **`cookie set` can now set `SameSite` and an expiry.** The read side
+  (`cookie list`) reports a cookie's `SameSite` and expiration, and session
+  import applies them, but the manual `cookie set` could only ever write a
+  default-SameSite session cookie — so an agent could not faithfully re-set a
+  cookie it had just read. `cookie set` gains `--same-site <strict|lax|none>`
+  and `--expires <unix-epoch-seconds>`, mapped to `Network.setCookie`
+  (headless) and `chrome.cookies.set` (browser) through the same SameSite
+  spelling used everywhere else. Omitting a flag preserves the prior behaviour
+  (no SameSite attribute, a session cookie).
+
+### Fixed
+
+- **`session import` of a non-object JSON no longer reports a false success.**
+  An array, string, or number parses as valid JSON but reaches every field read
+  as absent, so the import fell straight through to `success: true` — telling the
+  agent the session restored while nothing was applied (in browser mode a `null`
+  root instead threw a `TypeError` mislabeled `Other`). Import now rejects a
+  non-object root up front with `InvalidArgument` (exit 7), identically in both
+  modes, alongside the existing version and `cookies`-array guards.
+
 ## [0.4.92] - 2026-06-09
 
 ### Fixed
