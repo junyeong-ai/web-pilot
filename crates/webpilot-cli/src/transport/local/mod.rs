@@ -168,19 +168,18 @@ impl LocalTransport {
             let _ = dev.apply(&page).await;
         }
 
-        // Restore the active frame across CLI invocations. CLI calls are
-        // separate processes, so without persistence `frame switch` would
-        // be a no-op — the next `eval` would lose the active frame and
-        // silently fall back to the main world.
-        let persisted = read_persisted_active_frame(browser_context_id.as_deref());
-        let restored_active = match persisted {
-            Some(fid) if frame_exists(&page, &fid).await => Some(fid),
-            Some(_) => {
-                clear_persisted_active_frame(browser_context_id.as_deref());
-                None
-            }
-            None => None,
-        };
+        // Restore the active frame across CLI invocations VERBATIM. CLI calls are
+        // separate processes, so without persistence `frame switch` would be a
+        // no-op — the next `eval` would lose the active frame and silently fall
+        // back to the main world. A frame that has since VANISHED is deliberately
+        // KEPT, not dropped: a scoped command then resolves it as `FrameNotFound`
+        // (exit 4 → recapture / re-switch) instead of SILENTLY running in the main
+        // frame, matching browser mode (which keeps `activeFrameId` and
+        // FrameNotFounds via `frameVanishedError`). The clear is deferred to the
+        // recovery paths that REPORT it — `frame list` re-validates against the
+        // live tree and returns the reset, `frame main` / a fresh `frame switch`
+        // replace it — so the agent is never silently retargeted on open.
+        let restored_active = read_persisted_active_frame(browser_context_id.as_deref());
 
         // Restore the armed-monitor state across CLI invocations: `network
         // start` in one process must keep recording through navigations run
@@ -1100,36 +1099,6 @@ pub(super) fn persist_monitor_armed(
 fn clear_persisted_monitors(browser_context_id: Option<&str>) {
     let _ = std::fs::remove_file(monitor_marker(Monitor::Console, browser_context_id));
     let _ = std::fs::remove_file(monitor_marker(Monitor::Network, browser_context_id));
-}
-
-async fn frame_exists(page: &CdpClient, frame_id: &str) -> bool {
-    let Ok(tree) = page.send("Page.getFrameTree", None).await else {
-        return false;
-    };
-    fn walk(node: &Value, target: &str, depth: u32) -> bool {
-        if depth > MAX_FRAME_DEPTH {
-            return false;
-        }
-        if node
-            .get("frame")
-            .and_then(|f| f.get("id"))
-            .and_then(|v| v.as_str())
-            == Some(target)
-        {
-            return true;
-        }
-        if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
-            for child in children {
-                if walk(child, target, depth + 1) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-    tree.get("frameTree")
-        .map(|t| walk(t, frame_id, 0))
-        .unwrap_or(false)
 }
 
 // ── Module-private helpers ────────────────────────────────────────────────

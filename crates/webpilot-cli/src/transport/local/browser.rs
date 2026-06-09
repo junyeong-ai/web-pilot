@@ -270,7 +270,20 @@ impl LocalTransport {
         if let Some(tree) = result.get("frameTree") {
             collect_frames(tree, 0, &mut frames);
         }
-        let active_frame_id = self.active_frame_id.lock().await.clone();
+        let mut active_frame_id = self.active_frame_id.lock().await.clone();
+        // A persisted active-frame id can outlive its frame — a prior process
+        // switched into it, then the page dropped it. `frame list` is the recovery
+        // path: reset the stale scope to main and REPORT it (active_frame_id: None)
+        // so the agent re-orients explicitly, rather than being silently
+        // retargeted. Mirrors browser `handleFrameList`; the open-time restore
+        // deliberately keeps a vanished id so a scoped command FrameNotFounds first.
+        if let Some(fid) = &active_frame_id
+            && !frames.iter().any(|f| &f.frame_id == fid)
+        {
+            *self.active_frame_id.lock().await = None;
+            super::clear_persisted_active_frame(self.persisted_context_key());
+            active_frame_id = None;
+        }
         Ok(ResponseData::Frames {
             frames,
             active_frame_id,

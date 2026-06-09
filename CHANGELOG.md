@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.111] - 2026-06-10
+
+### Fixed
+
+- **A vanished persisted active frame now surfaces as `FrameNotFound` (exit 4),
+  not a silent retarget to the main frame, in headless too.** `LocalTransport::open`
+  validated the restored active frame against the live tree and silently cleared
+  it when the page had dropped it — so the next scoped command (`eval`, `dom`,
+  `capture`) ran in the main frame with no signal, while browser mode kept the
+  scope and returned `FrameNotFound`. Open now restores the id verbatim; the clear
+  moves to the recovery paths that REPORT it — `frame list` (now resets a stale
+  scope and returns `active_frame_id: null`, mirroring browser) and `frame main`.
+- **`find_chrome` discovers a Linux Chrome-for-Testing install.** The agent-browser
+  candidate list carried only the macOS layouts, so a Linux box with only a
+  `chrome-linux64/chrome` CfT install (the exact path the browser e2e harness
+  resolves) fell through to "Chrome not found". Added the Linux CfT path plus the
+  standard Linux system-Chrome locations.
+
 ## [0.4.110] - 2026-06-10
 
 ### Fixed

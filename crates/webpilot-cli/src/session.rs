@@ -5,8 +5,16 @@ use std::path::PathBuf;
 use webpilot::dirs;
 
 const SYSTEM_CHROME_PATHS: &[&str] = &[
+    // macOS
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    // Linux standard install locations (`which` below covers PATH installs; these
+    // catch a present-but-not-on-PATH binary)
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/opt/google/chrome/chrome",
 ];
 
 /// Headless Chrome's launch viewport. `device reset` snaps the page back to
@@ -42,6 +50,10 @@ pub fn find_chrome() -> Result<PathBuf> {
                     "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
                     "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
                     "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                    // Linux Chrome-for-Testing layout — the same path the browser
+                    // e2e harness resolves, so production discovery can't drift
+                    // from the layout the tests assume.
+                    "chrome-linux64/chrome",
                 ];
                 for rel in candidates {
                     let p = entry.path().join(rel);

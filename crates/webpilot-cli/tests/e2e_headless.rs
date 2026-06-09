@@ -593,6 +593,53 @@ fn headless_behavioral_flow() {
     let back = fx.run(&["frame", "main"]);
     assert_eq!(code(&back), 0, "frame main failed: {}", stdout(&back));
 
+    // 2j. A persisted active frame that VANISHED between CLI invocations surfaces
+    //     as FrameNotFound on the next scoped command (exit 4 → recapture), never a
+    //     SILENT retarget to the main frame. Switch into /frame, schedule the page
+    //     to drop that iframe, then a fresh process's `eval` must FrameNotFound —
+    //     not run in main and return a value. `frame list` is the recovery path: it
+    //     resets the stale scope and reports `active_frame_id: null`.
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+    let _ = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(
+        code(&fx.run(&["frame", "url", "/frame"])),
+        0,
+        "switch into /frame for the vanish test"
+    );
+    let _ = fx.run(&[
+        "eval",
+        "setTimeout(function(){window.parent.document.querySelector('iframe').remove()},50); 'scheduled'",
+    ]);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let stale_eval = fx.run(&["eval", "1+1"]);
+    assert_eq!(
+        code(&stale_eval),
+        4,
+        "a scoped command on a vanished persisted frame must be FrameNotFound (exit 4), \
+         not a silent main-frame run: {}",
+        stdout(&stale_eval)
+    );
+    let recover = fx.run(&["frame"]);
+    assert_eq!(
+        code(&recover),
+        0,
+        "frame list recovery failed: {}",
+        stdout(&recover)
+    );
+    let recover_json: serde_json::Value =
+        serde_json::from_str(&stdout(&recover)).expect("frame list json");
+    assert!(
+        recover_json["active_frame_id"].is_null(),
+        "frame list must reset a vanished active frame to main and report it: {}",
+        stdout(&recover)
+    );
+    assert_eq!(
+        code(&fx.run(&["eval", "2+2"])),
+        0,
+        "after frame-list recovery a scoped command runs in main again"
+    );
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+
     // 3. A link click that navigates reports `url_changed`, `--capture`
     //    returns the NEW document (settle: committed + parsed, never the dying
     //    page), and armed monitors keep recording across the navigation even

@@ -200,9 +200,11 @@ async function handleFrameList() {
 
   // A persisted active-frame id can outlive its frame — the page changed while
   // the MV3 service worker was suspended, so the restored scope points at a frame
-  // the tree no longer has. Drop it back to main rather than report a scope that
-  // does not exist, mirroring headless, which validates the persisted active
-  // frame against the live tree on open (`frame_exists` → clear).
+  // the tree no longer has. `frame list` is the recovery path: drop it back to
+  // main and REPORT the reset (active_frame_id below) rather than a scope that no
+  // longer exists. Both modes keep a vanished scope until then, so a scoped
+  // command FrameNotFounds first instead of silently retargeting to main; headless
+  // `do_frame_list` mirrors this exact reset.
   if (activeFrameId !== 0 && !all.some((f) => f.frameId === activeFrameId)) {
     setActiveFrameId(0);
   }
