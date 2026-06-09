@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.67] - 2026-06-09
+
+### Fixed
+
+- **A default (no-`--context`) agent no longer sees or attaches to tabs opened by
+  an isolated `--context` agent.** The default target scope matched EVERY browser
+  context, so a plain `tab` list, `tab switch`, `capture`, and the pin resolver all
+  reached an isolated context's tabs — a multi-agent isolation breach. The default
+  scope is now every target NOT in a Chrome-created context (default-context
+  targets do carry a browserContextId, just one Chrome doesn't list among the
+  created ones), applied through one `target_in_context` helper at all four target
+  lookups. Guarded by a tab-level isolation assertion in the headless e2e.
+- **An accessibility capture in an unreachable cross-origin OOPIF fails loud
+  instead of returning the root tree.** Scoping the AX tree to the active frame
+  (0.4.66) left a worthless fallback: when the frame's CDP id couldn't be resolved
+  (an OOPIF has no in-tab context), it returned the ROOT document's tree under an
+  iframe-scoped envelope — coherent but factually wrong. It now returns
+  `FrameNotFound`, the same boundary `eval`/`find` use.
+
 ## [0.4.66] - 2026-06-09
 
 ### Fixed

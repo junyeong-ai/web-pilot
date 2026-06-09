@@ -887,5 +887,31 @@ fn headless_behavioral_flow() {
         stdout(&read_b)
     );
 
+    // 8b. Tab-level isolation: the default context's `tab` list and `tab switch`
+    //     must never reach a tab opened under an isolated `--context`. The default
+    //     scope is every target NOT in a created browser context, so ctx-a's tab is
+    //     invisible to it and switching to that id from the default is TabNotFound —
+    //     without it the default scope (`None`) matched every context's tabs.
+    let ctx_a_tabs = fx.run(&["--context", "ctx-a", "tab"]);
+    let ctx_a_json: serde_json::Value =
+        serde_json::from_str(&stdout(&ctx_a_tabs)).expect("ctx-a tab json");
+    let ctx_a_tab_id = ctx_a_json[0]["id"]
+        .as_str()
+        .expect("ctx-a tab id")
+        .to_string();
+    let default_tabs = fx.run(&["tab"]);
+    assert!(
+        !stdout(&default_tabs).contains(&ctx_a_tab_id),
+        "the default context's tab list must not leak an isolated --context tab: {}",
+        stdout(&default_tabs)
+    );
+    let cross_switch = fx.run(&["tab", "switch", &ctx_a_tab_id]);
+    assert_eq!(
+        code(&cross_switch),
+        4,
+        "switching from the default context to an isolated --context tab must be TabNotFound (4): {}",
+        stdout(&cross_switch)
+    );
+
     drop(fx);
 }

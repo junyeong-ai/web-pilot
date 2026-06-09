@@ -7,7 +7,7 @@ use webpilot::WebPilotError;
 use webpilot::protocol::{FrameSelector, ResponseData, RunMode};
 use webpilot::types::{FrameInfo, TabInfo};
 
-use super::{LocalTransport, action_success, connect_to_page};
+use super::{LocalTransport, action_success, connect_to_page, target_in_context};
 
 impl LocalTransport {
     // ── Tabs ─────────────────────────────────────────────────────────────
@@ -15,13 +15,11 @@ impl LocalTransport {
     pub(super) async fn do_tab_list(&self) -> Result<ResponseData> {
         let targets = self.browser.get_targets().await?;
         let ctx = self.browser_context_id.as_deref();
+        let created = super::created_browser_contexts(&self.browser).await;
         let tabs: Vec<TabInfo> = targets
             .into_iter()
             .filter(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
-            .filter(|t| match ctx {
-                Some(id) => t.get("browserContextId").and_then(|v| v.as_str()) == Some(id),
-                None => true,
-            })
+            .filter(|t| target_in_context(t, ctx, &created))
             .map(|t| TabInfo {
                 id: t
                     .get("targetId")
@@ -56,13 +54,11 @@ impl LocalTransport {
     async fn ensure_tab_exists(&self, tab_id: &str) -> Result<Option<ResponseData>> {
         let ctx = self.browser_context_id.as_deref();
         let targets = self.browser.get_targets().await?;
+        let created = super::created_browser_contexts(&self.browser).await;
         let exists = targets.iter().any(|t| {
             t.get("targetId").and_then(|v| v.as_str()) == Some(tab_id)
                 && t.get("type").and_then(|v| v.as_str()) == Some("page")
-                && match ctx {
-                    Some(id) => t.get("browserContextId").and_then(|v| v.as_str()) == Some(id),
-                    None => true,
-                }
+                && target_in_context(t, ctx, &created)
         });
         Ok((!exists).then(|| ResponseData::Error {
             error: WebPilotError::TabNotFound {

@@ -163,15 +163,26 @@ async function handleCapture(command) {
         // Scope the AX tree to the active frame, like the DOM/screenshot/metadata
         // do: an unscoped getFullAXTree returns the ROOT document's tree while the
         // footer/URL report the iframe. Resolve the active frame's CDP frameId via
-        // the same nonce path eval uses (unambiguous for same-URL siblings) and
-        // pass it so the tree matches the frame the agent is looking at.
+        // the same nonce path eval uses (unambiguous for same-URL siblings).
         let params;
         if (activeFrameId !== 0) {
           const resolved = await resolveFrameWorld(tid, tabId, activeFrameId, "MAIN");
-          if (resolved?.frameId) params = { frameId: resolved.frameId };
+          // A cross-origin OOPIF has no context in this tab's session, so its CDP
+          // frameId can't be resolved. Fail like eval/find do — an unscoped tree
+          // here would be the ROOT under an iframe-scoped envelope: coherent but
+          // factually wrong. `null` is the sentinel the caller maps to that error.
+          if (!resolved?.frameId) return null;
+          params = { frameId: resolved.frameId };
         }
         return cdpSend(tid, "Accessibility.getFullAXTree", params);
       });
+      if (ax === null) {
+        return topErr(
+          err("FrameNotFound", `frame ${activeFrameId} has no reachable execution context`, {
+            frame_id: String(activeFrameId),
+          }),
+        );
+      }
       result.dom = result.dom || emptyDom();
       result.dom.accessibility_tree = JSON.stringify(ax, null, 2);
     } catch (e) {

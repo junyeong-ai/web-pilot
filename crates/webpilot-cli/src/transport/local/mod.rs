@@ -701,10 +701,13 @@ impl LocalTransport {
     /// is unknowable, so it returns `None` rather than rebind to a sibling tab.
     async fn bound_target(&self) -> Option<(String, String)> {
         let targets = self.browser.get_targets().await.ok()?;
+        let created = created_browser_contexts(&self.browser).await;
         let pick = targets
             .iter()
             .find(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(&self.target_id))
-            .or_else(|| sole_page_in_context(&targets, self.browser_context_id.as_deref()))?;
+            .or_else(|| {
+                sole_page_in_context(&targets, self.browser_context_id.as_deref(), &created)
+            })?;
         Some((
             pick.get("targetId").and_then(|v| v.as_str())?.to_string(),
             pick.get("url")
@@ -1128,11 +1131,9 @@ async fn pick_active_target(
     context_anchor: Option<&str>,
 ) -> Result<String> {
     let targets = browser.get_targets().await?;
+    let created = created_browser_contexts(browser).await;
     let is_page = |t: &&Value| t.get("type").and_then(|v| v.as_str()) == Some("page");
-    let in_ctx = |t: &&Value| match browser_context_id {
-        Some(id) => t.get("browserContextId").and_then(|v| v.as_str()) == Some(id),
-        None => true,
-    };
+    let in_ctx = |t: &&Value| target_in_context(t, browser_context_id, &created);
     let alive = |id: &str| -> bool {
         targets
             .iter()
@@ -1184,16 +1185,53 @@ pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<Cdp
 /// target id has vanished: with exactly one page left it is unambiguously the
 /// navigation's result, but with several there is no way to tell which is — so
 /// it refuses to guess rather than silently rebind to a sibling tab.
+/// The browser-context ids Chrome created for `--context` isolation — every
+/// context EXCEPT its built-in default. A target in none of these is in the
+/// default context (default-context targets DO carry a browserContextId, just one
+/// Chrome doesn't list here), which is how a `None` scope is matched.
+pub(super) async fn created_browser_contexts(browser: &CdpClient) -> Vec<String> {
+    browser
+        .send("Target.getBrowserContexts", None)
+        .await
+        .ok()
+        .and_then(|r| {
+            r.pointer("/browserContextIds")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a CDP target belongs to the given browser context. An isolated
+/// `--context` matches its own created id; the default (`None`) matches every
+/// target NOT in a created context. Scoping every target lookup by this keeps an
+/// agent without `--context` from ever seeing or attaching to a tab an
+/// isolated-context agent opened, and the reverse — without it the default scope
+/// matched every context's tabs (an isolation breach across multi-agent contexts).
+pub(super) fn target_in_context(
+    t: &Value,
+    browser_context_id: Option<&str>,
+    created: &[String],
+) -> bool {
+    let target_ctx = t.get("browserContextId").and_then(|v| v.as_str());
+    match browser_context_id {
+        Some(id) => target_ctx == Some(id),
+        None => target_ctx.is_none_or(|c| !created.iter().any(|x| x == c)),
+    }
+}
+
 fn sole_page_in_context<'a>(
     targets: &'a [Value],
     browser_context_id: Option<&str>,
+    created: &[String],
 ) -> Option<&'a Value> {
     let mut pages = targets.iter().filter(|t| {
         t.get("type").and_then(|v| v.as_str()) == Some("page")
-            && match browser_context_id {
-                Some(id) => t.get("browserContextId").and_then(|v| v.as_str()) == Some(id),
-                None => true,
-            }
+            && target_in_context(t, browser_context_id, created)
     });
     let only = pages.next()?;
     if pages.next().is_some() {
