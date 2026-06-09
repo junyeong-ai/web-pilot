@@ -358,11 +358,15 @@ async function dispatchActionToPage(tab, action) {
       r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
     }
     const result = { type: "Action", ...r };
-    // `navigates` / `frame_navigates` are internal bridge hints (a top-frame and a
-    // current-frame navigation), not part of the Action wire response. Browser
-    // mode resolves a top navigation from its own watch, but still needs
-    // `frame_navigates` to settle an iframe-internal one; read it, then drop both
-    // rather than leak fields the typed response never models.
+    // `navigates` (a new TOP document) and `frame_navigates` (the CURRENT frame)
+    // are internal bridge hints, not part of the typed Action response. Browser
+    // mode resolves the destination from its own main-frame watch, but a link
+    // click QUEUES its navigation, so the events can land after this response —
+    // `navigates` tells `settledActionUrl` to wait for that start instead of
+    // missing it (e.g. a `target=_top` link clicked inside a switched iframe),
+    // while `frame_navigates` drives the iframe-internal settle. Read both, then
+    // drop them rather than leak fields the wire response never models.
+    const navHint = r.navigates === true;
     const frameNavigates = r.frame_navigates === true;
     delete result.navigates;
     delete result.frame_navigates;
@@ -375,7 +379,7 @@ async function dispatchActionToPage(tab, action) {
     // `settledActionUrl`'s `chrome.tabs.get`/`webNavigation` awaits yield the
     // event loop so that event is delivered first. A single pre-settle check
     // would miss it and leave the pin silently on the opener.
-    const settledUrl = await settledActionUrl(tab.id, urlBefore, navWatch);
+    const settledUrl = await settledActionUrl(tab.id, urlBefore, navWatch, navHint);
     if (settledUrl && settledUrl !== urlBefore) {
       result.url_changed = settledUrl;
     }

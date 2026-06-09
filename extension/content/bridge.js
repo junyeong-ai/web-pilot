@@ -146,6 +146,18 @@
     // size gate: a real <button> is interactive regardless of size.
     const isDegenerate = (rect) => rect.width < 5 || rect.height < 5;
 
+    // The heuristic passes skip an element that already carries a DELIBERATE
+    // semantic role (the semantic pass collects the interactive ones). But ARIA
+    // `role="none"`/`"presentation"` explicitly STRIP the implicit role — such an
+    // element is semantically role-less, so a `role="none"` div WITH an `onclick`
+    // (or innermost cursor:pointer) is a real click target the agent must see, not
+    // a semantic control to defer. Treat none/presentation (and the first token of
+    // a multi-token role) as "no role".
+    const hasExplicitRole = (el) => {
+      const role = (el.getAttribute("role") || "").trim().split(/\s+/)[0].toLowerCase();
+      return role !== "" && role !== "none" && role !== "presentation";
+    };
+
     const markers = new Set(markerEls);
     for (const el of tabindexEls) {
       const ti = parseInt(el.getAttribute("tabindex"), 10);
@@ -154,7 +166,7 @@
     for (const el of markers) {
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
-      if (el.getAttribute("role")) continue;
+      if (hasExplicitRole(el)) continue;
       if (isDegenerate(el.getBoundingClientRect())) continue;
       if (!isVisible(el)) continue;
       add(el);
@@ -180,7 +192,7 @@
       const el = everything[i];
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
-      if (el.getAttribute("role")) continue;
+      if (hasExplicitRole(el)) continue;
       const rect = el.getBoundingClientRect();
       if (rect.bottom < 0 || rect.top > innerHeight) continue;
       if (isDegenerate(rect)) continue;

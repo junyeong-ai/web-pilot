@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.112] - 2026-06-10
+
+### Fixed
+
+- **A `role="presentation"` / `role="none"` element with a click marker is now
+  indexed.** The marker and cursor:pointer heuristic passes skipped any element
+  carrying a `role` attribute (assuming the semantic pass covers it), but ARIA
+  `none`/`presentation` explicitly STRIP the implicit role — so a `<div
+  role="presentation" onclick>` is a real click target that was silently dropped
+  from the snapshot, unclickable by the agent. Those two roles (and the first
+  token of a multi-token role) are now treated as role-less; a genuine semantic
+  role is still deferred to the semantic pass.
+- **Browser-mode `--capture` after a click that triggers a QUEUED top navigation
+  no longer snapshots the pre-click page.** A link click queues its navigation
+  (HTML spec), so its `onBeforeNavigate`/`onCommitted` can land after the bridge
+  click response — but `settledActionUrl` ignored the bridge's `navigates` hint
+  and concluded "nothing navigated", returning immediately. It now takes the hint
+  (e.g. a `target=_top` link clicked inside a switched iframe) and polls briefly
+  for the start, PROBE-bounded, mirroring headless's `nav_hint` fall-through; a
+  mis-hint costs only the probe, never the full navigation timeout.
+
 ## [0.4.111] - 2026-06-10
 
 ### Fixed

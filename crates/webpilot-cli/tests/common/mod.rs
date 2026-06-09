@@ -20,6 +20,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <a id="pop" href="/second" target="_blank" rel="noopener">open popup</a>
 <form action="/second" method="get"><button type="submit" id="formsubmit">submit form</button></form>
 <div id="cardwrap" style="cursor:pointer">clickable card<input id="hiddenchild" style="display:none"></div>
+<div id="presdiv" role="presentation" onclick="document.title='pres-clicked'">presentation click target</div>
 <div id="shadowhost"></div>
 <iframe src="/frame"></iframe>
 <script>

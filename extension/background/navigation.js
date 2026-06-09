@@ -1,7 +1,7 @@
 // // Navigation settle: commit watch, settled-wait, and document readiness.
 // // Mirrors the navigation half of transport/local/mod.rs.
 
-import { navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
+import { PROBE_MS, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { rearmMonitors } from "./state.js";
 
 // ── Navigation settle ───────────────────────────────────────────────────────
@@ -74,20 +74,35 @@ function watchMainFrameCommit(tabId) {
 // returns its URL, so a following auto-capture reads the destination, not the
 // dying page. Never throws: the action's side effect is already done. The watch
 // must be registered BEFORE the action so the start/commit it triggers is seen.
-async function settledActionUrl(tabId, beforeUrl, watch) {
-  // The navigation-start signal (`watch.started`, from onBeforeNavigate) is the
-  // decision authority, not a fixed grace window: a guessed delay would either
-  // add latency to every non-navigating action or still miss a slow start, so
-  // none is added. The `chrome.tabs.get` await yields the event loop so an
-  // onBeforeNavigate dispatched during the action is processed before the check
-  // — the browser's nearest equivalent of headless's in-order CDP event buffer.
-  // The residual gap (a start that dispatches after this point) is inherent to
-  // MV3's cross-channel event ordering and degrades to a best-effort capture the
-  // agent re-runs, never a wrong action; headless, on one ordered socket, has no
-  // such gap.
-  const tab = await chrome.tabs.get(tabId).catch(() => null);
-  const urlNow = tab?.url || "";
-  if (!watch.started && !watch.committed && (!urlNow || urlNow === beforeUrl)) {
+async function settledActionUrl(tabId, beforeUrl, watch, navHint) {
+  // The navigation-start signal (`watch.started`, from onBeforeNavigate, or the
+  // tab URL having moved) is the decision authority. The `chrome.tabs.get` await
+  // yields the event loop so an onBeforeNavigate dispatched during the action is
+  // processed before the check — the browser's nearest equivalent of headless's
+  // in-order CDP event buffer.
+  const navStarted = async () => {
+    if (watch.started || watch.committed) return true;
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    return Boolean(t?.url && t.url !== beforeUrl);
+  };
+  let started = await navStarted();
+  // A link click QUEUES its navigation (HTML spec), so onBeforeNavigate /
+  // onCommitted can land on a LATER task — after the bridge's click response and
+  // this check. When the bridge determined the click loads a new TOP document
+  // (`navHint`, e.g. a `target=_top` link inside an iframe), poll briefly for that
+  // start rather than concluding "nothing navigated" and letting `--capture`
+  // snapshot the pre-click page — mirroring headless's PROBE-bound fall-through on
+  // `nav_hint`. A genuine queued nav starts within a tick; a mis-hint costs only
+  // this probe, never the full navigation timeout. No hint = no wait (the hot
+  // path), so a non-navigating action still pays nothing.
+  if (!started && navHint) {
+    const deadline = Date.now() + PROBE_MS;
+    while (!started && Date.now() < deadline) {
+      await sleep(25);
+      started = await navStarted();
+    }
+  }
+  if (!started) {
     watch.dispose();
     return beforeUrl; // nothing navigated — hot path, no settle wait
   }

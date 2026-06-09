@@ -135,6 +135,13 @@ fn headless_behavioral_flow() {
         !elements.iter().any(|e| e["id"] == "hiddenchild"),
         "a display:none element must never be indexed: {dom}"
     );
+    // A `role="presentation"` element carrying a click marker is a real click
+    // target: ARIA none/presentation STRIP the implicit role, so the marker
+    // heuristic must treat it like a plain div, not skip it as a semantic control.
+    assert!(
+        elements.iter().any(|e| e["id"] == "presdiv"),
+        "a role=presentation element with onclick must be indexed (none/presentation = no role): {dom}"
+    );
 
     let button_index = elements
         .iter()
