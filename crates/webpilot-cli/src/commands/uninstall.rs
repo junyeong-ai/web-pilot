@@ -188,10 +188,7 @@ fn collect_plan() -> Plan {
         .filter(|p| p.is_dir());
 
     let extension = Some(webpilot::dirs::extension_dir_path()).filter(|p| p.is_dir());
-    let nm_host = nm_host::nm_dir()
-        .ok()
-        .map(|d| d.join("com.webpilot.host.json"))
-        .filter(|p| p.is_file());
+    let nm_host = nm_host::nm_manifest_path().ok().filter(|p| p.is_file());
     let cache_root = Some(webpilot::dirs::root_path()).filter(|p| p.is_dir());
 
     Plan {

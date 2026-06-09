@@ -27,8 +27,21 @@ pub(crate) fn context_hash(name: &str) -> String {
     format!("{:012x}", hasher.finish())
 }
 
+const CONTEXT_FILE_PREFIX: &str = "ctx-";
+const CONTEXT_FILE_SUFFIX: &str = ".json";
+
 pub(crate) fn context_file_path(name: &str) -> std::path::PathBuf {
-    dirs::contexts_dir().join(format!("ctx-{}.json", context_hash(name)))
+    dirs::contexts_dir().join(format!(
+        "{CONTEXT_FILE_PREFIX}{}{CONTEXT_FILE_SUFFIX}",
+        context_hash(name)
+    ))
+}
+
+/// Whether a filename in the contexts dir is a context record. The one predicate
+/// every sweep over that directory shares, so the read side can never drift from
+/// the `context_file_path` write side.
+pub(crate) fn is_context_file(name: &str) -> bool {
+    name.starts_with(CONTEXT_FILE_PREFIX) && name.ends_with(CONTEXT_FILE_SUFFIX)
 }
 
 /// Serialize resolution of one context name across processes. Without this two
@@ -182,10 +195,7 @@ pub(crate) async fn resolve_context_target(
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok())
-                .filter(|e| {
-                    let n = e.file_name().to_string_lossy().into_owned();
-                    n.starts_with("ctx-") && n.ends_with(".json")
-                })
+                .filter(|e| is_context_file(&e.file_name().to_string_lossy()))
                 .count()
         })
         .unwrap_or(0);
@@ -242,7 +252,7 @@ pub(crate) async fn gc_expired_contexts(browser: &CdpClient, current_pid: i32) {
     };
     for entry in entries.filter_map(|e| e.ok()) {
         let fname = entry.file_name().to_string_lossy().to_string();
-        if !fname.starts_with("ctx-") || !fname.ends_with(".json") {
+        if !is_context_file(&fname) {
             continue;
         }
         let Ok(data) = std::fs::read_to_string(entry.path()) else {

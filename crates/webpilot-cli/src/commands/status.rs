@@ -153,17 +153,8 @@ enum ManifestState {
 fn check_nm_manifest() -> ManifestState {
     // No home directory means no per-user Chrome NM dir to inspect — report
     // not-found rather than probing a fallback path that cannot be Chrome's.
-    let home = match std::env::var("HOME") {
-        Ok(h) if !h.is_empty() => h,
-        _ => return ManifestState::NotFound,
-    };
-    let path = if cfg!(target_os = "macos") {
-        std::path::PathBuf::from(&home).join(
-            "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.webpilot.host.json",
-        )
-    } else {
-        std::path::PathBuf::from(&home)
-            .join(".config/google-chrome/NativeMessagingHosts/com.webpilot.host.json")
+    let Ok(path) = crate::commands::setup::nm_host::nm_manifest_path() else {
+        return ManifestState::NotFound;
     };
 
     let Ok(content) = std::fs::read_to_string(&path) else {

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.56] - 2026-06-09
+
+### Changed
+
+- **Consolidated three duplicated naming/structure conventions to a single
+  source**, so the read and write sides can't drift:
+  - The `ctx-<hash>.json` context-file pattern, checked inline in five sweeps over
+    the contexts dir, is now one `is_context_file` predicate beside the
+    `context_file_path` writer.
+  - The Native Messaging host name and manifest path, rebuilt inline in `status`
+    (the whole Chrome path) and `uninstall`, are now `NM_HOST_NAME` +
+    `nm_manifest_path()` shared with `setup`.
+  - The frame-tree walker existed twice (one per output type); `FrameRecord` was a
+    strict subset of the wire `FrameInfo`, so it and its walker are removed and
+    `frame find` uses `FrameInfo` and the one `collect_frames`.
+
 ## [0.4.55] - 2026-06-09
 
 ### Fixed

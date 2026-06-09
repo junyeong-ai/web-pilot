@@ -264,7 +264,7 @@ impl LocalTransport {
         let tree = self.page.send("Page.getFrameTree", None).await?;
         let mut all = Vec::new();
         if let Some(t) = tree.get("frameTree") {
-            collect_frame_records(t, &mut all);
+            collect_frames(t, &mut all);
         }
 
         // Only HTTP(S) subframes are switch targets — the same scheme filter
@@ -273,12 +273,12 @@ impl LocalTransport {
         // matches the set it is told about, and headless and browser agree:
         // a named `about:blank` / `srcdoc` / `data:` / `file:` iframe is not a
         // frame-switch target in either mode.
-        let candidates: Vec<&FrameRecord> = all
+        let candidates: Vec<&FrameInfo> = all
             .iter()
             .filter(|f| !f.is_main && f.url.starts_with("http"))
             .collect();
 
-        let matched: Option<&FrameRecord> = match &selector {
+        let matched: Option<&FrameInfo> = match &selector {
             FrameSelector::Main => unreachable!("handled above"),
             FrameSelector::Name { value } => candidates
                 .iter()
@@ -402,42 +402,7 @@ impl LocalTransport {
     }
 }
 
-// ── Frame-tree walking helpers ───────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-struct FrameRecord {
-    frame_id: String,
-    url: String,
-    name: Option<String>,
-    is_main: bool,
-}
-
-fn collect_frame_records(node: &Value, out: &mut Vec<FrameRecord>) {
-    if let Some(frame) = node.get("frame") {
-        out.push(FrameRecord {
-            frame_id: frame
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            url: frame
-                .get("url")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            name: frame
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            is_main: frame.get("parentId").is_none(),
-        });
-    }
-    if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
-        for child in children {
-            collect_frame_records(child, out);
-        }
-    }
-}
+// ── Frame-tree walking helper ────────────────────────────────────────────
 
 fn collect_frames(node: &Value, out: &mut Vec<FrameInfo>) {
     if let Some(frame) = node.get("frame") {

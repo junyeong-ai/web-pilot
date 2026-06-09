@@ -436,8 +436,9 @@ pub async fn quit_session() -> Result<()> {
     let contexts = dirs::contexts_dir();
     if let Ok(entries) = std::fs::read_dir(&contexts) {
         for entry in entries.filter_map(|e| e.ok()) {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with("ctx-") && name.ends_with(".json") {
+            if crate::transport::local_context::is_context_file(
+                &entry.file_name().to_string_lossy(),
+            ) {
                 let _ = std::fs::remove_file(entry.path());
             }
         }

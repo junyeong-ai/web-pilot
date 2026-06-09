@@ -36,7 +36,7 @@ pub fn run(args: NmHostArgs) -> Result<CommandOutput> {
         .context("could not canonicalise own binary path")?;
 
     let manifest = serde_json::json!({
-        "name": "com.webpilot.host",
+        "name": NM_HOST_NAME,
         "description": "WebPilot — Browser control tool for AI agents",
         "path": binary_path.display().to_string(),
         "type": "stdio",
@@ -46,7 +46,7 @@ pub fn run(args: NmHostArgs) -> Result<CommandOutput> {
     let nm_dir = nm_dir()?;
     std::fs::create_dir_all(&nm_dir)?;
 
-    let manifest_path = nm_dir.join("com.webpilot.host.json");
+    let manifest_path = nm_dir.join(format!("{NM_HOST_NAME}.json"));
     let json = serde_json::to_string_pretty(&manifest).expect("manifest is a static-shape Value");
     // Atomic: an interrupted write must not truncate a working manifest and
     // leave browser mode unable to launch the host.
@@ -95,6 +95,16 @@ pub fn nm_dir() -> Result<PathBuf> {
             .join("google-chrome")
             .join("NativeMessagingHosts")
     })
+}
+
+/// The Native Messaging host name — the manifest's `name`, the file stem Chrome
+/// looks up, and what the extension connects to. One source for all three.
+pub const NM_HOST_NAME: &str = "com.webpilot.host";
+
+/// Full path to the installed host manifest. The one place `setup`, `status`,
+/// and `uninstall` agree on where it lives.
+pub fn nm_manifest_path() -> Result<PathBuf> {
+    Ok(nm_dir()?.join(format!("{NM_HOST_NAME}.json")))
 }
 
 /// Chrome extension IDs are 32 characters, each in `[a-p]`.

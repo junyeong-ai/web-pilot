@@ -5,7 +5,7 @@ use webpilot::dirs;
 
 use crate::output::CommandOutput;
 use crate::transport::LocalTransport;
-use crate::transport::local_context::{ContextEntry, context_file_path};
+use crate::transport::local_context::{ContextEntry, context_file_path, is_context_file};
 
 #[derive(Args)]
 pub struct ContextArgs {
@@ -37,7 +37,7 @@ fn list_contexts() -> Result<CommandOutput> {
     if let Ok(entries) = std::fs::read_dir(dirs::contexts_dir()) {
         for entry in entries.filter_map(|e| e.ok()) {
             let fname = entry.file_name().to_string_lossy().to_string();
-            if !fname.starts_with("ctx-") || !fname.ends_with(".json") {
+            if !is_context_file(&fname) {
                 continue;
             }
             if let Ok(data) = std::fs::read_to_string(entry.path())
@@ -90,7 +90,7 @@ async fn close_contexts(
         if let Ok(entries) = std::fs::read_dir(dirs::contexts_dir()) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let fname = entry.file_name().to_string_lossy().to_string();
-                if !fname.starts_with("ctx-") || !fname.ends_with(".json") {
+                if !is_context_file(&fname) {
                     continue;
                 }
                 if let Ok(data) = std::fs::read_to_string(entry.path())
