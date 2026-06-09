@@ -411,6 +411,18 @@ async fn handle_one_cli_request(
     // steer the extension past what policy validated.
     request["command"] = serde_json::to_value(&command).expect("Command serializes (static shape)");
 
+    // The service worker re-arms MAIN-world console/network hooks after every
+    // navigation, but never reads the policy store (the host is the sole sink).
+    // Carry the current `eval`-gate verdicts so its re-arm honours a deny that
+    // landed after the monitor was started — headless `reinstall_monitors`
+    // re-checks the very same gate before re-injecting, so this keeps the enforce
+    // boundary identical in both modes rather than leaving browser mode to re-arm
+    // a denied monitor across a navigation.
+    request["monitor_policy"] = serde_json::json!({
+        "console": crate::policy::enforce(&webpilot::protocol::Command::ConsoleStart).is_ok(),
+        "network": crate::policy::enforce(&webpilot::protocol::Command::NetworkStart).is_ok(),
+    });
+
     // The CLI's own id only correlates this one socket's request/response, so we
     // restore it on the way back; over the multiplexed NM channel we use a
     // host-unique id that can't clash with another concurrent CLI process.

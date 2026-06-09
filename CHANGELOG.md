@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.52] - 2026-06-09
+
+### Fixed
+
+- **Browser mode now honours an `eval` deny when re-arming console/network
+  monitors across a navigation, matching headless.** The service worker re-injected
+  the MAIN-world monitor hooks after every navigation purely on the armed flag,
+  ignoring policy — so a deny that landed after `console start` kept capturing
+  across the next navigation, while headless `reinstall_monitors` re-checks the
+  `eval` gate and stops. The host now forwards the current `console`/`network`
+  policy verdicts with each command and `rearmMonitors` skips a denied injector
+  (the armed flag is kept, so re-allowing `eval` re-arms). Guarded by a deny-re-arm
+  assertion in both e2e suites.
+
 ## [0.4.51] - 2026-06-09
 
 ### Fixed

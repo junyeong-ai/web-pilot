@@ -418,6 +418,40 @@ fn headless_behavioral_flow() {
         stdout(&logs)
     );
 
+    // 3b. The `eval` gate covers monitor re-injection: a deny that lands AFTER
+    //     `console start` must stop the MAIN-world hooks from re-arming on the
+    //     next document — `reinstall_monitors` re-checks the gate (browser mode
+    //     mirrors this via host-attached verdicts). First confirm the
+    //     self-logging page IS captured while allowed, so the deny case can't
+    //     pass on a timing miss.
+    let _ = fx.run(&["console", "clear"]);
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/log")])),
+        0
+    );
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(
+        stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
+        "a self-logging page must be captured while the monitor is armed"
+    );
+    let _ = fx.run(&["console", "clear"]);
+    let deny = fx.run(&["policy", "set", "--operation", "eval", "--verdict", "deny"]);
+    assert_eq!(code(&deny), 0, "policy set eval deny: {}", stdout(&deny));
+    let _ = fx.run(&["action", "navigate", &base]);
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/log")])),
+        0,
+        "navigate is allowed (only eval was denied)"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(
+        !stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
+        "eval-deny must stop the monitor re-arming on the new document"
+    );
+    let _ = fx.run(&["policy", "clear"]);
+    // Restore the working page for the steps below (the deny test left us on /log).
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+
     // 4. A click-opened tab (`rel=noopener`, so correlation cannot rely on
     //    `window.opener`) is reported as `new_tab` and becomes the active tab —
     //    the pin follows the agent's working tab.

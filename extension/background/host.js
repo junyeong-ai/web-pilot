@@ -3,6 +3,7 @@
 
 import { applyHostConfig } from "./session.js";
 import { processCommand } from "./router.js";
+import { setMonitorPolicy } from "./state.js";
 
 const NM_HOST = "com.webpilot.host";
 const KEEPALIVE_INTERVAL = 25000;
@@ -68,7 +69,7 @@ let commandQueue = Promise.resolve();
 const QUEUE_EXEMPT = new Set(["Status", "Ping"]);
 
 function handleHostMessage(request, port) {
-  const { id, command } = request;
+  const { id, command, monitor_policy } = request;
   // The host pushes its resolved settings alongside every Pong; apply them
   // before the command-only early return below would drop the message.
   if (request.result?.type === "Config") {
@@ -80,8 +81,14 @@ function handleHostMessage(request, port) {
     processCommandWithKeepAlive(id, command, port);
     return;
   }
+  // Adopt this command's monitor verdicts INSIDE the queue, the instant before
+  // it runs — not on arrival — so a later command's verdicts can't overwrite an
+  // earlier command's before that earlier one (and its post-nav re-arm) runs.
   commandQueue = commandQueue
-    .then(() => processCommandWithKeepAlive(id, command, port))
+    .then(() => {
+      if (monitor_policy) setMonitorPolicy(monitor_policy);
+      return processCommandWithKeepAlive(id, command, port);
+    })
     .catch(() => {});
 }
 

@@ -497,6 +497,40 @@ fn browser_behavioral_flow() {
         "console monitor must record entries: {}",
         stdout(&logs)
     );
+
+    // 4c. The eval gate covers monitor RE-injection in browser mode too: a deny
+    //     landing after `console start` must stop the service worker re-arming the
+    //     MAIN-world hooks on the next document (the host attaches the verdict;
+    //     `rearmMonitors` honours it), matching headless `reinstall_monitors`.
+    //     Confirm the self-logging page IS captured while allowed first, so the
+    //     deny case can't pass on a timing miss.
+    let _ = fx.run(&["console", "clear"]);
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/log")])),
+        0
+    );
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(
+        stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
+        "a self-logging page must be captured while the monitor is armed"
+    );
+    let _ = fx.run(&["console", "clear"]);
+    let bdeny = fx.run(&["policy", "set", "--operation", "eval", "--verdict", "deny"]);
+    assert_eq!(code(&bdeny), 0, "policy set eval deny: {}", stdout(&bdeny));
+    let _ = fx.run(&["action", "navigate", &base]);
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/log")])),
+        0,
+        "navigate is allowed (only eval was denied)"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(
+        !stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
+        "eval-deny must stop the service worker re-arming the monitor"
+    );
+    let _ = fx.run(&["policy", "clear"]);
+    let _ = fx.run(&["action", "navigate", &base]);
+
     let cset = fx.run(&["cookie", "set", &base, "wp_e2e", "v1"]);
     assert_eq!(code(&cset), 0, "cookie set failed: {}", stdout(&cset));
     let clist = fx.run(&["cookie", "list", &base]);

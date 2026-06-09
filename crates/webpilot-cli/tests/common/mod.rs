@@ -41,6 +41,12 @@ pub const CSP_FRAME: &str = r#"<!doctype html><html><head><title>cspframe</title
 pub const SLOW: &str = r#"<!doctype html><html><head><title>slow-final</title></head>
 <body><h1 id="arrived">arrived</h1></body></html>"#;
 
+/// Emits a console log a beat AFTER it loads, so the message lands only if a
+/// monitor is (re)armed on the new document — the signal the
+/// eval-deny-stops-monitor-rearm assertion keys on, in both modes.
+pub const LOG: &str = r#"<!doctype html><html><head><title>log-page</title></head>
+<body><script>setTimeout(function(){console.log('postnav-monitor-marker')},200)</script></body></html>"#;
+
 const CSP_HEADER: &str = "Content-Security-Policy: script-src 'self'\r\n";
 
 /// Minimal HTTP server: serves the fixture page for `/`, the inner document for
@@ -66,6 +72,8 @@ pub fn spawn_server() -> String {
                 } else if req.starts_with("GET /slow") {
                     std::thread::sleep(std::time::Duration::from_millis(800));
                     (SLOW, "")
+                } else if req.starts_with("GET /log") {
+                    (LOG, "")
                 } else {
                     (PAGE, "")
                 };

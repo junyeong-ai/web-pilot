@@ -10,6 +10,21 @@ import { ensureBridge, sendToContent } from "./content.js";
 // buffer is at this cap, so the literal `500` in those scripts must match.
 const MONITOR_BUFFER_CAP = 500;
 
+// Latest console/network policy verdicts, pushed by the host alongside every
+// command (the service worker never reads the policy store — the host is the
+// sole sink). A denied monitor is NOT re-armed after a navigation, mirroring
+// headless `reinstall_monitors`, which re-checks `enforce(ConsoleStart /
+// NetworkStart)` before re-injecting: so an `eval` deny stops the MAIN-world
+// hooks in BOTH modes, not just headless. The armed set is kept untouched, so
+// re-allowing `eval` re-arms on the next navigation — same as the headless flag.
+let monitorPolicy = { console: true, network: true };
+function setMonitorPolicy(mp) {
+  monitorPolicy = {
+    console: mp?.console !== false,
+    network: mp?.network !== false,
+  };
+}
+
 // ── Console / network monitoring injection ─────────────────────────────────
 
 // Re-arm any ARMED console/network hooks on `tabId`'s new main document — the
@@ -21,12 +36,16 @@ const MONITOR_BUFFER_CAP = 500;
 // unless the tab is actually being monitored, so a plain navigation pays
 // nothing.
 async function rearmMonitors(tabId) {
-  if (monitoringState.console.has(tabId)) {
+  // `&& monitorPolicy.X`: re-injecting a MAIN-world hook is the same effect
+  // `console start` / `network start` are gated on (`eval`), so a deny that
+  // landed after arming must stop the re-arm too — exactly as headless
+  // `reinstall_monitors` re-checks the gate. The armed set is left intact.
+  if (monitoringState.console.has(tabId) && monitorPolicy.console) {
     try {
       await injectConsoleMonitoring(tabId);
     } catch {}
   }
-  if (monitoringState.network.has(tabId)) {
+  if (monitoringState.network.has(tabId) && monitorPolicy.network) {
     try {
       await injectNetworkMonitoring(tabId);
     } catch {}
@@ -469,4 +488,4 @@ async function handleSessionImport(rawData) {
   }
 }
 
-export { handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, injectConsoleMonitoring, injectNetworkMonitoring, rearmMonitors };
+export { handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, injectConsoleMonitoring, injectNetworkMonitoring, rearmMonitors, setMonitorPolicy };
