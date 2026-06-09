@@ -261,12 +261,13 @@ mod tests {
         // Every non-action key added to PolicyKey must round-trip through the
         // on-disk store (Display/FromStr via serde_plain).
         let s = parse(
-            r#"{"rules":{"eval":"deny","fetch":"deny","session_export":"deny","cookie_list":"deny","cookie_set":"deny","cookie_delete":"deny","dom_set":"deny","tab_close":"deny","session_import":"allow","device":"deny"}}"#,
+            r#"{"rules":{"eval":"deny","fetch":"deny","session_export":"deny","cookie_list":"deny","cookie_set":"deny","cookie_delete":"deny","dom_set":"deny","tab_close":"deny","session_import":"allow","device":"deny","context_close":"deny"}}"#,
         )
         .unwrap();
-        assert_eq!(s.rules.len(), 10);
+        assert_eq!(s.rules.len(), 11);
         // `device` (headless-only emulation gate) must resolve like any other key.
         assert_eq!(s.verdict_for(PolicyKey::Device), PolicyVerdict::Deny);
+        assert_eq!(s.verdict_for(PolicyKey::ContextClose), PolicyVerdict::Deny);
     }
 
     // `parse_and_enforce` is the host's security gate for raw socket traffic.

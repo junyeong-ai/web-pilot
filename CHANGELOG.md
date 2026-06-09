@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.91] - 2026-06-09
+
+### Fixed
+
+- **`context close` respects `policy default deny`.** Disposing a browser context
+  destroys it and every tab in it — and `context close --all` can wipe OTHER
+  agents' contexts — yet it reached CDP directly, bypassing the policy gate, while
+  the strictly-less-destructive `tab_close` was gated. A steered agent under
+  `default deny` could still nuke contexts. A new `PolicyKey::ContextClose`
+  (headless-only, like `device`) is now enforced at the command, so `default deny`
+  forbids it and `policy set --operation context_close --verdict allow` re-permits
+  it. `context list` (a read) stays ungated — completing the policy model's
+  "gate effects, not observations" rule across the headless-only commands
+  (`device`/`context close` gated; `profile`/`record`/`context list` are read-only).
+  Verified: `context close` is PolicyDenied (6) under deny, allowed when permitted;
+  `context list` stays exit 0.
+
 ## [0.4.90] - 2026-06-09
 
 ### Fixed

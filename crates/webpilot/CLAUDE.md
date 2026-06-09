@@ -18,7 +18,7 @@ No I/O — pure types and serialization.
   data. Includes `StaleSnapshot` and `VersionMismatch`.
 - `types.rs` — DOM / cookie / console / network / tab shapes; `PolicyKey` (the
   effect-based policy key — `ActionKind` ∪ {eval, fetch, dom_set, tab_close,
-  cookie_list, cookie_set, cookie_delete, session_export, session_import}, with
+  cookie_list, cookie_set, cookie_delete, session_export, session_import, device, context_close}, with
   an exhaustive `From<ActionKind>`); `PolicyVerdict`. `DomSnapshot.subframes` is
   the count of HTTP iframes outside the active frame. `DomSnapshot::to_text()`
   renders the agent-facing `[index] element` format.

@@ -88,6 +88,12 @@ async fn close_contexts(
     name: Option<String>,
     all: bool,
 ) -> Result<CommandOutput> {
+    // Disposing a context destroys it and all its tabs — and `--all` can wipe
+    // other agents' contexts. It reaches CDP directly (not via the gated
+    // `LocalTransport::send`), so gate it here, like `device`: a strictly more
+    // destructive effect than the gated `tab_close`, which `default deny` must
+    // forbid. (`context list`, a read, is not gated.)
+    crate::policy::enforce_key(webpilot::types::PolicyKey::ContextClose)?;
     let browser = local.browser();
 
     if all {

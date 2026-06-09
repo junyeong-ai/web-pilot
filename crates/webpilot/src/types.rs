@@ -128,6 +128,12 @@ pub enum PolicyKey {
     /// so it never appears on the wire `Command` surface; enforced directly at the
     /// `device` command's CDP sink.
     Device,
+    /// Disposing a browser context (`context close [--all]`): destroys the
+    /// context and every tab in it — a strictly more destructive effect than
+    /// `tab_close` (which IS gated), and `--all` can wipe OTHER agents' contexts.
+    /// A `default deny` policy must be able to forbid it. Headless-only (contexts
+    /// are headless's multi-agent mechanism); enforced at the command's sink.
+    ContextClose,
 }
 
 impl From<ActionKind> for PolicyKey {

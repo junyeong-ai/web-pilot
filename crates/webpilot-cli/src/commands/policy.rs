@@ -25,7 +25,8 @@ pub enum PolicyCommand {
     /// the `frame find` predicate), `fetch`, `dom_set`, `tab_close`,
     /// `cookie_list` (covers `cookie list` and `cookie get`), `cookie_set`,
     /// `cookie_delete`, `session_export`, `session_import`, `device` (emulation:
-    /// viewport + user-agent spoofing). `navigate` also covers `capture --url`
+    /// viewport + user-agent spoofing), `context_close` (`context close [--all]`
+    /// disposes a context and all its tabs). `navigate` also covers `capture --url`
     /// and `tab new URL`.
     Set {
         #[arg(long)]
