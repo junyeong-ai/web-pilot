@@ -84,7 +84,7 @@ impl LocalTransport {
         self.target_id = tab_id.to_string();
         *self.active_frame_id.lock().await = None;
         super::clear_persisted_active_frame(self.persisted_context_key());
-        super::write_persisted_active_tab(self.persisted_context_key(), tab_id);
+        super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
         self.rebind_page_world().await?;
         // Armed monitors follow the agent's working tab: the freshly bound
         // page has no hooks yet (idempotent no-op when nothing is armed).
@@ -223,7 +223,7 @@ impl LocalTransport {
         // clears the dead pin after that one loud failure, for recovery. Browser
         // mode gets the same effect from its sticky pin.
         if self.target_id.as_str() == tab_id {
-            super::write_persisted_active_tab(self.persisted_context_key(), tab_id);
+            super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
         }
         self.browser
             .send("Target.closeTarget", Some(json!({"targetId": tab_id})))
@@ -347,7 +347,7 @@ impl LocalTransport {
                         .await;
                 }
                 *self.active_frame_id.lock().await = Some(frame.frame_id.clone());
-                super::write_persisted_active_frame(self.persisted_context_key(), &frame.frame_id);
+                super::write_persisted_active_frame(self.persisted_context_key(), &frame.frame_id)?;
                 Ok(ResponseData::FrameSwitched {
                     success: true,
                     frame_id: Some(frame.frame_id.clone()),

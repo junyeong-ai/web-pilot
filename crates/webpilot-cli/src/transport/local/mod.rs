@@ -811,11 +811,13 @@ fn read_persisted_active_frame(browser_context_id: Option<&str>) -> Option<Strin
     serde_json::from_str::<String>(&raw).ok()
 }
 
-pub(super) fn write_persisted_active_frame(browser_context_id: Option<&str>, frame_id: &str) {
+pub(super) fn write_persisted_active_frame(
+    browser_context_id: Option<&str>,
+    frame_id: &str,
+) -> std::io::Result<()> {
     let path = active_frame_file(browser_context_id);
-    if let Ok(s) = serde_json::to_string(frame_id) {
-        let _ = dirs::atomic_write(&path, s.as_bytes());
-    }
+    let s = serde_json::to_string(frame_id).expect("a frame-id string serializes");
+    dirs::atomic_write(&path, s.as_bytes())
 }
 
 pub(super) fn clear_persisted_active_frame(browser_context_id: Option<&str>) {
@@ -835,14 +837,18 @@ pub(super) fn read_persisted_active_tab(browser_context_id: Option<&str>) -> Opt
     serde_json::from_str::<String>(&raw).ok()
 }
 
-pub(super) fn write_persisted_active_tab(browser_context_id: Option<&str>, target_id: &str) {
+pub(super) fn write_persisted_active_tab(
+    browser_context_id: Option<&str>,
+    target_id: &str,
+) -> std::io::Result<()> {
     let path = active_tab_file(browser_context_id);
-    if let Ok(s) = serde_json::to_string(target_id) {
-        // Atomic temp+rename: a concurrent process resolving the active tab
-        // (`pick_active_target`) must never read a torn/empty pin — that would
-        // parse as `None` and silently retarget the command to a different tab.
-        let _ = dirs::atomic_write(&path, s.as_bytes());
-    }
+    let s = serde_json::to_string(target_id).expect("a target-id string serializes");
+    // Atomic temp+rename: a concurrent process resolving the active tab
+    // (`pick_active_target`) must never read a torn/empty pin — that would parse
+    // as `None` and silently retarget. The error is returned, not swallowed: a
+    // failed write means the pin a `tab switch` exists to set never landed, so
+    // the next process would attach to the wrong tab — the command must say so.
+    dirs::atomic_write(&path, s.as_bytes())
 }
 
 pub(super) fn clear_persisted_active_tab(browser_context_id: Option<&str>) {
@@ -916,10 +922,12 @@ fn read_persisted_device(browser_context_id: Option<&str>) -> Option<DeviceState
     serde_json::from_str(&raw).ok()
 }
 
-pub(crate) fn write_persisted_device(browser_context_id: Option<&str>, state: &DeviceState) {
-    if let Ok(s) = serde_json::to_string(state) {
-        let _ = dirs::atomic_write(&device_state_file(browser_context_id), s.as_bytes());
-    }
+pub(crate) fn write_persisted_device(
+    browser_context_id: Option<&str>,
+    state: &DeviceState,
+) -> std::io::Result<()> {
+    let s = serde_json::to_string(state).expect("device state serializes");
+    dirs::atomic_write(&device_state_file(browser_context_id), s.as_bytes())
 }
 
 pub(crate) fn clear_persisted_device(browser_context_id: Option<&str>) {

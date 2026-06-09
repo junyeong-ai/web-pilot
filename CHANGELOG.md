@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.53] - 2026-06-09
+
+### Fixed
+
+- **A pin/frame/device persistence write that fails now fails the command, instead
+  of silently reporting success with a stale pin on disk.** `tab switch`,
+  `tab close`, `frame switch`, and `device set` exist to persist state for the
+  NEXT process (each CLI invocation re-attaches); the atomic write of that state
+  was discarded with `let _ =`, so a failed write (e.g. a full disk) left the old
+  pin in place and the next process silently attached to the wrong tab. The writes
+  now return their result and the commands propagate it — matching session export.
+  A click-opened popup adoption, which routes through `tab switch`, already treats
+  a failure as "not adopted", so it degrades cleanly.
+
 ## [0.4.52] - 2026-06-09
 
 ### Fixed

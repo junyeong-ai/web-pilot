@@ -75,7 +75,7 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
             // Persist so the override (UA especially) survives this process —
             // re-applied by every later `open`, matching the metrics that
             // already persist incidentally.
-            write_persisted_device(ctx.as_deref(), &state);
+            write_persisted_device(ctx.as_deref(), &state)?;
             Ok(CommandOutput::Data {
                 json: serde_json::json!({"success": true, "width": width, "height": height, "mobile": mobile, "user_agent": state.user_agent}),
                 human: format!("Device: {width}x{height} (mobile={mobile}, scale={scale})"),
@@ -97,7 +97,7 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
                 user_agent: Some(ua.to_string()),
             };
             state.apply(local.page()).await?;
-            write_persisted_device(ctx.as_deref(), &state);
+            write_persisted_device(ctx.as_deref(), &state)?;
             Ok(CommandOutput::Data {
                 json: serde_json::json!({"success": true, "preset": name, "width": w, "height": h}),
                 human: format!("Device: {name} ({w}x{h})"),
