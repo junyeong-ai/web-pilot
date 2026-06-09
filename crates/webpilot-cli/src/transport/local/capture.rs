@@ -156,7 +156,20 @@ impl LocalTransport {
 
         let mut ax_tree_json: Option<String> = None;
         if want_ax {
-            let r = self.page.send("Accessibility.getFullAXTree", None).await?;
+            // Scope the AX tree to the active frame, like DOM/screenshot/metadata
+            // do: with an iframe switched in, an unscoped getFullAXTree returns the
+            // ROOT document's tree while the footer/URL report the iframe — the
+            // agent would read accessibility for a frame it isn't looking at.
+            let params = self
+                .active_frame_id
+                .lock()
+                .await
+                .clone()
+                .map(|fid| json!({ "frameId": fid }));
+            let r = self
+                .page
+                .send("Accessibility.getFullAXTree", params)
+                .await?;
             ax_tree_json = Some(serde_json::to_string_pretty(&r)?);
         }
 

@@ -625,6 +625,26 @@ fn browser_behavioral_flow() {
         "eval must run in the switched frame: {}",
         stdout(&href)
     );
+    // The accessibility tree must follow the active frame (headless parity): while
+    // switched into the iframe it must describe the iframe's own controls, scoping
+    // getFullAXTree to the active frame's CDP id rather than returning the root.
+    let ax_cap = fx.run(&["capture", "--include", "accessibility"]);
+    assert_eq!(
+        code(&ax_cap),
+        0,
+        "accessibility capture inside an iframe failed: {}",
+        stdout(&ax_cap)
+    );
+    let ax_json: serde_json::Value =
+        serde_json::from_str(&stdout(&ax_cap)).expect("ax capture json");
+    let ax_path = ax_json["accessibility_path"]
+        .as_str()
+        .expect("accessibility_path");
+    let ax_tree = std::fs::read_to_string(ax_path).expect("read ax tree");
+    assert!(
+        ax_tree.contains("inner link"),
+        "AX tree while switched into the iframe must be scoped to it (carry its own 'inner link'), not the root document"
+    );
     // A click on a link that navigates ONLY the switched iframe (not the top URL)
     // must settle the ACTIVE frame's own navigation: the auto-capture lands on the
     // iframe's new document, never the pre-click page. The top URL never moves, so

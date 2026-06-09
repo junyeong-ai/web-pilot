@@ -4,6 +4,7 @@
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
 import { activeFrameId, annotationPaintMs, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
+import { resolveFrameWorld } from "./query.js";
 import { ensureBridge, sendToContent } from "./content.js";
 import { waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { rearmMonitors } from "./state.js";
@@ -158,9 +159,19 @@ async function handleCapture(command) {
       // not just the inner `nodes` array — headless serializes the full response
       // with `to_string_pretty`, so an agent parsing the tree must see the same
       // wrapper object and shape in both modes.
-      const ax = await withCdp(tabId, (tid) =>
-        cdpSend(tid, "Accessibility.getFullAXTree"),
-      );
+      const ax = await withCdp(tabId, async (tid) => {
+        // Scope the AX tree to the active frame, like the DOM/screenshot/metadata
+        // do: an unscoped getFullAXTree returns the ROOT document's tree while the
+        // footer/URL report the iframe. Resolve the active frame's CDP frameId via
+        // the same nonce path eval uses (unambiguous for same-URL siblings) and
+        // pass it so the tree matches the frame the agent is looking at.
+        let params;
+        if (activeFrameId !== 0) {
+          const resolved = await resolveFrameWorld(tid, tabId, activeFrameId, "MAIN");
+          if (resolved?.frameId) params = { frameId: resolved.frameId };
+        }
+        return cdpSend(tid, "Accessibility.getFullAXTree", params);
+      });
       result.dom = result.dom || emptyDom();
       result.dom.accessibility_tree = JSON.stringify(ax, null, 2);
     } catch (e) {

@@ -19,7 +19,11 @@ import { ensureBridge, sendToContent } from "./content.js";
 // written only in `world`, the matching context is unambiguously that world's
 // (no auxData-type guess). A cross-origin out-of-process iframe has no context
 // in the tab's session and resolves to null — the same boundary headless has.
-async function frameWorldContextId(tid, tabId, frameId, world) {
+// Resolve a switched frame's `{ contextId, frameId }` in `world`: the
+// `uniqueContextId` for evaluation, and the CDP `frameId` (from the matched
+// context's auxData) for frame-scoped CDP calls like Accessibility.getFullAXTree.
+// `frameWorldContextId` is the thin wrapper that returns only the contextId.
+async function resolveFrameWorld(tid, tabId, frameId, world) {
   const contexts = [];
   const onEvent = (source, method, params) => {
     if (source.tabId === tabId && method === "Runtime.executionContextCreated") {
@@ -67,13 +71,16 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
         // Return the uniqueContextId, not the reusable integer id: it stays
         // valid across a renderer swap and can never resolve to a different
         // context that reused the integer.
-        if (r?.result?.value === nonce) matches.push(c.uniqueId);
+        if (r?.result?.value === nonce) matches.push(c);
       }
       // Exactly one context must carry the nonce. The stamp is written only in
       // the targeted frame+world, so a second match means a same-origin page
       // copied the probe global across windows to spoof the target — refuse to
       // guess which is real rather than returning the wrong frame's context.
-      if (matches.length === 1) return matches[0];
+      if (matches.length === 1) {
+        const m = matches[0];
+        return { contextId: m.uniqueId, frameId: m.auxData?.frameId ?? null };
+      }
       if (matches.length > 1) return null;
       await sleep(25);
     }
@@ -87,6 +94,13 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
       args: [key],
     }).catch(() => {});
   }
+}
+
+// The uniqueContextId alone — what evaluation needs. `null` when the frame's
+// world can't be resolved (removed frame / cross-origin OOPIF), same boundary.
+async function frameWorldContextId(tid, tabId, frameId, world) {
+  const resolved = await resolveFrameWorld(tid, tabId, frameId, world);
+  return resolved ? resolved.contextId : null;
 }
 
 // One evaluation contract for every frame: decide the form by COMPILING
@@ -344,4 +358,4 @@ async function handleFetch(command) {
   }
 }
 
-export { cdpEval, frameWorldContextId, handleDomGet, handleDomSet, handleEval, handleFetch, handleWait };
+export { cdpEval, frameWorldContextId, handleDomGet, handleDomSet, handleEval, handleFetch, handleWait, resolveFrameWorld };

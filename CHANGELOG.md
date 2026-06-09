@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.66] - 2026-06-09
+
+### Fixed
+
+- **The accessibility tree follows the active frame.** With an iframe switched in,
+  `capture --include accessibility` returned the ROOT document's AX tree while the
+  footer/URL reported the iframe — the agent read accessibility for a frame it
+  wasn't looking at, missing the iframe's own controls. `getFullAXTree` is now
+  scoped to the active frame's CDP frame id (headless: `active_frame_id`; browser:
+  resolved through the same nonce path eval uses, unambiguous for same-URL
+  siblings), matching how DOM/screenshot/metadata already scope. Guarded in both
+  e2e suites.
+
 ## [0.4.65] - 2026-06-09
 
 ### Fixed

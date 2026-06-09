@@ -359,6 +359,27 @@ fn headless_behavioral_flow() {
         "capture inside iframe failed: {}",
         stdout(&frame_cap)
     );
+    // The accessibility tree must follow the active frame, like DOM/screenshot do:
+    // while switched into the iframe it must describe the iframe's own controls,
+    // not the root document's. (An unscoped getFullAXTree would return the root.)
+    let ax_cap = fx.run(&["capture", "--include", "accessibility"]);
+    assert_eq!(
+        code(&ax_cap),
+        0,
+        "accessibility capture inside an iframe failed: {}",
+        stdout(&ax_cap)
+    );
+    let ax_json: serde_json::Value =
+        serde_json::from_str(&stdout(&ax_cap)).expect("ax capture json");
+    let ax_path = ax_json["accessibility_path"]
+        .as_str()
+        .expect("accessibility_path");
+    let ax_tree = std::fs::read_to_string(ax_path).expect("read ax tree");
+    assert!(
+        ax_tree.contains("inner link"),
+        "AX tree while switched into the iframe must be scoped to it (carry its own 'inner link'), not the root document"
+    );
+
     let link_idx = index_of(&frame_cap, "link");
     let frame_click = fx.run(&["action", "click", &link_idx]);
     assert_eq!(
