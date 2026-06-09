@@ -27,12 +27,20 @@ impl Request {
     }
 }
 
+/// `Capture` with no `include` defaults to the DOM — the most-used capture and a
+/// sensible floor. An empty list yields a useless result (no DOM, no screenshot,
+/// no error), so a wire caller that omits the field gets the DOM, matching the
+/// CLI surface's own default.
+fn default_capture_include() -> Vec<CaptureField> {
+    vec![CaptureField::Dom]
+}
+
 /// All command kinds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Command {
     Capture {
-        #[serde(default)]
+        #[serde(default = "default_capture_include")]
         include: Vec<CaptureField>,
         #[serde(default)]
         opts: CaptureOpts,
@@ -358,4 +366,30 @@ pub enum ResponseData {
     Error {
         error: WebPilotError,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_with_no_include_defaults_to_dom() {
+        // A wire caller (raw IPC, or the host parsing a request) that omits
+        // `include` must get the DOM, never a useless empty capture.
+        let cmd: Command = serde_json::from_str(r#"{"type":"Capture"}"#).unwrap();
+        let Command::Capture { include, .. } = cmd else {
+            panic!("expected Capture, got {cmd:?}");
+        };
+        assert_eq!(include, vec![CaptureField::Dom]);
+    }
+
+    #[test]
+    fn capture_respects_an_explicit_include() {
+        let cmd: Command =
+            serde_json::from_str(r#"{"type":"Capture","include":["screenshot"]}"#).unwrap();
+        let Command::Capture { include, .. } = cmd else {
+            panic!("expected Capture, got {cmd:?}");
+        };
+        assert_eq!(include, vec![CaptureField::Screenshot]);
+    }
 }

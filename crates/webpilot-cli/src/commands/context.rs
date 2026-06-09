@@ -27,12 +27,18 @@ pub enum ContextCommand {
 
 pub async fn run(local: &mut LocalTransport, args: ContextArgs) -> Result<CommandOutput> {
     match args.command {
-        ContextCommand::List => list_contexts(),
         ContextCommand::Close { name, all } => close_contexts(local, name, all).await,
+        // `list` is resolved before a transport opens (a disk read must never
+        // launch Chrome) — see `run_headless_mode`. Kept exhaustive in case a
+        // future caller reaches `run` directly: it still needs no browser.
+        ContextCommand::List => list_contexts(),
     }
 }
 
-fn list_contexts() -> Result<CommandOutput> {
+/// Read the context store off disk. Pure filesystem I/O — no browser — so the CLI
+/// resolves `context list` through this BEFORE opening a transport, never paying
+/// a Chrome launch (or failing when Chrome is unavailable) to list contexts.
+pub fn list_contexts() -> Result<CommandOutput> {
     let mut contexts = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dirs::contexts_dir()) {
         for entry in entries.filter_map(|e| e.ok()) {

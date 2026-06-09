@@ -163,6 +163,17 @@ async fn run_headless_mode(
         _ => {}
     }
 
+    // `context list` only reads the context store off disk — resolve it before
+    // LocalTransport::open so a pure listing never launches Chrome (nor fails when
+    // Chrome is unavailable) for filesystem I/O. `context close` disposes a live
+    // CDP context and falls through to the session below.
+    if let Cmd::Context(args) = &command
+        && matches!(args.command, commands::context::ContextCommand::List)
+    {
+        output::render(commands::context::list_contexts()?, mode);
+        return Ok(());
+    }
+
     // Context-management commands operate on the context *store* at the browser
     // level — they must not resolve (and so auto-create) the `--context` they
     // were invoked with, or `context list` would create the very context it is

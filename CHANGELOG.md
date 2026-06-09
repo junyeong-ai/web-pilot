@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.62] - 2026-06-09
+
+### Fixed
+
+- **`context list` no longer launches Chrome.** Listing the multi-agent context
+  store is pure filesystem I/O, but it was classified alongside the context
+  commands that need a live session, so running it with no session cold-started
+  Chrome (or failed outright where Chrome is unavailable) just to read a directory.
+  It now resolves before any transport opens. `context close` still binds the
+  session it needs to dispose a live CDP context.
+- **A `Capture` request with no `include` defaults to the DOM.** The wire field
+  defaulted to an empty list, so a raw IPC caller (or the host parsing a bare
+  `{"type":"Capture"}`) got back an empty capture — no DOM, no screenshot, no
+  error. The wire default is now the DOM, matching the CLI surface; an explicit
+  `include` is still respected.
+
 ## [0.4.61] - 2026-06-09
 
 ### Fixed
