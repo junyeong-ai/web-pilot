@@ -289,6 +289,11 @@ pub struct ElementState {
     pub readonly: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<SelectOption>>,
+    /// The option list hit the bridge's per-element cap, so `options` is a prefix
+    /// of a longer set. Rendered as `options(N+)` so the agent never reads the
+    /// shown slice as the whole list.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub options_truncated: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -624,8 +629,9 @@ impl DomSnapshot {
                     .map(|o| o.text.as_str())
                     .unwrap_or("");
                 out.push_str(&format!(
-                    "options({}) selected=\"{}\" ",
+                    "options({}{}) selected=\"{}\" ",
                     opts.len(),
+                    if el.state.options_truncated { "+" } else { "" },
                     line_safe(sel)
                 ));
             }
@@ -775,6 +781,50 @@ mod tests {
             accessibility_tree: None,
         };
         let _ = snap.to_text(); // Must not panic
+    }
+
+    #[test]
+    fn to_text_flags_a_truncated_option_list() {
+        let make = |truncated: bool| {
+            let el = InteractiveElement {
+                index: 1,
+                tag: "select".into(),
+                id: None,
+                role: None,
+                text: String::new(),
+                semantics: ElementSemantics::default(),
+                state: ElementState {
+                    options: Some(vec![SelectOption {
+                        value: "v".into(),
+                        text: "v".into(),
+                        selected: false,
+                    }]),
+                    options_truncated: truncated,
+                    ..Default::default()
+                },
+                spatial: ElementSpatial::default(),
+            };
+            DomSnapshot {
+                elements: vec![el],
+                total_nodes: 1,
+                page_url: "x".into(),
+                page_title: "y".into(),
+                scroll: ScrollInfo::default(),
+                scroll_percent: 0,
+                extraction_ms: 0,
+                subframes: 0,
+                shadow_truncated: false,
+                text_content: None,
+                text_truncated: false,
+                accessibility_tree: None,
+            }
+            .to_text()
+        };
+        // A capped list reads as a prefix (`50+`), never as the whole set; an
+        // uncapped one stays a bare count so the marker means something.
+        assert!(make(false).contains("options(1)"));
+        assert!(!make(false).contains("options(1+)"));
+        assert!(make(true).contains("options(1+)"));
     }
 
     #[test]

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.51] - 2026-06-09
+
+### Fixed
+
+- **A `<select>` / listbox with more than 50 options now flags the cut.** The
+  bridge caps an element's option list at 50 to bound tokens, but the snapshot
+  carried no signal — so a 250-country dropdown rendered `options(50)` as if
+  complete and the agent could conclude an unlisted option did not exist. The
+  element now carries `options_truncated`, rendered as `options(50+)` and
+  serialized in JSON, matching the `text_truncated` / `shadow_truncated` markers.
+
 ## [0.4.50] - 2026-06-09
 
 ### Fixed

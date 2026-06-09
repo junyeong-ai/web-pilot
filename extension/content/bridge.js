@@ -338,29 +338,43 @@
     return null;
   }
 
+  // The option list is capped so a giant `<select>` (countries, timezones) costs
+  // bounded tokens — but `truncated` flags the cut so the agent never reads the
+  // shown slice as the whole list (the same honesty as `shadow_truncated` and the
+  // console/network caps). Returns `{ list, truncated }`, or `undefined` for a
+  // non-option element. One walk per element: the truncation flag comes from the
+  // same collected set the list is sliced from, never a second query.
+  const OPTION_CAP = 50;
   function extractOptions(el, tag) {
+    let all;
+    let mapper;
     if (tag === "select") {
-      return [...el.options]
-        .slice(0, 50)
-        .map((o) => ({ value: o.value, text: o.text, selected: o.selected }));
-    }
-    const role = el.getAttribute("role");
-    if (role === "listbox" || role === "menu" || role === "combobox") {
-      const opts = el.querySelectorAll('[role="option"], [role="menuitem"]');
-      if (opts.length > 0) {
-        return [...opts].slice(0, 50).map((o) => ({
-          // `?? clip(...)`, not `|| clip(...)`: an option with an explicit
-          // `data-value=""` (a "none"/placeholder choice) has the empty string
-          // as its real value — `||` would discard it for the visible text and
-          // mis-report what `action select` must send. `getAttribute` returns
-          // null only when the attribute is absent, which correctly falls back.
-          value: o.getAttribute("data-value") ?? clip(o.textContent.trim(), 80),
-          text: clip(o.textContent.trim(), 80),
-          selected: o.getAttribute("aria-selected") === "true",
-        }));
+      all = [...el.options];
+      mapper = (o) => ({ value: o.value, text: o.text, selected: o.selected });
+    } else {
+      const role = el.getAttribute("role");
+      if (role === "listbox" || role === "menu" || role === "combobox") {
+        const opts = el.querySelectorAll('[role="option"], [role="menuitem"]');
+        if (opts.length > 0) {
+          all = [...opts];
+          mapper = (o) => ({
+            // `?? clip(...)`, not `|| clip(...)`: an option with an explicit
+            // `data-value=""` (a "none"/placeholder choice) has the empty string
+            // as its real value — `||` would discard it for the visible text and
+            // mis-report what `action select` must send. `getAttribute` returns
+            // null only when the attribute is absent, which correctly falls back.
+            value: o.getAttribute("data-value") ?? clip(o.textContent.trim(), 80),
+            text: clip(o.textContent.trim(), 80),
+            selected: o.getAttribute("aria-selected") === "true",
+          });
+        }
       }
     }
-    return undefined;
+    if (!all) return undefined;
+    return {
+      list: all.slice(0, OPTION_CAP).map(mapper),
+      truncated: all.length > OPTION_CAP,
+    };
   }
 
   // Occlusion by multi-point hit-test. A single centre probe both over-reports
@@ -443,6 +457,7 @@
         // selector here.
         const elemId = el.id ? clip(el.id, 50) : undefined;
 
+        const optionData = extractOptions(el, tag);
         const entry = {
           index: idx++,
           tag,
@@ -468,7 +483,8 @@
           required: el.required || undefined,
           readonly: el.readOnly || undefined,
           label: resolveLabel(el),
-          options: extractOptions(el, tag),
+          options: optionData?.list,
+          options_truncated: optionData?.truncated || undefined,
           landmark: findLandmark(el),
           in_viewport:
             rect.top < innerHeight &&
