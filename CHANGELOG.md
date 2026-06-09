@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.104] - 2026-06-10
+
+### Fixed
+
+- **Browser mode: an empty storage section no longer blocks the cookie import.**
+  0.4.103 gated storage handling on field *presence*, so a present-but-empty
+  `local_storage: {}` (the common shape when the exported page had no storage)
+  triggered the no-page guard on a non-http pin and returned before importing the
+  cookies — even though cookies are browser-global and need no page. Storage
+  shape is now validated up front (a non-object is `InvalidArgument` on any pin,
+  page-independently), and the no-page guard fires only for *non-empty* storage
+  that actually needs a page to import. An empty or absent storage section is a
+  no-op that never blocks the cookies.
+- **Browser mode: `session import` keeps a cookie's `expiration: 0`.** The
+  expiry was assigned with `c.expiration || undefined`, so a legitimate `0` (the
+  epoch — an already-expired cookie) was dropped and the cookie was imported as a
+  session cookie instead, where headless forwards `expires: 0` and lets it
+  expire. The zero is now preserved (`== null` guard), so an expired cookie
+  expires identically in both modes.
+
 ## [0.4.103] - 2026-06-10
 
 ### Fixed

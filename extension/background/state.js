@@ -483,17 +483,24 @@ async function handleSessionImport(rawData) {
     }
     const cookies = data.cookies || [];
     const cookiesTotal = cookies.length;
-    // Web Storage import needs an http page to run in. If the file carries
-    // storage but no such page is active (e.g. a chrome:// pin), fail up front —
-    // don't import the cookies and then silently drop the storage. The NoPage
-    // sibling of session export's own guard.
-    //
-    // Gate on PRESENCE (`hasOwn`), not non-emptiness: a present but malformed
-    // value like `"local_storage":1` has no own keys, so an `Object.keys` gate
-    // would skip the bridge and report success while silently dropping it —
-    // where headless forwards any present field to the bridge, which rejects a
-    // non-object. Forwarding it below lets that same validator run in this mode.
-    const hasStorage = Object.hasOwn(data, "local_storage") || Object.hasOwn(data, "session_storage");
+    // A present `local_storage`/`session_storage` must be a plain object or null
+    // — the same shape the bridge requires, validated here so a non-object is
+    // rejected up front on ANY pin (the bridge needs an http page to run; this
+    // check does not) rather than silently dropped. Fail before importing the
+    // cookies, so a malformed file never half-applies.
+    for (const key of ["local_storage", "session_storage"]) {
+      const value = data[key];
+      if (Object.hasOwn(data, key) && value !== null && (typeof value !== "object" || Array.isArray(value))) {
+        return { type: "SessionResult", success: false, error: err("InvalidArgument", `session \`${key}\` must be an object`) };
+      }
+    }
+    // Only NON-EMPTY storage carries data to import, and only that needs an http
+    // page to run the bridge in; an empty, null, or absent field is a no-op.
+    // Gating on actual data (not mere presence) keeps an empty storage section
+    // from blocking the cookie import — cookies are browser-global and need no
+    // page — when the pin is a non-http page.
+    const hasStorage = Object.keys(data.local_storage || {}).length > 0
+      || Object.keys(data.session_storage || {}).length > 0;
     const tab = await resolveActiveTab();
     if (hasStorage && !tab) {
       return { type: "SessionResult", success: false, error: noPageErr() };
@@ -534,7 +541,11 @@ async function handleSessionImport(rawData) {
           ...(c.host_only ? {} : { domain: c.domain }),
           secure: c.secure, httpOnly: c.http_only,
           sameSite: chromeSameSite(c.same_site),
-          expirationDate: c.expiration || undefined,
+          // `== null`, not `|| undefined`: a legitimate `expiration: 0` (the
+          // epoch, i.e. already expired) is a real expiry headless forwards as
+          // `expires: 0`, not a session cookie — `|| undefined` would drop the
+          // zero and keep the cookie instead of expiring it.
+          expirationDate: c.expiration == null ? undefined : c.expiration,
         });
       } catch {
         cookiesFailed++;
@@ -546,12 +557,11 @@ async function handleSessionImport(rawData) {
       await ensureBridge(tab.id, activeFrameId);
       const r = await sendToContent(tab.id, {
         type: "importStorage",
-        // Forward the ACTUAL present value — not `|| {}`, which would coerce a
-        // falsy non-object like `""` or `0` into `{}` and mask it — so the bridge
-        // validates the shape exactly as headless does. An absent field is `{}`
-        // (a no-op), matching headless's `unwrap_or_else(|| json!({}))`.
-        localStorage: Object.hasOwn(data, "local_storage") ? data.local_storage : {},
-        sessionStorage: Object.hasOwn(data, "session_storage") ? data.session_storage : {},
+        // Shape is validated above; an absent/empty field is `{}` (a no-op),
+        // matching headless's `unwrap_or_else(|| json!({}))`. The bridge then
+        // validates the values (must be strings) as it imports.
+        localStorage: data.local_storage || {},
+        sessionStorage: data.session_storage || {},
       }, activeFrameId);
       if (r && r.success === false) {
         return { type: "SessionResult", success: false, error: r.error || otherErr("storage import failed") };
