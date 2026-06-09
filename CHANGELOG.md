@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.70] - 2026-06-09
+
+### Fixed
+
+- **The console/network monitor buffer cap is one source, so eviction and the
+  `truncated` flag cannot drift.** The page-side ring-buffer eviction hard-coded
+  `500` while the read path that sets `truncated` used the named cap constant — a
+  latent split where raising the constant would evict at 500 yet report the buffer
+  complete, hiding the silent drops from the agent. Both are now derived from the
+  single cap: browser passes it into the injected monitor as a `chrome.scripting`
+  argument; headless substitutes it into the install script. No literal `500`
+  remains in either eviction path.
+
 ## [0.4.69] - 2026-06-09
 
 ### Fixed

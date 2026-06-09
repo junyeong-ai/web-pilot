@@ -56,7 +56,8 @@ async function injectConsoleMonitoring(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId, frameIds: [0] },
     world: "MAIN",
-    func: () => {
+    args: [MONITOR_BUFFER_CAP],
+    func: (cap) => {
       // Gating on `__webpilot_console` alone fails after `console clear` (an
       // empty array is truthy, so the patch wouldn't reinstall) and double-wraps
       // if the buffer is cleared out of band. A separate sentinel keeps `start`
@@ -72,7 +73,7 @@ async function injectConsoleMonitoring(tabId) {
             message: args.map((a) => { try { return String(a); } catch { return "[object]"; } }).join(" "),
             timestamp: Date.now(),
           });
-          if (window.__webpilot_console.length > 500) window.__webpilot_console.shift();
+          if (window.__webpilot_console.length > cap) window.__webpilot_console.shift();
           orig[m].apply(console, args);
         };
       });
@@ -84,7 +85,8 @@ async function injectNetworkMonitoring(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId, frameIds: [0] },
     world: "MAIN",
-    func: () => {
+    args: [MONITOR_BUFFER_CAP],
+    func: (cap) => {
       if (window.__webpilot_network_active) return;
       window.__webpilot_network_active = true;
       window.__webpilot_network = [];
@@ -103,7 +105,7 @@ async function injectNetworkMonitoring(tabId) {
         // status/error/duration on completion by mutating this same entry.
         const entry = { type: "fetch", url, method, duration_ms: 0, timestamp: Date.now() };
         window.__webpilot_network.push(entry);
-        if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+        if (window.__webpilot_network.length > cap) window.__webpilot_network.shift();
         return origFetch.apply(this, args).then((response) => {
           entry.status = response.status;
           entry.duration_ms = Math.round(performance.now() - t0);
@@ -138,7 +140,7 @@ async function injectNetworkMonitoring(tabId) {
         // so an in-flight XHR is visible to a read, like fetch.
         const entry = { type: "xhr", url: meta.url || "", method: meta.method || "GET", duration_ms: 0, timestamp: Date.now() };
         window.__webpilot_network.push(entry);
-        if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+        if (window.__webpilot_network.length > cap) window.__webpilot_network.shift();
         // status===0 covers abort, timeout AND network/CORS failure alike, so
         // read the actual terminal event rather than labelling every one a
         // "Network error" — a request the page itself cancelled is not one.

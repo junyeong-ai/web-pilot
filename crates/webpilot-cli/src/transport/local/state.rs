@@ -68,7 +68,7 @@ impl LocalTransport {
     // ── Console / network monitoring ─────────────────────────────────────
 
     pub(super) async fn do_console_start(&self) -> Result<ResponseData> {
-        self.page.evaluate(CONSOLE_INSTALL_JS).await?;
+        self.page.evaluate(&with_cap(CONSOLE_INSTALL_JS)).await?;
         self.console_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
         super::persist_monitor_armed(super::Monitor::Console, self.persisted_context_key())?;
@@ -128,7 +128,7 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_network_start(&self) -> Result<ResponseData> {
-        self.page.evaluate(NETWORK_INSTALL_JS).await?;
+        self.page.evaluate(&with_cap(NETWORK_INSTALL_JS)).await?;
         self.network_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
         super::persist_monitor_armed(super::Monitor::Network, self.persisted_context_key())?;
@@ -147,12 +147,12 @@ impl LocalTransport {
         if self.console_monitoring.load(Acquire)
             && crate::policy::enforce(&Command::ConsoleStart).is_ok()
         {
-            let _ = self.page.evaluate(CONSOLE_INSTALL_JS).await;
+            let _ = self.page.evaluate(&with_cap(CONSOLE_INSTALL_JS)).await;
         }
         if self.network_monitoring.load(Acquire)
             && crate::policy::enforce(&Command::NetworkStart).is_ok()
         {
-            let _ = self.page.evaluate(NETWORK_INSTALL_JS).await;
+            let _ = self.page.evaluate(&with_cap(NETWORK_INSTALL_JS)).await;
         }
     }
 
@@ -408,9 +408,17 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
 }
 
 /// Max entries kept in each MAIN-world monitor ring buffer. The install scripts
-/// below evict the oldest past this; a read reports `truncated` when the buffer
-/// is at this cap, so the literal `500` in those scripts must match this value.
+/// below evict the oldest past this (their `$CAP` placeholder), and a read reports
+/// `truncated` at this cap — one source, so eviction and the flag cannot drift.
 const MONITOR_BUFFER_CAP: usize = 500;
+
+/// Substitute the ring-buffer cap into a monitor install script. The page-side
+/// eviction (`> $CAP`) and the Rust-side `truncated` flag both derive from
+/// `MONITOR_BUFFER_CAP` through this, so changing the cap can never leave them
+/// disagreeing (which would tell an agent the buffer is complete after silent drops).
+fn with_cap(install_js: &str) -> String {
+    install_js.replace("$CAP", &MONITOR_BUFFER_CAP.to_string())
+}
 
 const CONSOLE_INSTALL_JS: &str = r#"
 // Always (re-)attach the recorder. Gating on `window.__webpilot_console`
@@ -430,7 +438,7 @@ if (!window.__webpilot_console_patched) {
                 message: args.map(a => { try { return String(a); } catch { return "[object]"; } }).join(" "),
                 timestamp: Date.now(),
             });
-            if (window.__webpilot_console.length > 500) window.__webpilot_console.shift();
+            if (window.__webpilot_console.length > $CAP) window.__webpilot_console.shift();
             orig[m].apply(console, args);
         };
     });
@@ -456,7 +464,7 @@ if (!window.__webpilot_network_active) {
         // slow request sees it; fill in on completion by mutating this entry.
         const entry = { type: "fetch", url, method, duration_ms: 0, timestamp: Date.now() };
         window.__webpilot_network.push(entry);
-        if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+        if (window.__webpilot_network.length > $CAP) window.__webpilot_network.shift();
         return origFetch.apply(this, args).then(response => {
             entry.status = response.status;
             entry.duration_ms = Math.round(performance.now() - t0);
@@ -486,7 +494,7 @@ if (!window.__webpilot_network_active) {
         // Record in-flight at send (no status, duration 0), updated on loadend.
         const entry = { type: "xhr", url: meta.url || "", method: meta.method || "GET", duration_ms: 0, timestamp: Date.now() };
         window.__webpilot_network.push(entry);
-        if (window.__webpilot_network.length > 500) window.__webpilot_network.shift();
+        if (window.__webpilot_network.length > $CAP) window.__webpilot_network.shift();
         // status===0 covers abort, timeout AND network/CORS failure alike, so
         // read the actual terminal event instead of labelling every one a
         // "Network error" — an aborted request the page itself cancelled is not a
