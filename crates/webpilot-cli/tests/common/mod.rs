@@ -41,6 +41,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 pub const FRAME: &str = r##"<!doctype html><html><head><title>frame</title></head>
 <body><a id="link" href="#">inner link</a>
 <a id="framenav" href="/framed2">go framed2</a>
+<a id="topnav" target="_top" href="/second">go top</a>
 <iframe src="/nested"></iframe></body></html>"##;
 
 /// An HTTP iframe nested INSIDE `/frame`. Switching into `/frame` and capturing

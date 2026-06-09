@@ -21,7 +21,14 @@ const SESSION_SCHEMA_VERSION = 1;
 // NetworkStart)` before re-injecting: so an `eval` deny stops the MAIN-world
 // hooks in BOTH modes, not just headless. The armed set is kept untouched, so
 // re-allowing `eval` re-arms on the next navigation — same as the headless flag.
-let monitorPolicy = { console: true, network: true };
+//
+// Default DENY (fail-closed): an MV3 service worker is evicted when idle, and a
+// navigation's `onCompleted` can fire after the relaunch but before the host has
+// pushed a fresh verdict. Defaulting to allow would re-inject the MAIN-world
+// hooks during that warmup window even under an `eval` deny — a fail-OPEN gap
+// headless never has (it reads the live store on every re-install). Re-arm stays
+// blocked until the first command carries the real verdict.
+let monitorPolicy = { console: false, network: false };
 function setMonitorPolicy(mp) {
   monitorPolicy = {
     console: mp?.console !== false,

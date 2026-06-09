@@ -602,54 +602,77 @@
   // navigation. The frame may be the top frame or a switched iframe; the settle
   // uses it to catch an iframe-internal navigation the top-frame `navigates`
   // signal can't see.
-  function frameNavigates(el, notCanceled) {
-    if (!notCanceled) return false;
+  // The ancestor a (non-cancelled) navigating click targets — "_self" (this
+  // frame), "_top", or "_parent" — or null when it loads no document in an
+  // existing frame (a popup / named or `_blank` target, a javascript:/mailto:
+  // url, or a fragment-only same-document change). Shared by both nav hints so
+  // they can never disagree about WHETHER — and WHERE — a click navigates.
+  function navTargetKeyword(el, notCanceled) {
+    if (!notCanceled) return null;
     const a = el.closest("a[href]");
     if (a) {
       const target = (a.target || "").trim().toLowerCase();
       if (target && target !== "_self" && target !== "_top" && target !== "_parent") {
-        return false; // opens a new context (a popup), not a same-frame load
+        return null; // opens a new context (a popup), not an existing frame
       }
       let dest, cur;
       try {
         dest = new URL(a.href, location.href);
         cur = new URL(location.href);
       } catch {
-        return false;
+        return null;
       }
       if (dest.protocol !== "http:" && dest.protocol !== "https:" && dest.protocol !== "file:") {
-        return false; // javascript:/mailto:/tel:/… never load a document
+        return null; // javascript:/mailto:/tel:/… never load a document
       }
       // A change confined to the fragment is a same-document nav (no load event):
       // hinting it would burn the settle's whole PROBE waiting for a commit that
       // never comes.
       if (dest.origin === cur.origin && dest.pathname === cur.pathname && dest.search === cur.search) {
-        return false;
+        return null;
       }
-      return true;
+      return target || "_self";
     }
     // A submit control submits its associated form on click → a new document
-    // loads in this frame, but it carries no `href` so the link path above misses
-    // it. (A form submit always navigates — even to the same URL — so the link's
-    // fragment-only exclusion does not apply.) `type=button`/`reset` don't submit;
-    // a `<button>` with no type defaults to submit.
+    // loads, but it carries no `href` so the link path above misses it. (A form
+    // submit always navigates — even to the same URL — so the link's fragment-only
+    // exclusion does not apply.) `type=button`/`reset` don't submit; a `<button>`
+    // with no type defaults to submit.
     const btn = el.closest('button, input[type="submit"], input[type="image"]');
     if (btn && btn.form && (btn.tagName !== "BUTTON" || btn.type === "submit")) {
       const t = (btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "")
         .trim()
         .toLowerCase();
       if (t && t !== "_self" && t !== "_top" && t !== "_parent") {
-        return false; // submits into a new context (a popup), not this frame
+        return null; // submits into a new context (a popup), not an existing frame
       }
-      return true;
+      return t || "_self";
     }
-    return false;
+    return null;
   }
 
-  // `navigates` is the TOP-frame subset of `frameNavigates`: only a top-level
-  // navigation is `url_changed`, the signal driving the main-frame settle.
+  // Does the navigation land in the ACTIVE frame (where the bridge runs)? Drives
+  // the active-frame settle. `_self` always lands here; `_top`/`_parent` resolve
+  // to an ancestor and land here only when THIS frame is the top (then they are
+  // itself). A nav into an ancestor is not a current-frame load.
+  function frameNavigates(el, notCanceled) {
+    const t = navTargetKeyword(el, notCanceled);
+    if (t === null) return false;
+    if (t === "_self") return true;
+    return window.top === window; // _top / _parent of the top frame IS the top
+  }
+
+  // Does the navigation load a new TOP document? — the `url_changed` signal
+  // driving the main-frame settle. `_top` always loads the top; `_self` only from
+  // the top frame; `_parent` only from a direct child of the top. A `_top` link
+  // clicked inside a switched iframe IS a top navigation — the active frame does
+  // not move — so this hint must fire for it, not `frameNavigates`.
   function clickNavigates(el, notCanceled) {
-    return window.top === window && frameNavigates(el, notCanceled);
+    const t = navTargetKeyword(el, notCanceled);
+    if (t === null) return false;
+    if (t === "_top") return true;
+    if (t === "_parent") return window.parent === window.top;
+    return window.top === window; // _self
   }
 
   function reliableClick(el) {

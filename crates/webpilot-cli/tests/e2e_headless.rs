@@ -533,6 +533,42 @@ fn headless_behavioral_flow() {
         stdout(&annotate_in_frame)
     );
 
+    // 2h-top. A `target="_top"` link clicked INSIDE the switched iframe navigates
+    //         the TOP frame, not the active iframe — the bridge must report it as a
+    //         top navigation (`navigates`, driving `url_changed` + the main settle),
+    //         never a current-frame nav. Pre-fix the iframe-scoped hint mis-classed
+    //         it (`navigates:false`, `frame_navigates:true`), so the click returned
+    //         success with no `url_changed` and waited the wrong frame. The click
+    //         must land the TOP on /second.
+    let top_cap = fx.run(&["capture", "--include", "dom"]);
+    let topnav_idx = index_of(&top_cap, "topnav");
+    let topnav_click = fx.run(&["action", "click", &topnav_idx]);
+    assert_eq!(
+        code(&topnav_click),
+        0,
+        "_top link click inside an iframe failed: {}",
+        stdout(&topnav_click)
+    );
+    let topnav_json: serde_json::Value =
+        serde_json::from_str(&stdout(&topnav_click)).expect("topnav click json");
+    assert!(
+        topnav_json["url_changed"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("/second")),
+        "a _top link clicked inside a switched iframe must navigate the TOP frame \
+         and report url_changed=/second, not settle the active frame: {}",
+        stdout(&topnav_click)
+    );
+    // Restore: the _top nav left the top on /second with no iframe — return to base
+    // and re-enter /frame so the iframe-internal nav test below runs in context.
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+    let _ = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(
+        code(&fx.run(&["frame", "url", "/frame"])),
+        0,
+        "re-enter /frame after the _top nav"
+    );
+
     // 2i. A click on a link that navigates ONLY the switched iframe (not the top
     //     URL) must settle the ACTIVE frame's own navigation: the auto-capture
     //     lands on the iframe's new document, never the pre-click one. The top

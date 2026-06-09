@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.110] - 2026-06-10
+
+### Fixed
+
+- **A `target="_top"` (or `_parent`) link/form clicked inside a switched iframe is
+  now classified as the top navigation it is, in both modes.** The bridge's two
+  nav hints disagreed: `frameNavigates` treated `_top`/`_parent` as a same-frame
+  load while `clickNavigates` only fired in the top window — so a `_top` click in
+  an iframe reported `navigates:false`, `frame_navigates:true`, and the settle
+  waited the wrong (active) frame, returning success with no `url_changed`. Both
+  hints now derive from one `navTargetKeyword` helper that resolves which ancestor
+  the click targets, so they can never disagree about whether — and where — a
+  click navigates.
+- **Page text (`capture --include text`) can no longer inject a fake `[index]`
+  action row.** It was the one page-controlled string rendered into the
+  agent-facing snapshot without `line_safe`, so a crafted body containing
+  `\n[7] button "Pay"` (or a `\r` cursor-return) surfaced as a forged DOM index
+  line. Each line is now indented (no leading `[` at column 0) and `line_safe`d,
+  while staying multi-line.
+- **Browser-mode monitor re-arm now fails closed on a service-worker restart.**
+  `monitorPolicy` defaulted to allow, so a navigation's `onCompleted` firing after
+  an MV3 relaunch but before the host pushed a fresh verdict would re-inject the
+  MAIN-world console/network hooks even under an `eval` deny. It now defaults to
+  deny — re-arm stays blocked until the first command carries the real verdict,
+  matching headless, which reads the live policy store on every re-install.
+
 ## [0.4.109] - 2026-06-10
 
 ### Fixed
