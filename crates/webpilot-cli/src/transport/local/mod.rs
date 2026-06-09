@@ -54,6 +54,13 @@ const BRIDGE_JS: &str = include_str!("../../../../../extension/content/bridge.js
 /// monitors stay in the MAIN world, where they belong.
 const BRIDGE_WORLD: &str = "webpilot_bridge";
 
+/// Max CDP frame-tree depth any recursive walk descends. The tree is
+/// browser-supplied, and Chrome caps real nesting far below this, so a depth
+/// limit well above any genuine page lets a pathological or corrupted tree
+/// degrade (a shorter list / "not found") instead of overflowing the stack. One
+/// source for every frame walk in this module and its siblings.
+pub(super) const MAX_FRAME_DEPTH: u32 = 256;
+
 pub struct LocalTransport {
     pub(crate) browser: CdpClient,
     pub(crate) page: CdpClient,
@@ -687,15 +694,18 @@ impl LocalTransport {
         let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
             return true;
         };
-        fn contains(node: &Value, fid: &str) -> bool {
+        fn contains(node: &Value, fid: &str, depth: u32) -> bool {
+            if depth > MAX_FRAME_DEPTH {
+                return false;
+            }
             node.pointer("/frame/id").and_then(Value::as_str) == Some(fid)
                 || node
                     .get("childFrames")
                     .and_then(Value::as_array)
-                    .is_some_and(|kids| kids.iter().any(|k| contains(k, fid)))
+                    .is_some_and(|kids| kids.iter().any(|k| contains(k, fid, depth + 1)))
         }
         tree.get("frameTree")
-            .is_some_and(|root| contains(root, &fid))
+            .is_some_and(|root| contains(root, &fid, 0))
     }
 
     /// `(target_id, url)` of the page WebPilot is bound to — the target it just
@@ -1075,7 +1085,10 @@ async fn frame_exists(page: &CdpClient, frame_id: &str) -> bool {
     let Ok(tree) = page.send("Page.getFrameTree", None).await else {
         return false;
     };
-    fn walk(node: &Value, target: &str) -> bool {
+    fn walk(node: &Value, target: &str, depth: u32) -> bool {
+        if depth > MAX_FRAME_DEPTH {
+            return false;
+        }
         if node
             .get("frame")
             .and_then(|f| f.get("id"))
@@ -1086,7 +1099,7 @@ async fn frame_exists(page: &CdpClient, frame_id: &str) -> bool {
         }
         if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
             for child in children {
-                if walk(child, target) {
+                if walk(child, target, depth + 1) {
                     return true;
                 }
             }
@@ -1094,7 +1107,7 @@ async fn frame_exists(page: &CdpClient, frame_id: &str) -> bool {
         false
     }
     tree.get("frameTree")
-        .map(|t| walk(t, frame_id))
+        .map(|t| walk(t, frame_id, 0))
         .unwrap_or(false)
 }
 

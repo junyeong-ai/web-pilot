@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.83] - 2026-06-09
+
+### Fixed
+
+- **Every CDP frame-tree walk is depth-bounded from one shared limit.** A
+  systematic audit after the per-walk fixes found two more unbounded recursions —
+  `frame_exists`'s `walk` and `active_frame_still_present`'s `contains` — that could
+  overflow the stack on a pathological or corrupted browser-supplied tree. All five
+  frame walks (`find`, `count_http`, `collect_frames`, `contains`, `walk`) now
+  derive their cap from a single `MAX_FRAME_DEPTH` in the module (replacing three
+  scattered copies), so the bound can't drift and no walk is left unguarded.
+
 ## [0.4.82] - 2026-06-09
 
 ### Fixed

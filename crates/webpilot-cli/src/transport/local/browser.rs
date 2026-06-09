@@ -419,13 +419,8 @@ impl LocalTransport {
 
 // ── Frame-tree walking helper ────────────────────────────────────────────
 
-/// Max frame-tree depth to recurse, matching `count_http_subframes`. The tree is
-/// browser-supplied, so a pathological (or corrupted) depth must degrade to a
-/// shorter frame list, never overflow the stack.
-const MAX_FRAME_DEPTH: u32 = 256;
-
 fn collect_frames(node: &Value, depth: u32, out: &mut Vec<FrameInfo>) {
-    if depth > MAX_FRAME_DEPTH {
+    if depth > super::MAX_FRAME_DEPTH {
         return;
     }
     if let Some(frame) = node.get("frame") {

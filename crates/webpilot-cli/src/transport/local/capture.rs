@@ -251,12 +251,6 @@ impl LocalTransport {
         let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
             return 0;
         };
-        // Bound the recursion. A frame tree is acyclic and Chrome caps real
-        // nesting far below this, but the structure is browser-supplied, so a
-        // depth limit well above any genuine page keeps a pathological tree from
-        // overflowing the stack — it degrades to an undercount, never a crash.
-        const MAX_FRAME_DEPTH: u32 = 256;
-
         // The node whose `/frame/id` matches `fid`, anywhere in the tree. Bounded
         // by the same depth cap as the counting walk: the tree is browser-supplied,
         // so a pathological (or corrupted) depth must degrade to "not found", never
@@ -266,7 +260,7 @@ impl LocalTransport {
             fid: &str,
             depth: u32,
         ) -> Option<&'a serde_json::Value> {
-            if depth > MAX_FRAME_DEPTH {
+            if depth > super::MAX_FRAME_DEPTH {
                 return None;
             }
             if node.pointer("/frame/id").and_then(|v| v.as_str()) == Some(fid) {
@@ -278,7 +272,7 @@ impl LocalTransport {
         }
         // Count this node and its descendants that are HTTP frames.
         fn count_http(node: &serde_json::Value, depth: u32, count: &mut u32) {
-            if depth > MAX_FRAME_DEPTH {
+            if depth > super::MAX_FRAME_DEPTH {
                 return;
             }
             if node
