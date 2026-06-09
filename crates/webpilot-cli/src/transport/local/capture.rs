@@ -257,14 +257,24 @@ impl LocalTransport {
         // overflowing the stack — it degrades to an undercount, never a crash.
         const MAX_FRAME_DEPTH: u32 = 256;
 
-        // The node whose `/frame/id` matches `fid`, anywhere in the tree.
-        fn find<'a>(node: &'a serde_json::Value, fid: &str) -> Option<&'a serde_json::Value> {
+        // The node whose `/frame/id` matches `fid`, anywhere in the tree. Bounded
+        // by the same depth cap as the counting walk: the tree is browser-supplied,
+        // so a pathological (or corrupted) depth must degrade to "not found", never
+        // overflow the stack.
+        fn find<'a>(
+            node: &'a serde_json::Value,
+            fid: &str,
+            depth: u32,
+        ) -> Option<&'a serde_json::Value> {
+            if depth > MAX_FRAME_DEPTH {
+                return None;
+            }
             if node.pointer("/frame/id").and_then(|v| v.as_str()) == Some(fid) {
                 return Some(node);
             }
             node.get("childFrames")
                 .and_then(|v| v.as_array())
-                .and_then(|kids| kids.iter().find_map(|k| find(k, fid)))
+                .and_then(|kids| kids.iter().find_map(|k| find(k, fid, depth + 1)))
         }
         // Count this node and its descendants that are HTTP frames.
         fn count_http(node: &serde_json::Value, depth: u32, count: &mut u32) {
@@ -293,7 +303,7 @@ impl LocalTransport {
         // subtree root is the frame the capture already shows.
         let active = self.active_frame_id.lock().await.clone();
         let subtree = match &active {
-            Some(fid) => find(root, fid),
+            Some(fid) => find(root, fid, 0),
             None => Some(root),
         };
         let mut count = 0;

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.79] - 2026-06-09
+
+### Fixed
+
+- **The active-frame lookup in the subframe count is depth-bounded.** The `find`
+  helper that locates the active frame's node in the CDP frame tree (added in
+  0.4.77) recursed without the depth cap its sibling counting walk already had — a
+  pathological or corrupted browser-supplied tree could overflow the stack. It now
+  degrades to "not found" past the same `MAX_FRAME_DEPTH`, never a crash.
+
 ## [0.4.78] - 2026-06-09
 
 ### Changed
