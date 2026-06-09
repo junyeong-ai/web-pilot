@@ -1064,6 +1064,31 @@ fn headless_behavioral_flow() {
         "a newer (even non-integer) schema version must be rejected: {}",
         stdout(&ns)
     );
+    // `session import` is ATOMIC across cookies and storage: a non-string
+    // local_storage VALUE (Web Storage holds only strings) is rejected up front,
+    // BEFORE any cookie is applied — so a malformed file never leaves cookies
+    // mutated behind a storage reject. Import a valid host-only canary cookie
+    // alongside a numeric storage value; the import must fail (exit 7) AND the
+    // canary must not appear in the cookie store. (Pre-fix the cookie loop ran
+    // first, so the canary leaked despite the error.)
+    let atomic_session = home.join("atomic-session.json");
+    std::fs::write(
+        &atomic_session,
+        br#"{"version":1,"cookies":[{"name":"atomic_canary","value":"x","domain":"127.0.0.1","path":"/","same_site":"lax","host_only":true}],"local_storage":{"k":1}}"#,
+    )
+    .expect("write atomic session fixture");
+    let asy = fx.run(&["session", "import", atomic_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&asy),
+        7,
+        "a non-string storage value must reject the whole import (exit 7): {}",
+        stdout(&asy)
+    );
+    assert!(
+        !stdout(&fx.run(&["cookie", "list", &base])).contains("atomic_canary"),
+        "session import must NOT apply cookies when storage validation fails (atomicity): {}",
+        stdout(&fx.run(&["cookie", "list", &base]))
+    );
 
     // The `*`-new marker is suppressed for a fresh DOCUMENT (no baseline), but a
     // same-document `pushState`/hash change keeps the baseline — so an element it

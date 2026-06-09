@@ -13,30 +13,16 @@ import { rearmMonitors } from "./state.js";
 // watch must be registered before the navigation is issued.
 
 function watchMainFrameCommit(tabId) {
-  const watch = {
-    started: false,
-    committed: false,
-    crossDocument: false,
-    documentId: null,
-    error: null,
-    dispose: () => {},
+  const watch = { started: false, committed: false, documentId: null, error: null, dispose: () => {} };
+  const listener = (d) => {
+    if (d.tabId === tabId && d.frameId === 0) {
+      watch.committed = true;
+      // The committed document's identity — the equivalent of the headless
+      // loaderId. A redirect chain updates it to the latest commit, which is
+      // the document worth settling on.
+      watch.documentId = d.documentId ?? null;
+    }
   };
-  const mark = (d, crossDocument) => {
-    if (d.tabId !== tabId || d.frameId !== 0) return;
-    watch.committed = true;
-    // The committed document's identity — the equivalent of the headless
-    // loaderId. A redirect chain updates it to the latest commit, which is
-    // the document worth settling on.
-    watch.documentId = d.documentId ?? null;
-    // onCommitted is a NEW document — the headless "loaderId is Some" case, so
-    // the frame tree is replaced. Same-document navigations (pushState history
-    // traversal, fragment jumps) leave the document AND its frames intact, so a
-    // frame the agent switched into survives them (headless returns early for
-    // exactly this case without clearing the active frame).
-    if (crossDocument) watch.crossDocument = true;
-  };
-  const onCommitted = (d) => mark(d, true);
-  const onSameDocument = (d) => mark(d, false);
   // A main-frame navigation that has BEGUN but not yet committed — the headless
   // `frameStartedLoading` signal. A click whose handler sets `location.href`
   // fires this before any commit, so an action that triggered a navigation is
@@ -51,9 +37,15 @@ function watchMainFrameCommit(tabId) {
   const errorListener = (d) => {
     if (d.tabId === tabId && d.frameId === 0) watch.error = d.error || "navigation error";
   };
-  chrome.webNavigation.onCommitted.addListener(onCommitted);
-  chrome.webNavigation.onHistoryStateUpdated.addListener(onSameDocument);
-  chrome.webNavigation.onReferenceFragmentUpdated.addListener(onSameDocument);
+  // Same-document navigations (pushState history traversal, fragment jumps)
+  // commit via their own events, never onCommitted — all three together make
+  // every navigation kind observable, including one whose URL doesn't move.
+  const events = [
+    chrome.webNavigation.onCommitted,
+    chrome.webNavigation.onHistoryStateUpdated,
+    chrome.webNavigation.onReferenceFragmentUpdated,
+  ];
+  events.forEach((ev) => ev.addListener(listener));
   chrome.webNavigation.onBeforeNavigate.addListener(startedListener);
   chrome.webNavigation.onErrorOccurred.addListener(errorListener);
   // Self-disposing and idempotent: callers register the watch BEFORE issuing
@@ -67,9 +59,7 @@ function watchMainFrameCommit(tabId) {
     if (disposed) return;
     disposed = true;
     clearTimeout(timer);
-    chrome.webNavigation.onCommitted.removeListener(onCommitted);
-    chrome.webNavigation.onHistoryStateUpdated.removeListener(onSameDocument);
-    chrome.webNavigation.onReferenceFragmentUpdated.removeListener(onSameDocument);
+    events.forEach((ev) => ev.removeListener(listener));
     chrome.webNavigation.onBeforeNavigate.removeListener(startedListener);
     chrome.webNavigation.onErrorOccurred.removeListener(errorListener);
   };
@@ -270,10 +260,17 @@ async function navigateBoundTab(url) {
   const existing = await resolveActiveTab();
   let tabId;
   let beforeUrl = "";
+  let beforeDocId = null;
   let watch;
   if (existing) {
     tabId = existing.id;
     beforeUrl = existing.url || "";
+    // The main frame's document identity BEFORE the navigation — the browser's
+    // loaderId equivalent. Comparing it to the post-settle id tells cross- from
+    // same-document without depending on observing onCommitted (which can lose a
+    // race to the settle's URL-change fallback).
+    const beforeFrame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 }).catch(() => null);
+    beforeDocId = beforeFrame?.documentId ?? null;
     watch = watchMainFrameCommit(tabId);
     await chrome.tabs.update(tabId, { url, active: true });
   } else {
@@ -283,13 +280,19 @@ async function navigateBoundTab(url) {
     watch = watchMainFrameCommit(tabId);
   }
   await waitNavigationSettled(tabId, beforeUrl, watch, url);
-  // A cross-document navigation replaces the frame tree — drop any stale frame
-  // scope so a capture after `frame switch` then a navigate is main-frame-scoped.
-  // A same-document nav (hash/pushState) leaves the document and its frames
-  // intact, so a frame the agent switched into stays valid (headless returns
-  // early for that case without clearing the active frame). A freshly created
-  // tab is always main-scoped.
-  if (watch.crossDocument || !existing) setActiveFrameId(0);
+  // Drop the frame scope only for a CROSS-document navigation — its frame tree is
+  // replaced, so a capture after `frame switch` then a navigate is main-scoped. A
+  // same-document nav (hash/pushState) keeps the document AND its documentId, so a
+  // frame the agent switched into stays valid (headless returns early for that
+  // case without clearing the active frame). Decide by the main-frame documentId
+  // across the navigation: reset unless both ids are known AND equal — a fresh
+  // tab, an unreadable id, or a changed id all mean "not the same document".
+  let sameDocument = false;
+  if (existing && beforeDocId) {
+    const afterFrame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 }).catch(() => null);
+    sameDocument = afterFrame?.documentId === beforeDocId;
+  }
+  if (!sameDocument) setActiveFrameId(0);
   // Re-arm console/network hooks at settle (headless parity) so traffic the new
   // page fires before `load` is captured, not lost to the `onCompleted` gap.
   await rearmMonitors(tabId);

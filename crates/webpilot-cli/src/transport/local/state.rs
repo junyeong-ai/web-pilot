@@ -299,17 +299,28 @@ impl LocalTransport {
             .into());
         }
 
-        // A present storage map must be a plain object (or null). Validate it
-        // BEFORE the cookie loop so a malformed file rejects without first
-        // applying its cookies — the same fail-up-front order browser mode keeps,
-        // so a failed import leaves identical state in both.
+        // A present storage map must be a plain object (or null) OF STRING
+        // VALUES. Validate both shape and value types BEFORE the cookie loop so a
+        // malformed file rejects without first applying its cookies — the same
+        // fail-up-front order browser mode keeps, so a failed import leaves
+        // identical state in both. The bridge re-checks at its sink; this keeps
+        // the import atomic (no half-applied cookies behind a storage reject).
         for key in ["local_storage", "session_storage"] {
-            if let Some(v) = parsed.get(key)
-                && !v.is_null()
-                && !v.is_object()
-            {
+            let Some(v) = parsed.get(key) else { continue };
+            if v.is_null() {
+                continue;
+            }
+            let Some(map) = v.as_object() else {
                 return Err(WebPilotError::InvalidArgument {
                     detail: format!("session `{key}` must be an object"),
+                }
+                .into());
+            };
+            // Web Storage holds only strings; a non-string value would coerce to
+            // garbage ("[object Object]"), so reject it rather than import a lie.
+            if map.values().any(|val| !val.is_string()) {
+                return Err(WebPilotError::InvalidArgument {
+                    detail: format!("session `{key}` values must be strings"),
                 }
                 .into());
             }

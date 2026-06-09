@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.109] - 2026-06-10
+
+### Fixed
+
+- **`session import` is now atomic across cookies and storage in both modes.** A
+  non-string `local_storage` / `session_storage` VALUE (Web Storage holds only
+  strings) was caught only at the bridge sink — after the cookie loop had already
+  run — so a malformed file left cookies mutated behind a storage reject. The
+  storage value types are now validated up front, before any cookie is applied,
+  alongside the existing shape check; the bridge keeps its own check as the sink.
+- **Browser-mode same-document frame preservation is now race-free.** v0.4.108
+  decided cross- vs same-document by whether `onCommitted` fired, but a
+  cross-document navigation that settled through the settle loop's URL-change
+  fallback before that event was processed left the flag false and wrongly
+  preserved a stale frame scope. `navigateBoundTab` now snapshots the main-frame
+  `documentId` before the navigation and compares it after settle — the browser's
+  loaderId equivalent — resetting the frame scope unless both ids are known and
+  equal.
+
 ## [0.4.108] - 2026-06-10
 
 ### Fixed

@@ -490,8 +490,18 @@ async function handleSessionImport(rawData) {
     // cookies, so a malformed file never half-applies.
     for (const key of ["local_storage", "session_storage"]) {
       const value = data[key];
-      if (Object.hasOwn(data, key) && value !== null && (typeof value !== "object" || Array.isArray(value))) {
+      if (!Object.hasOwn(data, key) || value === null) continue;
+      if (typeof value !== "object" || Array.isArray(value)) {
         return { type: "SessionResult", success: false, error: err("InvalidArgument", `session \`${key}\` must be an object`) };
+      }
+      // Web Storage holds only strings; a non-string value would coerce to
+      // garbage ("[object Object]"). Reject up front — before any cookie is
+      // applied — so a malformed file never half-imports (the bridge re-checks
+      // at its sink; this keeps the import atomic).
+      for (const v of Object.values(value)) {
+        if (typeof v !== "string") {
+          return { type: "SessionResult", success: false, error: err("InvalidArgument", `session \`${key}\` values must be strings`) };
+        }
       }
     }
     // Only NON-EMPTY storage carries data to import, and only that needs an http
