@@ -137,16 +137,34 @@ pub(crate) async fn resolve_context_target(
                     t.get("targetId").and_then(|v| v.as_str()) == Some(&entry.target_id)
                         && t.get("type").and_then(|v| v.as_str()) == Some("page")
                 });
-                let tid = if has_target {
-                    entry.target_id.clone()
+                let (tid, created) = if has_target {
+                    (entry.target_id.clone(), false)
                 } else {
-                    browser
+                    let tid = browser
                         .create_target_in_context(&entry.browser_context_id, "about:blank")
-                        .await?
+                        .await?;
+                    (tid, true)
                 };
                 entry.target_id = tid.clone();
                 entry.last_used = now;
-                let _ = dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes());
+                // The entry is the cross-process reuse record: a failed write would
+                // leave the next process reading a stale target id and creating yet
+                // another target — an accumulating orphan. Surface the failure, and
+                // if this resolve just created the target, close it so the command
+                // fails atomically with nothing leaked.
+                if let Err(e) =
+                    dirs::atomic_write(&file_path, serde_json::to_string(&entry)?.as_bytes())
+                {
+                    if created {
+                        let _ = browser
+                            .send(
+                                "Target.closeTarget",
+                                Some(serde_json::json!({ "targetId": tid })),
+                            )
+                            .await;
+                    }
+                    return Err(e.into());
+                }
                 return Ok((tid, entry.browser_context_id, live_lock));
             } else {
                 super::local::clear_context_state(&entry.browser_context_id);

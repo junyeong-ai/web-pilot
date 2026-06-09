@@ -81,12 +81,11 @@ async function handleCapture(command) {
     page_title: "",
   };
 
-  // The frame tree, fetched once — used to validate the active capture frame
-  // here and to count out-of-scope HTTP subframes for the snapshot below.
-  // A scoped capture in ANY mode whose target frame has since been removed is a
-  // FrameNotFound, not a stale-context success — only the DOM pass used to check,
-  // so a screenshot/PDF/AX of a since-removed iframe returned a stale result with
-  // no sign the scope was dead.
+  // The frame tree, fetched once — validates the active capture frame here and
+  // counts out-of-scope HTTP subframes for the snapshot below. A scoped capture
+  // in ANY mode whose target frame has since been removed is a FrameNotFound, not
+  // a stale-context success: every pass (DOM, screenshot, PDF, AX) checks the
+  // scope through this one tree.
   const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
   if (
     activeFrameId !== 0 &&

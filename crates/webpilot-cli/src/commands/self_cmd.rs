@@ -134,10 +134,14 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
         );
     }
 
-    atomic_replace(&extracted, &dest)?;
+    // Sign the downloaded binary BEFORE swapping it in: an ad-hoc signature is
+    // what lets it run under macOS Gatekeeper, so a signing failure must abort
+    // the update with the old (working) binary still in place — never report a
+    // successful update that installed an unrunnable binary.
     if cfg!(target_os = "macos") {
-        codesign(&dest);
+        codesign(&extracted)?;
     }
+    atomic_replace(&extracted, &dest)?;
 
     let human = format!(
         "✓ Updated v{current} → v{target_version}\n  {}",
@@ -344,11 +348,17 @@ fn set_executable(_: &Path) -> Result<()> {
     Ok(())
 }
 
-fn codesign(p: &Path) {
-    let _ = Command::new("codesign")
+fn codesign(p: &Path) -> Result<()> {
+    let status = Command::new("codesign")
         .args(["--force", "--sign", "-"])
         .arg(p)
-        .status();
+        .status()?;
+    if !status.success() {
+        anyhow::bail!(
+            "codesign failed — the updated binary would be unrunnable on macOS, so the update was aborted with the existing binary kept"
+        );
+    }
+    Ok(())
 }
 
 /// Self-cleaning temp directory.

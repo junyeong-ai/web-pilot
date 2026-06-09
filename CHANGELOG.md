@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.55] - 2026-06-09
+
+### Fixed
+
+- **Browser-mode `fetch` surfaces a rejected request instead of "no result".** A
+  failed fetch (DNS, connection refused, CORS) arrives as a JS eval exception,
+  which the handler ignored, returning the misleading "No fetch result". It now
+  raises the exception, matching headless (`page.evaluate(...)?` propagates it).
+- **`self update` aborts if the new binary can't be code-signed**, keeping the old
+  binary, instead of reporting success while installing an unrunnable unsigned
+  binary. Signing happens before the atomic swap.
+- **A multi-agent context whose target-id write fails no longer leaks a target.**
+  `resolve_context_target` swallowed the persist of the resolved/created target,
+  so a failed write left the next process to create another target against a stale
+  record. The write is propagated, and a target created in the failing resolve is
+  closed so the command fails atomically with nothing leaked.
+
+### Changed
+
+- Removed historical "used to / replaced / previously" notes from comments (tab
+  find, settings, capture frame validation) so the code reads as designed.
+
 ## [0.4.54] - 2026-06-09
 
 ### Fixed

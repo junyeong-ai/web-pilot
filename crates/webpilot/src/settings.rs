@@ -1,9 +1,7 @@
 //! Layered runtime settings: built-in defaults < `config.toml` < environment.
 //!
-//! A single resolved [`Settings`] is the one place every tunable is read from,
-//! replacing the scattered `std::env::var` calls that used to live in
-//! `timeouts`, the CDP client, the session launcher, and the context GC. Each
-//! field resolves independently as `env.or(file).unwrap_or(default)`, so an
+//! A single resolved [`Settings`] is the one place every tunable is read from.
+//! Each field resolves independently as `env.or(file).unwrap_or(default)`, so an
 //! environment override always wins, a `config.toml` value is the team default,
 //! and the built-in default is the floor.
 //!

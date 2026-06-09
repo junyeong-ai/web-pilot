@@ -322,15 +322,23 @@ async function handleFetch(command) {
       const ev = await cdpSend(tid, "Runtime.evaluate", {
         expression: code, awaitPromise: true, returnByValue: true,
       });
+      // A rejected fetch (DNS, connection refused, CORS) surfaces as an eval
+      // exception, not a value — raise it instead of returning `undefined` and
+      // reporting the misleading "no result". Headless does the same: its
+      // `page.evaluate(...)?` propagates the exception.
+      if (ev.exceptionDetails) {
+        throw new Error(
+          ev.exceptionDetails.exception?.description ||
+            ev.exceptionDetails.text ||
+            "fetch failed",
+        );
+      }
       return ev.result?.value;
     });
-    if (r && r.oversize) {
+    if (r.oversize) {
       return { type: "FetchResult", success: false, error: err("Other", `response body exceeds the ${r.oversize}-byte fetch limit`) };
     }
-    if (r) {
-      return { type: "FetchResult", success: true, status: r.status, body: r.body };
-    }
-    return { type: "FetchResult", success: false, error: otherErr("No fetch result") };
+    return { type: "FetchResult", success: true, status: r.status, body: r.body };
   } catch (e) {
     return { type: "FetchResult", success: false, error: exceptionErr(e) };
   }

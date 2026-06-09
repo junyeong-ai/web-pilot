@@ -118,8 +118,7 @@ async fn close_tab<T: Transport>(transport: &mut T, tab_id: String) -> Result<Co
 async fn find_tab<T: Transport>(transport: &mut T, pattern: &str) -> Result<CommandOutput> {
     // An empty or all-`*` pattern matches every tab — reject it rather than
     // silently switch to the first one. Same `*`-glob as `frame url`, shared so
-    // the two URL selectors can't drift (this used to star-strip into a substring,
-    // which broke a middle `*` and matched everything on `*`).
+    // the two URL selectors can't drift.
     if webpilot::url_glob::is_blank(pattern) {
         return Err(webpilot::WebPilotError::InvalidArgument {
             detail: "tab find --url pattern must contain a non-wildcard character".into(),
