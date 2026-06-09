@@ -97,7 +97,19 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
   try {
     while (Date.now() - start < navigationTimeoutMs()) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
-      if (tab && (watch.committed || (tab.url && tab.url !== beforeUrl))) {
+      if (!tab) {
+        // The tab vanished mid-navigation (closed, or a page `window.close()`).
+        // That is a gone pin — a typed TabNotFound the agent re-pins from, the
+        // way `resolveActiveTab` already types one — not a full-timeout wait that
+        // then surfaces as a misleading NavigationFailed. (`chrome.tabs.get`
+        // resolves for a live tab whatever its navigation state, so a null here
+        // is a genuine vanish, never a transient mid-nav blip.)
+        const e = new Error(`Tab not found: ${tabId}. List: webpilot tab`);
+        e.code = "TabNotFound";
+        e.data = { tab_id: String(tabId) };
+        throw e;
+      }
+      if (watch.committed || (tab.url && tab.url !== beforeUrl)) {
         // Bind the readiness probe to the COMMITTED document, not just "the
         // frame right now": on a same-URL reload the old document can still
         // report readyState "complete" in the beat between commit and swap.

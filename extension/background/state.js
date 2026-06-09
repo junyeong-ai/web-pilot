@@ -56,6 +56,27 @@ async function rearmMonitors(tabId) {
   }
 }
 
+// When the agent's working tab moves (tab switch / new / popup adoption), the
+// monitors it armed must follow so `console read` / `network read` see the new
+// tab. Headless re-installs its global monitor on every pin move (each routes
+// through `do_tab_switch` → `reinstall_monitors`); browser's per-tab armed set
+// has no such global, so carry the armed kinds from the old pinned tab onto the
+// new one and inject their hooks. The old tab's flag is left to be pruned when it
+// closes — a later switch back re-arms it — so a round trip never loses state.
+async function carryMonitorsToTab(fromTabId, toTabId) {
+  if (fromTabId != null && fromTabId !== toTabId) {
+    let changed = false;
+    for (const kind of ["console", "network"]) {
+      if (monitoringState[kind].has(fromTabId) && !monitoringState[kind].has(toTabId)) {
+        monitoringState[kind].add(toTabId);
+        changed = true;
+      }
+    }
+    if (changed) saveMonitoringState();
+  }
+  await rearmMonitors(toTabId);
+}
+
 async function injectConsoleMonitoring(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId, frameIds: [0] },
@@ -538,4 +559,4 @@ async function handleSessionImport(rawData) {
   }
 }
 
-export { handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, rearmMonitors, setMonitorPolicy };
+export { carryMonitorsToTab, handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, rearmMonitors, setMonitorPolicy };

@@ -8,7 +8,7 @@ import { ensureBridge, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
 import { countHttpSubframes } from "./capture.js";
-import { rearmMonitors } from "./state.js";
+import { carryMonitorsToTab, rearmMonitors } from "./state.js";
 
 // ── Action ─────────────────────────────────────────────────────────────────
 
@@ -421,6 +421,10 @@ async function dispatchActionToPage(tab, action) {
         // describe the agent's newly pinned tab as a page it is not. (The caller's
         // pre-capture settle then no-ops on the already-ready tab.)
         await adoptedDocumentReady(newTab.id, PROBE_MS);
+        // Armed monitors follow the agent's working tab onto the adopted popup
+        // (headless re-arms on every pin move) — after it settles so the hooks
+        // land on the real document.
+        await carryMonitorsToTab(tab.id, newTab.id);
         const settled = (await chrome.tabs.get(newTab.id).catch(() => null)) || newTab;
         result.new_tab = {
           id: String(settled.id),

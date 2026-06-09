@@ -6,6 +6,7 @@ import { activeFrameId, activeTabId, navigationTimeoutMs, resolveActiveTab, setA
 import { cdpSend, withCdp } from "./cdp.js";
 import { cdpEval, frameWorldContextId } from "./query.js";
 import { adoptedDocumentReady } from "./navigation.js";
+import { carryMonitorsToTab } from "./state.js";
 import { isHostConnected } from "./host.js";
 
 // Match a `frame url` pattern against a frame URL: every non-`*` run of the
@@ -26,6 +27,7 @@ function urlGlobMatch(pattern, url) {
 // ── Tabs ───────────────────────────────────────────────────────────────────
 
 async function handleTabNew(url) {
+  const previous = activeTabId;
   const created = await chrome.tabs.create({ url, active: true });
   setActiveTabId(created.id);
   // A fresh tab has its own frame tree — drop any frame scope.
@@ -37,6 +39,10 @@ async function handleTabNew(url) {
   // `wait_navigation_settled(before_url: "about:blank")` twin); best-effort, so
   // a tab that never leaves about:blank returns at the deadline.
   await adoptedDocumentReady(created.id, navigationTimeoutMs());
+  // Armed monitors follow the agent's working tab onto the new one (headless
+  // parity) — done after the page settles so the hooks inject into the real
+  // document, not the transient about:blank.
+  await carryMonitorsToTab(previous, created.id);
   const settled = await chrome.tabs.get(created.id).catch(() => null);
   return {
     type: "Action",
@@ -94,10 +100,15 @@ async function handleTabSwitch(tabId) {
     // OS foreground: that steals focus from whatever app the user is in, and
     // capture/eval/actions all reach the tab through CDP regardless of which
     // window is frontmost. The pin below, not OS focus, is what commands follow.
+    const previous = activeTabId;
     await chrome.tabs.update(target, { active: true });
     setActiveTabId(target);
     // A different tab has its own frame tree — drop any frame scope.
     setActiveFrameId(0);
+    // Armed console/network monitors follow the working tab, as headless re-arms
+    // on every pin move — otherwise `console read` on the switched-to tab would
+    // silently miss its logs.
+    await carryMonitorsToTab(previous, target);
     return { type: "Action", success: true };
   } catch (e) {
     return { type: "Action", success: false, error: err("TabNotFound", e.message, { tab_id: tabId }) };

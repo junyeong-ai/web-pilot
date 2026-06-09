@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.101] - 2026-06-10
+
+### Fixed
+
+- **Browser mode: armed console/network monitors follow the working tab.** A
+  `console start` armed the monitor on the pinned tab, but a later `tab switch`,
+  `tab new`, or popup adoption left the armed flags on the old tab — so a
+  `console read` on the new tab silently missed its logs. Headless re-installs
+  its monitor on every pin move (each routes through the tab-switch path);
+  browser now carries the armed kinds onto the new tab and injects their hooks at
+  each pin move, so monitoring follows the agent's working tab in both modes.
+- **Browser mode: a tab that vanishes mid-navigation is a typed TabNotFound.**
+  If the bound tab closed (or a page `window.close()`d) while `navigate` /
+  `capture --url` / `back` / `forward` / `reload` was waiting for the navigation
+  to settle, the wait polled to its full timeout and then reported
+  `NavigationFailed` — masking a gone pin as a navigation problem for 15s. The
+  settle now detects the vanished tab and fails fast with `TabNotFound` (exit 4),
+  matching `resolveActiveTab`, which already types a vanished pin that way.
+
 ## [0.4.100] - 2026-06-10
 
 ### Fixed

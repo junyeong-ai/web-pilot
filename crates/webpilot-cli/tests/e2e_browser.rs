@@ -1020,5 +1020,31 @@ fn browser_behavioral_flow() {
         stdout(&pop_status)
     );
 
+    // Armed monitors follow the working tab across a pin MOVE (here `tab new`),
+    // not just a same-tab navigation — headless re-arms on every pin move, so
+    // browser must too or `console read` on the new tab silently misses its logs.
+    // The /log page self-logs on load, so a read after `tab new /log` must see
+    // it. Last step in the flow, so the extra tab it leaves is harmless.
+    let cstart = fx.run(&["console", "start"]);
+    assert_eq!(
+        code(&cstart),
+        0,
+        "console start failed: {}",
+        stdout(&cstart)
+    );
+    let mtab = fx.run(&["tab", "new", &format!("{base}/log")]);
+    assert_eq!(
+        code(&mtab),
+        0,
+        "tab new for monitor-follow failed: {}",
+        stdout(&mtab)
+    );
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(
+        stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
+        "an armed console monitor must follow the pin onto a new tab: {}",
+        stdout(&fx.run(&["console", "read"]))
+    );
+
     drop(fx);
 }
