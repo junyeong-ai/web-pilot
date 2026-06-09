@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.97] - 2026-06-10
+
+### Fixed
+
+- **A page-controlled title can no longer inject a fake element line into the
+  capture output.** The `Label: value` lines that report page identity and
+  artifact paths (`Page:`, `Title:`, `Screenshot:`, …) — the only place a
+  screenshot/PDF/accessibility-only capture shows the agent what page it sees —
+  rendered each value verbatim. A page setting `document.title` to a string
+  containing a newline and a forged `[999] button "Pay"` line could thus fabricate
+  an index line in the snapshot an agent reads, even though `DomSnapshot::to_text`
+  already neutralized the same value in the DOM footer. Every value now passes
+  through `line_safe`, closing the inconsistency so control characters can never
+  split one labelled line into two.
+
 ## [0.4.96] - 2026-06-10
 
 ### Fixed
