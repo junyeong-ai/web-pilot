@@ -4,6 +4,22 @@
 // // isolated world; ensureBridge just guarantees it is injected.
 
 import { sleep } from "./session.js";
+import { err } from "./errors.js";
+
+// A bridge call (capture, wait, dom get/set) routed to a since-vanished iframe
+// must read as FrameNotFound (exit 4 → recapture), not the BridgeUnavailable
+// (exit 3 → infra) a failed injection into a missing frame would otherwise
+// produce. The main frame (0) exists as long as the tab does, so only sub-frames
+// are probed. Pass an already-fetched `frames` list to avoid a redundant
+// getAllFrames. Mirrors headless `bridge_context_id`, which is FrameNotFound for
+// an unmapped active frame.
+async function frameVanishedError(tabId, frameId, frames = null) {
+  if (frameId === 0) return null;
+  const list = frames || (await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []));
+  if (list.some((f) => f.frameId === frameId && f.url?.startsWith("http"))) return null;
+  const sel = `frame ${frameId}`;
+  return err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel });
+}
 
 async function ensureBridge(tabId, frameId = 0) {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -64,4 +80,4 @@ async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
   }
 }
 
-export { ensureBridge, injectBridgeOnly, sendToContent };
+export { ensureBridge, frameVanishedError, injectBridgeOnly, sendToContent };

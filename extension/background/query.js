@@ -4,7 +4,7 @@
 import { err, exceptionErr, noPageErr, otherErr, timeoutErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, resolveActiveTab, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
-import { ensureBridge, sendToContent } from "./content.js";
+import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
 
 // ── Eval ───────────────────────────────────────────────────────────────────
 
@@ -220,6 +220,8 @@ async function handleWait(command) {
 
   // Selector / text / idle — delegate to bridge.js with the same condition shape.
   try {
+    const frameGone = await frameVanishedError(tab.id, activeFrameId);
+    if (frameGone) return { type: "Wait", success: false, error: frameGone };
     await ensureBridge(tab.id, activeFrameId);
     const r = await sendToContent(
       tab.id,
@@ -261,6 +263,8 @@ async function handleDomSet(command) {
   const msg = bridgeMessageForDom("set", command);
   if (!msg) return { type: "CommandResult", success: false, error: otherErr("Invalid property") };
   try {
+    const frameGone = await frameVanishedError(tab.id, activeFrameId);
+    if (frameGone) return { type: "CommandResult", success: false, error: frameGone };
     await ensureBridge(tab.id, activeFrameId);
     const r = await sendToContent(tab.id, msg, activeFrameId);
     return { type: "CommandResult", success: r.success, error: r.error || null };
@@ -275,6 +279,8 @@ async function handleDomGet(command) {
   const msg = bridgeMessageForDom("get", command);
   if (!msg) return { type: "CommandResult", success: false, error: otherErr("Invalid property") };
   try {
+    const frameGone = await frameVanishedError(tab.id, activeFrameId);
+    if (frameGone) return { type: "CommandResult", success: false, error: frameGone };
     await ensureBridge(tab.id, activeFrameId);
     const r = await sendToContent(tab.id, msg, activeFrameId);
     return {

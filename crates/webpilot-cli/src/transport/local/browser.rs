@@ -67,7 +67,11 @@ impl LocalTransport {
         }))
     }
 
-    pub(super) async fn do_tab_switch(&mut self, tab_id: &str) -> Result<ResponseData> {
+    pub(super) async fn do_tab_switch(
+        &mut self,
+        tab_id: &str,
+        reinstall_now: bool,
+    ) -> Result<ResponseData> {
         if let Some(not_found) = self.ensure_tab_exists(tab_id).await? {
             return Ok(not_found);
         }
@@ -82,9 +86,14 @@ impl LocalTransport {
         super::clear_persisted_active_frame(self.persisted_context_key());
         super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
         self.rebind_page_world().await?;
-        // Armed monitors follow the agent's working tab: the freshly bound
-        // page has no hooks yet (idempotent no-op when nothing is armed).
-        self.reinstall_monitors().await;
+        // Armed monitors follow the agent's working tab. A plain `tab switch` lands
+        // on an already-loaded page, so re-arm now. `tab new` and popup adoption
+        // pass `false`: their target is still about:blank here and the imminent
+        // document load wipes window-level hooks, so they re-arm AFTER the new
+        // document settles instead.
+        if reinstall_now {
+            self.reinstall_monitors().await;
+        }
         Ok(action_success(None))
     }
 
@@ -123,7 +132,7 @@ impl LocalTransport {
         // Rebind through the same path `tab switch` uses, so frame scope,
         // persistence, and monitors stay consistent. A popup that already
         // vanished is simply not adopted.
-        match self.do_tab_switch(&id).await {
+        match self.do_tab_switch(&id, false).await {
             Ok(ResponseData::Action { success: true, .. }) => {}
             _ => return None,
         }
@@ -134,6 +143,10 @@ impl LocalTransport {
         // already left. (This settle also lets the auto-capture skip its own.)
         let mut popup_events = self.page.subscribe_events();
         self.await_adopted_document(&mut popup_events).await;
+        // Re-arm monitors now that the adopted popup has left about:blank and
+        // committed its real document — the early arm in `do_tab_switch` was
+        // skipped (`false`) because that load would have wiped it.
+        self.reinstall_monitors().await;
         let settled = self
             .browser
             .send("Target.getTargetInfo", Some(json!({ "targetId": id })))
@@ -186,7 +199,7 @@ impl LocalTransport {
         // in browser mode. Rebind through the `tab switch` path so a
         // long-lived transport (the MCP server) acts on the tab it just
         // created, not the page it was bound to before.
-        match self.do_tab_switch(&target_id).await? {
+        match self.do_tab_switch(&target_id, false).await? {
             ResponseData::Action { success: true, .. } => {}
             other => return Ok(other),
         }
@@ -197,6 +210,9 @@ impl LocalTransport {
         // still returns, carrying whatever URL it reached.
         let deadline = std::time::Instant::now() + webpilot::settings::timeouts().navigation;
         super::wait_navigation_settled(&self.page, None, "about:blank", deadline).await;
+        // Re-arm monitors on the settled new document — the early arm in
+        // `do_tab_switch` was skipped (`false`) because this load wipes it.
+        self.reinstall_monitors().await;
         let url = self
             .eval_in_active("location.href")
             .await

@@ -851,7 +851,7 @@ impl Transport for LocalTransport {
             } => self.do_wait(condition, timeout_ms).await,
             Command::Status => self.do_status().await,
             Command::TabList => self.do_tab_list().await,
-            Command::TabSwitch { tab_id } => self.do_tab_switch(&tab_id).await,
+            Command::TabSwitch { tab_id } => self.do_tab_switch(&tab_id, true).await,
             Command::TabNew { url } => self.do_tab_new(&url).await,
             Command::TabClose { tab_id } => self.do_tab_close(&tab_id).await,
             Command::DomSet {

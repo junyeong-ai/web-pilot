@@ -850,6 +850,39 @@ fn browser_behavioral_flow() {
          document (framed2btn), not the pre-click page: {}",
         stdout(&framenav_click)
     );
+
+    // A bridge op routed to an iframe that has since been removed from its parent
+    // must read as FrameNotFound (exit 4 → recapture), not the BridgeUnavailable
+    // (exit 3 → infra) a failed injection would yield — matching `capture` and
+    // headless `bridge_context_id`. Still switched into the iframe, schedule its
+    // same-origin parent to drop it, then probe with `dom get` and `wait`.
+    let _ = fx.run(&[
+        "eval",
+        "setTimeout(function(){window.parent.document.querySelectorAll('iframe').forEach(function(f){f.remove()})},50)",
+    ]);
+    std::thread::sleep(Duration::from_millis(300));
+    let gone_get = fx.run(&["dom", "get-text", "body"]);
+    assert_eq!(
+        code(&gone_get),
+        4,
+        "dom get on a vanished active frame must be FrameNotFound (exit 4), not BridgeUnavailable: {}",
+        stdout(&gone_get)
+    );
+    assert!(
+        stdout(&gone_get).contains("FrameNotFound"),
+        "vanished-frame dom get must carry FrameNotFound: {}",
+        stdout(&gone_get)
+    );
+    let gone_wait = fx.run(&["wait", "--timeout", "1", "selector", "body"]);
+    assert_eq!(
+        code(&gone_wait),
+        4,
+        "wait on a vanished active frame must be FrameNotFound (exit 4): {}",
+        stdout(&gone_wait)
+    );
+    // Reset the frame scope for the steps below — the active iframe is gone.
+    let _ = fx.run(&["frame", "main"]);
+
     // A `--url` capture navigates to a fresh document, which drops the frame
     // scope — so `--annotate` here must succeed on the new main frame, not
     // false-fail against the stale switched-frame id. It also leaves us back on

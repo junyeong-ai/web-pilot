@@ -775,6 +775,31 @@ fn headless_behavioral_flow() {
         stdout(&nt_click)
     );
 
+    // 6c. Armed monitors follow the pin across a tab-new MOVE, not just a
+    //     same-tab navigation. `tab new` routes through `do_tab_switch`, which
+    //     DEFERS the monitor arm (the new tab is still about:blank there and the
+    //     imminent load would wipe it) and re-arms after the document settles —
+    //     so the /log marker (fired +200ms, after the arm) is captured. Without
+    //     the deferred re-arm the new tab would carry no hooks and `console read`
+    //     would silently miss its logs. The console monitor armed at step 3 is
+    //     still running. (Browser-mode mirror: the monitor-follow step in
+    //     e2e_browser.) Restore the pin to a base page for the policy step below.
+    let _ = fx.run(&["console", "clear"]);
+    let mtab = fx.run(&["tab", "new", &format!("{base}/log")]);
+    assert_eq!(
+        code(&mtab),
+        0,
+        "tab new for monitor-follow failed: {}",
+        stdout(&mtab)
+    );
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(
+        stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
+        "an armed console monitor must follow the pin onto a new tab: {}",
+        stdout(&fx.run(&["console", "read"]))
+    );
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+
     // 7. Policy: a deny rule is enforced at the transport boundary before the
     //    page is touched, in this (headless) mode. Re-capture first so the
     //    index is otherwise valid — proving policy, not staleness, blocks it.

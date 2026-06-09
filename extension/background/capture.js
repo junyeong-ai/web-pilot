@@ -5,7 +5,7 @@ import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
 import { activeFrameId, annotationPaintMs, resolveActiveTab, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { resolveFrameWorld } from "./query.js";
-import { ensureBridge, sendToContent } from "./content.js";
+import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
 import { navigateBoundTab } from "./navigation.js";
 
 // ── Capture ────────────────────────────────────────────────────────────────
@@ -91,13 +91,8 @@ async function handleCapture(command) {
   // a stale-context success: every pass (DOM, screenshot, PDF, AX) checks the
   // scope through this one tree.
   const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
-  if (
-    activeFrameId !== 0 &&
-    !frames.some((f) => f.frameId === activeFrameId && f.url?.startsWith("http"))
-  ) {
-    const sel = `frame ${activeFrameId}`;
-    return topErr(err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel }));
-  }
+  const frameGone = await frameVanishedError(tabId, activeFrameId, frames);
+  if (frameGone) return topErr(frameGone);
 
   // DOM extraction — scoped to the active frame (main by default), exactly
   // like the headless transport. Indices the agent sees resolve against the

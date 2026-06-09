@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.107] - 2026-06-10
+
+### Fixed
+
+- **Headless `tab new` / popup adoption now re-arm console/network monitors on
+  the settled document, not the throwaway `about:blank`.** Both routed through
+  `do_tab_switch`, which re-armed window-level monitor hooks immediately — but
+  the new tab's real document had not loaded yet, so the imminent load wiped the
+  hooks and the agent's `console read` / `network read` missed the adopted page's
+  load-time activity. `do_tab_switch` now takes `reinstall_now`: a plain `tab
+  switch` (already-loaded target) re-arms at once, while `tab new` and popup
+  adoption defer and re-arm after the document settles, matching browser mode.
+- **Browser-mode `wait` / `dom get` / `dom set` against a vanished active iframe
+  now return `FrameNotFound` (exit 4 → recapture), not `BridgeUnavailable` (exit
+  3 → infra).** They called `ensureBridge` without first checking the pinned
+  frame still exists, so a failed injection into a removed frame surfaced as a
+  generic "page not responding". A shared `frameVanishedError` guard (also now
+  backing `capture`'s check) probes the frame tree first, matching headless
+  `bridge_context_id`.
+
 ## [0.4.106] - 2026-06-10
 
 ### Fixed
