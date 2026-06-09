@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.89] - 2026-06-09
+
+### Fixed
+
+- **`device` emulation now respects `policy default deny`.** The headless `device`
+  command reaches CDP directly, bypassing `LocalTransport::send` (the usual policy
+  sink), so a locked-down agent could still change the viewport and — notably —
+  spoof the user agent, the exact steered-agent threat the policy guards against,
+  contradicting the documented "default deny = least-privilege" mode. A new
+  `PolicyKey::Device` is now enforced at the command's CDP sink
+  (`policy::enforce_key`), so `default deny` forbids it and `policy set --operation
+  device --verdict allow` re-permits it. Verified: device set is PolicyDenied (6)
+  under default-deny, allowed once permitted.
+
+### Changed
+
+- Refreshed a stale `frameNavigates` comment that described only link clicks after
+  it grew to also hint form-submit navigations.
+
 ## [0.4.88] - 2026-06-09
 
 ### Fixed

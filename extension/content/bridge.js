@@ -590,19 +590,17 @@
     return r.error ? { error: r.error } : { target: r.el };
   }
 
-  // Whether a click on `el` will queue a top-level document navigation — the
-  // signal the settle logic needs because a link click's navigation is queued
-  // (HTML spec), so its frameStartedLoading can arrive AFTER the click response
-  // and miss a one-shot event drain. Deterministic and derived at click time:
-  // a non-prevented click on a self-targeting `a[href]` whose http(s)/file
-  // destination differs from the current document (a pure fragment change loads
-  // nothing). `notCanceled` is the click event's dispatch result, so a
-  // preventDefault'd SPA link correctly reports no navigation.
-  // True when this click loads a new document IN THE CURRENT FRAME — a
-  // non-prevented link to a different http(s)/file URL (not a fragment, not a
-  // popup target). The frame may be the top frame or a switched iframe; the
-  // settle layer uses this to wait for an iframe-internal navigation the
-  // top-frame `navigates` signal can't see.
+  // True when this click loads a new document IN THE CURRENT FRAME — either a
+  // non-prevented self-targeting `a[href]` to a different http(s)/file URL (not a
+  // fragment, not a popup target), OR a click on a form's submit control (which
+  // submits the form and loads a document with no href). The settle layer needs
+  // this because the navigation is queued (HTML spec): its frameStartedLoading
+  // can arrive AFTER the click response and miss a one-shot event drain, so it
+  // must be derived deterministically at click time. `notCanceled` is the click
+  // event's dispatch result, so a preventDefault'd SPA link/button reports no
+  // navigation. The frame may be the top frame or a switched iframe; the settle
+  // uses it to catch an iframe-internal navigation the top-frame `navigates`
+  // signal can't see.
   function frameNavigates(el, notCanceled) {
     if (!notCanceled) return false;
     const a = el.closest("a[href]");

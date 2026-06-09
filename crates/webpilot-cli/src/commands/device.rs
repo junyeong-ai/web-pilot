@@ -33,6 +33,10 @@ pub enum DeviceCommand {
 }
 
 pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<CommandOutput> {
+    // `device` reaches CDP directly (not through `LocalTransport::send`, the usual
+    // policy sink), so gate it here: every subcommand changes emulation — the user
+    // agent especially is a spoofing effect a `default deny` policy must forbid.
+    crate::policy::enforce_key(webpilot::types::PolicyKey::Device)?;
     let ctx = local.persisted_context_key().map(str::to_string);
     match args.command {
         DeviceCommand::Set {

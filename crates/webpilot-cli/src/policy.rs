@@ -38,9 +38,17 @@ fn policy_file() -> PathBuf {
 /// `deny`, so callers can both propagate it (`?`) and reconstruct the wire
 /// envelope from it.
 pub fn enforce(command: &Command) -> std::result::Result<(), WebPilotError> {
-    let Some(key) = command.policy_key() else {
-        return Ok(());
-    };
+    match command.policy_key() {
+        Some(key) => enforce_key(key),
+        None => Ok(()),
+    }
+}
+
+/// Enforce policy on a bare [`PolicyKey`] — for an effect that doesn't ride the
+/// wire `Command` surface and so can't go through [`enforce`]. The headless-only
+/// `device` command (raw CDP, not a `Command`) uses this so a `default deny`
+/// policy forbids it like any other effect.
+pub fn enforce_key(key: PolicyKey) -> std::result::Result<(), WebPilotError> {
     if denies(key) {
         return Err(WebPilotError::PolicyDenied {
             operation: key.to_string(),
@@ -253,10 +261,12 @@ mod tests {
         // Every non-action key added to PolicyKey must round-trip through the
         // on-disk store (Display/FromStr via serde_plain).
         let s = parse(
-            r#"{"rules":{"eval":"deny","fetch":"deny","session_export":"deny","cookie_list":"deny","cookie_set":"deny","cookie_delete":"deny","dom_set":"deny","tab_close":"deny","session_import":"allow"}}"#,
+            r#"{"rules":{"eval":"deny","fetch":"deny","session_export":"deny","cookie_list":"deny","cookie_set":"deny","cookie_delete":"deny","dom_set":"deny","tab_close":"deny","session_import":"allow","device":"deny"}}"#,
         )
         .unwrap();
-        assert_eq!(s.rules.len(), 9);
+        assert_eq!(s.rules.len(), 10);
+        // `device` (headless-only emulation gate) must resolve like any other key.
+        assert_eq!(s.verdict_for(PolicyKey::Device), PolicyVerdict::Deny);
     }
 
     // `parse_and_enforce` is the host's security gate for raw socket traffic.

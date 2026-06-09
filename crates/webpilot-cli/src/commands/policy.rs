@@ -24,8 +24,9 @@ pub enum PolicyCommand {
     /// kind, plus `eval` (also covers `console`/`network start` injection and
     /// the `frame find` predicate), `fetch`, `dom_set`, `tab_close`,
     /// `cookie_list` (covers `cookie list` and `cookie get`), `cookie_set`,
-    /// `cookie_delete`, `session_export`, `session_import`. `navigate` also
-    /// covers `capture --url` and `tab new URL`.
+    /// `cookie_delete`, `session_export`, `session_import`, `device` (emulation:
+    /// viewport + user-agent spoofing). `navigate` also covers `capture --url`
+    /// and `tab new URL`.
     Set {
         #[arg(long)]
         operation: String,

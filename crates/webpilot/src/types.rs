@@ -122,6 +122,12 @@ pub enum PolicyKey {
     CookieDelete,
     SessionExport,
     SessionImport,
+    /// Device emulation (`device set`/`preset`/`reset`): changes the viewport and,
+    /// notably, the user agent the page sees — a spoofing effect a `default deny`
+    /// policy must be able to forbid. Headless-only (browser mode has no `device`),
+    /// so it never appears on the wire `Command` surface; enforced directly at the
+    /// `device` command's CDP sink.
+    Device,
 }
 
 impl From<ActionKind> for PolicyKey {
