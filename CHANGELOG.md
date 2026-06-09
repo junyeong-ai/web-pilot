@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.81] - 2026-06-09
+
+### Fixed
+
+- **`frame list` / `frame switch` frame-tree walk is depth-bounded.** `collect_frames`
+  recursed through `childFrames` with no depth cap (unlike `count_http_subframes`,
+  bounded in 0.4.79), so a pathologically deep or corrupted browser-supplied frame
+  tree could overflow the stack while building the frame list. It now stops at the
+  same `MAX_FRAME_DEPTH`, degrading to a shorter list rather than a crash.
+
 ## [0.4.80] - 2026-06-09
 
 ### Fixed

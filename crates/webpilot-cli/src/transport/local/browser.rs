@@ -252,7 +252,7 @@ impl LocalTransport {
         let result = self.page.send("Page.getFrameTree", None).await?;
         let mut frames = Vec::new();
         if let Some(tree) = result.get("frameTree") {
-            collect_frames(tree, &mut frames);
+            collect_frames(tree, 0, &mut frames);
         }
         let active_frame_id = self.active_frame_id.lock().await.clone();
         Ok(ResponseData::Frames {
@@ -279,7 +279,7 @@ impl LocalTransport {
         let tree = self.page.send("Page.getFrameTree", None).await?;
         let mut all = Vec::new();
         if let Some(t) = tree.get("frameTree") {
-            collect_frames(t, &mut all);
+            collect_frames(t, 0, &mut all);
         }
 
         // Only HTTP(S) subframes are switch targets — the same scheme filter
@@ -419,7 +419,15 @@ impl LocalTransport {
 
 // ── Frame-tree walking helper ────────────────────────────────────────────
 
-fn collect_frames(node: &Value, out: &mut Vec<FrameInfo>) {
+/// Max frame-tree depth to recurse, matching `count_http_subframes`. The tree is
+/// browser-supplied, so a pathological (or corrupted) depth must degrade to a
+/// shorter frame list, never overflow the stack.
+const MAX_FRAME_DEPTH: u32 = 256;
+
+fn collect_frames(node: &Value, depth: u32, out: &mut Vec<FrameInfo>) {
+    if depth > MAX_FRAME_DEPTH {
+        return;
+    }
     if let Some(frame) = node.get("frame") {
         out.push(FrameInfo {
             frame_id: frame
@@ -445,7 +453,7 @@ fn collect_frames(node: &Value, out: &mut Vec<FrameInfo>) {
     }
     if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
         for child in children {
-            collect_frames(child, out);
+            collect_frames(child, depth + 1, out);
         }
     }
 }
