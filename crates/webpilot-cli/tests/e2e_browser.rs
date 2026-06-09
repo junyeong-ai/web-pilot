@@ -927,6 +927,15 @@ fn browser_behavioral_flow() {
         "vanished-frame action must carry FrameNotFound: {}",
         stdout(&gone_act)
     );
+    // `session export` reads storage through the active frame's bridge — a
+    // vanished frame must be FrameNotFound (exit 4), not BridgeUnavailable.
+    let gone_export = fx.run(&["session", "export"]);
+    assert_eq!(
+        code(&gone_export),
+        4,
+        "session export on a vanished active frame must be FrameNotFound (exit 4): {}",
+        stdout(&gone_export)
+    );
     // Reset the frame scope for the steps below — the active iframe is gone.
     let _ = fx.run(&["frame", "main"]);
 

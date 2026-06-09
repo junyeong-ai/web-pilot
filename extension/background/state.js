@@ -3,7 +3,7 @@
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
 import { activeFrameId, monitoringState, resolveActiveTab, saveMonitoringState } from "./session.js";
-import { ensureBridge, sendToContent } from "./content.js";
+import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
 
 // Max entries each MAIN-world monitor ring buffer keeps; the install scripts
 // below evict the oldest past this, and a read reports `truncated` when the
@@ -438,6 +438,12 @@ async function handleSessionExport() {
     if (!tab) {
       return topErr(noPageErr());
     }
+    // The export reads storage through the active frame's bridge; a switched
+    // frame that vanished is FrameNotFound (exit 4 → recapture), not the
+    // BridgeUnavailable (exit 3 → infra) a failed inject yields — matching
+    // capture/wait/dom and headless `bridge_context_id`.
+    const frameGone = await frameVanishedError(tab.id, activeFrameId);
+    if (frameGone) return topErr(frameGone);
     // A storage read that fails or comes back as a typed bridge error must
     // fail the export (headless parity): writing empty storage would import
     // back as silent data loss. A valid read carries a `localStorage` object.
@@ -527,6 +533,16 @@ async function handleSessionImport(rawData) {
     const tab = await resolveActiveTab();
     if (hasStorage && !tab) {
       return { type: "SessionResult", success: false, error: noPageErr() };
+    }
+    // The storage import below runs in the active frame's bridge; a switched
+    // frame that vanished is FrameNotFound (exit 4 → recapture), not
+    // BridgeUnavailable. Check it BEFORE any cookie is applied so a gone frame
+    // never half-imports (cookies committed behind a storage that can't land).
+    if (hasStorage && tab) {
+      const frameGone = await frameVanishedError(tab.id, activeFrameId);
+      if (frameGone) {
+        return { type: "SessionResult", success: false, error: frameGone };
+      }
     }
     let cookiesFailed = 0;
     let cookiesMalformed = 0;

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.115] - 2026-06-10
+
+### Fixed
+
+- **`session export` / `session import` on a vanished active iframe now return
+  `FrameNotFound` (exit 4 → recapture), not `BridgeUnavailable` (exit 3 → infra).**
+  Both read/write storage through the active frame's bridge but were the last two
+  sites missing the frame-existence precheck that `wait` / `dom` / `capture` /
+  `action` already run — completing the v0.4.107 frame-vanish class across every
+  browser bridge-call site. The import checks the frame BEFORE applying any
+  cookie, so a gone frame never half-imports.
+
 ## [0.4.114] - 2026-06-10
 
 ### Fixed
