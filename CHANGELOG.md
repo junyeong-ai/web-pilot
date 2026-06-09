@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.114] - 2026-06-10
+
+### Fixed
+
+- **A browser-mode ACTION on a vanished active iframe now returns `FrameNotFound`
+  (exit 4 → recapture), not `BridgeUnavailable` (exit 3 → infra).** The
+  frame-existence precheck added for `wait` / `dom` / `capture` was missing from
+  the action dispatch, so a `click` / `type` / etc. on a frame that had vanished
+  since the capture surfaced a generic "page not responding" instead of the typed
+  recapture signal headless and the other browser commands return. The dispatch
+  now runs the shared `frameVanishedError` guard before injecting (reusing the
+  frame tree it already fetches), excluding `key_press`, which targets browser
+  focus rather than the active frame's bridge.
+
 ## [0.4.113] - 2026-06-10
 
 ### Fixed

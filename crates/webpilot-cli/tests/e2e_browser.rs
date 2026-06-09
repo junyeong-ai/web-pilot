@@ -912,6 +912,21 @@ fn browser_behavioral_flow() {
         "wait on a vanished active frame must be FrameNotFound (exit 4): {}",
         stdout(&gone_wait)
     );
+    // A bridge ACTION on the vanished frame must ALSO be FrameNotFound (exit 4),
+    // not BridgeUnavailable — the action dispatch prechecks the frame like
+    // wait/dom/capture do (key_press is exempt: it targets browser focus).
+    let gone_act = fx.run(&["action", "click", "1"]);
+    assert_eq!(
+        code(&gone_act),
+        4,
+        "action on a vanished active frame must be FrameNotFound (exit 4), not BridgeUnavailable: {}",
+        stdout(&gone_act)
+    );
+    assert!(
+        stdout(&gone_act).contains("FrameNotFound"),
+        "vanished-frame action must carry FrameNotFound: {}",
+        stdout(&gone_act)
+    );
     // Reset the frame scope for the steps below — the active iframe is gone.
     let _ = fx.run(&["frame", "main"]);
 

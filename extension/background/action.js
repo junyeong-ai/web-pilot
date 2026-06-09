@@ -4,7 +4,7 @@
 import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
-import { ensureBridge, sendToContent } from "./content.js";
+import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
 import { countHttpSubframes } from "./capture.js";
@@ -340,9 +340,10 @@ async function dispatchActionToPage(tab, action) {
   // documentId is how the settle below knows to wait for the new page rather than
   // capture the old one — the active-frame analogue of the main-frame navWatch.
   let activeFrameDocId = null;
+  let activeFrames = null;
   if (activeFrameId !== 0) {
-    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null);
-    activeFrameDocId = frames?.find((f) => f.frameId === activeFrameId)?.documentId ?? null;
+    activeFrames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null);
+    activeFrameDocId = activeFrames?.find((f) => f.frameId === activeFrameId)?.documentId ?? null;
   }
 
   try {
@@ -354,6 +355,17 @@ async function dispatchActionToPage(tab, action) {
     if (action.kind === "key_press") {
       r = await dispatchKeyPress(tab.id, action);
     } else {
+      // The switched frame must still exist before a bridge action touches it: a
+      // frame that vanished since the capture is FrameNotFound (exit 4 → recapture),
+      // not the BridgeUnavailable (exit 3 → infra) a failed inject yields —
+      // matching wait/dom/capture and headless `bridge_context_id`. key_press is
+      // exempt: it targets browser FOCUS, not the active frame's bridge. Reuse the
+      // frame tree already fetched for the documentId above.
+      const frameGone = await frameVanishedError(tab.id, activeFrameId, activeFrames);
+      if (frameGone) {
+        navWatch.dispose();
+        return { type: "Action", success: false, error: frameGone };
+      }
       await ensureBridge(tab.id, activeFrameId);
       r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
     }
