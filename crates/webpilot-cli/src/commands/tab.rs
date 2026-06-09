@@ -94,7 +94,13 @@ async fn new_tab<T: Transport>(transport: &mut T, url: &str) -> Result<CommandOu
             ..
         } => {
             lift_error(success, error, ())?;
-            new_tab.map(|t| t.url).unwrap_or_else(|| url.to_string())
+            // `tab new` always settles and returns the opened tab; a success with
+            // no `new_tab` is a protocol violation, not an occasion to echo the
+            // requested URL — that would report the requested address as the landed
+            // one, masking a redirect (or the missing tab) behind a plausible lie.
+            new_tab
+                .map(|t| t.url)
+                .ok_or_else(|| anyhow::anyhow!("tab new reported success but returned no tab"))?
         }
         ResponseData::Error { error } => return Err(error.into()),
         _ => anyhow::bail!("Unexpected response shape"),

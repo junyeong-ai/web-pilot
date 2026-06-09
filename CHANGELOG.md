@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.82] - 2026-06-09
+
+### Fixed
+
+- **`tab new` no longer echoes the requested URL as the landed one when the tab is
+  missing.** It reports the new tab's settled URL (redirect-resolved) from the
+  response — but on a success with no `new_tab` it fell back to the requested URL,
+  the exact "blind echo" its own contract forbids: a redirect (or a missing tab)
+  would be reported as the requested address. Since the handler always populates
+  `new_tab` on success in both modes, that case is a protocol violation and now
+  fails honestly rather than returning a plausible lie.
+
 ## [0.4.81] - 2026-06-09
 
 ### Fixed
