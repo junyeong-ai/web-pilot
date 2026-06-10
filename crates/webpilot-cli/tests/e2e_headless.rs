@@ -924,6 +924,35 @@ fn headless_behavioral_flow() {
         stdout(&framenav_click)
     );
 
+    // 2i-name. The same iframe-internal settle when the link addresses the frame
+    //     by NAME: the iframe is `name="innerfr"` and `#selftarget` carries
+    //     `target="innerfr"`, which HTML resolves to the frame itself — exactly
+    //     `_self`. The bridge must map the matching name to a current-frame nav
+    //     hint, not classify it as a popup (which would skip the settle and
+    //     capture the pre-click document).
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+    let _ = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(
+        code(&fx.run(&["frame", "url", "/frame"])),
+        0,
+        "re-enter /frame for the named-target nav"
+    );
+    let cap_name = fx.run(&["capture", "--include", "dom"]);
+    let selftarget_idx = index_of(&cap_name, "selftarget");
+    let selftarget_click = fx.run(&["action", "click", &selftarget_idx, "--capture"]);
+    assert_eq!(
+        code(&selftarget_click),
+        0,
+        "named-target iframe-internal nav click failed: {}",
+        stdout(&selftarget_click)
+    );
+    assert!(
+        stdout(&selftarget_click).contains("framed2btn"),
+        "a link targeting the frame's own NAME must settle like _self and \
+         capture the new frame document (framed2btn): {}",
+        stdout(&selftarget_click)
+    );
+
     let back = fx.run(&["frame", "main"]);
     assert_eq!(code(&back), 0, "frame main failed: {}", stdout(&back));
 

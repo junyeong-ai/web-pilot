@@ -24,7 +24,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <div id="presdiv" role="presentation" onclick="document.title='pres-clicked'">presentation click target</div>
 <p id="wsp">whitespace<br>collapse<br>marker</p>
 <nav><div id="shadowhost"></div></nav>
-<iframe src="/frame"></iframe>
+<iframe src="/frame" name="innerfr"></iframe>
 <script>
   // A DOCUMENT-level delegated click listener: it fires for a click inside the
   // shadow root only if the synthetic event is `composed` (crosses the boundary).
@@ -47,6 +47,7 @@ pub const FRAME: &str = r##"<!doctype html><html><head><title>frame</title></hea
 <body><a id="link" href="#">inner link</a>
 <a id="framenav" href="/framed2">go framed2</a>
 <a id="topnav" target="_top" href="/second">go top</a>
+<a id="selftarget" target="innerfr" href="/framed2">self by name</a>
 <iframe src="/nested"></iframe></body></html>"##;
 
 /// An HTTP iframe nested INSIDE `/frame`. Switching into `/frame` and capturing

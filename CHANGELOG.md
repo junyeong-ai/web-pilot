@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.162] - 2026-06-11
+
+### Fixed
+
+- **A link or form targeting an existing frame's NAME now settles like the
+  keyword it resolves to, instead of being classified as a popup.** HTML
+  resolves a non-keyword `target`/`formtarget` name against the existing
+  browsing contexts — most commonly the frame itself (a named iframe whose own
+  links target its own name, the classic frameset-era pattern). The bridge
+  treated every non-keyword name as a popup, so such a click reported success
+  with no navigation hint, skipped the settle, and the following capture showed
+  the pre-click document. The bridge now maps a name matching `window.name` to
+  `_self`, a same-origin parent's name to `_parent`, and a same-origin top's
+  name to `_top` (case-sensitive, per spec); an unreadable cross-origin
+  ancestor or an unmatched name stays a popup, the pre-existing conservative
+  behaviour. Shared bridge; an e2e clicks a `target="innerfr"` link inside the
+  `name="innerfr"` iframe and asserts the auto-capture lands on the new frame
+  document.
+
 ## [0.4.161] - 2026-06-11
 
 ### Changed

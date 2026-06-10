@@ -682,13 +682,39 @@
   // existing frame (a popup / named or `_blank` target, a javascript:/mailto:
   // url, or a fragment-only same-document change). Shared by both nav hints so
   // they can never disagree about WHETHER — and WHERE — a click navigates.
+  // A non-keyword target NAME navigates an existing frame when it matches one
+  // (HTML's browsing-context name lookup) — most commonly THIS frame, a named
+  // iframe whose own links target its own name. Map the names this frame can
+  // see to their keyword equivalent; cross-origin ancestors throw on `.name`
+  // and stay null (conservative: treated as a popup, the pre-existing
+  // behaviour). Name matching is case-SENSITIVE per spec — only the keywords
+  // are case-insensitive.
+  function resolveNamedTarget(name) {
+    if (window.name === name) return "_self";
+    try {
+      if (window.parent !== window && window.parent.name === name) return "_parent";
+    } catch {
+      /* cross-origin parent — unreadable, not this frame's concern */
+    }
+    try {
+      if (window.top !== window && window.top.name === name) return "_top";
+    } catch {
+      /* cross-origin top — unreadable */
+    }
+    return null; // no reachable frame carries the name → a popup
+  }
+
   function navTargetKeyword(el, notCanceled) {
     if (!notCanceled) return null;
     const a = el.closest("a[href]");
     if (a) {
-      const target = (a.target || "").trim().toLowerCase();
+      let target = (a.target || "").trim().toLowerCase();
       if (target && target !== "_self" && target !== "_top" && target !== "_parent") {
-        return null; // opens a new context (a popup), not an existing frame
+        // Not a keyword: resolve the raw (case-sensitive) name to a frame this
+        // click would actually navigate, or bail as a popup.
+        const mapped = resolveNamedTarget((a.target || "").trim());
+        if (!mapped) return null;
+        target = mapped;
       }
       let dest, cur;
       try {
@@ -715,11 +741,14 @@
     // with no type defaults to submit.
     const btn = el.closest('button, input[type="submit"], input[type="image"]');
     if (btn && btn.form && (btn.tagName !== "BUTTON" || btn.type === "submit")) {
-      const t = (btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "")
-        .trim()
-        .toLowerCase();
+      const raw = (btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "").trim();
+      let t = raw.toLowerCase();
       if (t && t !== "_self" && t !== "_top" && t !== "_parent") {
-        return null; // submits into a new context (a popup), not an existing frame
+        // Same name resolution as the link path: a form targeting an existing
+        // frame's name submits INTO that frame, not a popup.
+        const mapped = resolveNamedTarget(raw);
+        if (!mapped) return null;
+        t = mapped;
       }
       return t || "_self";
     }
