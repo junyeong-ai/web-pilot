@@ -570,14 +570,32 @@ async function handleSessionImport(rawData) {
     if (hasStorage && !tab) {
       return { type: "SessionResult", success: false, error: noPageErr() };
     }
-    // The storage import below runs in the active frame's bridge; a switched
-    // frame that vanished is FrameNotFound (exit 4 → recapture), not
-    // BridgeUnavailable. Check it BEFORE any cookie is applied so a gone frame
-    // never half-imports (cookies committed behind a storage that can't land).
+    // Apply storage BEFORE the cookies (headless parity). Storage is the
+    // quota-prone, bulky part and runs in the active frame's bridge — so a write
+    // the page rejects (a vanished frame → FrameNotFound, or a localStorage
+    // quota overflow) must fail up front, before any cookie is committed.
+    // Otherwise a half-import leaves the agent an authenticated session (cookies
+    // set) on inconsistent app state (storage that couldn't land); storage first
+    // leaves no cookies on that failure, merely logged-out. A successful import
+    // lands both halves regardless of order.
     if (hasStorage && tab) {
       const frameGone = await frameVanishedError(tab.id, activeFrameId);
       if (frameGone) {
         return { type: "SessionResult", success: false, error: frameGone };
+      }
+      // A storage import failure is propagated, not swallowed (headless
+      // parity): the caller asked to restore it and must know it didn't.
+      await ensureBridge(tab.id, activeFrameId);
+      const r = await sendToContent(tab.id, {
+        type: "importStorage",
+        // Shape is validated above; an absent/empty field is `{}` (a no-op),
+        // matching headless's `unwrap_or_else(|| json!({}))`. The bridge then
+        // validates the values (must be strings) as it imports.
+        localStorage: data.local_storage || {},
+        sessionStorage: data.session_storage || {},
+      }, activeFrameId);
+      if (r && r.success === false) {
+        return { type: "SessionResult", success: false, error: r.error || otherErr("storage import failed") };
       }
     }
     let cookiesFailed = 0;
@@ -631,22 +649,6 @@ async function handleSessionImport(rawData) {
         if (!set) cookiesFailed++;
       } catch {
         cookiesFailed++;
-      }
-    }
-    if (tab && hasStorage) {
-      // A storage import failure is propagated, not swallowed (headless
-      // parity): the caller asked to restore it and must know it didn't.
-      await ensureBridge(tab.id, activeFrameId);
-      const r = await sendToContent(tab.id, {
-        type: "importStorage",
-        // Shape is validated above; an absent/empty field is `{}` (a no-op),
-        // matching headless's `unwrap_or_else(|| json!({}))`. The bridge then
-        // validates the values (must be strings) as it imports.
-        localStorage: data.local_storage || {},
-        sessionStorage: data.session_storage || {},
-      }, activeFrameId);
-      if (r && r.success === false) {
-        return { type: "SessionResult", success: false, error: r.error || otherErr("storage import failed") };
       }
     }
     // A cookie the browser refused, or a malformed row that couldn't be parsed,

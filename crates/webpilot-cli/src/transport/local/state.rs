@@ -379,12 +379,29 @@ impl LocalTransport {
             .into_iter()
             .flatten()
             .any(|v| v.as_object().is_some_and(|m| !m.is_empty()));
-        // Storage imports through the active frame's bridge, so a switched frame
-        // that vanished is FrameNotFound. Resolve its context BEFORE the cookie loop
-        // so a gone frame fails up front and never half-imports — cookies committed
-        // behind a storage that can't land — matching the browser session guard.
+        // Apply storage BEFORE the cookies. Storage is the quota-prone, bulky
+        // part, and it imports through the active frame's bridge — so a write
+        // the page rejects (a vanished frame → FrameNotFound, or a localStorage
+        // quota overflow) must fail up front, before any cookie is committed.
+        // Otherwise a half-import leaves the agent an authenticated session
+        // (cookies set) sitting on inconsistent app state (storage that could
+        // not land) — subtly wrong page behaviour the agent can't see. With
+        // storage first, the same failure leaves no cookies, so the page is
+        // merely logged-out, not authenticated-but-inconsistent. A successful
+        // import is unaffected: both halves land regardless of order.
         if has_storage {
             self.bridge_context_id().await?;
+            // A storage write the page rejected (quota) is surfaced by the
+            // bridge as a typed error — parse it rather than treating any
+            // non-throwing reply as success.
+            let resp = self
+                .invoke_bridge(&json!({
+                    "type": "importStorage",
+                    "localStorage": local_storage.cloned().unwrap_or_else(|| json!({})),
+                    "sessionStorage": session_storage.cloned().unwrap_or_else(|| json!({})),
+                }))
+                .await?;
+            Self::parse_bridge_response(resp)?;
         }
 
         let mut cookies_failed = 0usize;
@@ -419,20 +436,6 @@ impl LocalTransport {
                 }
             }
         }
-        if has_storage {
-            // A storage write the page rejected (quota) is surfaced by the
-            // bridge as a typed error — parse it rather than treating any
-            // non-throwing reply as success.
-            let resp = self
-                .invoke_bridge(&json!({
-                    "type": "importStorage",
-                    "localStorage": local_storage.cloned().unwrap_or_else(|| json!({})),
-                    "sessionStorage": session_storage.cloned().unwrap_or_else(|| json!({})),
-                }))
-                .await?;
-            Self::parse_bridge_response(resp)?;
-        }
-
         // A cookie the browser refused, or a malformed row that couldn't be
         // parsed, is a partial failure the agent must see — never a success that
         // silently imported less than the file contained.

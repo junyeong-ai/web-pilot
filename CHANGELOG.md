@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.156] - 2026-06-10
+
+### Fixed
+
+- **`session import` applies storage before cookies, so a storage failure never
+  leaves cookies committed behind it.** The import set every cookie first, then
+  wrote `localStorage`/`sessionStorage` — so a write the page rejected (a
+  `localStorage` quota overflow) failed *after* the auth cookies were already
+  applied, leaving the agent an authenticated session sitting on inconsistent
+  app state, subtly-wrong page behaviour it could not see. The import already
+  resolved the storage frame up front to avoid exactly this for a vanished
+  frame; the bulk write itself now runs there too. Storage is applied first and
+  bails on any rejection before a single cookie is set, so the same failure
+  leaves the page merely logged-out, not authenticated-but-inconsistent. A
+  successful import lands both halves regardless of order. Both modes.
+
 ## [0.4.155] - 2026-06-10
 
 ### Fixed
