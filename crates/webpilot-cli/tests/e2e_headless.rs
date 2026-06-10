@@ -1433,5 +1433,23 @@ fn headless_behavioral_flow() {
         stdout(&cross_switch)
     );
 
+    // 8c. `context close NAME --all` is a contradictory request — close one named
+    //     context AND every context — so it must be rejected (InvalidArgument,
+    //     exit 7), never silently take the destructive all-branch that wipes every
+    //     agent's contexts while reporting the single named close the agent asked
+    //     for. The rejection lands BEFORE any disposal, so ctx-a survives.
+    let ambiguous_close = fx.run(&["context", "close", "ctx-a", "--all"]);
+    assert_eq!(
+        code(&ambiguous_close),
+        7,
+        "context close NAME --all must be InvalidArgument (7), not a silent close-all: {}",
+        stdout(&ambiguous_close)
+    );
+    assert!(
+        stdout(&fx.run(&["context", "list"])).contains("ctx-a"),
+        "a rejected ambiguous close must not have disposed ctx-a: {}",
+        stdout(&fx.run(&["context", "list"]))
+    );
+
     drop(fx);
 }

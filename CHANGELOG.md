@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.119] - 2026-06-10
+
+### Fixed
+
+- **`context close NAME --all` is now rejected as `InvalidArgument` (exit 7)
+  instead of silently destroying every context.** The handler took the `--all`
+  branch whenever the flag was set, ignoring the `name` — so a contradictory
+  `context close mycontext --all` wiped EVERY context (and every agent's tabs)
+  while the agent believed it closed one named context. The two are now
+  mutually exclusive: specify a name or `--all`, not both.
+
 ## [0.4.118] - 2026-06-10
 
 ### Fixed
