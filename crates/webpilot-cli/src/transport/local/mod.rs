@@ -187,7 +187,7 @@ impl LocalTransport {
         // per-tab monitoring survives because the worker itself persists.
         let (console_armed, network_armed) = read_persisted_monitors(browser_context_id.as_deref());
 
-        Ok(Self {
+        let transport = Self {
             browser,
             page,
             ws_url,
@@ -200,7 +200,25 @@ impl LocalTransport {
             console_monitoring: Arc::new(AtomicBool::new(console_armed)),
             network_monitoring: Arc::new(AtomicBool::new(network_armed)),
             _context_lock: context_lock,
-        })
+        };
+
+        // Re-arm armed monitors against the CURRENT document, mirroring the
+        // device re-apply above. The hooks live on `window` and survive process
+        // boundaries, so restoring the flag is enough WHILE the document stays
+        // put — but a navigation WebPilot did NOT drive (a page-initiated
+        // redirect between two CLI commands) wipes them with no
+        // `reinstall_monitors` to fire, so an armed monitor would silently stop
+        // recording until the next WebPilot-driven navigation. Re-applying on
+        // open keeps an armed monitor following the page across out-of-band
+        // navigations too. The install JS is idempotent and buffer-preserving
+        // (it re-patches only an unpatched `console`/`fetch` and keeps an
+        // existing buffer), so re-arming an already-hooked document is a no-op,
+        // and it re-checks policy, so an `eval` deny still stops it.
+        if console_armed || network_armed {
+            transport.reinstall_monitors().await;
+        }
+
+        Ok(transport)
     }
 
     pub(crate) fn persisted_context_key(&self) -> Option<&str> {

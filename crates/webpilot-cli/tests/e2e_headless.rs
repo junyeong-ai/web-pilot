@@ -876,6 +876,33 @@ fn headless_behavioral_flow() {
     // Restore the working page for the steps below (the deny test left us on /log).
     assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
 
+    // 3c. An armed monitor must survive a navigation WebPilot did NOT drive (a
+    //     page-initiated `location.href` redirect). Between two CLI processes
+    //     nothing watches for that nav, so its document swap wipes the MAIN-world
+    //     hooks with no `reinstall_monitors` to fire — the monitor would silently
+    //     go dead. `open` re-arms an armed monitor against the current document,
+    //     so a log emitted after the out-of-band nav is still captured.
+    let _ = fx.run(&["console", "start"]);
+    let _ = fx.run(&["console", "clear"]);
+    // A bare eval that sets location.href is an OUT-OF-BAND nav — not an `action
+    // navigate`, so navigate_reconnect's post-nav reinstall never runs for it.
+    let _ = fx.run(&["eval", &format!("window.location.href='{base}/frame'; 'go'")]);
+    // Settle on /frame deterministically: #topnav exists only in the FRAME doc,
+    // so the wait cannot pass on the pre-nav page.
+    assert_eq!(
+        code(&fx.run(&["wait", "--timeout", "5", "selector", "#topnav"])),
+        0,
+        "out-of-band nav must reach the /frame document"
+    );
+    let _ = fx.run(&["eval", "console.log('oob-recovered')"]);
+    assert!(
+        stdout(&fx.run(&["console", "read"])).contains("oob-recovered"),
+        "an armed monitor must re-arm on open after an out-of-band navigation and \
+         capture a log emitted in the new document (open re-applies armed monitors)"
+    );
+    // Restore the working page for the steps below.
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+
     // 4. A click-opened tab (`rel=noopener`, so correlation cannot rely on
     //    `window.opener`) is reported as `new_tab` and becomes the active tab —
     //    the pin follows the agent's working tab.

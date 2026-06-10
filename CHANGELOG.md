@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.125] - 2026-06-10
+
+### Fixed
+
+- **An armed console/network monitor now survives a navigation WebPilot did not
+  drive (headless).** The monitor hooks live on `window` and are wiped by every
+  full-document navigation; `reinstall_monitors` re-injected them after a
+  WebPilot-driven navigation, but a page-initiated redirect (`location.href`)
+  that happened between two CLI processes had no watcher to re-arm it, so the
+  monitor silently went dead until the next WebPilot-driven navigation.
+  `LocalTransport::open` now re-applies armed monitors against the current
+  document — mirroring how it already re-applies device emulation — so a monitor
+  follows the page across out-of-band navigations too. The install JS is
+  idempotent and buffer-preserving, and re-arming re-checks the `eval` policy
+  gate. (Browser mode already re-arms on every navigation via the persistent
+  service worker, so this gap was headless-only.)
+
 ## [0.4.124] - 2026-06-10
 
 ### Fixed
