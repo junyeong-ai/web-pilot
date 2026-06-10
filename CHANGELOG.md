@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.142] - 2026-06-10
+
+### Fixed
+
+- **A malformed `config.toml` no longer blocks the local commands that read no
+  settings.** `settings::init()` ran unconditionally at CLI startup, so a typo
+  in `[timeouts]` aborted `policy`, `setup`, `uninstall`, `diff`, and `self`
+  before their handlers ran — even though none of them touch settings. That
+  held the recovery and security surfaces hostage to an unrelated config error:
+  you could not `policy default deny` to lock the tool down, nor `setup` /
+  `uninstall` to repair the install, when `config.toml` was the very thing that
+  was broken. Validation now runs after the local-command early-return, so the
+  settings-backed paths (transport / headless / browser / MCP) still fail
+  loudly with a clear `InvalidArgument`, while the settings-free commands stay
+  usable. The host keeps its own up-front validation.
+
 ## [0.4.141] - 2026-06-10
 
 ### Fixed

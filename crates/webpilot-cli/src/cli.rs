@@ -43,10 +43,6 @@ pub async fn run_cli() -> Result<()> {
         .with_target(false)
         .try_init();
 
-    // Validate settings up front so a malformed `config.toml` fails loudly with
-    // a clear message instead of being silently ignored.
-    webpilot::settings::init().map_err(|detail| WebPilotError::InvalidArgument { detail })?;
-
     let mode = output::detect_output_mode(cli.json);
 
     if cli.browser && cli.context.is_some() {
@@ -60,6 +56,17 @@ pub async fn run_cli() -> Result<()> {
     if matches!(cli.command.execution(), Execution::Local) {
         return run_local(cli.command, mode).await;
     }
+
+    // Settings back only the transport, MCP, and headless/browser paths, so
+    // `config.toml` is validated HERE — after the local commands have returned.
+    // `policy`, `setup`, `uninstall`, `diff`, and `self` read no settings, and
+    // must stay usable to inspect or repair an install even when config.toml is
+    // itself what's broken: a security `policy default deny` or a recovery
+    // `setup` / `uninstall` cannot be held hostage by an unrelated timeouts
+    // typo. Every path that actually reads settings still fails loudly here (a
+    // clear InvalidArgument) rather than running with values the operator
+    // believes are in effect but aren't.
+    webpilot::settings::init().map_err(|detail| WebPilotError::InvalidArgument { detail })?;
 
     // The MCP server owns its own long-lived transport and stdio loop; it picks
     // the mode from the same flags the CLI does.
