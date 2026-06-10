@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.164] - 2026-06-11
+
+### Fixed
+
+- **A text/AX-only capture no longer claims "entire page visible".** The shell
+  snapshot those captures ride carried zeroed scroll metrics, and the renderer
+  read all-zeroes as a page that fits the viewport — so `capture --include
+  text` on a long, scrolled page told the agent there was nothing more to
+  scroll. Scroll metrics are now `Option`al: a capture that never measured
+  layout carries `None` and the rendered text omits the Scroll line entirely
+  (only a DOM pass, which measures, may speak about scroll). Both modes — the
+  browser shell drops the zeroed struct, headless's `empty_snapshot` is `None`,
+  and a unit test pins the omission.
+
 ## [0.4.163] - 2026-06-11
 
 ### Fixed

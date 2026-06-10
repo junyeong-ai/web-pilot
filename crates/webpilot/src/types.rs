@@ -382,7 +382,12 @@ pub struct DomSnapshot {
     pub total_nodes: u32,
     pub page_url: String,
     pub page_title: String,
-    pub scroll: ScrollInfo,
+    /// Scroll metrics, present only when a DOM pass actually measured them. A
+    /// text/AX-only capture never reads layout, so it carries `None` and the
+    /// rendered text omits the Scroll line — a zeroed struct would render as
+    /// "entire page visible", a claim nothing measured.
+    #[serde(default)]
+    pub scroll: Option<ScrollInfo>,
     #[serde(default)]
     pub scroll_percent: u32,
     pub extraction_ms: u64,
@@ -707,15 +712,19 @@ impl DomSnapshot {
             line_safe(&self.page_url)
         ));
 
-        let above = self.scroll.pages_above();
-        let below = self.scroll.pages_below();
-        let pct = self.scroll_percent;
-        if above < 0.05 && below < 0.05 {
-            out.push_str("--- Scroll: entire page visible ---\n");
-        } else {
-            out.push_str(&format!(
-                "--- Scroll: {pct}% ({above:.1} above, {below:.1} below) ---\n"
-            ));
+        // Only a capture that measured layout may speak about scroll; a
+        // text/AX-only capture carries no metrics and says nothing.
+        if let Some(ref scroll) = self.scroll {
+            let above = scroll.pages_above();
+            let below = scroll.pages_below();
+            let pct = self.scroll_percent;
+            if above < 0.05 && below < 0.05 {
+                out.push_str("--- Scroll: entire page visible ---\n");
+            } else {
+                out.push_str(&format!(
+                    "--- Scroll: {pct}% ({above:.1} above, {below:.1} below) ---\n"
+                ));
+            }
         }
 
         if self.subframes > 0 {
@@ -791,7 +800,7 @@ mod tests {
             total_nodes: 0,
             page_url: "x".into(),
             page_title: "y".into(),
-            scroll: ScrollInfo::default(),
+            scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
             subframes: 0,
@@ -837,7 +846,7 @@ mod tests {
             total_nodes: 1,
             page_url: "x".into(),
             page_title: "y".into(),
-            scroll: ScrollInfo::default(),
+            scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
             subframes: 0,
@@ -875,7 +884,7 @@ mod tests {
                 total_nodes: 1,
                 page_url: "x".into(),
                 page_title: "y".into(),
-                scroll: ScrollInfo::default(),
+                scroll: Some(ScrollInfo::default()),
                 scroll_percent: 0,
                 extraction_ms: 0,
                 subframes: 0,
@@ -920,7 +929,7 @@ mod tests {
             total_nodes: 1,
             page_url: "x".into(),
             page_title: "y".into(),
-            scroll: ScrollInfo::default(),
+            scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
             subframes: 0,
@@ -945,7 +954,7 @@ mod tests {
             total_nodes: 0,
             page_url: "x".into(),
             page_title: "y".into(),
-            scroll: ScrollInfo::default(),
+            scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
             subframes: 0,
@@ -971,13 +980,43 @@ mod tests {
     }
 
     #[test]
+    fn to_text_omits_the_scroll_line_when_nothing_measured() {
+        let mut snap = DomSnapshot {
+            elements: Vec::new(),
+            total_nodes: 0,
+            page_url: "x".into(),
+            page_title: "y".into(),
+            // A text/AX-only capture never reads layout — no scroll metrics.
+            scroll: None,
+            scroll_percent: 0,
+            extraction_ms: 0,
+            subframes: 0,
+            shadow_truncated: false,
+            text_content: Some("body".into()),
+            text_truncated: false,
+            accessibility_tree: None,
+        };
+        assert!(
+            !snap.to_text().contains("Scroll:"),
+            "an unmeasured capture must not claim a scroll state: {}",
+            snap.to_text()
+        );
+        // A measured capture (a DOM pass) still renders it.
+        snap.scroll = Some(ScrollInfo::default());
+        assert!(
+            snap.to_text()
+                .contains("--- Scroll: entire page visible ---")
+        );
+    }
+
+    #[test]
     fn to_text_renders_captured_page_text() {
         let mut snap = DomSnapshot {
             elements: Vec::new(),
             total_nodes: 0,
             page_url: "x".into(),
             page_title: "y".into(),
-            scroll: ScrollInfo::default(),
+            scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
             subframes: 0,

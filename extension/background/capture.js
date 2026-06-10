@@ -320,9 +320,11 @@ async function handleCapture(command) {
 }
 
 function emptyDom() {
+  // No `scroll`: this shell carries no measured layout, and an absent field
+  // deserializes as None so the rendered text omits the Scroll line — a zeroed
+  // struct would claim "entire page visible", which nothing measured.
   return {
     elements: [], total_nodes: 0, page_url: "", page_title: "",
-    scroll: { scroll_x: 0, scroll_y: 0, scroll_width: 0, scroll_height: 0, viewport_width: 0, viewport_height: 0 },
     scroll_percent: 0, extraction_ms: 0,
   };
 }

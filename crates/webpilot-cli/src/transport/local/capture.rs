@@ -6,7 +6,7 @@ use webpilot::WebPilotError;
 use webpilot::capture::{CaptureField, CaptureOpts};
 use webpilot::dirs;
 use webpilot::protocol::ResponseData;
-use webpilot::types::{DomSnapshot, ScrollInfo};
+use webpilot::types::DomSnapshot;
 
 use super::LocalTransport;
 
@@ -338,7 +338,7 @@ fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
         total_nodes: 0,
         page_url: page_url.to_string(),
         page_title: page_title.to_string(),
-        scroll: ScrollInfo::default(),
+        scroll: None,
         scroll_percent: 0,
         extraction_ms: 0,
         subframes: 0,
