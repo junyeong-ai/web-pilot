@@ -135,6 +135,13 @@ fn headless_behavioral_flow() {
         !elements.iter().any(|e| e["id"] == "hiddenchild"),
         "a display:none element must never be indexed: {dom}"
     );
+    // An explicit `draggable="true"` is an interaction affordance: the `drag`
+    // action addresses elements by index, so a declared drag source must be
+    // capturable even with no other marker/semantic tag.
+    assert!(
+        elements.iter().any(|e| e["id"] == "dragme"),
+        "a draggable=\"true\" element must be indexed (it is the drag action's addressee): {dom}"
+    );
     // A `role="presentation"` element carrying a click marker is a real click
     // target: ARIA none/presentation STRIP the implicit role, so the marker
     // heuristic must treat it like a plain div, not skip it as a semantic control.

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.171] - 2026-06-11
+
+### Fixed
+
+- **A `draggable="true"` element is indexed.** The `drag` action addresses
+  elements by snapshot index, but a declared drag source carrying no other
+  marker/semantic tag was invisible to the capture — the action existed with no
+  way to name its target. The explicit attribute joins the interaction-marker
+  set (the selector matches only the literal attribute, never the implicit
+  draggable default of images/links). Empirically verified end-to-end: dragging
+  a draggable source drives the real HTML5 DnD session (dragstart → drag →
+  dragend; mouseup is correctly absent per spec), and dragging a plain element
+  delivers the full mouse gesture (mousedown → moves → mouseup on the target).
+- **The drag gesture carries the `buttons` bitmask on every event** (pressed/
+  moved: 1, released: 0), aligning with how CDP tracks held buttons across a
+  gesture (and with Puppeteer/Playwright). Both modes.
+
 ## [0.4.170] - 2026-06-11
 
 ### Fixed

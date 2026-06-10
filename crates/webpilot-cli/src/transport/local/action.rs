@@ -856,11 +856,19 @@ impl LocalTransport {
         let tx = coord(&resp, "tx")?;
         let ty = coord(&resp, "ty")?;
 
+        // `buttons` (the held-button bitmask, 1 = left) must accompany every
+        // event of the gesture: CDP tracks the drag through it, and a move
+        // carrying `buttons: 0` resets that state so the final release is
+        // treated as releasing a button that isn't down — silently ignored,
+        // leaving the page mid-drag (mouseup never fires) while the command
+        // reports success. Empirically verified: without it the page sees
+        // mousedown + a single move and NO mouseup.
         self.page
             .send(
                 "Input.dispatchMouseEvent",
                 Some(json!({
-                    "type": "mousePressed", "x": sx, "y": sy, "button": "left", "clickCount": 1,
+                    "type": "mousePressed", "x": sx, "y": sy,
+                    "button": "left", "buttons": 1, "clickCount": 1,
                 })),
             )
             .await?;
@@ -877,6 +885,7 @@ impl LocalTransport {
                         "x": sx + (tx - sx) * ratio,
                         "y": sy + (ty - sy) * ratio,
                         "button": "left",
+                        "buttons": 1,
                     })),
                 )
                 .await?;
@@ -887,7 +896,8 @@ impl LocalTransport {
             .send(
                 "Input.dispatchMouseEvent",
                 Some(json!({
-                    "type": "mouseReleased", "x": tx, "y": ty, "button": "left", "clickCount": 1,
+                    "type": "mouseReleased", "x": tx, "y": ty,
+                    "button": "left", "buttons": 0, "clickCount": 1,
                 })),
             )
             .await?;

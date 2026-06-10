@@ -568,20 +568,25 @@ async function handleDrag(tabId, action) {
 
     const { sx, sy, tx, ty } = coords;
     const steps = Math.max(action.steps || 1, 1);
+    // `buttons` (held-button bitmask, 1 = left) must ride every event of the
+    // gesture: CDP tracks the drag through it, and a move carrying buttons:0
+    // resets that state so the release is treated as releasing an un-pressed
+    // button — silently ignored, the page never sees mouseup (headless parity;
+    // empirically verified there).
     await withCdp(tabId, async (tid) => {
       await cdpSend(tid, "Input.dispatchMouseEvent", {
-        type: "mousePressed", x: sx, y: sy, button: "left", clickCount: 1,
+        type: "mousePressed", x: sx, y: sy, button: "left", buttons: 1, clickCount: 1,
       });
       await sleep(50);
       for (let i = 1; i <= steps; i++) {
         const r = i / steps;
         await cdpSend(tid, "Input.dispatchMouseEvent", {
-          type: "mouseMoved", x: sx + (tx - sx) * r, y: sy + (ty - sy) * r, button: "left",
+          type: "mouseMoved", x: sx + (tx - sx) * r, y: sy + (ty - sy) * r, button: "left", buttons: 1,
         });
         await sleep(20);
       }
       await cdpSend(tid, "Input.dispatchMouseEvent", {
-        type: "mouseReleased", x: tx, y: ty, button: "left", clickCount: 1,
+        type: "mouseReleased", x: tx, y: ty, button: "left", buttons: 0, clickCount: 1,
       });
     });
 

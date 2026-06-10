@@ -124,8 +124,12 @@
     // semantic pass — a design-system custom element whose clickable part
     // lives in its shadow root and carries `onclick`/`jsaction` rather than a
     // semantic tag would otherwise be invisible to the agent.
+    // `[draggable="true"]` is an explicit interaction affordance too — the
+    // `drag` action addresses elements by index, so a declared drag source
+    // must be capturable. (The attribute selector matches only the explicit
+    // attribute, never the implicit `draggable` default of images/links.)
     const markerSel = '[onclick],[data-action],[ng-click],' +
-      '[v-on\\:click],[\\@click],[data-click],[jsaction]';
+      '[v-on\\:click],[\\@click],[data-click],[jsaction],[draggable="true"]';
 
     // One shadow-DOM walk gathers all three candidate sets under one budget.
     const [all, markerEls, tabindexEls] = queryAllDeepMulti(

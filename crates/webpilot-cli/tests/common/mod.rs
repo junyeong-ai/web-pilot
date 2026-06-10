@@ -41,6 +41,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 </script>
 <div id="ce" contenteditable>hello</div>
 <input id="num" type="number">
+<div id="dragme" draggable="true">drag me</div>
 </body></html>"#;
 
 pub const FRAME: &str = r##"<!doctype html><html><head><title>frame</title></head>
