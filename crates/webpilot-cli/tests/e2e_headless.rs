@@ -759,6 +759,31 @@ fn headless_behavioral_flow() {
         stdout(&entered)
     );
 
+    // A click whose handler navigates via `location.href` (a JS navigation with no
+    // href attribute the bridge could hint) must STILL be settled: headless must
+    // catch the queued nav like browser mode does (pinned by the browser e2e), or
+    // url_changed is dropped and --capture races the slow target.
+    let _ = fx.run(&["action", "navigate", &base]);
+    let slow_cap = fx.run(&["capture", "--include", "dom"]);
+    let slownav_idx = index_of(&slow_cap, "slownav");
+    let slownav = fx.run(&["action", "click", &slownav_idx]);
+    assert_eq!(
+        code(&slownav),
+        0,
+        "slownav click failed: {}",
+        stdout(&slownav)
+    );
+    let slownav_json: serde_json::Value =
+        serde_json::from_str(&stdout(&slownav)).expect("slownav click json");
+    assert!(
+        slownav_json["url_changed"]
+            .as_str()
+            .is_some_and(|u| u.contains("/slow")),
+        "a click whose handler navigates via location.href must report url_changed=/slow \
+         (the settle must catch the queued JS nav, as browser mode does): {}",
+        stdout(&slownav)
+    );
+
     let _ = fx.run(&["action", "navigate", &base]);
     let logged = fx.run(&["eval", "console.log('e2e-monitor-marker')"]);
     assert_eq!(code(&logged), 0);
