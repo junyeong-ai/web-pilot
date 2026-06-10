@@ -5,7 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.135] - 2026-06-10
+## [0.4.136] - 2026-06-10
+
+### Fixed
+
+- **`cookie get NAME` of an absent cookie is now a typed not-found (exit 4)
+  instead of a `(0 cookies)` success.** Asking for a specific cookie that doesn't
+  exist returned an empty list with exit 0 — indistinguishable from a successful
+  read, so an agent checking an auth cookie's presence by exit code would misread
+  the absence as success. It now returns `CookieNotFound` (exit 4), matching how
+  `find`/`action click` report a missing target. `cookie list` (no name) is
+  unchanged — listing zero cookies is a valid result, not a miss. Both modes
+  (shared handler).
 
 ### Fixed
 

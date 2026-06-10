@@ -65,6 +65,9 @@ pub enum WebPilotError {
     #[error("Context not found: {name}. List: webpilot context list")]
     ContextNotFound { name: String },
 
+    #[error("Cookie not found: {name}. List: webpilot cookie list URL")]
+    CookieNotFound { name: String },
+
     #[error("Session error: {detail}")]
     Session { detail: String },
 
@@ -82,6 +85,7 @@ impl WebPilotError {
             | E::SelectorNotFound { .. }
             | E::TabNotFound { .. }
             | E::ContextNotFound { .. }
+            | E::CookieNotFound { .. }
             | E::FrameNotFound { .. } => 4,
             E::Timeout { .. } => 5,
             E::PolicyDenied { .. } => 6,
@@ -110,6 +114,7 @@ impl WebPilotError {
             E::PolicyDenied { .. } => "PolicyDenied",
             E::TabNotFound { .. } => "TabNotFound",
             E::ContextNotFound { .. } => "ContextNotFound",
+            E::CookieNotFound { .. } => "CookieNotFound",
             E::Session { .. } => "Session",
             E::Other { .. } => "Other",
         }
@@ -166,6 +171,9 @@ impl WebPilotError {
             "ContextNotFound" => Self::ContextNotFound {
                 name: str_field("name").unwrap_or(w.message),
             },
+            "CookieNotFound" => Self::CookieNotFound {
+                name: str_field("name").unwrap_or(w.message),
+            },
             "Session" | "SessionError" => Self::Session {
                 detail: str_field("detail").unwrap_or(w.message),
             },
@@ -209,6 +217,7 @@ impl WebPilotError {
             E::PolicyDenied { operation } => put("operation", operation.clone().into()),
             E::TabNotFound { tab_id } => put("tab_id", tab_id.clone().into()),
             E::ContextNotFound { name } => put("name", name.clone().into()),
+            E::CookieNotFound { name } => put("name", name.clone().into()),
             // The detail-carrying variants whose Display PREFIXES `detail`
             // ("Invalid argument: …", "Chrome connection lost: …", "Session
             // error: …") must round-trip the RAW detail, not just the formatted

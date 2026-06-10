@@ -61,6 +61,18 @@ pub async fn run<T: Transport>(transport: &mut T, args: CookieArgs) -> Result<Co
                 cookies
             };
 
+            // `cookie get NAME` asks for a SPECIFIC cookie — an absent one is a
+            // typed not-found (exit 4), like `find` / `action click` on a missing
+            // target, not a `(0 cookies)` list reported as success (exit 0) that an
+            // agent checking an auth cookie's presence by exit code would misread.
+            // `cookie list` (no name) keeps returning an empty list — listing zero
+            // is a valid result, not a miss.
+            if let Some(ref n) = name_filter
+                && filtered.is_empty()
+            {
+                return Err(webpilot::WebPilotError::CookieNotFound { name: n.clone() }.into());
+            }
+
             let human_lines: Vec<String> = filtered
                 .iter()
                 .map(|c| {

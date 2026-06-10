@@ -1394,6 +1394,24 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["cookie", "list", &base]))
     );
 
+    // `cookie get NAME` of an ABSENT cookie is a typed not-found (exit 4), like
+    // `find`/`click` on a missing target — not a "(0 cookies)" list reported as
+    // success (exit 0), which an agent checking an auth cookie by exit code would
+    // misread. A present cookie (`sess`, set above) still resolves.
+    let miss = fx.run(&["cookie", "get", &base, "no_such_cookie"]);
+    assert_eq!(
+        code(&miss),
+        4,
+        "cookie get of an absent cookie must be a typed not-found (exit 4), not a 0-item success: {}",
+        stdout(&miss)
+    );
+    assert_eq!(
+        code(&fx.run(&["cookie", "get", &base, "sess"])),
+        0,
+        "cookie get of a present cookie must still succeed: {}",
+        stdout(&fx.run(&["cookie", "get", &base, "sess"]))
+    );
+
     // `session import` of a non-object JSON (here an array) is a typed
     // InvalidArgument (exit 7), never a false `success` reporting an import that
     // applied nothing.

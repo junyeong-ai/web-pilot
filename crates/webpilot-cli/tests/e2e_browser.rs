@@ -685,6 +685,15 @@ fn browser_behavioral_flow() {
         "a cookie Chrome refused must not appear in the browser cookie list: {}",
         stdout(&fx.run(&["cookie", "list", &base]))
     );
+    // Browser-mode parity: `cookie get` of an absent cookie is a typed not-found
+    // (exit 4), not a 0-item success — the shared handler enforces it in both
+    // modes, so the IPC path must surface it too.
+    assert_eq!(
+        code(&fx.run(&["cookie", "get", &base, "no_such_cookie"])),
+        4,
+        "browser cookie get of an absent cookie must be a typed not-found (exit 4): {}",
+        stdout(&fx.run(&["cookie", "get", &base, "no_such_cookie"]))
+    );
 
     // 4e. Browser-mode parity for the session-import guard: a non-object JSON is
     //     a typed InvalidArgument (exit 7), not a false success reporting an
