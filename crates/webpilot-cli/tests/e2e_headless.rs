@@ -1451,5 +1451,17 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["context", "list"]))
     );
 
+    // 8d. `record --frames N --duration M` names the same quantity (a frame
+    //     count) two contradictory ways — the flags are documented as
+    //     alternatives — so it must be rejected (InvalidArgument, exit 7) before
+    //     any frame is captured, never silently honor one and drop the other.
+    let ambiguous_record = fx.run(&["record", "--frames", "2", "--duration", "5"]);
+    assert_eq!(
+        code(&ambiguous_record),
+        7,
+        "record --frames N --duration M must be InvalidArgument (7), not a silent pick-one: {}",
+        stdout(&ambiguous_record)
+    );
+
     drop(fx);
 }

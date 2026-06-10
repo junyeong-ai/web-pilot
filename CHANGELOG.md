@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.120] - 2026-06-10
+
+### Fixed
+
+- **`record --frames N --duration M` is now rejected as `InvalidArgument`
+  (exit 7) instead of silently honoring `--frames` and dropping `--duration`.**
+  The two flags are documented as alternatives — each names the same quantity
+  (a frame count) a different way — so supplying both is a contradictory
+  request. The match took `--frames` unconditionally and discarded the
+  `--duration` the agent also asked for; the four argument combinations are now
+  exhaustive and the both-supplied case is an explicit rejection.
+
 ## [0.4.119] - 2026-06-10
 
 ### Fixed

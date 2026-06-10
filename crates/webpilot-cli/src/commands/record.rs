@@ -55,12 +55,21 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
     }
 
     let frame_count = match (args.frames, args.duration) {
-        (Some(f), _) => f,
+        // The two are documented as alternatives — each names the same quantity
+        // (a frame count) a different way, so supplying both is a contradictory
+        // request. Reject it rather than silently honor one and drop the other.
+        (Some(_), Some(_)) => {
+            return Err(webpilot::WebPilotError::InvalidArgument {
+                detail: "specify --frames OR --duration, not both".into(),
+            }
+            .into());
+        }
+        (Some(f), None) => f,
         (None, Some(secs)) => {
             let interval_secs = args.interval as f64 / 1000.0;
             ((secs / interval_secs).ceil() as u32).max(1)
         }
-        _ => {
+        (None, None) => {
             return Err(webpilot::WebPilotError::InvalidArgument {
                 detail: "specify --frames or --duration".into(),
             }
