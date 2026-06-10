@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.151] - 2026-06-10
+
+### Fixed
+
+- **`console read` and `network read` text rows now lead with each entry's
+  timestamp.** The entries carried a millisecond timestamp (the JSON already
+  exposed it), but the human/MCP rows showed only level+message and
+  type/method/url/status/duration — so an agent reading via text could neither
+  correlate entries to wall-clock events nor, more importantly, learn the value
+  to pass to `--since` for an incremental read (the feature was effectively
+  unusable from the text surface). Each row now leads with `[<ms>]`. Rendering
+  moves to unit-tested `console_row` / `network_row` helpers; the JSON is
+  unchanged.
+
 ## [0.4.150] - 2026-06-10
 
 ### Fixed
