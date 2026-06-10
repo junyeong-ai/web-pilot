@@ -34,6 +34,14 @@ impl LocalTransport {
         if opts.annotate {
             self.require_main_frame("capture --annotate").await?;
         }
+        // `Page.printToPDF` is inherently a top-level operation — CDP has no
+        // frame-scoped print — so a PDF taken while an iframe is active would
+        // silently capture the TOP page, not the iframe the agent switched into
+        // (while the DOM/header describe the iframe). Refuse it like `--annotate`
+        // so the agent switches back to main rather than receiving the wrong page.
+        if include.contains(&CaptureField::Pdf) {
+            self.require_main_frame("capture --include pdf").await?;
+        }
 
         let want = |f: CaptureField| include.contains(&f);
         let want_dom = want(CaptureField::Dom) || opts.annotate;

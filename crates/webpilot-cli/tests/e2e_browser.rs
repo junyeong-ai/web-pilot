@@ -821,6 +821,17 @@ fn browser_behavioral_flow() {
         ax_tree.contains("inner link"),
         "AX tree while switched into the iframe must be scoped to it (carry its own 'inner link'), not the root document"
     );
+    // `--include pdf` while scoped to a frame must fail loud (headless parity):
+    // `Page.printToPDF` is top-level only, so it would silently render the TOP
+    // page, not the iframe the agent switched into. Reject as InvalidArgument so
+    // the agent switches back to main rather than receiving the wrong page.
+    let pdf_in_frame = fx.run(&["capture", "--include", "pdf"]);
+    assert_eq!(
+        code(&pdf_in_frame),
+        7,
+        "capture --include pdf while an iframe is active must be InvalidArgument (7) in browser mode too: {}",
+        stdout(&pdf_in_frame)
+    );
     // An ACTION's own --capture while switched into the iframe must scope the
     // subframe count to the active frame too — not just a standalone `capture`.
     // A click that stays in the frame (a same-document `#` fragment link) must

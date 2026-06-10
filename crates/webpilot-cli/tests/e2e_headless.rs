@@ -656,6 +656,18 @@ fn headless_behavioral_flow() {
         "capture --annotate while an iframe is active must fail InvalidArgument (7): {}",
         stdout(&annotate_in_frame)
     );
+    // 2h-pdf. Likewise, `--include pdf` while scoped to a frame must fail loud:
+    //     `Page.printToPDF` is top-level only (CDP has no frame-scoped print), so
+    //     it would silently render the TOP page, not the iframe the agent
+    //     switched into. Reject it like `--annotate` (both modes), so the agent
+    //     switches back to main rather than receiving the wrong page.
+    let pdf_in_frame = fx.run(&["capture", "--include", "pdf"]);
+    assert_eq!(
+        code(&pdf_in_frame),
+        7,
+        "capture --include pdf while an iframe is active must fail InvalidArgument (7), not render the top page: {}",
+        stdout(&pdf_in_frame)
+    );
 
     // 2h-top. A `target="_top"` link clicked INSIDE the switched iframe navigates
     //         the TOP frame, not the active iframe — the bridge must report it as a

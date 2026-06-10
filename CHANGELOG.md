@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.130] - 2026-06-10
+
+### Fixed
+
+- **`capture --include pdf` while scoped to an iframe is now rejected instead of
+  silently returning a PDF of the wrong page.** `Page.printToPDF` is inherently a
+  top-level operation — CDP has no frame-scoped print — so after `frame switch`
+  into an iframe, a PDF capture rendered the TOP page while the DOM/header
+  described the iframe the agent switched into. It now fails with `InvalidArgument`
+  (exit 7) telling the agent to switch back to main first, exactly like the
+  existing `--annotate` guard. Both modes.
+
 ## [0.4.129] - 2026-06-10
 
 ### Fixed

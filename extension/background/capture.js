@@ -76,6 +76,14 @@ async function handleCapture(command) {
   if (opts.annotate && activeFrameId !== 0) {
     return topErr(err("InvalidArgument", "'capture --annotate' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
   }
+  // `Page.printToPDF` is inherently a top-level operation — there is no
+  // frame-scoped print — so a PDF taken while an iframe is active would silently
+  // capture the TOP page, not the iframe the agent switched into (while the
+  // DOM/header describe the iframe). Refuse it like `--annotate` (headless
+  // parity), so the agent switches back to main rather than getting the wrong page.
+  if (include.has("pdf") && activeFrameId !== 0) {
+    return topErr(err("InvalidArgument", "'capture --include pdf' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
+  }
 
   const result = {
     type: "Capture",
