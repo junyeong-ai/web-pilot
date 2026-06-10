@@ -381,6 +381,28 @@ fn headless_behavioral_flow() {
         stdout(&tv)
     );
 
+    // 2a-ce. `type` into a contenteditable APPENDS at the end, like an <input>:
+    //     after a programmatic focus the caret sits at a stale/start position,
+    //     so the bridge collapses the selection to the end before inserting.
+    //     `#ce` starts with "hello"; typing "more" (default, no --clear) must
+    //     yield "hellomore", never "morehello".
+    let ce_index = index_of(&cap, "ce");
+    let ce_typed = fx.run(&["action", "type", &ce_index, "more"]);
+    assert_eq!(
+        code(&ce_typed),
+        0,
+        "type into a contenteditable failed: {}",
+        stdout(&ce_typed)
+    );
+    let ce_text = fx.run(&["eval", "document.getElementById('ce').textContent"]);
+    let cej: serde_json::Value = serde_json::from_str(&stdout(&ce_text)).expect("eval json");
+    assert_eq!(
+        cej["result"].as_str(),
+        Some("\"hellomore\""),
+        "type into a contenteditable must append at the end (hello+more), not prepend: {}",
+        stdout(&ce_text)
+    );
+
     // 2a. A same-URL reload rebuilds the document, clearing the old execution
     //      contexts. The bridge re-injects into the fresh isolated world on its
     //      own (the persistent addScriptToEvaluateOnNewDocument), and the open-

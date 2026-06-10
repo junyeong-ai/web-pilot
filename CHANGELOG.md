@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.149] - 2026-06-10
+
+### Fixed
+
+- **`type` into a `contenteditable` now appends at the end instead of inserting
+  at a stale caret.** The bridge focused the element and called
+  `insertText` straight away, but after a programmatic `focus()` the caret sits
+  at a stale or start position — so typing into a contenteditable that already
+  held text prepended or spliced into the middle rather than extending it (the
+  default `type`, without `--clear`, is an append). An `<input>`/`<textarea>`
+  appended correctly because that path concatenates onto the existing value; the
+  contenteditable path now matches it by collapsing the selection to the end of
+  the element's contents before inserting. The `--clear` path (select-all +
+  delete) is unchanged. A headless e2e types into a contenteditable seeded with
+  "hello" and asserts the result is "hellomore", not "morehello".
+
 ## [0.4.148] - 2026-06-10
 
 ### Fixed

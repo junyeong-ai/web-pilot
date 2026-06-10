@@ -795,6 +795,18 @@
         // contenteditable it likewise empties the element.
         document.execCommand("selectAll", false, null);
         document.execCommand("delete", false, null);
+      } else {
+        // Append at the end, matching the <input>/<textarea> path below: after a
+        // programmatic focus() the caret sits at a stale or start position, so a
+        // bare insertText would prepend or splice into the middle instead of
+        // extending the field. Collapse the selection to the end of the
+        // element's contents first.
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
       }
       document.execCommand("insertText", false, text);
       // execCommand fires input on its own, but an empty `text` (or a framework
