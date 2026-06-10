@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.143] - 2026-06-10
+
+### Fixed
+
+- **A CDP event-buffer overflow during a headless wait no longer masquerades as
+  `ConnectionLost`.** When the event broadcast overflowed mid-wait (a burst
+  larger than `cdp.event_buffer`, default 256), the wait returned a typed
+  `ConnectionLost` (exit 3) even though the socket was still alive — the
+  alive-flag check already covers a real drop. An agent that branches on the
+  exit code would tear down and re-attach a live session when the right recovery
+  is simply to retry the operation. It is now a `Timeout` (exit 5) whose
+  free-form `kind` carries the loss ("event buffer overflowed; events were
+  dropped, so the wait is inconclusive — retry, or raise `cdp.event_buffer`"),
+  so the deadline stays honest (the awaited event may have fired and been
+  discarded — never a confident "it never happened") without mislabelling a live
+  connection as lost. `do_wait navigation` preserves the typed overflow `Timeout`
+  as-is. Browser mode is unaffected (its navigation settle rides `chrome.*`
+  listeners, not a bounded broadcast channel).
+
 ## [0.4.142] - 2026-06-10
 
 ### Fixed

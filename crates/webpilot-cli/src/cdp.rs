@@ -389,7 +389,8 @@ impl CdpClient {
         // Whether the event broadcast overflowed mid-wait (a burst larger than
         // `cdp.event_buffer`). The awaited event may have been one of the dropped
         // messages, so a subsequent deadline is NOT a confident "it never
-        // happened" — it is reported as lost events, never a plain Timeout.
+        // happened" — it becomes an inconclusive Timeout that carries the loss,
+        // never a ConnectionLost (the socket is still alive).
         let mut lagged = false;
         loop {
             // A connection that dies mid-wait must surface immediately as
@@ -407,15 +408,22 @@ impl CdpClient {
             let now = tokio::time::Instant::now();
             if now >= deadline {
                 if lagged {
-                    // Events were dropped during the wait and the awaited one
-                    // never arrived — surface the loss (retry, or raise
-                    // `cdp.event_buffer`) instead of a Timeout that would imply
-                    // the page/event simply didn't happen.
-                    return Err(WebPilotError::ConnectionLost {
-                        detail: format!(
-                            "CDP event buffer overflowed while waiting for {target} — \
-                             events were dropped; retry (or raise cdp.event_buffer)"
+                    // Events were dropped mid-wait (a burst exceeded
+                    // `cdp.event_buffer`), so the awaited event may have fired
+                    // and been discarded — the deadline is reached, but "it
+                    // never happened" is not a safe conclusion. The socket is
+                    // still alive (the alive-flag check above already caught a
+                    // real drop), so this is a Timeout the agent retries — never
+                    // a ConnectionLost that would have it tear down a live
+                    // session. The free-form kind carries the loss so a retry
+                    // can raise `cdp.event_buffer` rather than re-issue blindly.
+                    return Err(WebPilotError::Timeout {
+                        kind: format!(
+                            "{target} — CDP event buffer overflowed; events were \
+                             dropped, so the wait is inconclusive (retry, or raise \
+                             cdp.event_buffer)"
                         ),
+                        elapsed_ms: timeout.as_millis() as u64,
                     }
                     .into());
                 }
