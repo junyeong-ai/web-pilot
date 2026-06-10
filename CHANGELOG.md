@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.166] - 2026-06-11
+
+### Fixed
+
+- **`status` renders the context label through `line_safe`**, closing the last
+  raw interpolation of a context name (list and close were fixed in
+  0.4.158/0.4.159): a name carrying a newline can no longer forge an extra
+  status line such as a fake `URL:` field. The page-controlled tab title/URL
+  fields were already wrapped.
+
 ## [0.4.165] - 2026-06-11
 
 ### Fixed

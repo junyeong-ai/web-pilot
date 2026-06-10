@@ -25,7 +25,9 @@ pub fn render(
     let mut human = format!("Mode: {mode}");
     human.push_str(&format!("\nConnected: {connected}"));
     if let Some(ctx) = context_label {
-        human.push_str(&format!("\nContext: {ctx}"));
+        // `line_safe` like every other agent-facing field — a context name
+        // carrying a newline must not forge an extra status line.
+        human.push_str(&format!("\nContext: {}", line_safe(ctx)));
     }
     if let Some(ref v) = chrome_version {
         human.push_str(&format!("\nChrome: {v}"));
