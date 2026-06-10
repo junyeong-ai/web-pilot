@@ -439,6 +439,11 @@
       const picked = [];
       let idx = 1;
       const includeBounds = options.bounds || false;
+      // Resolved once for the whole snapshot: `document.activeElement` names only
+      // the outermost shadow HOST, so a focused control inside an open shadow
+      // root would otherwise report `focused: false`. `deepActiveElement` pierces
+      // shadow roots, matching the focus handling the key-press path already uses.
+      const active = deepActiveElement();
 
       for (const el of all) {
         if (!isVisible(el)) continue;
@@ -489,7 +494,7 @@
           href: el.getAttribute("href") || undefined,
           input_type: tag === "input" ? (el.type || undefined) : undefined,
           disabled: isDisabled(el),
-          focused: document.activeElement === el,
+          focused: active === el,
           checked: (el.type === "checkbox" || el.type === "radio") ? el.checked : undefined,
           expanded:
             el.getAttribute("aria-expanded") === "true" ? true :

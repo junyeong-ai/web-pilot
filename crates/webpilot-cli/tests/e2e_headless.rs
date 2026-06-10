@@ -410,6 +410,35 @@ fn headless_behavioral_flow() {
         stdout(&title_after)
     );
 
+    // 2g. `focused` must pierce open shadow roots. `document.activeElement` names
+    //     only the outermost shadow HOST, so focusing a control inside a shadow
+    //     root and reading it back naively reports `focused:false`. Focus the
+    //     shadow button by index, re-capture, and confirm the snapshot marks it
+    //     focused — proving per-element `focused` resolves via deepActiveElement.
+    let cap_sf = fx.run(&["capture", "--include", "dom"]);
+    let sf_btn = index_of(&cap_sf, "shadowbtn");
+    assert_eq!(
+        code(&fx.run(&["action", "focus", &sf_btn])),
+        0,
+        "focusing a shadow-root control must succeed"
+    );
+    let cap_sf_after = fx.run(&["capture", "--include", "dom"]);
+    let sf_json: serde_json::Value =
+        serde_json::from_str(&stdout(&cap_sf_after)).expect("capture json");
+    let sf_focused = sf_json["elements"]
+        .as_array()
+        .expect("elements array")
+        .iter()
+        .find(|e| e["id"] == "shadowbtn")
+        .and_then(|e| e["focused"].as_bool())
+        .unwrap_or(false);
+    assert!(
+        sf_focused,
+        "a focused control inside an open shadow root must report focused:true \
+         (deepActiveElement pierces the shadow host): {}",
+        stdout(&cap_sf_after)
+    );
+
     // 2e. `fetch` runs as a debugger-routed MAIN-world eval in both modes (no
     //     contextId, CSP-exempt) and returns the response body — a same-origin
     //     GET against the fixture server must come back with the page markup.

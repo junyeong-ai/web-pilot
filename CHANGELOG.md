@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.123] - 2026-06-10
+
+### Fixed
+
+- **A focused control inside an open shadow root is now reported as
+  `focused:true` instead of `false`.** The per-element `focused` flag compared
+  against `document.activeElement`, which names only the outermost shadow host —
+  so after focusing an `<input>`/`<button>` inside a web component's shadow root,
+  a capture silently reported it unfocused, and an agent could wrongly conclude
+  the focus did not land or the element was non-interactive. It now resolves
+  through `deepActiveElement` (which pierces shadow roots), the same focus
+  handling the key-press path already used. Shared `bridge.js`, so both modes are
+  fixed at once.
+
 ## [0.4.122] - 2026-06-10
 
 ### Fixed
