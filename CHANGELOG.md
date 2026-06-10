@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.168] - 2026-06-11
+
+### Fixed
+
+- **`cookie list`/`set`/`delete` survive a vanished tab pin**, completing the
+  browser-global classification 0.4.167 started for cookie-only session
+  imports: the jar is shared, the commands take their scope from the URL
+  argument (the Network calls ride whatever target session is attached — same
+  jar either way), and browser mode never resolved a tab for them at all. The
+  first command after the pinned tab closes can now be a cookie command and it
+  proceeds against the shared jar instead of failing `TabNotFound`. An e2e pins
+  it.
+
 ## [0.4.167] - 2026-06-11
 
 ### Fixed

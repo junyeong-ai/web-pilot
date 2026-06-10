@@ -2119,5 +2119,26 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["cookie", "list", &base]))
     );
 
+    // And the cookie commands themselves are browser-global: the FIRST command
+    // after the pin dies (the one that observes the vanished pin before it is
+    // dropped) must still list/set against the shared jar, not TabNotFound.
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "tab new (cookie-on-dead-pin setup) failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "close", &active_id(&fx.run(&["tab"]))])),
+        0,
+        "closing the active tab failed"
+    );
+    let dead_pin_list = fx.run(&["cookie", "list", &base]);
+    assert_eq!(
+        code(&dead_pin_list),
+        0,
+        "cookie list as the first command on a dead pin must succeed (the jar is browser-global): {}",
+        stdout(&dead_pin_list)
+    );
+
     drop(fx);
 }

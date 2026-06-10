@@ -1202,6 +1202,14 @@ fn command_needs_active_page(command: &Command) -> bool {
         | Command::TabSwitch { .. }
         | Command::TabClose { .. }
         | Command::Status => false,
+        // The cookie jar is browser-global: list/set/delete take their scope
+        // from the URL argument, not from the active page (the Network calls
+        // ride whatever target session is attached — same jar either way).
+        // Browser mode routes these through `chrome.cookies` with no tab
+        // resolution at all; a vanished pin must not block them here either.
+        Command::CookieList { .. } | Command::CookieSet { .. } | Command::CookieDelete { .. } => {
+            false
+        }
         // Cookies are browser-global — set through any target's session they
         // land in the shared jar — so a cookie-only session import must not be
         // blocked by a vanished pin. Only the storage half writes into the
