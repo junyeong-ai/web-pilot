@@ -154,7 +154,7 @@ pub(crate) async fn resolve_context_target(
                     (entry.target_id.clone(), false)
                 } else {
                     let tid = browser
-                        .create_target_in_context(&entry.browser_context_id, "about:blank")
+                        .create_target("about:blank", Some(&entry.browser_context_id))
                         .await?;
                     (tid, true)
                 };
@@ -215,9 +215,7 @@ pub(crate) async fn resolve_context_target(
     // through. Build the rest under a guard that tears the context down on the
     // error path, and forgets it on success.
     let built: Result<String> = async {
-        let tid = browser
-            .create_target_in_context(&ctx_id, "about:blank")
-            .await?;
+        let tid = browser.create_target("about:blank", Some(&ctx_id)).await?;
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();

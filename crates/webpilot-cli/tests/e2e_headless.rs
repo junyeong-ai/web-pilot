@@ -2213,5 +2213,43 @@ fn headless_behavioral_flow() {
         stdout(&ambiguous_find)
     );
 
+    // 9c. Closing the LAST tab must not wedge the session: the attach creates a
+    //     blank page to bind to (the state a fresh browser starts in), so `tab`
+    //     still lists, the dead pin still fires its one loud TabNotFound on the
+    //     first page action, and the recovery `navigate` then works. Before the
+    //     fix every command — including the navigate that would fix it — failed
+    //     NoPage forever.
+    let all_ids: Vec<String> =
+        serde_json::from_str::<serde_json::Value>(&stdout(&fx.run(&["tab"])))
+            .expect("tab list json")
+            .as_array()
+            .expect("tab array")
+            .iter()
+            .filter_map(|t| t["id"].as_str().map(str::to_owned))
+            .collect();
+    for id in &all_ids {
+        assert_eq!(
+            code(&fx.run(&["tab", "close", id])),
+            0,
+            "closing tab {id} failed"
+        );
+    }
+    // The first page action observes the dead pin once — loud, typed.
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &base])),
+        4,
+        "the first page action after the last tab closed must be the one loud TabNotFound"
+    );
+    // ...and the retry proceeds on the blank attach: the session recovered.
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &base])),
+        0,
+        "navigate must recover the session after the last tab closed"
+    );
+    assert!(
+        stdout(&fx.run(&["capture", "--include", "dom"])).contains("cardwrap"),
+        "the recovered session must capture the navigated page"
+    );
+
     drop(fx);
 }

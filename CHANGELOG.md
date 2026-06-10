@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.172] - 2026-06-11
+
+### Fixed
+
+- **Closing the last tab no longer wedges the headless session.** With zero
+  pages in scope the attach failed `NoPage` — and since every command (including
+  the `tab new` and `navigate` that would fix it) needs that attach first, the
+  session was permanently unrecoverable, with the NoPage guidance pointing at a
+  command that failed the same way (empirically confirmed). The attach now
+  creates a blank page to bind to — the state a fresh browser starts in — so
+  the recovery commands work; the dead-pin signal still fires its one loud
+  `TabNotFound` on the first page action, so nothing acts on the blank
+  silently. An e2e closes every tab and asserts the loud signal then the
+  recovery.
+- **The vanished-pin signal is consumed by its one loud failure.** A long-lived
+  transport (the MCP server) kept the flag forever, so after a dead pin every
+  page tool — including `browser_navigate` — repeated `TabNotFound` with no way
+  to clear it. One announced failure, then the fallback is the active page —
+  matching what separate CLI invocations already did across their process
+  boundary.
+- `Target.createTarget` calls consolidate into one `CdpClient::create_target`
+  (optional browser context), shared by `tab new`, the zero-page attach, and
+  the context store.
+
 ## [0.4.171] - 2026-06-11
 
 ### Fixed

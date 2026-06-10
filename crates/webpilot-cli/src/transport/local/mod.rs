@@ -866,17 +866,20 @@ impl Transport for LocalTransport {
     async fn send(&mut self, command: Command) -> Result<ResponseData> {
         crate::policy::enforce(&command)?;
         // The pinned tab closed and this transport attached to a fallback
-        // survivor. A command that ACTS on the active page must not silently run
+        // survivor. A command that ACTS on the active page must not SILENTLY run
         // on it — fail loud with TabNotFound, carrying the dead id, so the agent
         // re-pins. Tab management and status only need the browser connection, so
-        // they proceed and let the recovery happen.
-        if let Some(dead) = &self.pin_vanished
-            && command_needs_active_page(&command)
+        // they proceed and let the recovery happen. The flag is CONSUMED by that
+        // one loud failure: the persisted pin is already dropped, so for a CLI
+        // process the next invocation re-resolves onto the fallback anyway — and
+        // a long-lived transport (the MCP server) must behave identically, not
+        // repeat TabNotFound forever on a flag no later command can clear (which
+        // blocked even `navigate`, leaving the session unrecoverable). One loud
+        // signal, then the fallback is the active page — announced, not silent.
+        if command_needs_active_page(&command)
+            && let Some(dead) = self.pin_vanished.take()
         {
-            return Err(WebPilotError::TabNotFound {
-                tab_id: dead.clone(),
-            }
-            .into());
+            return Err(WebPilotError::TabNotFound { tab_id: dead }.into());
         }
         match command {
             Command::Capture { include, opts, url } => self.do_capture(include, opts, url).await,
@@ -1274,9 +1277,24 @@ async fn pick_active_target(
             t.get("targetId")
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
-        })
-        .ok_or(WebPilotError::NoPage)?;
-    Ok((target, vanished))
+        });
+    match target {
+        Some(target) => Ok((target, vanished)),
+        // Zero pages in scope — the last tab was closed. Failing NoPage here
+        // would wedge the session permanently: every command (including the
+        // `tab new` and `navigate` that would fix it) needs this attach first,
+        // and the NoPage guidance ("navigate") would point at a command that
+        // fails the same way. Create a blank page to attach to instead — the
+        // exact state a fresh browser starts in — so the recovery commands
+        // work; the dead-pin signal still fires its one loud TabNotFound for a
+        // page action, so nothing acts on the blank silently.
+        None => {
+            let target = browser
+                .create_target("about:blank", browser_context_id)
+                .await?;
+            Ok((target, vanished))
+        }
+    }
 }
 
 pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<CdpClient> {

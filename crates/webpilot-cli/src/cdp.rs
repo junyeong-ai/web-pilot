@@ -553,20 +553,19 @@ impl CdpClient {
         Ok(())
     }
 
-    pub async fn create_target_in_context(
+    /// Create a page target, scoped to `browser_context_id` when given (the
+    /// default browser context otherwise). One creation API for `tab new` and
+    /// the zero-page attach, so context scoping can't drift between them.
+    pub async fn create_target(
         &self,
-        browser_context_id: &str,
         url: &str,
+        browser_context_id: Option<&str>,
     ) -> Result<String> {
-        let result = self
-            .send(
-                "Target.createTarget",
-                Some(serde_json::json!({
-                    "url": url,
-                    "browserContextId": browser_context_id,
-                })),
-            )
-            .await?;
+        let mut params = serde_json::json!({ "url": url });
+        if let Some(ctx) = browser_context_id {
+            params["browserContextId"] = serde_json::json!(ctx);
+        }
+        let result = self.send("Target.createTarget", Some(params)).await?;
         result
             .get("targetId")
             .and_then(|v| v.as_str())

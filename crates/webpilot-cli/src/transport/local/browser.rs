@@ -208,19 +208,10 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_tab_new(&mut self, url: &str) -> Result<ResponseData> {
-        let target_id = match self.browser_context_id.as_deref() {
-            Some(ctx) => self.browser.create_target_in_context(ctx, url).await?,
-            None => {
-                let r = self
-                    .browser
-                    .send("Target.createTarget", Some(json!({"url": url})))
-                    .await?;
-                r.get("targetId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string()
-            }
-        };
+        let target_id = self
+            .browser
+            .create_target(url, self.browser_context_id.as_deref())
+            .await?;
         // A new tab becomes the active one — same UX as `chrome.tabs.create`
         // in browser mode. Rebind through the `tab switch` path so a
         // long-lived transport (the MCP server) acts on the tab it just
