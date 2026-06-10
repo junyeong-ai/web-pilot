@@ -40,7 +40,7 @@ fn read_capped(path: &std::path::Path, label: &str) -> Result<Vec<u8>> {
 #[derive(Args)]
 pub struct DiffArgs {
     /// Diff two DOM snapshots (JSON files)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "screenshot")]
     dom: bool,
 
     /// Diff two screenshots (PNG/JPEG files)

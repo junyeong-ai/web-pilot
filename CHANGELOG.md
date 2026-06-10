@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.157] - 2026-06-10
+
+### Fixed
+
+- **`diff --dom --screenshot` is rejected at parse instead of silently picking
+  DOM mode.** The two mode flags were independent booleans with `--dom` taking
+  precedence, so asking for both ran a DOM diff (against PNG bytes, a confusing
+  JSON decode error) with no signal that the flags conflict. They are now
+  declared mutually exclusive (`conflicts_with`, the same convention `find`
+  uses), so clap rejects the combination up front naming both flags.
+
 ## [0.4.156] - 2026-06-10
 
 ### Fixed
