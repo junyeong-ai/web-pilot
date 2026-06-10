@@ -269,7 +269,19 @@ async function handleFrameSwitch(selector) {
     return { type: "FrameSwitched", success: false, frame_id: activeFrameIdWire(), error: noPageErr() };
   }
 
-  const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => []);
+  // `getAllFrames` resolves null (or rejects) when the tab closed between the
+  // resolve above and this read — surface the dead tab as the typed TabNotFound
+  // the agent re-pins from, not a FrameNotFound that reads as "bad selector"
+  // (the same guard `frame list` applies).
+  const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null);
+  if (!frames) {
+    return {
+      type: "FrameSwitched",
+      success: false,
+      frame_id: activeFrameIdWire(),
+      error: err("TabNotFound", `Tab not found: ${tab.id}. List: webpilot tab`, { tab_id: String(tab.id) }),
+    };
+  }
   const httpFrames = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http"));
 
   let matched = null;

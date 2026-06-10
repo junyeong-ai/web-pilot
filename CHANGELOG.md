@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.163] - 2026-06-11
+
+### Fixed
+
+- **`_blank` can never be captured by the frame-name lookup.** The named-target
+  resolution added in 0.4.162 checked only the three frame keywords before
+  consulting frame names, so a page that set `window.name = "_blank"` could
+  trick a `target="_blank"` click into being classified as a current-frame
+  navigation. `_blank` is reserved per spec — always a new context — and is now
+  short-circuited before any name matching, in both the link and form paths.
+- **Browser `frame switch` on a tab that died mid-command is a typed
+  `TabNotFound`, not `FrameNotFound`.** When the pinned tab closed between
+  resolving it and reading its frames, `getAllFrames`' null/rejection collapsed
+  to an empty candidate list and surfaced as `FrameNotFound` — which reads as
+  "bad selector, retry the frame search" when the real recovery is re-pinning a
+  live tab. The same null-guard `frame list` already uses now applies, so the
+  dead tab surfaces as the `TabNotFound` the agent re-pins from.
+- The parity test's enum anchor now includes the opening brace, so `Action` can
+  never prefix-match `ActionKind` regardless of declaration order.
+
 ## [0.4.162] - 2026-06-11
 
 ### Fixed

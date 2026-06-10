@@ -39,7 +39,9 @@ fn service_worker_source() -> String {
 /// struct-variant field braces don't end the scan early, doc/attr/field lines
 /// skipped (a variant starts with an uppercase identifier).
 fn enum_variants(source: &str, name: &str) -> BTreeSet<String> {
-    let anchor = format!("pub enum {name}");
+    // The opening brace is part of the anchor so `Action` can never match the
+    // longer `ActionKind` (rustfmt keeps the brace on the same line).
+    let anchor = format!("pub enum {name} {{");
     let start = source
         .find(&anchor)
         .unwrap_or_else(|| panic!("{name} enum present"));
