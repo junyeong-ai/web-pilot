@@ -1264,9 +1264,22 @@
       box.style.cssText =
         `position:fixed;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;border:2px solid rgba(255,0,0,0.8)`;
       const label = document.createElement("div");
-      label.textContent = String(el.index);
+      const text = String(el.index);
+      label.textContent = text;
+      // Keep the index on-screen at the viewport edges. The default sits just
+      // above and slightly left of the box, which renders off-screen — losing
+      // the number while the box still shows — for an element flush against the
+      // top, left, or right edge. Clamp each axis: flip the label down into the
+      // box at the top edge, in from the left, and back left when it would
+      // overflow the right (the index width is estimated from the monospace
+      // glyph advance plus the horizontal padding).
+      const labelW = text.length * 7 + 6;
+      const top = Math.max(-16, -el.y);
+      let left = Math.max(-2, -el.x);
+      const overflow = el.x + left + labelW - window.innerWidth;
+      if (overflow > 0) left = Math.max(-el.x, left - overflow);
       label.style.cssText =
-        "position:absolute;top:-16px;left:-2px;background:rgba(255,0,0,0.9);color:#fff;font:bold 11px/14px monospace;padding:0 3px;border-radius:2px";
+        `position:absolute;top:${top}px;left:${left}px;background:rgba(255,0,0,0.9);color:#fff;font:bold 11px/14px monospace;padding:0 3px;border-radius:2px`;
       box.appendChild(label);
       container.appendChild(box);
     }

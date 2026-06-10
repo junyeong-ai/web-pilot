@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.154] - 2026-06-10
+
+### Fixed
+
+- **`capture --annotate` index labels stay on-screen at the viewport edges.**
+  Each box's index label was pinned at a fixed `top:-16px; left:-2px` offset, so
+  an element flush against the viewport top (a header or top nav — very common)
+  rendered its number above the visible area and lost it, leaving a box the
+  agent couldn't map back to an index. The label position is now clamped per
+  axis: it flips down into the box at the top edge, in from the left, and back
+  left when it would overflow the right (the index width is estimated from the
+  monospace glyph advance plus padding). Shared bridge path; both modes.
+
 ## [0.4.153] - 2026-06-10
 
 ### Fixed
