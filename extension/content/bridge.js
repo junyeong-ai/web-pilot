@@ -1130,10 +1130,15 @@
         // behaves. The fast light-DOM check runs first (the common case); the
         // shadow-aware walk runs only when it misses, so a page without
         // shadow-only text pays nothing extra.
+        // Collapse whitespace too, like the DOM snapshot's element text that
+        // `find --text` matches (`(el.innerText||…).replace(/\s+/g," ")`): a
+        // `<button>Pay<br>now</button>` whose innerText is "Pay\nnow" must match
+        // `wait text "pay now"`, exactly as `find --text "pay now"` already does.
         const needle = cond.value.toLowerCase();
+        const collapse = (s) => s.replace(/\s+/g, " ").trim().toLowerCase();
         const hasText = () =>
-          (document.body?.innerText || "").toLowerCase().includes(needle) ||
-          bodyTextWithShadow().toLowerCase().includes(needle);
+          collapse(document.body?.innerText || "").includes(needle) ||
+          collapse(bodyTextWithShadow()).includes(needle);
         if (hasText()) {
           return finish({ success: true });
         }

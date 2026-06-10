@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.138] - 2026-06-10
+
+### Fixed
+
+- **`wait --until text` now collapses whitespace, completing its alignment with
+  `find --text`.** After the case/shadow fix, one normalization gap remained:
+  `find --text` matches against element text with runs of whitespace collapsed to
+  a single space, but `wait --until text` matched raw `innerText` — so
+  `wait --until text "pay now"` still timed out on a `<button>Pay<br>now</button>`
+  (whose innerText is `"Pay\nnow"`) that `find --text "pay now"` matches. The wait
+  haystack is now collapsed the same way, so the three text-matching paths
+  (find, `--include text` capture, wait) behave identically. Shared `bridge.js`.
+
 ## [0.4.137] - 2026-06-10
 
 ### Fixed

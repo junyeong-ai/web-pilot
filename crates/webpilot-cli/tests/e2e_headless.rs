@@ -182,6 +182,15 @@ fn headless_behavioral_flow() {
         "wait text must pierce open shadow roots (match shadow-only 'shadowonlyprose'): {}",
         stdout(&fx.run(&["wait", "--timeout", "3", "text", "SHADOWONLYPROSE"]))
     );
+    // ...and collapse whitespace like find --text: <p>whitespace<br>collapse<br>
+    // marker</p> has innerText with newlines, so "whitespace collapse marker"
+    // (single spaces) must still match.
+    assert_eq!(
+        code(&fx.run(&["wait", "--timeout", "3", "text", "whitespace collapse marker"])),
+        0,
+        "wait text must collapse whitespace to match a <br>-separated phrase: {}",
+        stdout(&fx.run(&["wait", "--timeout", "3", "text", "whitespace collapse marker"]))
+    );
 
     // 2. Click the button by its captured index; its onclick sets the title.
     let click = fx.run(&["action", "click", &button_index.to_string()]);

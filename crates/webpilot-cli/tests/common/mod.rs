@@ -21,6 +21,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <form action="/second" method="get"><input id="forminput" type="text"><button type="submit" id="formsubmit">submit form</button></form>
 <div id="cardwrap" style="cursor:pointer">clickable card<input id="hiddenchild" style="display:none"></div>
 <div id="presdiv" role="presentation" onclick="document.title='pres-clicked'">presentation click target</div>
+<p id="wsp">whitespace<br>collapse<br>marker</p>
 <nav><div id="shadowhost"></div></nav>
 <iframe src="/frame"></iframe>
 <script>
