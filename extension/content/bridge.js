@@ -1162,11 +1162,14 @@
         // A MutationObserver cannot see a property/state change — `el.checked =
         // true`, `el.disabled = false`, a `.value` edit — because those fire no
         // mutation, so a state pseudo-class (`:checked`, `:disabled`, `:valid`,
-        // `:focus`) would run to the full timeout though it already matches. Poll
-        // alongside the observer to catch them within one interval; the observer
-        // still gives instant response to structural and attribute changes.
+        // `:focus`) would run to the full timeout though it already matches; and
+        // the observer watches only the light tree, so a match appearing inside
+        // an open shadow root is invisible to it as well. Poll alongside to
+        // catch both within one interval (`matchesDeep` pierces shadow); the
+        // observer still gives instant response to light-DOM structural and
+        // attribute changes.
         pollTimer = setInterval(() => {
-          if (document.querySelector(cond.value)) finish({ success: true });
+          if (matchesDeep()) finish({ success: true });
         }, 100);
         break;
       }

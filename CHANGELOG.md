@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.155] - 2026-06-10
+
+### Fixed
+
+- **`wait selector`'s 100 ms poll also pierces open shadow roots now.** The
+  previous release made the initial check and the MutationObserver callback
+  shadow-aware but left the poll on a bare `document.querySelector`, so a
+  selector whose target appeared inside an open shadow root *after* the wait
+  began still timed out — the light-tree observer can't see a shadow mutation,
+  and the poll was the only path that could catch it. The poll now uses the same
+  `matchesDeep` walk, completing the shadow-piercing `wait selector`. A headless
+  e2e schedules a button into an open shadow root after the wait starts and
+  asserts the wait is satisfied (it would time out under the previous poll).
+
 ## [0.4.154] - 2026-06-10
 
 ### Fixed
