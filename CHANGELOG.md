@@ -5,7 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.139] - 2026-06-10
+## [0.4.140] - 2026-06-10
+
+### Fixed
+
+- **Browser `frame list` surfaces a closed pinned tab as `TabNotFound` instead of
+  an empty list or a raw TypeError.** If the pinned tab closed between resolving
+  it and reading its frames, `getAllFrames` resolved null (or rejected): the old
+  `.catch(() => [])` turned a rejection into a successful empty list (an agent
+  reads "this page has no iframes"), and a null-resolve hit `null.map(...)`,
+  throwing a raw `TypeError` surfaced as a generic error. It now returns the typed
+  `TabNotFound` the agent recovers from — matching headless `do_frame_list`, which
+  propagates a `Page.getFrameTree` failure, and the `frameVanishedError` pattern
+  used elsewhere. (`frame list` is the documented recovery path, so a clean typed
+  error there matters.)
 
 ### Fixed
 

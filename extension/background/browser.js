@@ -184,7 +184,18 @@ async function handleFrameList() {
   // resolves a tab and correctly returns an empty list below.)
   if (!tab) return topErr(noPageErr());
 
-  const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => []);
+  // The pinned tab can close between resolving it and reading its frames:
+  // `getAllFrames` then resolves null (or rejects). Surface the typed TabNotFound
+  // the agent recovers from — never an empty list it would read as "this page has
+  // no iframes", and never the raw `null.map` TypeError the old `.catch(() => [])`
+  // left for the null-resolve case. Headless `do_frame_list` likewise propagates a
+  // `Page.getFrameTree` failure rather than returning empty.
+  const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null);
+  if (!all) {
+    return topErr(
+      err("TabNotFound", `Tab not found: ${tab.id}. List: webpilot tab`, { tab_id: String(tab.id) }),
+    );
+  }
   const frames = all.map((f) => ({
     frame_id: String(f.frameId),
     url: f.url || "",
