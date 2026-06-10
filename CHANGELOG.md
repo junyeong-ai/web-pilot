@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.174] - 2026-06-11
+
+### Fixed
+
+- **Modifier chords press the modifier keys for real.** `key-press --shift/--ctrl/…`
+  set only the CDP `modifiers` bitmask on the main key's events; the modifier
+  key itself was never pressed, so renderer editing commands keyed off real
+  modifier state did nothing — empirically, `shift+ArrowLeft` left the selection
+  untouched. Each held modifier now goes down (`rawKeyDown`, accumulating the
+  mask like a physical keyboard) before the main key and comes up in reverse
+  after it: `shift+Arrow` extends the selection (verified live and pinned by
+  e2e), and page-level shortcut listeners see the modifier keys themselves.
+  Both modes. Note: browser-LEVEL shortcuts (ctrl/cmd+A select-all, copy/paste)
+  have no UI layer headless and still do nothing — now documented in the skill
+  with the working alternatives (`type --clear`, eval `el.select()`).
+- **`context close` argument errors are parser-level.** A bare `context close`
+  (no name, no `--all`) launched Chrome on its way to the handler's rejection;
+  `NAME --all` was rejected in the handler too. clap now declares the contract
+  (`required_unless_present`, `conflicts_with`), so both are refused before any
+  transport opens.
+
 ## [0.4.173] - 2026-06-11
 
 ### Fixed

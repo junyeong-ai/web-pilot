@@ -497,6 +497,32 @@ fn headless_behavioral_flow() {
         stdout(&val)
     );
 
+    // 2b-chord. A modifier chord brackets the modifier's own key events around
+    //     the main key (rawKeyDown … keyUp), so renderer-level editing commands
+    //     fire: shift+ArrowLeft from caret-at-end must EXTEND the selection by
+    //     one character — the mask-only dispatch left the selection untouched.
+    let seed2 = fx.run(&[
+        "eval",
+        "(()=>{const i=document.getElementById('q'); i.value='hello'; i.focus(); i.setSelectionRange(5,5); return 'ok';})()",
+    ]);
+    assert_eq!(code(&seed2), 0, "chord seed failed: {}", stdout(&seed2));
+    assert_eq!(
+        code(&fx.run(&["action", "key-press", "--shift", "ArrowLeft"])),
+        0,
+        "shift+ArrowLeft failed"
+    );
+    let sel = fx.run(&[
+        "eval",
+        "document.getElementById('q').selectionStart===4 && document.getElementById('q').selectionEnd===5",
+    ]);
+    let sj: serde_json::Value = serde_json::from_str(&stdout(&sel)).expect("eval json");
+    assert_eq!(
+        sj["result"].as_str(),
+        Some("true"),
+        "shift+ArrowLeft must extend the selection (4..5) via the bracketed modifier: {}",
+        stdout(&sel)
+    );
+
     // 2b-click. A click must focus a focusable target, like a real click —
     //     mousedown's default action moves focus, firing focus/focusin and
     //     establishing the browser focus a following native key_press lands on
@@ -1982,16 +2008,16 @@ fn headless_behavioral_flow() {
     );
 
     // 8c. `context close NAME --all` is a contradictory request — close one named
-    //     context AND every context — so it must be rejected (InvalidArgument,
-    //     exit 7), never silently take the destructive all-branch that wipes every
-    //     agent's contexts while reporting the single named close the agent asked
-    //     for. The rejection lands BEFORE any disposal, so ctx-a survives.
+    //     context AND every context. clap now declares the two mutually
+    //     exclusive (`conflicts_with`), so the PARSER rejects it (exit 2, before
+    //     any transport opens — no Chrome side effect), never silently taking
+    //     the destructive all-branch. ctx-a survives.
     let ambiguous_close = fx.run(&["context", "close", "ctx-a", "--all"]);
     assert_eq!(
         code(&ambiguous_close),
-        7,
-        "context close NAME --all must be InvalidArgument (7), not a silent close-all: {}",
-        stdout(&ambiguous_close)
+        2,
+        "context close NAME --all must be rejected by the parser (2), not a silent close-all: {}",
+        String::from_utf8_lossy(&ambiguous_close.stderr)
     );
     assert!(
         stdout(&fx.run(&["context", "list"])).contains("ctx-a"),
@@ -2199,6 +2225,30 @@ fn headless_behavioral_flow() {
         code(&fx.run(&["tab", "new", &format!("{base}/second")])),
         0,
         "tab new /second (2) failed"
+    );
+    // The target list's URL field updates asynchronously (targetInfoChanged):
+    // wait until BOTH /second tabs are visible to `tab` so the ambiguity below
+    // is deterministic, not a race against the second tab's URL landing.
+    let mut second_count = 0usize;
+    for _ in 0..20 {
+        second_count = serde_json::from_str::<serde_json::Value>(&stdout(&fx.run(&["tab"])))
+            .ok()
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter(|t| t["url"].as_str().is_some_and(|u| u.contains("/second")))
+                        .count()
+                })
+            })
+            .unwrap_or(0);
+        if second_count >= 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert_eq!(
+        second_count, 2,
+        "both /second tabs must be listed before the ambiguity check"
     );
     let ambiguous_find = fx.run(&["tab", "find", "--url", "/second"]);
     assert_eq!(

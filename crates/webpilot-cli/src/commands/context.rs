@@ -20,8 +20,12 @@ pub enum ContextCommand {
     List,
     /// Close a context or all contexts.
     Close {
+        /// A target is required up front — deferring the "name or --all" check
+        /// into the handler let the bare invocation launch Chrome on its way to
+        /// the rejection.
+        #[arg(required_unless_present = "all")]
         name: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "name")]
         all: bool,
     },
 }
@@ -153,10 +157,7 @@ async fn close_contexts(
     }
 
     let Some(name) = name else {
-        return Err(WebPilotError::InvalidArgument {
-            detail: "specify a context name or --all".into(),
-        }
-        .into());
+        unreachable!("clap requires a name unless --all is present");
     };
 
     let file_path = context_file_path(&name);

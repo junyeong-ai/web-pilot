@@ -309,11 +309,37 @@ async function dispatchKeyPress(tabId, action) {
     // (macOS != Windows), and sending the Windows code on macOS mis-maps the
     // key to an unrelated browser accelerator. `windowsVirtualKeyCode` + key +
     // code is the portable set Chrome resolves from everywhere.
+    // The bitmask alone does not PRESS the modifier: Chromium's built-in
+    // editing commands (Ctrl+A select-all, Shift+Arrow selection) key off real
+    // modifier key events, so a chord is bracketed like a physical keyboard —
+    // each held modifier goes down (rawKeyDown, accumulating the mask) before
+    // the main key and comes up in reverse after it (headless parity;
+    // empirically verified there). Bits mirror the mask: Alt=1 Ctrl=2 Meta=4
+    // Shift=8.
+    const held = [
+      m.ctrl && ["Control", "ControlLeft", 17, 2],
+      m.alt && ["Alt", "AltLeft", 18, 1],
+      m.shift && ["Shift", "ShiftLeft", 16, 8],
+      m.meta && ["Meta", "MetaLeft", 91, 4],
+    ].filter(Boolean);
+    let acc = 0;
+    for (const [mkey, mcode, mvk, bit] of held) {
+      acc |= bit;
+      await cdpSend(tid, "Input.dispatchKeyEvent", {
+        type: "rawKeyDown", modifiers: acc, key: mkey, code: mcode, windowsVirtualKeyCode: mvk,
+      });
+    }
     const base = { modifiers, key: shiftLetter(action.key), code, windowsVirtualKeyCode: vk };
     await cdpSend(tid, "Input.dispatchKeyEvent", text != null
       ? { ...base, type: "keyDown", text }
       : { ...base, type: "keyDown" });
     await cdpSend(tid, "Input.dispatchKeyEvent", { ...base, type: "keyUp" });
+    for (const [mkey, mcode, mvk, bit] of [...held].reverse()) {
+      acc &= ~bit;
+      await cdpSend(tid, "Input.dispatchKeyEvent", {
+        type: "keyUp", modifiers: acc, key: mkey, code: mcode, windowsVirtualKeyCode: mvk,
+      });
+    }
     // Enter can submit a form, and that navigation is QUEUED — its commit may
     // land after this response, so hint `navigates` for Enter (the only native
     // key that loads a document) so `settledActionUrl` waits the PROBE for it

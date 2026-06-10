@@ -742,6 +742,41 @@ impl LocalTransport {
         let key = shift_letter(key, mods.shift);
         let text = text.map(|t| shift_letter(&t, mods.shift));
 
+        // The bitmask alone does not PRESS the modifier: Chromium's built-in
+        // editing commands (Ctrl+A select-all, Shift+Arrow selection extension)
+        // key off real modifier key events, so a chord is bracketed like a
+        // physical keyboard — each held modifier goes down (rawKeyDown,
+        // accumulating the mask the way real typing does) before the main key
+        // and comes up in reverse order after it. Empirically verified:
+        // mask-only ctrl+a left the selection untouched; bracketed it
+        // selects all. (Bits mirror `modifier_mask`: Alt=1 Ctrl=2 Meta=4
+        // Shift=8.)
+        let held: Vec<(&str, &str, u32, u32)> = [
+            (mods.ctrl, ("Control", "ControlLeft", 17u32, 2u32)),
+            (mods.alt, ("Alt", "AltLeft", 18, 1)),
+            (mods.shift, ("Shift", "ShiftLeft", 16, 8)),
+            (mods.meta, ("Meta", "MetaLeft", 91, 4)),
+        ]
+        .into_iter()
+        .filter_map(|(on, m)| on.then_some(m))
+        .collect();
+        let mut acc = 0u32;
+        for (mkey, mcode, mvk, bit) in &held {
+            acc |= bit;
+            self.page
+                .send(
+                    "Input.dispatchKeyEvent",
+                    Some(json!({
+                        "type": "rawKeyDown",
+                        "modifiers": acc,
+                        "key": mkey,
+                        "code": mcode,
+                        "windowsVirtualKeyCode": mvk,
+                    })),
+                )
+                .await?;
+        }
+
         // `nativeVirtualKeyCode` is deliberately omitted: it is the
         // platform-native scan code (different on macOS vs Windows), and
         // sending the Windows code on macOS makes Chrome mis-map the key to an
@@ -770,6 +805,22 @@ impl LocalTransport {
                 })),
             )
             .await?;
+
+        for (mkey, mcode, mvk, bit) in held.iter().rev() {
+            acc &= !bit;
+            self.page
+                .send(
+                    "Input.dispatchKeyEvent",
+                    Some(json!({
+                        "type": "keyUp",
+                        "modifiers": acc,
+                        "key": mkey,
+                        "code": mcode,
+                        "windowsVirtualKeyCode": mvk,
+                    })),
+                )
+                .await?;
+        }
         Ok(())
     }
 

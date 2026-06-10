@@ -78,6 +78,12 @@ webpilot action type N "text" --clear              # --clear replaces existing v
 webpilot action key-press Enter --ctrl --shift      # also --alt --meta; real key event
                                                     #   (Tab/Backspace/arrows/Enter-submit work;
                                                     #   acts on the focused element — click/focus first)
+                                                    #   Chords reach the PAGE (shift+Arrow extends a
+                                                    #   selection; JS shortcut listeners see the
+                                                    #   modifier keys) — but BROWSER-level shortcuts
+                                                    #   (ctrl/cmd+A select-all, copy/paste) have no UI
+                                                    #   layer headless; use `type --clear` or eval
+                                                    #   `el.select()` instead.
 webpilot action navigate "https://…"               # cross-origin reconnect handled
 webpilot action scroll down --amount 600           # or `up`
 webpilot action scroll-to N                        # bring [N] into view
