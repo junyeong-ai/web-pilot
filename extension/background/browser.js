@@ -237,6 +237,25 @@ async function readFrameName(tabId, frameId) {
     .catch(() => null);
 }
 
+// A pattern frame selector (`name` / `url`) that matched more than one frame is
+// ambiguous: switching into whichever came first would silently scope every
+// later command to a frame the agent may not have meant. Fail loud with the
+// match list (headless parity) so the agent refines the pattern or uses a
+// `frame predicate` — the precise escape hatch, which stays first-match.
+function ambiguousFrameSwitch(hits, what) {
+  if (hits.length <= 1) return null;
+  const urls = hits.map((f) => f.url).join(", ");
+  return {
+    type: "FrameSwitched",
+    success: false,
+    frame_id: activeFrameIdWire(),
+    error: err(
+      "InvalidArgument",
+      `${hits.length} frames match ${what} — refine it or use \`frame predicate\` to pick one: ${urls}`,
+    ),
+  };
+}
+
 async function handleFrameSwitch(selector) {
   selector = selector || { by: "main" };
 
@@ -256,14 +275,18 @@ async function handleFrameSwitch(selector) {
   let matched = null;
 
   if (selector.by === "name") {
+    const hits = [];
     for (const f of httpFrames) {
-      if ((await readFrameName(tab.id, f.frameId)) === selector.value) {
-        matched = f;
-        break;
-      }
+      if ((await readFrameName(tab.id, f.frameId)) === selector.value) hits.push(f);
     }
+    const ambiguous = ambiguousFrameSwitch(hits, `name "${selector.value}"`);
+    if (ambiguous) return ambiguous;
+    matched = hits[0] ?? null;
   } else if (selector.by === "url") {
-    matched = httpFrames.find((f) => f.url && urlGlobMatch(selector.pattern || "", f.url));
+    const hits = httpFrames.filter((f) => f.url && urlGlobMatch(selector.pattern || "", f.url));
+    const ambiguous = ambiguousFrameSwitch(hits, `url pattern "${selector.pattern}"`);
+    if (ambiguous) return ambiguous;
+    matched = hits[0] ?? null;
   } else if (selector.by === "predicate") {
     // A predicate is arbitrary caller JS, gated by the `eval` key — enforced
     // by the NM host before the command is forwarded here. It runs through the

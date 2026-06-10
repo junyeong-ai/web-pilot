@@ -9,6 +9,32 @@ use webpilot::types::{FrameInfo, TabInfo};
 
 use super::{LocalTransport, action_success, connect_to_page, target_in_context};
 
+/// A pattern frame selector (`name` / `url`) that matched more than one frame is
+/// ambiguous: switching into whichever came first in document order would
+/// silently scope every later command to a frame the agent may not have meant.
+/// Fail loud with the match list so the agent refines the pattern or reaches for
+/// a `frame predicate`. (The `predicate` selector is the precise escape hatch
+/// and stays first-match — it is what this message points to.)
+fn ambiguous_frame_switch(hits: &[&FrameInfo], what: String) -> ResponseData {
+    let urls = hits
+        .iter()
+        .map(|f| f.url.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    ResponseData::FrameSwitched {
+        success: false,
+        frame_id: None,
+        name: None,
+        url: None,
+        error: Some(WebPilotError::InvalidArgument {
+            detail: format!(
+                "{} frames match {what} — refine it or use `frame predicate` to pick one: {urls}",
+                hits.len()
+            ),
+        }),
+    }
+}
+
 impl LocalTransport {
     // ── Tabs ─────────────────────────────────────────────────────────────
 
@@ -326,14 +352,31 @@ impl LocalTransport {
 
         let matched: Option<&FrameInfo> = match &selector {
             FrameSelector::Main => unreachable!("handled above"),
-            FrameSelector::Name { value } => candidates
-                .iter()
-                .find(|f| f.name.as_deref() == Some(value.as_str()))
-                .copied(),
-            FrameSelector::Url { pattern } => candidates
-                .iter()
-                .find(|f| webpilot::url_glob::matches(pattern, &f.url))
-                .copied(),
+            FrameSelector::Name { value } => {
+                let hits: Vec<&FrameInfo> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|f| f.name.as_deref() == Some(value.as_str()))
+                    .collect();
+                if hits.len() > 1 {
+                    return Ok(ambiguous_frame_switch(&hits, format!("name \"{value}\"")));
+                }
+                hits.into_iter().next()
+            }
+            FrameSelector::Url { pattern } => {
+                let hits: Vec<&FrameInfo> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|f| webpilot::url_glob::matches(pattern, &f.url))
+                    .collect();
+                if hits.len() > 1 {
+                    return Ok(ambiguous_frame_switch(
+                        &hits,
+                        format!("url pattern \"{pattern}\""),
+                    ));
+                }
+                hits.into_iter().next()
+            }
             FrameSelector::Predicate { js } => {
                 // The predicate rides the SAME form decision as `eval` — compile
                 // to detect expression vs statements, then evaluate — so a

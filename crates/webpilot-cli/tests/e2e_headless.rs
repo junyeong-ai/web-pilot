@@ -973,6 +973,43 @@ fn headless_behavioral_flow() {
         0,
         "after frame-list recovery a scoped command runs in main again"
     );
+
+    // 2h-amb. A pattern frame selector that matches MULTIPLE frames is
+    //     ambiguous — switching into whichever comes first would silently scope
+    //     later commands to a frame the agent may not mean. `/twoframes` embeds
+    //     two iframes with the same URL, so `frame url /framed2` matches both
+    //     and must fail InvalidArgument (7), naming the ambiguity, not silently
+    //     pick one. (The `frame predicate` escape hatch stays first-match.)
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/twoframes")])),
+        0,
+        "navigate to /twoframes failed"
+    );
+    // Both same-URL iframes must be loaded as http subframes before the switch,
+    // so the selector genuinely matches two. The capture confirms it — and the
+    // frame set is immutable between these separate processes, so the following
+    // `frame url` resolves against the same two frames.
+    let pre = fx.run(&["capture", "--include", "dom"]);
+    let pre_json: serde_json::Value = serde_json::from_str(&stdout(&pre)).expect("capture json");
+    assert_eq!(
+        pre_json["subframes"],
+        2,
+        "/twoframes must expose two http subframes before the ambiguity check: {}",
+        stdout(&pre)
+    );
+    let amb = fx.run(&["frame", "url", "/framed2"]);
+    assert_eq!(
+        code(&amb),
+        7,
+        "an ambiguous frame url (two frames match) must be InvalidArgument (7), not a silent first-match: {}",
+        stdout(&amb)
+    );
+    assert!(
+        stdout(&amb).contains("frames match"),
+        "the ambiguity error must name the match count: {}",
+        stdout(&amb)
+    );
+
     assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
 
     // 3. A link click that navigates reports `url_changed`, `--capture`

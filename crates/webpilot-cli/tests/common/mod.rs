@@ -62,6 +62,12 @@ pub const NESTED: &str = r##"<!doctype html><html><head><title>nested</title></h
 pub const FRAMED2: &str = r##"<!doctype html><html><head><title>framed2</title></head>
 <body><button id="framed2btn">on framed2</button></body></html>"##;
 
+/// Two iframes with the SAME URL — `frame url /framed2` matches both, so the
+/// switch must fail loud as an ambiguous selector rather than silently pick the
+/// first. The disambiguation surface (`frame predicate`) stays first-match.
+pub const TWOFRAMES: &str = r##"<!doctype html><html><head><title>twoframes</title></head>
+<body><iframe src="/framed2"></iframe><iframe src="/framed2"></iframe></body></html>"##;
+
 /// A page whose `Content-Security-Policy` forbids dynamic evaluation
 /// (`unsafe-eval`): the parity bar for `eval` inside a switched frame. Both
 /// documents carry the header, because eval runs against the FRAME's policy.
@@ -113,7 +119,9 @@ pub fn spawn_server() -> String {
                     let _ = stream.write_all(&bytes);
                     return;
                 }
-                let (body, extra_headers) = if req.starts_with("GET /framed2") {
+                let (body, extra_headers) = if req.starts_with("GET /twoframes") {
+                    (TWOFRAMES, "")
+                } else if req.starts_with("GET /framed2") {
                     (FRAMED2, "")
                 } else if req.starts_with("GET /nested") {
                     (NESTED, "")

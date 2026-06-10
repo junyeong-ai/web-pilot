@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.152] - 2026-06-10
+
+### Fixed
+
+- **An ambiguous `frame switch`/`frame url` selector now fails loud instead of
+  silently picking the first match.** A `name` or `url` pattern that matched more
+  than one frame switched into whichever came first in document order, so every
+  later command was silently scoped to a frame the agent may not have meant. A
+  pattern selector that matches multiple frames is now a typed `InvalidArgument`
+  that names the count and lists the matching URLs, so the agent refines the
+  pattern or reaches for a `frame predicate` (the precise escape hatch, which
+  stays first-match by design — it is what the error points to). Both modes
+  share the message; a `/twoframes` fixture (two iframes with the same URL) pins
+  it in the headless e2e.
+
 ## [0.4.151] - 2026-06-10
 
 ### Fixed
