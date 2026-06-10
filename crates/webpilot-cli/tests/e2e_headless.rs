@@ -349,6 +349,34 @@ fn headless_behavioral_flow() {
         stdout(&active)
     );
 
+    // 2b-shift. A `--shift` key-press of a LETTER produces its uppercase form,
+    //     like a real Shift+letter — the shift flag alone leaves the character
+    //     lowercase. Focus the text input, press Shift+a, and the field must
+    //     receive "A" (a non-letter's shift stays layout-agnostic and untouched).
+    let seed_shift = fx.run(&[
+        "eval",
+        "const i=document.getElementById('q'); i.value=''; i.focus(); 'ok'",
+    ]);
+    assert_eq!(
+        code(&seed_shift),
+        0,
+        "shift seed eval failed: {}",
+        stdout(&seed_shift)
+    );
+    assert_eq!(
+        code(&fx.run(&["action", "key-press", "a", "--shift"])),
+        0,
+        "Shift+a key-press failed"
+    );
+    let sval = fx.run(&["eval", "document.getElementById('q').value === 'A'"]);
+    let svj: serde_json::Value = serde_json::from_str(&stdout(&sval)).expect("eval json");
+    assert_eq!(
+        svj["result"].as_str(),
+        Some("true"),
+        "key-press a --shift must insert uppercase 'A', not lowercase 'a': {}",
+        stdout(&sval)
+    );
+
     // 2b-fkey. A canonical function key (`F1`) is a valid key-press; a
     //     non-canonical name (`F01`, a leading zero) is NOT a real DOM key code
     //     and must be rejected as InvalidArgument (exit 7), not silently

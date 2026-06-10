@@ -296,12 +296,20 @@ async function dispatchKeyPress(tabId, action) {
     const m = action.modifiers || {};
     const modifiers = (m.alt ? 1 : 0) | (m.ctrl ? 2 : 0) | (m.meta ? 4 : 0) | (m.shift ? 8 : 0);
     const { code, vk } = descriptor;
-    const text = (!m.ctrl && !m.alt && !m.meta) ? printableKeyText(action.key) : null;
+    // A shifted ASCII letter is its uppercase form on every Latin layout, so
+    // honor it: Shift+a delivers "A" — both the inserted `text` and the event
+    // `key` — not "a" with only the shiftKey flag (which leaves a field
+    // lowercase and an `e.key === "A"` listener unmatched). Shifted
+    // digits/punctuation are layout-specific (US `1`→`!`, others differ), so
+    // those are left unchanged rather than assume a keyboard layout.
+    const shiftLetter = (s) => (m.shift && /^[a-zA-Z]$/.test(s) ? s.toUpperCase() : s);
+    const rawText = !m.ctrl && !m.alt && !m.meta ? printableKeyText(action.key) : null;
+    const text = rawText != null ? shiftLetter(rawText) : null;
     // `nativeVirtualKeyCode` is omitted on purpose: it is platform-native
     // (macOS != Windows), and sending the Windows code on macOS mis-maps the
     // key to an unrelated browser accelerator. `windowsVirtualKeyCode` + key +
     // code is the portable set Chrome resolves from everywhere.
-    const base = { modifiers, key: action.key, code, windowsVirtualKeyCode: vk };
+    const base = { modifiers, key: shiftLetter(action.key), code, windowsVirtualKeyCode: vk };
     await cdpSend(tid, "Input.dispatchKeyEvent", text != null
       ? { ...base, type: "keyDown", text }
       : { ...base, type: "keyDown" });

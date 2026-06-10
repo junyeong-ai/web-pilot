@@ -92,6 +92,18 @@ fn key_descriptor(key: &str) -> Option<(String, u32)> {
 /// listeners but never submits. Other named keys (Tab, arrows, Backspace)
 /// produce no text: their effect is the keypress itself, and a stray "\t"
 /// would type a tab instead of traversing focus.
+/// A shifted ASCII letter is its uppercase form on every Latin layout, so a
+/// `--shift` key-press of a letter produces the uppercase character. Shifted
+/// digits/punctuation are layout-specific (US `1`→`!`), so they are left
+/// unchanged rather than assume a keyboard layout.
+fn shift_letter(s: &str, shift: bool) -> String {
+    if shift && s.len() == 1 && s.as_bytes()[0].is_ascii_alphabetic() {
+        s.to_ascii_uppercase()
+    } else {
+        s.to_owned()
+    }
+}
+
 fn printable_key_text(key: &str) -> Option<String> {
     match key {
         "Enter" => Some("\r".to_string()),
@@ -712,6 +724,16 @@ impl LocalTransport {
         let text = (!mods.ctrl && !mods.alt && !mods.meta)
             .then(|| printable_key_text(key))
             .flatten();
+        // A shifted ASCII letter is its uppercase form on every Latin layout, so
+        // honor it: `key-press a --shift` delivers "A" — both the inserted `text`
+        // and the event `key` — not "a" with only the shiftKey flag (which leaves
+        // a field lowercase and an `e.key === "A"` listener unmatched). Shifted
+        // digits/punctuation are layout-specific (US `1`→`!`, others differ), so
+        // those are left unchanged rather than assume a keyboard layout. `code`
+        // and `vk` stay keyed off the unshifted key — they are layout-position,
+        // not the produced character.
+        let key = shift_letter(key, mods.shift);
+        let text = text.map(|t| shift_letter(&t, mods.shift));
 
         // `nativeVirtualKeyCode` is deliberately omitted: it is the
         // platform-native scan code (different on macOS vs Windows), and

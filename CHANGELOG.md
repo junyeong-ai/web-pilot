@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.129] - 2026-06-10
+
+### Fixed
+
+- **`key-press <letter> --shift` now produces the uppercase character.** The
+  shift modifier set the event's shiftKey flag but left the injected `key`/`text`
+  unchanged, so `key-press a --shift` delivered lowercase `a` to a focused field
+  (and a `e.key === "A"` listener never matched) even though shift is otherwise
+  treated as a text-producing modifier. A shifted ASCII letter — uppercase on
+  every Latin layout — is now emitted as its uppercase form for both the event
+  `key` and the inserted text, in both modes. Shifted digits/punctuation are
+  layout-specific (US `1`→`!`, others differ), so those are deliberately left
+  unchanged rather than assume a keyboard layout.
+
 ## [0.4.128] - 2026-06-10
 
 ### Fixed
