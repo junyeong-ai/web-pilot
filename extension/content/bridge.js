@@ -253,6 +253,49 @@
     return node.parentElement || (root instanceof ShadowRoot ? root.host : null);
   }
 
+  // `--include text` source. `document.body.innerText` is rendering-aware
+  // (visibility, block newlines, slotted content) and fast, but it stops at open
+  // shadow boundaries — so a web component's own labels/prose are silently
+  // dropped, while the DOM snapshot (which pierces shadow) shows them. Keep
+  // `innerText` as the well-formatted base for the light tree and append the
+  // text OWNED by each open shadow root. A `<slot>`'s projected content already
+  // lives in the light tree (counted in the base), so the shadow walk skips
+  // slots — no double counting, and the light-only common case is unchanged.
+  function bodyTextWithShadow() {
+    const base = document.body?.innerText || "";
+    if (!document.body) return base;
+    const extra = [];
+    for (const el of document.body.querySelectorAll("*")) {
+      if (el.shadowRoot?.mode === "open" && el.checkVisibility?.()) {
+        const t = shadowOwnText(el.shadowRoot);
+        if (t) extra.push(t);
+      }
+    }
+    return extra.length ? `${base}\n${extra.join("\n")}` : base;
+  }
+
+  // Visible text owned by a shadow root: its own nodes' text, descending nested
+  // open shadow roots, but SKIPPING `<slot>` — a slot renders light-tree content
+  // that the base `innerText` already carries. A shadow host's own light
+  // children are unrendered unless slotted (and slotted ones surface via the
+  // base), so a host is descended through its shadow root, never its light kids.
+  function shadowOwnText(root) {
+    let out = "";
+    for (const child of root.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        out += `${child.textContent} `;
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        if (child.localName === "slot") continue;
+        if (child.checkVisibility && !child.checkVisibility()) continue;
+        out +=
+          child.shadowRoot?.mode === "open"
+            ? `${shadowOwnText(child.shadowRoot)} `
+            : `${shadowOwnText(child)} `;
+      }
+    }
+    return out.replace(/\s+/g, " ").trim();
+  }
+
   function isVisible(el) {
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return false;
@@ -1274,7 +1317,7 @@
         // costs the same bounded tokens everywhere (codepoint-safe). `truncated`
         // tells the agent the page has more text than shown — without it a clip
         // is silent and the visible prefix reads as the whole page.
-        const full = document.body?.innerText || "";
+        const full = bodyTextWithShadow();
         const text = clip(full, 50000);
         return {
           text,

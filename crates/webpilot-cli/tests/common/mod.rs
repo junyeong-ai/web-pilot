@@ -35,7 +35,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
     }
   });
   const sr = document.getElementById('shadowhost').attachShadow({ mode: 'open' });
-  sr.innerHTML = '<input id="shadowfile" type="file"><button id="shadowbtn">shadow</button>';
+  sr.innerHTML = '<input id="shadowfile" type="file"><button id="shadowbtn">shadow</button><p>shadowonlyprose</p>';
 </script>
 </body></html>"#;
 

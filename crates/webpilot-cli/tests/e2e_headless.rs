@@ -149,6 +149,23 @@ fn headless_behavioral_flow() {
         .and_then(|e| e["index"].as_u64())
         .expect("button index") as u32;
 
+    // 1b. `--include text` must include text inside open shadow roots, like the
+    //     DOM snapshot does — `innerText` alone stops at the shadow boundary and
+    //     would silently drop a web component's own prose with no truncated
+    //     signal. The shadow root carries "shadowonlyprose" (no slot), so the text
+    //     dump must surface it without double-counting any slotted content.
+    let text_cap = fx.run(&["capture", "--include", "text"]);
+    assert_eq!(code(&text_cap), 0, "text capture failed: {}", stdout(&text_cap));
+    let text_json: serde_json::Value =
+        serde_json::from_str(&stdout(&text_cap)).expect("text capture json");
+    assert!(
+        text_json["text_content"]
+            .as_str()
+            .is_some_and(|t| t.contains("shadowonlyprose")),
+        "capture --include text must include open-shadow-root text, not just light innerText: {}",
+        stdout(&text_cap)
+    );
+
     // 2. Click the button by its captured index; its onclick sets the title.
     let click = fx.run(&["action", "click", &button_index.to_string()]);
     assert_eq!(code(&click), 0, "click failed: {}", stdout(&click));

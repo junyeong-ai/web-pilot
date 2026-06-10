@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.131] - 2026-06-10
+
+### Fixed
+
+- **`capture --include text` now includes text inside open shadow roots.** The
+  text dump used `document.body.innerText`, which stops at the shadow boundary —
+  so a web component's own labels/prose were silently dropped (with no
+  `truncated` signal), even though the DOM snapshot already pierces shadow for
+  interactive elements. `innerText` is kept as the fast, well-formatted base for
+  the light tree and the text owned by each open shadow root is appended; a
+  `<slot>`'s projected content already lives in the light tree, so the shadow
+  walk skips slots — no double-counting, and the light-only common case is byte
+  for byte unchanged. Shared `bridge.js`, so both modes are fixed at once.
+
 ## [0.4.130] - 2026-06-10
 
 ### Fixed

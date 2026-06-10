@@ -298,6 +298,21 @@ fn browser_behavioral_flow() {
         "from the main frame, subframes counts every nested http iframe — the /frame iframe and the /nested iframe inside it: {}",
         stdout(&cap)
     );
+    // `--include text` must include open-shadow-root text in browser mode too
+    // (headless parity): the shadow root carries "shadowonlyprose", which plain
+    // `innerText` drops at the shadow boundary.
+    let text_cap = fx.run(&["capture", "--include", "text"]);
+    assert_eq!(code(&text_cap), 0, "text capture failed: {}", stdout(&text_cap));
+    let text_json: serde_json::Value =
+        serde_json::from_str(&stdout(&text_cap)).expect("text capture json");
+    assert!(
+        text_json["text_content"]
+            .as_str()
+            .is_some_and(|t| t.contains("shadowonlyprose")),
+        "capture --include text must include open-shadow-root text in browser mode too: {}",
+        stdout(&text_cap)
+    );
+
     let button_index = elements
         .iter()
         .find(|e| e["tag"] == "button")
