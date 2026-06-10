@@ -834,6 +834,22 @@
       el.value = newVal;
     }
 
+    // A typed control (number/date/time/…) silently sanitizes a value it can't
+    // parse to the empty string — "abc" into `<input type=number>` leaves the
+    // field blank. Firing input/change and reporting success would claim a value
+    // that never landed. A non-empty target that the control blanked is a
+    // rejection, not a no-op: fail typed so the agent retries with a valid
+    // format instead of trusting an empty field. (A control that merely
+    // normalises a valid value — "3.0" → "3" — keeps a non-empty value and is
+    // left alone.)
+    if (newVal !== "" && el.value === "") {
+      return err(
+        "InvalidArgument",
+        `The field rejected "${text}" — its input type does not accept that value`,
+        { requested: text },
+      );
+    }
+
     el.dispatchEvent(new InputEvent("input", {
       bubbles: true, inputType: "insertText", data: text,
     }));
@@ -931,7 +947,8 @@
               "Cannot type into a read-only field — the page rejects edits to it",
             );
           }
-          reliableType(r.target, action.text, action.clear);
+          const typeError = reliableType(r.target, action.text, action.clear);
+          if (typeError) return typeError;
           return { success: true };
         }
 

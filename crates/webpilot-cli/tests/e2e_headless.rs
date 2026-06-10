@@ -403,6 +403,34 @@ fn headless_behavioral_flow() {
         stdout(&ce_text)
     );
 
+    // 2a-num. A typed control silently sanitizes a value it can't parse to "".
+    //     Typing "abc" into `<input type=number>` leaves it blank, so a success
+    //     would claim a value that never landed — it must be a typed
+    //     InvalidArgument (7). A valid number still lands and reports success.
+    let num_index = index_of(&cap, "num");
+    let num_bad = fx.run(&["action", "type", &num_index, "abc"]);
+    assert_eq!(
+        code(&num_bad),
+        7,
+        "typing a non-numeric value into <input type=number> must be InvalidArgument (7), not a success that left the field empty: {}",
+        stdout(&num_bad)
+    );
+    let num_ok = fx.run(&["action", "type", &num_index, "42"]);
+    assert_eq!(
+        code(&num_ok),
+        0,
+        "typing a valid number must still succeed: {}",
+        stdout(&num_ok)
+    );
+    let num_val = fx.run(&["eval", "document.getElementById('num').value"]);
+    let nvj: serde_json::Value = serde_json::from_str(&stdout(&num_val)).expect("eval json");
+    assert_eq!(
+        nvj["result"].as_str(),
+        Some("\"42\""),
+        "the valid number must land in the field: {}",
+        stdout(&num_val)
+    );
+
     // 2a. A same-URL reload rebuilds the document, clearing the old execution
     //      contexts. The bridge re-injects into the fresh isolated world on its
     //      own (the persistent addScriptToEvaluateOnNewDocument), and the open-

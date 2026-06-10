@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.150] - 2026-06-10
+
+### Fixed
+
+- **`type` into a typed input that rejects the value now fails loud instead of
+  reporting success over an empty field.** A `<input type=number>` (and
+  `date`/`time`/`month`/`week`/`datetime-local`) silently sanitizes a value it
+  can't parse to the empty string — typing `abc` into a number field leaves it
+  blank — but the bridge still fired `input`/`change` and returned success, so
+  the agent believed the value landed when the field was empty. After setting
+  the value it now checks for that rejection (a non-empty target the control
+  blanked) and returns a typed `InvalidArgument`. A control that merely
+  normalizes a valid value (`3.0` → `3`, keeping a non-empty value) is left
+  alone, so legitimate input still succeeds. Shared bridge path; one fix for
+  both modes.
+
 ## [0.4.149] - 2026-06-10
 
 ### Fixed

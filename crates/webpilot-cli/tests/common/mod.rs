@@ -40,6 +40,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
   sr.innerHTML = '<input id="shadowfile" type="file"><button id="shadowbtn">shadow</button><p>shadowonlyprose</p>';
 </script>
 <div id="ce" contenteditable>hello</div>
+<input id="num" type="number">
 </body></html>"#;
 
 pub const FRAME: &str = r##"<!doctype html><html><head><title>frame</title></head>
