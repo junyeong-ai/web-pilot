@@ -618,6 +618,23 @@ fn headless_behavioral_flow() {
         stdout(&fetched)
     );
 
+    // 2e-bin. A binary (non-UTF8) response fails loud rather than handing back a
+    //     lossy-decoded string under a success status — the agent must never
+    //     mistake mojibake for the real body. `/binary` serves raw non-UTF8
+    //     bytes; the error names the cause.
+    let bin = fx.run(&["fetch", &format!("{base}/binary")]);
+    assert_eq!(
+        code(&bin),
+        1,
+        "fetch of a binary body must fail loud (exit 1), not succeed with mojibake: {}",
+        stdout(&bin)
+    );
+    assert!(
+        stdout(&bin).contains("not valid UTF-8"),
+        "the binary-fetch error must name the cause (not valid UTF-8): {}",
+        stdout(&bin)
+    );
+
     // 2f. The bridge runs in an isolated world, so page JS that overwrites the
     //     MAIN-world `__webpilot_handle` / `__webpilot_state` cannot corrupt how
     //     an index resolves. Tamper in MAIN, then capture + click and confirm

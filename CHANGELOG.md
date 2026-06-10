@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.145] - 2026-06-10
+
+### Fixed
+
+- **`fetch` no longer hands back a binary response as mojibake under a success
+  status.** The body was decoded with a non-fatal `TextDecoder`, so a binary or
+  otherwise non-UTF8 response (an image, a PDF, an `application/octet-stream`
+  endpoint) came back as replacement-character garbage with `status: 200` — the
+  agent had no way to tell corrupt text from the real body. It now decodes
+  strictly (`{ fatal: true }`); a body that is not valid UTF-8 fails loud with
+  its byte count ("response body is not valid UTF-8 (N bytes); fetch returns
+  text, not binary"), mirroring the existing oversize guard. Valid text bodies
+  (JSON/HTML/text) are unaffected. Both modes share the identical typed error,
+  and a `/binary` fixture route pins it in the headless and browser e2e suites.
+
 ## [0.4.144] - 2026-06-10
 
 ### Fixed

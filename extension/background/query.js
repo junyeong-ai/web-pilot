@@ -329,7 +329,10 @@ function fetchExpression(command) {
     }
     const merged = new Uint8Array(total); let off = 0;
     for (const p of parts) { merged.set(p, off); off += p.length; }
-    return { status: r.status, body: new TextDecoder().decode(merged) };
+    let body;
+    try { body = new TextDecoder("utf-8", { fatal: true }).decode(merged); }
+    catch (e) { return { status: r.status, binary: total }; }
+    return { status: r.status, body };
   })()`;
 }
 
@@ -357,6 +360,12 @@ async function handleFetch(command) {
     });
     if (r.oversize) {
       return { type: "FetchResult", success: false, error: err("Other", `response body exceeds the ${r.oversize}-byte fetch limit`) };
+    }
+    // A body that isn't valid UTF-8 is binary; a lossy-decoded string under a
+    // success status would be mojibake the agent can't tell from text. Fail
+    // loud with the byte count — headless parity.
+    if (r.binary != null) {
+      return { type: "FetchResult", success: false, error: err("Other", `response body is not valid UTF-8 (${r.binary} bytes); fetch returns text, not binary`) };
     }
     return { type: "FetchResult", success: true, status: r.status, body: r.body };
   } catch (e) {

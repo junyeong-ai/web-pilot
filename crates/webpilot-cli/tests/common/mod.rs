@@ -97,6 +97,19 @@ pub fn spawn_server() -> String {
                 let mut buf = [0u8; 1024];
                 let n = stream.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]);
+                // A deliberately non-UTF8 body: `fetch` must fail loud on a
+                // binary response, never hand back a lossy-decoded string under
+                // a success status. Raw bytes — it cannot be a &str.
+                if req.starts_with("GET /binary") {
+                    let bytes = [0xFFu8, 0xFE, 0x00, 0x01, 0xFF];
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        bytes.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(&bytes);
+                    return;
+                }
                 let (body, extra_headers) = if req.starts_with("GET /framed2") {
                     (FRAMED2, "")
                 } else if req.starts_with("GET /nested") {

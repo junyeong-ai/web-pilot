@@ -460,6 +460,22 @@ fn browser_behavioral_flow() {
         stdout(&fetched)
     );
 
+    // 2e-bin. A binary (non-UTF8) response fails loud, not a lossy-decoded
+    //     string under a success status — headless parity. `/binary` serves raw
+    //     non-UTF8 bytes; the error names the cause.
+    let bin = fx.run(&["fetch", &format!("{base}/binary")]);
+    assert_eq!(
+        code(&bin),
+        1,
+        "fetch of a binary body must fail loud (exit 1), not succeed with mojibake: {}",
+        stdout(&bin)
+    );
+    assert!(
+        stdout(&bin).contains("not valid UTF-8"),
+        "the binary-fetch error must name the cause (not valid UTF-8): {}",
+        stdout(&bin)
+    );
+
     // 2f. A click that triggers a SAME-TAB navigation (here `location.href` to a
     //     deliberately-slow `/slow`) must be detected and waited out: the action
     //     registers a commit watch before dispatching, settles on the new

@@ -230,7 +230,10 @@ impl LocalTransport {
                 }}
                 const merged = new Uint8Array(total); let off = 0;
                 for (const p of parts) {{ merged.set(p, off); off += p.length; }}
-                return {{ status: r.status, body: new TextDecoder().decode(merged) }};
+                let body;
+                try {{ body = new TextDecoder("utf-8", {{ fatal: true }}).decode(merged); }}
+                catch (e) {{ return {{ status: r.status, binary: total }}; }}
+                return {{ status: r.status, body }};
             }})()"#,
             url = serde_json::to_string(url)?,
             method = serde_json::to_string(method.unwrap_or("GET"))?,
@@ -243,6 +246,15 @@ impl LocalTransport {
         if let Some(max) = result.get("oversize").and_then(|v| v.as_u64()) {
             return Err(WebPilotError::Other {
                 detail: format!("response body exceeds the {max}-byte fetch limit"),
+            }
+            .into());
+        }
+        // A body that isn't valid UTF-8 is binary; lossy-decoding it would hand
+        // the agent mojibake under a success status. Fail loud with the byte
+        // count, mirroring the oversize guard above.
+        if let Some(bytes) = result.get("binary").and_then(|v| v.as_u64()) {
+            return Err(WebPilotError::Other {
+                detail: format!("response body is not valid UTF-8 ({bytes} bytes); fetch returns text, not binary"),
             }
             .into());
         }
