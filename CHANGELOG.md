@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.121] - 2026-06-10
+
+### Fixed
+
+- **`webpilot self update` now refreshes the deployed Chrome extension to the
+  new version instead of leaving it stale.** The on-disk unpacked extension is
+  version-locked to the binary (browser mode's host rejects any drift with
+  `VersionMismatch`), but the updater swapped only the binary — so the very next
+  `--browser` command failed with an infra error after an apparently successful
+  upgrade, and the user had to run `setup extension` by hand. The update now
+  re-materializes the extension via the freshly-installed binary (the running
+  process still holds the old embedded assets, so the new binary must write
+  them), but only when the extension was already deployed — a headless-only
+  install is left untouched. A running Chrome must still reload the extension to
+  pick up the new version; the success output now says so.
+
 ## [0.4.120] - 2026-06-10
 
 ### Fixed

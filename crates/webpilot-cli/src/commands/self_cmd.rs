@@ -143,8 +143,47 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
     }
     atomic_replace(&extracted, &dest)?;
 
+    // The on-disk unpacked extension is version-locked to the binary — browser
+    // mode's host rejects any drift with `VersionMismatch`, and the extension's
+    // content is purely a function of the binary version. Swapping the binary
+    // without refreshing the extension would silently break that lock, so bring
+    // the deployed extension to the new version too. Two constraints shape this:
+    //   - Only if it was ever deployed: a headless-only install never created
+    //     `extension_dir()`, and self-update must not impose browser-mode
+    //     artifacts on it. Check the path WITHOUT materialising it.
+    //   - Via the NEW binary, not in-process: this process still holds the OLD
+    //     embedded extension, so it must shell out to the freshly-installed
+    //     `dest` (which carries the new assets) to write them.
+    // Best-effort — a failure leaves a working new binary in place and surfaces
+    // as a manual follow-up, never as an update failure.
+    let extension = if !webpilot::dirs::extension_dir_path().exists() {
+        "not_installed"
+    } else if Command::new(&dest)
+        .args(["setup", "extension", "--yes"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        "refreshed"
+    } else {
+        "stale"
+    };
+
+    let extension_note = match extension {
+        // The disk is now coherent; the loaded copy in a running Chrome is not,
+        // and only a reload (or a Chrome restart) can pick up the new version.
+        "refreshed" => {
+            "\n  Browser mode: reload the extension in chrome://extensions to finish."
+        }
+        // The refresh did not run — point at the full manual remediation.
+        "stale" => {
+            "\n  Browser mode: run `webpilot setup extension`, then reload it in chrome://extensions."
+        }
+        _ => "",
+    };
+
     let human = format!(
-        "✓ Updated v{current} → v{target_version}\n  {}",
+        "✓ Updated v{current} → v{target_version}\n  {}{extension_note}",
         dest.display()
     );
     Ok(CommandOutput::Data {
@@ -153,6 +192,7 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
             "from": current,
             "to": target_version,
             "path": dest.display().to_string(),
+            "extension": extension,
         }),
         human,
     })
