@@ -855,6 +855,17 @@ fn headless_behavioral_flow() {
         "capture --include pdf while an iframe is active must fail InvalidArgument (7), not render the top page: {}",
         stdout(&pdf_in_frame)
     );
+    // 2h-shot. And `--include screenshot` too: `Page.captureScreenshot` is
+    //     equally top-level (no frame-scoped capture), so a screenshot here
+    //     would be TOP-page pixels under an iframe-labelled header — the wrong
+    //     image with correct-looking metadata. Same loud rejection, both modes.
+    let shot_in_frame = fx.run(&["capture", "--include", "screenshot"]);
+    assert_eq!(
+        code(&shot_in_frame),
+        7,
+        "capture --include screenshot while an iframe is active must fail InvalidArgument (7), not shoot the top page: {}",
+        stdout(&shot_in_frame)
+    );
 
     // 2h-top. A `target="_top"` link clicked INSIDE the switched iframe navigates
     //         the TOP frame, not the active iframe — the bridge must report it as a

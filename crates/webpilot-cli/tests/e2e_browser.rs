@@ -925,6 +925,16 @@ fn browser_behavioral_flow() {
         "capture --include pdf while an iframe is active must be InvalidArgument (7) in browser mode too: {}",
         stdout(&pdf_in_frame)
     );
+    // `--include screenshot` likewise (headless parity): `Page.captureScreenshot`
+    // is top-level too, so it would be TOP-page pixels under an iframe-labelled
+    // header — the wrong image with correct-looking metadata.
+    let shot_in_frame = fx.run(&["capture", "--include", "screenshot"]);
+    assert_eq!(
+        code(&shot_in_frame),
+        7,
+        "capture --include screenshot while an iframe is active must be InvalidArgument (7) in browser mode too: {}",
+        stdout(&shot_in_frame)
+    );
     // An ACTION's own --capture while switched into the iframe must scope the
     // subframe count to the active frame too — not just a standalone `capture`.
     // A click that stays in the frame (a same-document `#` fragment link) must

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.160] - 2026-06-10
+
+### Fixed
+
+- **`capture --include screenshot` while an iframe is active fails loud instead
+  of shooting the top page under an iframe-labelled header.** `Page.captureScreenshot`
+  is a top-level operation (CDP has no frame-scoped capture), so a screenshot
+  taken after `frame switch` was TOP-page pixels while the capture header and
+  DOM described the iframe — the wrong image with correct-looking metadata. It
+  is now refused with the same typed `InvalidArgument` that `--annotate` and
+  `--include pdf` already use for exactly this reason, completing that guard
+  family. Both modes; both e2e suites pin the rejection.
+
 ## [0.4.159] - 2026-06-10
 
 ### Fixed

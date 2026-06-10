@@ -42,6 +42,14 @@ impl LocalTransport {
         if include.contains(&CaptureField::Pdf) {
             self.require_main_frame("capture --include pdf").await?;
         }
+        // `Page.captureScreenshot` is top-level for the same reason — there is
+        // no frame-scoped capture — so a screenshot while an iframe is active
+        // would be TOP-page pixels under an iframe-labelled header: the wrong
+        // image with correct-looking metadata. Refuse it identically.
+        if include.contains(&CaptureField::Screenshot) {
+            self.require_main_frame("capture --include screenshot")
+                .await?;
+        }
 
         let want = |f: CaptureField| include.contains(&f);
         let want_dom = want(CaptureField::Dom) || opts.annotate;

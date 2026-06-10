@@ -84,6 +84,13 @@ async function handleCapture(command) {
   if (include.has("pdf") && activeFrameId !== 0) {
     return topErr(err("InvalidArgument", "'capture --include pdf' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
   }
+  // `Page.captureScreenshot` is top-level for the same reason — there is no
+  // frame-scoped capture — so a screenshot while an iframe is active would be
+  // TOP-page pixels under an iframe-labelled header: the wrong image with
+  // correct-looking metadata. Refuse it identically (headless parity).
+  if (include.has("screenshot") && activeFrameId !== 0) {
+    return topErr(err("InvalidArgument", "'capture --include screenshot' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
+  }
 
   const result = {
     type: "Capture",
