@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.141] - 2026-06-10
+
+### Fixed
+
+- **Headless `action back` / `forward` now settles on the *main* frame's
+  navigation, not any frame's.** The traversal waited for a bare
+  `Page.frameNavigated` of any frame; a subframe that reloaded during the
+  settle window (an ad iframe, a meta-refresh, a JS-driven iframe nav) could
+  end the wait early, and the readyState probe that follows — finding the
+  *old* main document still `complete` — returned at once. A following capture
+  then showed the page we navigated away from while the command reported
+  success. The wait is now filtered to the top frame (no `parentId`), matching
+  the click-settle path and browser mode, which already filter for this exact
+  reason. A single `main_frame_navigated` helper is now the one definition of
+  "did the main frame navigate?", shared by both settle paths, and
+  `CdpClient::wait_for_event_matching` adds the predicate-based wait the filter
+  needs.
+
 ## [0.4.140] - 2026-06-10
 
 ### Fixed

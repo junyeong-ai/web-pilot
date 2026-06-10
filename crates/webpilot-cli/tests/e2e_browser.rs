@@ -302,7 +302,12 @@ fn browser_behavioral_flow() {
     // (headless parity): the shadow root carries "shadowonlyprose", which plain
     // `innerText` drops at the shadow boundary.
     let text_cap = fx.run(&["capture", "--include", "text"]);
-    assert_eq!(code(&text_cap), 0, "text capture failed: {}", stdout(&text_cap));
+    assert_eq!(
+        code(&text_cap),
+        0,
+        "text capture failed: {}",
+        stdout(&text_cap)
+    );
     let text_json: serde_json::Value =
         serde_json::from_str(&stdout(&text_cap)).expect("text capture json");
     assert!(

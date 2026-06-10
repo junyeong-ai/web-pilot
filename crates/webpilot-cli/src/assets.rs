@@ -194,7 +194,10 @@ mod tests {
         write_dir(&EXTENSION, &tmp).expect("second materialise");
 
         assert!(!orphan_file.exists(), "a top-level orphan must be pruned");
-        assert!(!orphan_dir.exists(), "an orphan subdirectory must be pruned");
+        assert!(
+            !orphan_dir.exists(),
+            "an orphan subdirectory must be pruned"
+        );
         assert!(
             tmp.join("manifest.json").exists(),
             "the real tree must survive the prune"

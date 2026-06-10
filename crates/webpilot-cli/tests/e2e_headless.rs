@@ -155,7 +155,12 @@ fn headless_behavioral_flow() {
     //     signal. The shadow root carries "shadowonlyprose" (no slot), so the text
     //     dump must surface it without double-counting any slotted content.
     let text_cap = fx.run(&["capture", "--include", "text"]);
-    assert_eq!(code(&text_cap), 0, "text capture failed: {}", stdout(&text_cap));
+    assert_eq!(
+        code(&text_cap),
+        0,
+        "text capture failed: {}",
+        stdout(&text_cap)
+    );
     let text_json: serde_json::Value =
         serde_json::from_str(&stdout(&text_cap)).expect("text capture json");
     assert!(
@@ -186,10 +191,22 @@ fn headless_behavioral_flow() {
     // marker</p> has innerText with newlines, so "whitespace collapse marker"
     // (single spaces) must still match.
     assert_eq!(
-        code(&fx.run(&["wait", "--timeout", "3", "text", "whitespace collapse marker"])),
+        code(&fx.run(&[
+            "wait",
+            "--timeout",
+            "3",
+            "text",
+            "whitespace collapse marker"
+        ])),
         0,
         "wait text must collapse whitespace to match a <br>-separated phrase: {}",
-        stdout(&fx.run(&["wait", "--timeout", "3", "text", "whitespace collapse marker"]))
+        stdout(&fx.run(&[
+            "wait",
+            "--timeout",
+            "3",
+            "text",
+            "whitespace collapse marker"
+        ]))
     );
 
     // 1d. `console read` / `network read` BEFORE the corresponding `start` is a
@@ -583,7 +600,8 @@ fn headless_behavioral_flow() {
         .and_then(|e| e["landmark"].as_str())
         .unwrap_or("");
     assert_eq!(
-        sf_landmark, "nav",
+        sf_landmark,
+        "nav",
         "a control inside an open shadow root must inherit the landmark wrapping \
          its host (flat-tree walk crosses the shadow boundary): {}",
         stdout(&cap_sf_after)
@@ -1029,7 +1047,10 @@ fn headless_behavioral_flow() {
     let _ = fx.run(&["console", "clear"]);
     // A bare eval that sets location.href is an OUT-OF-BAND nav — not an `action
     // navigate`, so navigate_reconnect's post-nav reinstall never runs for it.
-    let _ = fx.run(&["eval", &format!("window.location.href='{base}/frame'; 'go'")]);
+    let _ = fx.run(&[
+        "eval",
+        &format!("window.location.href='{base}/frame'; 'go'"),
+    ]);
     // Settle on /frame deterministically: #topnav exists only in the FRAME doc,
     // so the wait cannot pass on the pre-nav page.
     assert_eq!(
@@ -1757,6 +1778,44 @@ fn headless_behavioral_flow() {
         stdout(&closed)
     );
 
+    // 8d. History traversal settles on the MAIN frame, not whichever frame
+    //     fires first. The top fixture embeds an iframe, so going `back` to it
+    //     reloads a subframe too; the wait must settle on the top document we
+    //     navigated FROM (its `cardwrap`), never end early on the embedded
+    //     frame's own load and leave the readyState probe reading the page we
+    //     just left (`inner link` lives only on /frame's main document; once we
+    //     are back on the top page it sits in an unshown subframe). Browser
+    //     mode asserts the mirror at its navigation section. The subframe-vs-
+    //     main ordering is a few-ms race verified by review (like the other
+    //     navigation-settle races); this pins the deterministic real-back path
+    //     and its main-frame filter.
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &base])),
+        0,
+        "navigate to base (history seed) failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/frame")])),
+        0,
+        "navigate to /frame failed"
+    );
+    let on_frame = fx.run(&["capture", "--include", "dom"]);
+    assert!(
+        stdout(&on_frame).contains("inner link"),
+        "must be on /frame's main document before going back: {}",
+        stdout(&on_frame)
+    );
+    let back = fx.run(&["action", "back"]);
+    assert_eq!(code(&back), 0, "action back failed: {}", stdout(&back));
+    let after_back = fx.run(&["capture", "--include", "dom"]);
+    assert!(
+        stdout(&after_back).contains("cardwrap") && !stdout(&after_back).contains("inner link"),
+        "back must settle on the top document we navigated from (main-frame \
+         wait), not the embedded frame's load that would leave the capture on \
+         /frame: {}",
+        stdout(&after_back)
+    );
+
     // 9. Closing the ACTIVE tab leaves a dead pin. A pin-INDEPENDENT command
     //    (`tab` list) must still work so the agent can find a survivor and
     //    recover — not fail with a spurious TabNotFound. A page ACTION, by
@@ -1795,7 +1854,11 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["tab"]))
     );
 
-    assert_eq!(code(&fx.run(&["tab", "new", &base])), 0, "tab new (2) failed");
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "tab new (2) failed"
+    );
     assert_eq!(
         code(&fx.run(&["tab", "close", &active_id(&fx.run(&["tab"]))])),
         0,

@@ -25,6 +25,20 @@ fn is_real_document_url(url: &str) -> bool {
     !url.is_empty() && url != "about:blank"
 }
 
+/// The `frame` object of a top-frame `Page.frameNavigated`, or `None` for any
+/// other event (including a subframe navigation, which carries a `parentId`).
+/// The single source of "did the *main* frame just navigate?" — a subframe that
+/// reloads on its own must never settle a main-frame wait at the pre-navigation
+/// document, so both the click-settle replay and the history-traversal wait
+/// route their frame-event matching through here.
+fn main_frame_navigated(ev: &Value) -> Option<&Value> {
+    if ev.get("method").and_then(Value::as_str) != Some("Page.frameNavigated") {
+        return None;
+    }
+    let frame = ev.pointer("/params/frame")?;
+    frame.get("parentId").is_none().then_some(frame)
+}
+
 /// CDP modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8).
 fn modifier_mask(m: &webpilot::action::Modifiers) -> u32 {
     (m.alt as u32) | ((m.ctrl as u32) << 1) | ((m.meta as u32) << 2) | ((m.shift as u32) << 3)
@@ -474,14 +488,7 @@ impl LocalTransport {
         use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
         fn main_frame_url(ev: &Value) -> Option<&str> {
-            if ev.get("method").and_then(Value::as_str) != Some("Page.frameNavigated") {
-                return None;
-            }
-            let frame = ev.pointer("/params/frame")?;
-            if frame.get("parentId").is_some() {
-                return None;
-            }
-            frame.get("url").and_then(Value::as_str)
+            main_frame_navigated(ev)?.get("url").and_then(Value::as_str)
         }
 
         let immediate = self.bound_target_url().await;
@@ -806,10 +813,18 @@ impl LocalTransport {
         {
             return Err(e);
         }
+        // Settle only on the MAIN frame's navigation: a subframe that reloads
+        // during the traversal window would otherwise end this wait at the
+        // pre-traversal document, and the readyState probe below — finding the
+        // old document still `complete` — would return at once, so a following
+        // capture reads the page we navigated *away* from while the command
+        // reports success. (The click-settle path and browser mode both filter
+        // to the main frame for the same reason.)
         self.page
-            .wait_for_event(
-                "Page.frameNavigated",
+            .wait_for_event_matching(
+                "Page.frameNavigated (main frame)",
                 webpilot::settings::timeouts().back_forward,
+                |ev| main_frame_navigated(ev).is_some(),
             )
             .await
             .ok();

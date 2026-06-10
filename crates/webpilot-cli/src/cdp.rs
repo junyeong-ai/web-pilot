@@ -365,8 +365,26 @@ impl CdpClient {
         method: &str,
         timeout: std::time::Duration,
     ) -> Result<Value> {
-        let mut rx = self.events.subscribe();
         let target = method.to_string();
+        self.wait_for_event_matching(method, timeout, move |event| {
+            event.get("method").and_then(|v| v.as_str()) == Some(target.as_str())
+        })
+        .await
+    }
+
+    /// Like `wait_for_event`, but settles on the first event satisfying
+    /// `predicate` rather than a bare method-name match — so a caller can ignore
+    /// an event that names the right method but the wrong subject, e.g. a
+    /// subframe `Page.frameNavigated` that would otherwise end a main-frame wait
+    /// early. `label` names the awaited event in diagnostics only.
+    pub async fn wait_for_event_matching(
+        &self,
+        label: &str,
+        timeout: std::time::Duration,
+        predicate: impl Fn(&Value) -> bool,
+    ) -> Result<Value> {
+        let mut rx = self.events.subscribe();
+        let target = label.to_string();
         let deadline = tokio::time::Instant::now() + timeout;
         // Whether the event broadcast overflowed mid-wait (a burst larger than
         // `cdp.event_buffer`). The awaited event may have been one of the dropped
@@ -406,7 +424,7 @@ impl CdpClient {
             let tick = (deadline - now).min(std::time::Duration::from_millis(250));
             match tokio::time::timeout(tick, rx.recv()).await {
                 Ok(Ok(event)) => {
-                    if event.get("method").and_then(|v| v.as_str()) == Some(&target) {
+                    if predicate(&event) {
                         return Ok(event);
                     }
                 }

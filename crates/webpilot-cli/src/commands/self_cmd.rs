@@ -172,9 +172,7 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
     let extension_note = match extension {
         // The disk is now coherent; the loaded copy in a running Chrome is not,
         // and only a reload (or a Chrome restart) can pick up the new version.
-        "refreshed" => {
-            "\n  Browser mode: reload the extension in chrome://extensions to finish."
-        }
+        "refreshed" => "\n  Browser mode: reload the extension in chrome://extensions to finish.",
         // The refresh did not run — point at the full manual remediation.
         "stale" => {
             "\n  Browser mode: run `webpilot setup extension`, then reload it in chrome://extensions."
