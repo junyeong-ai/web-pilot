@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.122] - 2026-06-10
+
+### Fixed
+
+- **`setup` (extension/skill) is now a clean replace — files a previous version
+  left behind are pruned, not accumulated.** `write_dir` only ever wrote the
+  embedded tree's own entries and never removed on-disk files the tree no longer
+  carries, so a file dropped or renamed between releases lingered in the
+  deployed directory. With `self update` now re-materializing the extension over
+  an existing install on every upgrade, that drift would compound across
+  versions. The materialised tree is now a pure function of the binary version:
+  each level writes its embedded entries and prunes anything else (best-effort —
+  an inert leftover that can't be removed never fails an otherwise-successful
+  install).
+
 ## [0.4.121] - 2026-06-10
 
 ### Fixed

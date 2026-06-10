@@ -46,18 +46,32 @@ pub fn expected_extension_version() -> &'static str {
 
 /// Materialise an embedded `Dir` onto disk under `dest`.
 ///
-/// Existing files at the destination are overwritten so a `setup` command can
-/// be invoked repeatedly to repair a damaged install. Permissions are
-/// `0o755` on directories and `0o644` on files (Unix); Chrome needs the
-/// extension tree to be world-readable, so `0o700` would break it.
+/// A clean replace: existing files are overwritten and anything the embedded
+/// tree no longer carries is pruned, so the result is a pure function of the
+/// binary version — never a union of every version ever installed. That matters
+/// because `self update` re-runs `setup extension` over an existing install, so
+/// a file dropped or renamed between releases must not linger in the deployed
+/// extension. A `setup` command can still be invoked repeatedly to repair a
+/// damaged install. Permissions are `0o755` on directories and `0o644` on files
+/// (Unix); Chrome needs the extension tree to be world-readable, so `0o700`
+/// would break it.
 pub fn write_dir(dir: &Dir<'_>, dest: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dest)?;
     set_dir_mode(dest);
+
+    // The immediate-child names this level should hold after the write. Every
+    // other entry found on disk is a leftover from a prior version and is
+    // pruned below.
+    let mut expected: std::collections::HashSet<std::ffi::OsString> =
+        std::collections::HashSet::new();
 
     for entry in dir.entries() {
         match entry {
             include_dir::DirEntry::Dir(d) => {
                 let suffix = strip_root(d.path(), dir.path());
+                if let Some(name) = suffix.file_name() {
+                    expected.insert(name.to_owned());
+                }
                 write_dir(d, &dest.join(suffix))?;
             }
             include_dir::DirEntry::File(f) => {
@@ -65,6 +79,9 @@ pub fn write_dir(dir: &Dir<'_>, dest: &Path) -> io::Result<()> {
                     continue;
                 }
                 let suffix = strip_root(f.path(), dir.path());
+                if let Some(name) = suffix.file_name() {
+                    expected.insert(name.to_owned());
+                }
                 let target = dest.join(suffix);
                 if let Some(parent) = target.parent() {
                     std::fs::create_dir_all(parent)?;
@@ -77,7 +94,32 @@ pub fn write_dir(dir: &Dir<'_>, dest: &Path) -> io::Result<()> {
             }
         }
     }
+
+    prune_unexpected(dest, &expected);
     Ok(())
+}
+
+/// Remove on-disk entries at `dest` that the embedded tree no longer carries.
+///
+/// Best-effort: the install's correctness comes from the files that WERE
+/// written, and a stale leftover is inert (Chrome loads only what the new
+/// `manifest.json` references), so a leftover that can't be removed must not
+/// fail an otherwise-successful `setup` — it is untidy, not broken.
+fn prune_unexpected(dest: &Path, expected: &std::collections::HashSet<std::ffi::OsString>) {
+    let Ok(entries) = std::fs::read_dir(dest) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if expected.contains(&entry.file_name()) {
+            continue;
+        }
+        let path = entry.path();
+        let _ = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+    }
 }
 
 fn strip_root<'a>(p: &'a Path, root: &Path) -> &'a Path {
@@ -129,6 +171,40 @@ mod tests {
     fn extension_contains_icons() {
         assert!(EXTENSION.get_file("icons/icon16.png").is_some());
         assert!(EXTENSION.get_file("icons/icon128.png").is_some());
+    }
+
+    #[test]
+    fn write_dir_prunes_artifacts_of_a_previous_version() {
+        // Materialise the real embedded extension, then plant artifacts a prior
+        // version might have left: a stray top-level file and a whole stray
+        // subdirectory. A second materialise must remove them while keeping the
+        // genuine tree — proving the install is a clean function of the binary
+        // version, not an accumulation of every version ever installed (the
+        // exact path `self update` now re-runs over an existing install).
+        let tmp = std::env::temp_dir().join(format!("webpilot-assets-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        write_dir(&EXTENSION, &tmp).expect("first materialise");
+
+        let orphan_file = tmp.join("STALE_FROM_OLD_VERSION.js");
+        std::fs::write(&orphan_file, b"// removed in a later release").unwrap();
+        let orphan_dir = tmp.join("removed_subdir");
+        std::fs::create_dir_all(&orphan_dir).unwrap();
+        std::fs::write(orphan_dir.join("x.js"), b"x").unwrap();
+
+        write_dir(&EXTENSION, &tmp).expect("second materialise");
+
+        assert!(!orphan_file.exists(), "a top-level orphan must be pruned");
+        assert!(!orphan_dir.exists(), "an orphan subdirectory must be pruned");
+        assert!(
+            tmp.join("manifest.json").exists(),
+            "the real tree must survive the prune"
+        );
+        assert!(
+            tmp.join("content/bridge.js").exists(),
+            "nested real files must survive the prune"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
