@@ -1538,5 +1538,27 @@ fn headless_behavioral_flow() {
         stdout(&ambiguous_record)
     );
 
+    // 8e. A successful `Ok(msg)` command must carry its message into JSON, not
+    //     just `{"success":true}` — the piped JSON path is how an agent reads
+    //     output, so dropping the message would hide actionable detail (e.g. a
+    //     partial `context close --all` reporting which contexts it kept). ctx-a
+    //     survived the rejected 8c close; closing it now must echo the message.
+    let closed = fx.run(&["context", "close", "ctx-a"]);
+    assert_eq!(
+        code(&closed),
+        0,
+        "context close ctx-a failed: {}",
+        stdout(&closed)
+    );
+    let closed_json: serde_json::Value =
+        serde_json::from_str(&stdout(&closed)).expect("close json");
+    assert!(
+        closed_json["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("ctx-a")),
+        "a successful Ok command's JSON must carry its message, not just success: {}",
+        stdout(&closed)
+    );
+
     drop(fx);
 }

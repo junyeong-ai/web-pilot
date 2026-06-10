@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.126] - 2026-06-10
+
+### Fixed
+
+- **A successful command's message is now carried into JSON output, not dropped.**
+  `CommandOutput::Ok(msg)` rendered as a bare `{"success":true}` on the piped
+  JSON path — the very path an agent reads — while the human and MCP renders both
+  emitted the message. So `context close --all` reporting `"Closed 3 context(s);
+  1 kept (failed to dispose — retry)"` reached a human but an agent saw only
+  `success:true`, reading a partial failure as a clean sweep. JSON now includes
+  the `message` field, matching the human and MCP output.
+
 ## [0.4.125] - 2026-06-10
 
 ### Fixed

@@ -126,7 +126,14 @@ impl CommandOutput {
 pub fn render(result: CommandOutput, mode: OutputMode) {
     match (result, mode) {
         (CommandOutput::Ok(msg), OutputMode::Human) => eprintln!("{msg}"),
-        (CommandOutput::Ok(_), OutputMode::Json) => println!(r#"{{"success":true}}"#),
+        // Carry the message into JSON too — the human and MCP renders both emit
+        // it (`to_agent_text`), and an agent on the piped JSON path would
+        // otherwise lose actionable detail like `context close --all`'s
+        // "N kept (failed to dispose)", reading a bare `success:true` as a clean
+        // sweep.
+        (CommandOutput::Ok(msg), OutputMode::Json) => {
+            emit_json(&serde_json::json!({"success": true, "message": msg}))
+        }
 
         (CommandOutput::Data { human, .. }, OutputMode::Human) => eprintln!("{human}"),
         (CommandOutput::Data { json, .. }, OutputMode::Json) => emit_json(&json),
