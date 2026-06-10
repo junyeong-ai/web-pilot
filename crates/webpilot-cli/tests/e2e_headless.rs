@@ -439,6 +439,25 @@ fn headless_behavioral_flow() {
         stdout(&cap_sf_after)
     );
 
+    // 2h. `landmark` must also pierce open shadow roots: `#shadowhost` is wrapped
+    //     in <nav>, so a control inside its shadow root sits within that landmark
+    //     in the flat tree. A bare `parentElement` walk stops at the shadow host
+    //     and would report no landmark; the flat-tree walk crosses to the host
+    //     and finds the <nav>.
+    let sf_landmark = sf_json["elements"]
+        .as_array()
+        .expect("elements array")
+        .iter()
+        .find(|e| e["id"] == "shadowbtn")
+        .and_then(|e| e["landmark"].as_str())
+        .unwrap_or("");
+    assert_eq!(
+        sf_landmark, "nav",
+        "a control inside an open shadow root must inherit the landmark wrapping \
+         its host (flat-tree walk crosses the shadow boundary): {}",
+        stdout(&cap_sf_after)
+    );
+
     // 2e. `fetch` runs as a debugger-routed MAIN-world eval in both modes (no
     //     contextId, CSP-exempt) and returns the response body — a same-origin
     //     GET against the fixture server must come back with the page markup.

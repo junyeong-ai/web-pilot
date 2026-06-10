@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.124] - 2026-06-10
+
+### Fixed
+
+- **`landmark` now pierces open shadow roots, like `focused` and the other
+  per-element flags.** `findLandmark` walked `parentElement`, which returns null
+  at the shadow boundary — so a control inside a web component's shadow root
+  always reported no landmark, stripping semantic context from the DOM output and
+  breaking `find --landmark` for shadow components, even when the element
+  genuinely sits inside a `<nav>`/`<dialog>` in the outer tree. It now walks the
+  flat tree, crossing to the shadow host (where the accessibility tree flattens
+  the content). The shadow-crossing parent step that `isVisible`'s opacity walk
+  already used is extracted into one `flatTreeParent` helper. Shared `bridge.js`,
+  so both modes are fixed at once.
+
 ## [0.4.123] - 2026-06-10
 
 ### Fixed

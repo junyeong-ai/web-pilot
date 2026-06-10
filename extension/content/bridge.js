@@ -242,6 +242,17 @@
   // style reads cover visibility and the element's own opacity on every
   // Chrome version. A zero-area box is never actionable, so real layout is
   // still required.
+  // The element directly above `node` in the FLAT tree: its element parent, or —
+  // when `node` is the top of an open shadow root — the host that projects it
+  // into the outer tree. Returns null at the document root. This is how the a11y
+  // tree flattens shadow content into its host's position, so ancestor walks
+  // (visibility, landmark) see the outer context a bare `parentElement` would
+  // miss at the shadow boundary.
+  function flatTreeParent(node) {
+    const root = node.getRootNode();
+    return node.parentElement || (root instanceof ShadowRoot ? root.host : null);
+  }
+
   function isVisible(el) {
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return false;
@@ -259,8 +270,7 @@
     // dropped on Chromes that predate it.
     for (let node = el; node && node.nodeType === 1; ) {
       if (parseFloat(getComputedStyle(node).opacity) <= 0) return false;
-      const root = node.getRootNode();
-      node = node.parentElement || (root instanceof ShadowRoot ? root.host : null);
+      node = flatTreeParent(node);
     }
     return true;
   }
@@ -346,13 +356,18 @@
     const landmarks = new Set([
       "nav", "main", "footer", "header", "aside", "banner", "form", "dialog", "search",
     ]);
-    let p = el.parentElement;
+    // Walk the FLAT tree (crossing open shadow boundaries to the host), not just
+    // `parentElement`: a control inside a shadow root still sits within whatever
+    // landmark wraps its host in the outer tree, but `parentElement` returns null
+    // at the shadow boundary — so a bare walk would strip the landmark from every
+    // shadow-inner element. Mirrors the shadow-aware `isVisible`/`resolveLabel`.
+    let p = flatTreeParent(el);
     while (p && p !== document.body) {
       const role = p.getAttribute("role");
       if (role && landmarks.has(role)) return role;
       const tag = p.tagName.toLowerCase();
       if (landmarks.has(tag)) return tag;
-      p = p.parentElement;
+      p = flatTreeParent(p);
     }
     return null;
   }
