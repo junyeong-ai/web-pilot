@@ -654,6 +654,13 @@ fn browser_behavioral_flow() {
         "a self-logging page must be captured while the monitor is armed"
     );
     let _ = fx.run(&["console", "clear"]);
+    // Arm the network monitor too, so the suppressed-read signal below is
+    // pinned for BOTH monitors (headless parity).
+    assert_eq!(
+        code(&fx.run(&["network", "start"])),
+        0,
+        "network start (deny setup) failed"
+    );
     let bdeny = fx.run(&["policy", "set", "--operation", "eval", "--verdict", "deny"]);
     assert_eq!(code(&bdeny), 0, "policy set eval deny: {}", stdout(&bdeny));
     let _ = fx.run(&["action", "navigate", &base]);
@@ -678,6 +685,20 @@ fn browser_behavioral_flow() {
         "the suppressed-monitor error must name the cause: {}",
         stdout(&suppressed_read)
     );
+    // The network monitor's read path carries the same explicit signal.
+    let suppressed_net = fx.run(&["network", "read"]);
+    assert_eq!(
+        code(&suppressed_net),
+        7,
+        "network read on an eval-deny-suppressed monitor must be InvalidArgument (7) in browser mode too: {}",
+        stdout(&suppressed_net)
+    );
+    assert!(
+        stdout(&suppressed_net).contains("not installed"),
+        "the suppressed network-monitor error must name the cause: {}",
+        stdout(&suppressed_net)
+    );
+    let _ = fx.run(&["network", "clear"]);
     let _ = fx.run(&["policy", "clear"]);
     let _ = fx.run(&["action", "navigate", &base]);
 
