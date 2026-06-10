@@ -1196,14 +1196,25 @@ async fn resolve_target(
 /// the browser, so they proceed and let the agent re-pin. A new command defaults
 /// to needing the page — the safe choice (fail loud) until classified otherwise.
 fn command_needs_active_page(command: &Command) -> bool {
-    !matches!(
-        command,
+    match command {
         Command::TabList
-            | Command::TabNew { .. }
-            | Command::TabSwitch { .. }
-            | Command::TabClose { .. }
-            | Command::Status
-    )
+        | Command::TabNew { .. }
+        | Command::TabSwitch { .. }
+        | Command::TabClose { .. }
+        | Command::Status => false,
+        // Cookies are browser-global — set through any target's session they
+        // land in the shared jar — so a cookie-only session import must not be
+        // blocked by a vanished pin. Only the storage half writes into the
+        // ACTIVE page's origin (via the bridge), so the import is page-bound
+        // exactly when the payload carries storage: the same `hasStorage` gate
+        // the browser worker applies, read through the shared predicate so the
+        // two can never disagree. An unparsable payload classifies page-free so
+        // the import's own schema error wins over a misleading TabNotFound.
+        Command::SessionImport { data } => serde_json::from_str::<Value>(data)
+            .map(|v| state::storage_to_import(&v))
+            .unwrap_or(false),
+        _ => true,
+    }
 }
 
 /// Returns `(target_id, vanished_pin)`. `vanished_pin` is `Some(dead_id)` when the

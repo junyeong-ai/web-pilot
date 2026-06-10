@@ -218,9 +218,10 @@ fn initialize_result() -> Value {
 
 /// The `-32602` reason a `tools/call` params object is structurally malformed,
 /// or `None` when its shape is valid: `name` must be a string and `arguments`,
-/// when present, an object. A structurally-valid call that then fails at
-/// execution (unknown tool, a bad argument value, element not found) is a
-/// separate `isError` tool result, not a request error.
+/// when present, an object. (An unknown tool NAME is also `-32602`, decided by
+/// the separate `tool_exists` check; a structurally-valid call to a real tool
+/// that then fails at execution — a bad argument value, element not found — is
+/// an `isError` tool result, not a request error.)
 fn tool_call_param_error(params: &Value) -> Option<&'static str> {
     if params.get("name").and_then(Value::as_str).is_none() {
         return Some("invalid params: `name` must be a string");
@@ -231,9 +232,20 @@ fn tool_call_param_error(params: &Value) -> Option<&'static str> {
     None
 }
 
+/// Whether `name` is an advertised tool — checked against the same
+/// `tool_specs` that `tools/list` serves, one source for both.
+fn tool_exists(name: &str) -> bool {
+    tool_specs()
+        .as_array()
+        .expect("tool_specs is an array (static shape)")
+        .iter()
+        .any(|t| t.get("name").and_then(Value::as_str) == Some(name))
+}
+
 /// A tool failure is reported as a successful JSON-RPC response carrying
 /// `isError: true`, so the model sees the message and can react, per the MCP
-/// tool-call contract. Only malformed requests use JSON-RPC-level errors.
+/// tool-call contract. Malformed requests and unknown tool names use
+/// JSON-RPC-level errors (-32602), per spec.
 async fn tool_call_reply<T, F, Fut>(
     connect: &F,
     transport: &mut Option<T>,
@@ -256,6 +268,14 @@ where
         .get("name")
         .and_then(Value::as_str)
         .expect("validated by tool_call_param_error");
+    // An unknown tool NAME is a protocol-level error per the MCP spec (-32602
+    // with "Unknown tool"), not a tool-execution failure — and it is decided
+    // BEFORE any transport opens, so a typo'd name can't launch Chrome. The
+    // check reads the same `tool_specs` that `tools/list` serves, so it can
+    // never drift from the advertised surface.
+    if !tool_exists(name) {
+        return error_reply(id, -32602, &format!("unknown tool: {name}"));
+    }
     let args = params
         .get("arguments")
         .cloned()
@@ -746,11 +766,20 @@ mod tests {
             tool_call_param_error(&json!({ "name": "browser_eval", "arguments": { "code": "1" } })),
             None
         );
-        // A well-formed but UNKNOWN tool name is NOT a param error — it passes the
-        // shape check and becomes an isError tool result at execution.
+        // A well-formed but UNKNOWN tool name is NOT a shape error — the
+        // separate `tool_exists` check rejects it at protocol level (-32602)
+        // before any transport opens.
         assert_eq!(
             tool_call_param_error(&json!({ "name": "browser_unknown" })),
             None
+        );
+        assert!(
+            !tool_exists("browser_unknown"),
+            "an unadvertised name must fail the existence check"
+        );
+        assert!(
+            tool_exists("browser_snapshot"),
+            "an advertised tool must pass the existence check"
         );
         // Structurally malformed requests are -32602 param errors.
         assert!(tool_call_param_error(&json!({})).is_some(), "missing name");

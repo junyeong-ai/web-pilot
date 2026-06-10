@@ -2086,5 +2086,38 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["eval", "1"]))
     );
 
+    // A COOKIE-ONLY session import is browser-global (cookies land in the
+    // shared jar through any target's session), so a dead pin must NOT block
+    // it — only the storage half is page-bound. Set up a fresh dead pin, then
+    // import cookies-only and confirm both the exit and the cookie landing.
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "tab new (cookie-only import setup) failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "close", &active_id(&fx.run(&["tab"]))])),
+        0,
+        "closing the active tab failed"
+    );
+    let cookie_only = home.join("cookie-only-session.json");
+    std::fs::write(
+        &cookie_only,
+        br#"{"version":1,"cookies":[{"name":"deadpin_ok","value":"1","domain":"127.0.0.1","path":"/","same_site":"lax","host_only":true}]}"#,
+    )
+    .expect("write cookie-only session fixture");
+    let coi = fx.run(&["session", "import", cookie_only.to_str().unwrap()]);
+    assert_eq!(
+        code(&coi),
+        0,
+        "a cookie-only session import must succeed on a dead pin (cookies are browser-global): {}",
+        stdout(&coi)
+    );
+    assert!(
+        stdout(&fx.run(&["cookie", "list", &base])).contains("deadpin_ok"),
+        "the cookie-only import must actually land its cookie: {}",
+        stdout(&fx.run(&["cookie", "list", &base]))
+    );
+
     drop(fx);
 }

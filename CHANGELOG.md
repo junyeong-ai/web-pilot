@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.167] - 2026-06-11
+
+### Fixed
+
+- **A cookie-only `session import` succeeds on a vanished tab pin.** The
+  headless dead-pin guard classified `SessionImport` as page-bound
+  unconditionally, so importing a session that carries only cookies — which are
+  browser-global and land in the shared jar through any target's session —
+  failed `TabNotFound` after the active tab closed. The classification is now
+  payload-based: the import is page-bound exactly when the payload carries
+  storage (the half that writes into the active page's origin), read through a
+  predicate shared with the import itself so the two can never disagree — and
+  matching the browser worker's `hasStorage` gate, which already behaved this
+  way. An e2e imports a cookie-only session over a dead pin and asserts both
+  the success and the cookie landing.
+- **An unknown MCP tool name is a protocol-level `-32602` error, per spec, not
+  an `isError` tool result.** A typo'd tool name previously opened the
+  transport (launching Chrome for nothing) and came back as a success-shaped
+  response that spec-conformant clients read as a succeeded call. The name is
+  now checked against the same `tool_specs` that `tools/list` serves — one
+  source, no drift — before any transport opens.
+
 ## [0.4.166] - 2026-06-11
 
 ### Fixed

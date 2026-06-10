@@ -375,10 +375,7 @@ impl LocalTransport {
         // browser `hasStorage` gate), so it needs neither the bridge nor the frame.
         let local_storage = parsed.get("local_storage");
         let session_storage = parsed.get("session_storage");
-        let has_storage = [local_storage, session_storage]
-            .into_iter()
-            .flatten()
-            .any(|v| v.as_object().is_some_and(|m| !m.is_empty()));
+        let has_storage = storage_to_import(&parsed);
         // Apply storage BEFORE the cookies. Storage is the quota-prone, bulky
         // part, and it imports through the active frame's bridge — so a write
         // the page rejects (a vanished frame → FrameNotFound, or a localStorage
@@ -464,6 +461,19 @@ impl LocalTransport {
             error: None,
         })
     }
+}
+
+/// Whether a parsed session-import payload carries storage to write — the half
+/// that runs through the ACTIVE page's bridge. Cookie-only payloads are
+/// browser-global (any target's session lands them in the shared jar) and need
+/// no page. One predicate drives both the vanished-pin classification in `send`
+/// and the import itself, so they can never disagree — and it mirrors the
+/// browser worker's `hasStorage` gate exactly.
+pub(super) fn storage_to_import(parsed: &Value) -> bool {
+    ["local_storage", "session_storage"]
+        .iter()
+        .filter_map(|k| parsed.get(k))
+        .any(|v| v.as_object().is_some_and(|m| !m.is_empty()))
 }
 
 fn ok_command_result() -> ResponseData {
