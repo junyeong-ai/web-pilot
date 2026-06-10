@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.161] - 2026-06-11
+
+### Changed
+
+- **The browser-parity build gate now checks both directions and covers action
+  kinds.** `browser_parity.rs` asserted only that every wire `Command` variant
+  has a service-worker router case; a dead router arm (a removed command's
+  forgotten JS case) passed silently, and the `Action` *kinds* under the single
+  `Action` command had no static check at all — a new action added in Rust
+  without its `bridge.js` `executeAction` case compiled, passed headless tests,
+  and failed at runtime in whichever mode hit it first. The test now requires
+  set equality for the Command/router pair and adds the action-level twin:
+  `Action` kinds (snake_case wire tags) must equal the bridge's `case` set,
+  which handles every kind explicitly (page actions run; CDP-native kinds are
+  explicit mis-route rejections). A new action now fails the build until its
+  bridge arm exists — the same guarantee the command check already gave.
+
 ## [0.4.160] - 2026-06-10
 
 ### Fixed
