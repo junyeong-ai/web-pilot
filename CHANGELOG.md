@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.170] - 2026-06-11
+
+### Fixed
+
+- **Reading a monitor whose re-arm was suppressed is a typed error, not an
+  empty success.** After `console start` → `policy set eval deny` → a
+  navigation, the armed flag survives but the new document carries no hook (the
+  deny stops monitor injection, by design) — and `console read` /
+  `network read` returned an empty list the agent would read as "the page was
+  quiet". The read now distinguishes a missing hook (`undefined`) from an empty
+  buffer and fails with a typed `InvalidArgument` naming the suppression and
+  the recovery (`policy list`, then `console start`). Both modes, identical
+  messages; both e2e suites assert the explicit signal where they previously
+  asserted only the marker's absence.
+
 ## [0.4.169] - 2026-06-11
 
 ### Fixed

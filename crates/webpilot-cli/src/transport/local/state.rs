@@ -133,15 +133,25 @@ impl LocalTransport {
         // Read the entries AND whether the buffer is at its cap in one round-trip
         // — `truncated` flags a full buffer (older entries possibly evicted) so a
         // missing early entry never reads as a confident absence.
+        // `undefined` (no hook in THIS document) is distinct from an empty
+        // buffer: the armed flag survives a navigation whose re-arm was
+        // suppressed by an `eval` policy deny, and an empty success there would
+        // read as "the page logged nothing" while the monitor was in fact off.
         let result = self
             .page
             .evaluate(&format!(
-                "(()=>{{const a=window.__webpilot_console||[];\
+                "(()=>{{const a=window.__webpilot_console;if(a===undefined)return null;\
                   return{{entries:a.filter(e=>e.timestamp>={}),truncated:a.length>={}}};}})()",
                 since.unwrap_or(0),
                 MONITOR_BUFFER_CAP,
             ))
             .await?;
+        if result.is_null() {
+            return Err(WebPilotError::InvalidArgument {
+                detail: MONITOR_NOT_INSTALLED_CONSOLE.into(),
+            }
+            .into());
+        }
         let truncated = result
             .get("truncated")
             .and_then(|v| v.as_bool())
@@ -223,13 +233,21 @@ impl LocalTransport {
             }
             .into());
         }
+        // `undefined` (no hook in THIS document) is distinct from an empty
+        // buffer — see `do_console_read`.
         let js = format!(
-            "(()=>{{const a=window.__webpilot_network||[];\
+            "(()=>{{const a=window.__webpilot_network;if(a===undefined)return null;\
               return{{entries:a.filter(e=>e.timestamp>={}),truncated:a.length>={}}};}})()",
             since.unwrap_or(0),
             MONITOR_BUFFER_CAP,
         );
         let result = self.page.evaluate(&js).await?;
+        if result.is_null() {
+            return Err(WebPilotError::InvalidArgument {
+                detail: MONITOR_NOT_INSTALLED_NETWORK.into(),
+            }
+            .into());
+        }
         let truncated = result
             .get("truncated")
             .and_then(|v| v.as_bool())
@@ -578,6 +596,13 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
 /// below evict the oldest past this (their `$CAP` placeholder), and a read reports
 /// `truncated` at this cap — one source, so eviction and the flag cannot drift.
 const MONITOR_BUFFER_CAP: usize = 500;
+
+/// The armed flag is set but THIS document carries no hook: the re-arm after a
+/// navigation was suppressed (an `eval` policy deny stops monitor injection) or
+/// the document loaded outside WebPilot's drive. An empty success here would
+/// read as "the page was quiet" while the monitor was in fact off.
+const MONITOR_NOT_INSTALLED_CONSOLE: &str = "the console monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot console start`";
+const MONITOR_NOT_INSTALLED_NETWORK: &str = "the network monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot network start`";
 
 /// Substitute the ring-buffer cap into a monitor install script. The page-side
 /// eviction (`> $CAP`) and the Rust-side `truncated` flag both derive from

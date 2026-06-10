@@ -341,7 +341,10 @@ async function handleConsoleRead(since) {
       // break the read or leak a wire shape headless would never emit. `truncated`
       // reports a full buffer (older entries possibly evicted), like headless.
       func: (s, levels, cap) => {
-        const all = window.__webpilot_console || [];
+        // `undefined` (no hook in THIS document — the re-arm was suppressed by
+        // an eval policy deny, headless parity) is distinct from empty.
+        const all = window.__webpilot_console;
+        if (all === undefined) return { missing: true };
         return {
           entries: all
             .filter((e) => e && levels.includes(e.level) && e.timestamp >= s)
@@ -359,6 +362,12 @@ async function handleConsoleRead(since) {
       },
     });
     const out = r?.[0]?.result || { entries: [], truncated: false };
+    if (out.missing) {
+      return topErr(err(
+        "InvalidArgument",
+        "the console monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot console start`",
+      ));
+    }
     return { type: "ConsoleEntries", entries: out.entries, truncated: out.truncated };
   } catch (e) {
     // A scripting failure means we could not read the buffer — surface it
@@ -419,7 +428,10 @@ async function handleNetworkRead(since) {
       // value would otherwise pass and fail the CLI's `Option<u32>` decode as a
       // misleading ConnectionLost, where headless's per-entry `.ok()` just drops it.
       func: (s, cap) => {
-        const all = window.__webpilot_network || [];
+        // `undefined` (no hook in THIS document) is distinct from empty —
+        // headless parity, see handleConsoleRead.
+        const all = window.__webpilot_network;
+        if (all === undefined) return { missing: true };
         return {
           entries: all.filter(
             (e) =>
@@ -440,6 +452,12 @@ async function handleNetworkRead(since) {
       args: [since || 0, MONITOR_BUFFER_CAP],
     });
     const out = r?.[0]?.result || { entries: [], truncated: false };
+    if (out.missing) {
+      return topErr(err(
+        "InvalidArgument",
+        "the network monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot network start`",
+      ));
+    }
     return { type: "NetworkEntries", entries: out.entries, truncated: out.truncated };
   } catch (e) {
     return topErr(exceptionErr(e));

@@ -1244,9 +1244,21 @@ fn headless_behavioral_flow() {
         "navigate is allowed (only eval was denied)"
     );
     std::thread::sleep(std::time::Duration::from_millis(700));
+    // The suppressed monitor is EXPLICIT: the armed flag survived but this
+    // document carries no hook, so `console read` is a typed InvalidArgument
+    // naming the suppression — never an empty success the agent would read as
+    // "the page logged nothing".
+    let suppressed_read = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&suppressed_read),
+        7,
+        "console read on an eval-deny-suppressed monitor must be InvalidArgument (7), not empty success: {}",
+        stdout(&suppressed_read)
+    );
     assert!(
-        !stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
-        "eval-deny must stop the monitor re-arming on the new document"
+        stdout(&suppressed_read).contains("not installed"),
+        "the suppressed-monitor error must name the cause: {}",
+        stdout(&suppressed_read)
     );
     let _ = fx.run(&["policy", "clear"]);
     // Restore the working page for the steps below (the deny test left us on /log).

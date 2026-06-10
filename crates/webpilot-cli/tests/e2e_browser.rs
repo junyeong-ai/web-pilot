@@ -663,9 +663,20 @@ fn browser_behavioral_flow() {
         "navigate is allowed (only eval was denied)"
     );
     std::thread::sleep(std::time::Duration::from_millis(700));
+    // The suppression is EXPLICIT (headless parity): the armed flag survived
+    // but this document carries no hook, so the read is a typed
+    // InvalidArgument naming it — never an empty success.
+    let suppressed_read = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&suppressed_read),
+        7,
+        "console read on an eval-deny-suppressed monitor must be InvalidArgument (7) in browser mode too: {}",
+        stdout(&suppressed_read)
+    );
     assert!(
-        !stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
-        "eval-deny must stop the service worker re-arming the monitor"
+        stdout(&suppressed_read).contains("not installed"),
+        "the suppressed-monitor error must name the cause: {}",
+        stdout(&suppressed_read)
     );
     let _ = fx.run(&["policy", "clear"]);
     let _ = fx.run(&["action", "navigate", &base]);
