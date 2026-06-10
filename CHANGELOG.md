@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.132] - 2026-06-10
+
+### Fixed
+
+- **Skill docs: corrected the policy store path.** The embedded `SKILL.md` told
+  the agent policies live at `artifacts/policies.json`, but the store is
+  `policy/policies.json` under the durable data root — `artifacts/` is the
+  evictable cache for screenshots/PDFs, exactly where a security config must NOT
+  live (OS cache eviction would silently reset deny rules to allow). An agent
+  following the doc would look in the wrong directory.
+
 ## [0.4.131] - 2026-06-10
 
 ### Fixed

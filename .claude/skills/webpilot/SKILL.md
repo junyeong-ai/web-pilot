@@ -243,7 +243,7 @@ Keys gate by **effect**, not command name:
 
 A URL-less `capture`, buffer reads (`console`/`network read` & `clear`), `dom get`, and `find` are never gated. To deny all credential reads, set `session_export`, `cookie_list`, and `session_import` to `deny`.
 
-Policies are a single local file (`artifacts/policies.json`) read identically in both modes — `webpilot policy` never touches the browser, and a rule applies the moment it's set. A blocked operation fails with `PolicyDenied` (exit 6).
+Policies are a single local file (`policy/policies.json`, under the durable data root so deny rules survive cache eviction) read identically in both modes — `webpilot policy` never touches the browser, and a rule applies the moment it's set. A blocked operation fails with `PolicyDenied` (exit 6).
 
 ## Diff / record / profile
 
