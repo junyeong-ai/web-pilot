@@ -167,7 +167,10 @@ async fn close_contexts(
         crate::transport::local::clear_context_state(&ctx.browser_context_id);
     }
     let _ = std::fs::remove_file(&file_path);
-    Ok(CommandOutput::Ok(format!("Closed context '{name}'")))
+    Ok(CommandOutput::Ok(format!(
+        "Closed context '{}'",
+        line_safe(&name)
+    )))
 }
 
 /// Dispose a CDP browser context, tolerating one that is already gone (a
