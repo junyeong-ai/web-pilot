@@ -1,10 +1,44 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, ResponseData};
-use webpilot::types::line_safe;
+use webpilot::types::{CookieInfo, SameSite, line_safe};
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
+
+/// One agent-facing cookie row: name, a value preview, the domain+path scope,
+/// and the security/lifetime flags. Every attribute `CookieInfo` carries is
+/// shown — `secure`/`httpOnly`/`hostOnly`, the `sameSite` mode (when set), and
+/// the lifetime (`expires=<unix>` or `session`) — so an agent reasoning about a
+/// cookie's scope or auth behaviour never has to drop to the JSON to see it.
+fn cookie_row(c: &CookieInfo) -> String {
+    let mut flags: Vec<String> = Vec::new();
+    if c.secure {
+        flags.push("secure".into());
+    }
+    if c.http_only {
+        flags.push("httpOnly".into());
+    }
+    if c.host_only {
+        flags.push("hostOnly".into());
+    }
+    if !matches!(c.same_site, SameSite::Unspecified) {
+        flags.push(format!("sameSite={}", c.same_site));
+    }
+    flags.push(match c.expiration {
+        Some(ts) => format!("expires={}", ts as i64),
+        None => "session".into(),
+    });
+    let preview: String = c.value.chars().take(40).collect();
+    format!(
+        "{} = {} [{}{}] {}",
+        line_safe(&c.name),
+        line_safe(&preview),
+        line_safe(&c.domain),
+        line_safe(&c.path),
+        flags.join(",")
+    )
+}
 
 #[derive(Args)]
 pub struct CookieArgs {
@@ -73,28 +107,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: CookieArgs) -> Result<Co
                 return Err(webpilot::WebPilotError::CookieNotFound { name: n.clone() }.into());
             }
 
-            let human_lines: Vec<String> = filtered
-                .iter()
-                .map(|c| {
-                    let flags = [
-                        if c.secure { "secure" } else { "" },
-                        if c.http_only { "httpOnly" } else { "" },
-                    ]
-                    .iter()
-                    .filter(|s| !s.is_empty())
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(",");
-                    let preview: String = c.value.chars().take(40).collect();
-                    format!(
-                        "{} = {} [{}] {}",
-                        line_safe(&c.name),
-                        line_safe(&preview),
-                        line_safe(&c.domain),
-                        flags
-                    )
-                })
-                .collect();
+            let human_lines: Vec<String> = filtered.iter().map(cookie_row).collect();
 
             if name_filter.is_some() && filtered.len() == 1 {
                 return Ok(CommandOutput::Content {
@@ -160,5 +173,61 @@ async fn simple<T: Transport>(
         }
         ResponseData::Error { error } => Err(error.into()),
         _ => anyhow::bail!("Unexpected response shape"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cookie(name: &str) -> CookieInfo {
+        CookieInfo {
+            name: name.into(),
+            value: "v".into(),
+            domain: "example.com".into(),
+            path: "/".into(),
+            secure: false,
+            http_only: false,
+            same_site: SameSite::Unspecified,
+            expiration: None,
+            host_only: false,
+        }
+    }
+
+    #[test]
+    fn cookie_row_shows_every_scope_and_security_attribute() {
+        let mut c = cookie("sid");
+        c.path = "/admin".into();
+        c.secure = true;
+        c.http_only = true;
+        c.host_only = true;
+        c.same_site = SameSite::Strict;
+        c.expiration = Some(1_799_000_000.0);
+        let row = cookie_row(&c);
+        // The full scope (domain+path), every flag, the sameSite mode, and a
+        // concrete expiry — none of it left only in the JSON.
+        assert!(row.contains("[example.com/admin]"), "scope: {row}");
+        assert!(row.contains("secure"), "{row}");
+        assert!(row.contains("httpOnly"), "{row}");
+        assert!(row.contains("hostOnly"), "{row}");
+        assert!(row.contains("sameSite=strict"), "{row}");
+        assert!(row.contains("expires=1799000000"), "{row}");
+    }
+
+    #[test]
+    fn cookie_row_marks_session_and_hides_unspecified_samesite() {
+        let row = cookie_row(&cookie("tmp"));
+        assert!(
+            row.contains("session"),
+            "a cookie with no expiry is a session cookie: {row}"
+        );
+        assert!(
+            !row.contains("sameSite"),
+            "an Unspecified sameSite is not rendered: {row}"
+        );
+        assert!(
+            !row.contains("secure") && !row.contains("httpOnly"),
+            "absent flags are not rendered: {row}"
+        );
     }
 }

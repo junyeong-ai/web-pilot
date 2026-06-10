@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.148] - 2026-06-10
+
+### Fixed
+
+- **`cookie list` now renders every scope and security attribute, not just
+  `secure`/`httpOnly`.** The human/MCP row carried the name, value, domain, and
+  those two flags but silently dropped `path`, `sameSite`, the expiry, and the
+  host-only flag — all of which `CookieInfo` already held and the JSON already
+  exposed. An agent reading cookies as text (an MCP tool result, or the
+  terminal) could not see a cookie's path scope, its cross-site mode, whether it
+  was host-only, or whether it was a session or persistent cookie. The row now
+  shows the domain+path scope (`[example.com/admin]`) and the full flag set
+  (`secure,httpOnly,hostOnly,sameSite=strict,expires=<unix>` / `session`),
+  omitting only an unspecified `sameSite`. Rendering is extracted to a
+  unit-tested `cookie_row` helper.
+
 ## [0.4.147] - 2026-06-10
 
 ### Fixed
