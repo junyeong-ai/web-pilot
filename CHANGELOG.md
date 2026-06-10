@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.128] - 2026-06-10
+
+### Fixed
+
+- **A click now focuses its target, like a real click.** `reliableClick`
+  dispatched `pointerdown → mousedown → pointerup → mouseup → click` but never
+  moved focus, which a real click does as mousedown's default action. So a click
+  fired no `focus`/`focusin` event, left `document.activeElement` unchanged, and
+  — most importantly — did not establish the browser focus a following native
+  `key_press` lands on, silently breaking the documented click-then-type
+  contract (a click on a field followed by a keypress went nowhere). The click
+  now focuses the target after a non-cancelled `mousedown` (respecting a page
+  that cancels mousedown to prevent focus theft); `focus()` no-ops on a
+  non-focusable target. Shared `bridge.js`, so both modes are fixed at once.
+
 ## [0.4.127] - 2026-06-10
 
 ### Fixed

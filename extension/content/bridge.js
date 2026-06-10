@@ -720,7 +720,15 @@
       bubbles: true, composed: true, cancelable: true, clientX: x, clientY: y, button: 0, view: window,
     };
     el.dispatchEvent(new PointerEvent("pointerdown", opts));
-    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    const mousedownLive = el.dispatchEvent(new MouseEvent("mousedown", opts));
+    // A real click focuses the target as mousedown's default action — unless the
+    // page cancels mousedown (the toolbar pattern that deliberately prevents
+    // focus theft) — firing focus/focusin and, crucially, making the element the
+    // browser-focus target a following native key_press lands on (the documented
+    // click-then-type contract). A synthetic dispatch does not trigger that
+    // default action, so focus explicitly; focus() no-ops on a non-focusable
+    // element. The element is already scroll-centered above, so no extra scroll.
+    if (mousedownLive) el.focus();
     el.dispatchEvent(new PointerEvent("pointerup", opts));
     el.dispatchEvent(new MouseEvent("mouseup", opts));
     const notCanceled = el.dispatchEvent(new MouseEvent("click", opts));

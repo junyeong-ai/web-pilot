@@ -321,6 +321,34 @@ fn headless_behavioral_flow() {
         stdout(&val)
     );
 
+    // 2b-click. A click must focus a focusable target, like a real click —
+    //     mousedown's default action moves focus, firing focus/focusin and
+    //     establishing the browser focus a following native key_press lands on
+    //     (the documented click-then-type contract). A purely synthetic dispatch
+    //     skips that default, so without the explicit focus the click would leave
+    //     focus elsewhere. Navigate fresh, click the empty text input, and it
+    //     must become document.activeElement.
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+    let cap_cf = fx.run(&["capture", "--include", "dom"]);
+    let q_click_idx = index_of(&cap_cf, "q");
+    assert_eq!(
+        code(&fx.run(&["action", "click", &q_click_idx])),
+        0,
+        "click on the text input failed"
+    );
+    let active = fx.run(&[
+        "eval",
+        "document.activeElement === document.getElementById('q')",
+    ]);
+    let aj: serde_json::Value = serde_json::from_str(&stdout(&active)).expect("eval json");
+    assert_eq!(
+        aj["result"].as_str(),
+        Some("true"),
+        "a click must focus a focusable target (so a following key_press lands there), \
+         not leave focus elsewhere: {}",
+        stdout(&active)
+    );
+
     // 2b-fkey. A canonical function key (`F1`) is a valid key-press; a
     //     non-canonical name (`F01`, a leading zero) is NOT a real DOM key code
     //     and must be rejected as InvalidArgument (exit 7), not silently
