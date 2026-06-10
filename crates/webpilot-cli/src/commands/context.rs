@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::WebPilotError;
 use webpilot::dirs;
+use webpilot::types::line_safe;
 
 use crate::output::CommandOutput;
 use crate::transport::LocalTransport;
@@ -66,7 +67,14 @@ pub fn list_contexts() -> Result<CommandOutput> {
             .iter()
             .map(|ctx| {
                 let age = now.saturating_sub(ctx.created_at);
-                format!("  {} ({}s old) — {}", ctx.name, age, ctx.cwd)
+                // `line_safe` like every other agent-facing field: a name or
+                // cwd carrying a newline must not forge an extra list row.
+                format!(
+                    "  {} ({}s old) — {}",
+                    line_safe(&ctx.name),
+                    age,
+                    line_safe(&ctx.cwd)
+                )
             })
             .collect()
     };

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.158] - 2026-06-10
+
+### Fixed
+
+- **`context list` renders names and cwds through `line_safe`, like every other
+  agent-facing field.** A context name or working directory carrying a newline
+  could forge an extra row in the list output (the filesystem side was already
+  safe — names are hashed into fixed paths). The render now collapses control
+  characters, closing the one renderer that bypassed the codebase-wide
+  `line_safe` convention.
+
 ## [0.4.157] - 2026-06-10
 
 ### Fixed
