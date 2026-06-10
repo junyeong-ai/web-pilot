@@ -192,6 +192,25 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["wait", "--timeout", "3", "text", "whitespace collapse marker"]))
     );
 
+    // 1d. `console read` / `network read` BEFORE the corresponding `start` is a
+    //     typed not-active error (exit 7), not an empty buffer reported as
+    //     success — which an agent would misread as "the page logged nothing /
+    //     made no requests" when the monitor was simply never armed. (Same
+    //     empty-success-vs-typed-not-found theme as `cookie get`.) Runs before any
+    //     `console start` below.
+    assert_eq!(
+        code(&fx.run(&["console", "read"])),
+        7,
+        "console read before console start must be a typed not-active error (exit 7), not an empty success: {}",
+        stdout(&fx.run(&["console", "read"]))
+    );
+    assert_eq!(
+        code(&fx.run(&["network", "read"])),
+        7,
+        "network read before network start must be a typed not-active error (exit 7): {}",
+        stdout(&fx.run(&["network", "read"]))
+    );
+
     // 2. Click the button by its captured index; its onclick sets the title.
     let click = fx.run(&["action", "click", &button_index.to_string()]);
     assert_eq!(code(&click), 0, "click failed: {}", stdout(&click));

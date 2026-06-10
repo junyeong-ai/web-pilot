@@ -328,6 +328,22 @@ fn browser_behavioral_flow() {
         stdout(&fx.run(&["wait", "--timeout", "3", "text", "SHADOWONLYPROSE"]))
     );
 
+    // Browser parity: `console read` / `network read` before the corresponding
+    // `start` is a typed not-active error (exit 7), not an empty success — runs
+    // before any `console start`/`network start` below.
+    assert_eq!(
+        code(&fx.run(&["console", "read"])),
+        7,
+        "browser console read before start must be a typed not-active error (exit 7): {}",
+        stdout(&fx.run(&["console", "read"]))
+    );
+    assert_eq!(
+        code(&fx.run(&["network", "read"])),
+        7,
+        "browser network read before start must be a typed not-active error (exit 7): {}",
+        stdout(&fx.run(&["network", "read"]))
+    );
+
     let button_index = elements
         .iter()
         .find(|e| e["tag"] == "button")

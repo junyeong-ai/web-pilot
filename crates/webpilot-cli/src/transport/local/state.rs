@@ -115,6 +115,21 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_console_read(&self, since: Option<u64>) -> Result<ResponseData> {
+        // Reading before `console start` would return an empty buffer (exit 0) —
+        // indistinguishable from "the page logged nothing" — so an agent could
+        // conclude there were no console messages when the monitor was simply
+        // never armed. Fail loud instead, so the absence of a hook is never read
+        // as the absence of output.
+        if !self
+            .console_monitoring
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(WebPilotError::InvalidArgument {
+                detail: "console monitoring is not active — run `webpilot console start` first"
+                    .into(),
+            }
+            .into());
+        }
         // Read the entries AND whether the buffer is at its cap in one round-trip
         // — `truncated` flags a full buffer (older entries possibly evicted) so a
         // missing early entry never reads as a confident absence.
@@ -196,6 +211,18 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_network_read(&self, since: Option<u64>) -> Result<ResponseData> {
+        // See `do_console_read`: an empty read before `network start` would read
+        // as "no requests" rather than "monitor not armed". Fail loud.
+        if !self
+            .network_monitoring
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(WebPilotError::InvalidArgument {
+                detail: "network monitoring is not active — run `webpilot network start` first"
+                    .into(),
+            }
+            .into());
+        }
         let js = format!(
             "(()=>{{const a=window.__webpilot_network||[];\
               return{{entries:a.filter(e=>e.timestamp>={}),truncated:a.length>={}}};}})()",

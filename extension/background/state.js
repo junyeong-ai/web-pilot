@@ -319,6 +319,15 @@ async function handleConsoleStart() {
 async function handleConsoleRead(since) {
   const tab = await resolveActiveTab();
   if (!tab) return topErr(noPageErr());
+  // Reading before `console start` would return an empty buffer (success) —
+  // indistinguishable from "the page logged nothing" — so an agent could
+  // conclude there were no messages when the monitor was simply never armed.
+  // Fail loud, matching headless do_console_read.
+  if (!monitoringState.console.has(tab.id)) {
+    return topErr(
+      err("InvalidArgument", "console monitoring is not active — run `webpilot console start` first"),
+    );
+  }
   try {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
@@ -390,6 +399,13 @@ async function handleNetworkStart() {
 async function handleNetworkRead(since) {
   const tab = await resolveActiveTab();
   if (!tab) return topErr(noPageErr());
+  // See handleConsoleRead: an empty read before `network start` would read as
+  // "no requests" rather than "monitor not armed". Fail loud.
+  if (!monitoringState.network.has(tab.id)) {
+    return topErr(
+      err("InvalidArgument", "network monitoring is not active — run `webpilot network start` first"),
+    );
+  }
   try {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
