@@ -1694,5 +1694,56 @@ fn headless_behavioral_flow() {
         stdout(&closed)
     );
 
+    // 9. Closing the ACTIVE tab leaves a dead pin. A pin-INDEPENDENT command
+    //    (`tab` list) must still work so the agent can find a survivor and
+    //    recover — not fail with a spurious TabNotFound. A page ACTION, by
+    //    contrast, must fail loud rather than silently retarget onto a fallback
+    //    survivor (the never-silent-retarget contract). The persisted pin is
+    //    dropped after one resolve, so each case sets up its own dead pin. The
+    //    new tab's id isn't in `tab new`'s output, so read it from the `active`
+    //    flag in the list (`tab new` pins the tab it created). Runs LAST: it
+    //    churns the active-tab pin, which would disturb earlier tab-bound steps.
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+    let active_id = |list: &Output| -> String {
+        serde_json::from_str::<serde_json::Value>(&stdout(list))
+            .expect("tab list json")
+            .as_array()
+            .expect("tab list array")
+            .iter()
+            .find(|t| t["active"] == serde_json::Value::Bool(true))
+            .and_then(|t| t["id"].as_str())
+            .expect("an active tab")
+            .to_string()
+    };
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "tab new (vanish setup) failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "close", &active_id(&fx.run(&["tab"]))])),
+        0,
+        "closing the active tab failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["tab"])),
+        0,
+        "tab list after closing the active tab must work (pin-independent), not TabNotFound: {}",
+        stdout(&fx.run(&["tab"]))
+    );
+
+    assert_eq!(code(&fx.run(&["tab", "new", &base])), 0, "tab new (2) failed");
+    assert_eq!(
+        code(&fx.run(&["tab", "close", &active_id(&fx.run(&["tab"]))])),
+        0,
+        "closing the active tab failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["eval", "1"])),
+        4,
+        "a page command after the active tab vanished must be TabNotFound (4), not a silent retarget: {}",
+        stdout(&fx.run(&["eval", "1"]))
+    );
+
     drop(fx);
 }

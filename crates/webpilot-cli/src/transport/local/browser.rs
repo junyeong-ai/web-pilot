@@ -247,12 +247,14 @@ impl LocalTransport {
         }
 
         // Closing the tab this session is bound to: record it as the active pin
-        // FIRST, so the next command sees a DEAD pin and fails loud (TabNotFound
-        // via `pick_active_target`) instead of silently rebinding to an arbitrary
-        // tab — including the fresh-session case where no pin was persisted yet
-        // and the active tab is just the implicit `target_id`. `pick_active_target`
-        // clears the dead pin after that one loud failure, for recovery. Browser
-        // mode gets the same effect from its sticky pin.
+        // FIRST, so the next command sees a DEAD pin — including the fresh-session
+        // case where no pin was persisted yet and the active tab is just the
+        // implicit `target_id`. `pick_active_target` then drops the dead pin and
+        // attaches to a fallback survivor, marking the transport `pin_vanished`:
+        // a page ACTION fails loud (`send` → TabNotFound) rather than silently
+        // running on the survivor, while `tab` list/switch and `status` proceed so
+        // the agent can re-pin. Browser mode gets the same effect from its sticky
+        // pin.
         if self.target_id.as_str() == tab_id {
             super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
         }

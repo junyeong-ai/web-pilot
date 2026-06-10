@@ -67,6 +67,12 @@ pub struct LocalTransport {
     pub(crate) ws_url: String,
     pub(crate) browser_context_id: Option<String>,
     pub(crate) target_id: String,
+    /// `Some(dead_id)` when this transport opened onto a fallback survivor because
+    /// the persisted pin had closed. `send` then refuses any command that would
+    /// ACT on the active page (TabNotFound), so a page action never silently runs
+    /// on the retargeted tab; tab management and status proceed so the agent can
+    /// re-pin. Cleared on the next process (the dead pin was already dropped).
+    pub(crate) pin_vanished: Option<String>,
     /// Top frame id (CDP string). Refreshed on every page swap (`rebind_page_world`),
     /// so it always names the bound tab's main frame. Resolves the bridge context
     /// for the main frame when no iframe is switched.
@@ -138,7 +144,7 @@ impl LocalTransport {
             )
             .await?;
 
-        let (page, browser_context_id, target_id, context_lock) =
+        let (page, browser_context_id, target_id, context_lock, pin_vanished) =
             resolve_target(&browser, &ws_url, context_name).await?;
 
         let main_frame_id = fetch_main_frame_id(&page).await?;
@@ -193,6 +199,7 @@ impl LocalTransport {
             ws_url,
             browser_context_id,
             target_id,
+            pin_vanished,
             main_frame_id,
             frame_contexts,
             bridge_contexts,
@@ -858,6 +865,19 @@ async fn wait_navigation_settled(
 impl Transport for LocalTransport {
     async fn send(&mut self, command: Command) -> Result<ResponseData> {
         crate::policy::enforce(&command)?;
+        // The pinned tab closed and this transport attached to a fallback
+        // survivor. A command that ACTS on the active page must not silently run
+        // on it — fail loud with TabNotFound, carrying the dead id, so the agent
+        // re-pins. Tab management and status only need the browser connection, so
+        // they proceed and let the recovery happen.
+        if let Some(dead) = &self.pin_vanished
+            && command_needs_active_page(&command)
+        {
+            return Err(WebPilotError::TabNotFound {
+                tab_id: dead.clone(),
+            }
+            .into());
+        }
         match command {
             Command::Capture { include, opts, url } => self.do_capture(include, opts, url).await,
             Command::Action { action, capture } => self.do_action(action, capture).await,
@@ -1125,7 +1145,13 @@ async fn resolve_target(
     browser: &CdpClient,
     ws_url: &str,
     context: Option<&str>,
-) -> Result<(CdpClient, Option<String>, String, Option<std::fs::File>)> {
+) -> Result<(
+    CdpClient,
+    Option<String>,
+    String,
+    Option<std::fs::File>,
+    Option<String>,
+)> {
     if let Some(ctx_name) = context {
         // Context mode anchors on the context-entry's target id, but a
         // user-issued `tab switch` may have moved the active tab to a
@@ -1139,15 +1165,21 @@ async fn resolve_target(
         let (initial, browser_context_id, context_lock) =
             local_context::resolve_context_target(browser, ctx_name).await?;
 
-        let target_id =
+        let (target_id, vanished) =
             pick_active_target(browser, Some(&browser_context_id), Some(&initial)).await?;
 
         let cdp = connect_to_page(ws_url, &target_id).await?;
-        Ok((cdp, Some(browser_context_id), target_id, Some(context_lock)))
+        Ok((
+            cdp,
+            Some(browser_context_id),
+            target_id,
+            Some(context_lock),
+            vanished,
+        ))
     } else {
-        let target_id = pick_active_target(browser, None, None).await?;
+        let (target_id, vanished) = pick_active_target(browser, None, None).await?;
         let cdp = connect_to_page(ws_url, &target_id).await?;
-        Ok((cdp, None, target_id, None))
+        Ok((cdp, None, target_id, None, vanished))
     }
 }
 
@@ -1157,11 +1189,35 @@ async fn resolve_target(
 /// some other tab — the same contract browser mode enforces; the agent must
 /// `tab switch`/`tab new` to choose a new one. With NO pin (a fresh attach), the
 /// context anchor or the first page in scope is taken.
+/// Whether a command ACTS on the active page target (vs only needing the browser
+/// connection). After the pinned tab vanished the transport attaches to a
+/// fallback; these must NOT run on it (that is the silent retarget the pin
+/// contract forbids). Tab management (list/new/switch/close) and status read only
+/// the browser, so they proceed and let the agent re-pin. A new command defaults
+/// to needing the page — the safe choice (fail loud) until classified otherwise.
+fn command_needs_active_page(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::TabList
+            | Command::TabNew { .. }
+            | Command::TabSwitch { .. }
+            | Command::TabClose { .. }
+            | Command::Status
+    )
+}
+
+/// Returns `(target_id, vanished_pin)`. `vanished_pin` is `Some(dead_id)` when the
+/// persisted pin had closed: the transport still attaches to a fallback survivor
+/// so pin-independent commands (tab list/new/switch/close, status) keep working,
+/// while `send` turns `vanished_pin` into a typed `TabNotFound` for any command
+/// that would ACT on the now-gone active page — so the never-silently-retarget
+/// contract holds without blocking the agent's recovery. (Browser mode's
+/// persistent worker reads `activeTabId` directly and never trips this.)
 async fn pick_active_target(
     browser: &CdpClient,
     browser_context_id: Option<&str>,
     context_anchor: Option<&str>,
-) -> Result<String> {
+) -> Result<(String, Option<String>)> {
     let targets = browser.get_targets().await?;
     let is_page = |t: &&Value| t.get("type").and_then(|v| v.as_str()) == Some("page");
     let alive = |id: &str| -> bool {
@@ -1170,31 +1226,29 @@ async fn pick_active_target(
             .any(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(id) && is_page(&t))
     };
 
+    let mut vanished = None;
     if let Some(persisted) = read_persisted_active_tab(browser_context_id) {
         if alive(&persisted) {
-            return Ok(persisted);
+            return Ok((persisted, None));
         }
-        // The pinned tab closed. Fail loud with TabNotFound for THIS command, and
-        // drop the dead pin so the agent can recover: unlike browser mode (a
-        // persistent worker whose `tab switch` runs without the pin), every
-        // headless command re-opens a transport through this resolver, so a
-        // permanently-dead pin would block `tab switch` itself — there would be no
-        // way back. One loud failure, then the next command re-binds.
+        // The pinned tab closed. Drop the dead pin and remember it: a list/switch
+        // can still resolve a fallback below, but a page action must not silently
+        // run on it — `send` raises TabNotFound for those, carrying this id.
         clear_persisted_active_tab(browser_context_id);
-        return Err(WebPilotError::TabNotFound { tab_id: persisted }.into());
+        vanished = Some(persisted);
     }
 
     if let Some(anchor) = context_anchor
         && alive(anchor)
     {
-        return Ok(anchor.to_string());
+        return Ok((anchor.to_string(), vanished));
     }
 
     // A fresh attach: take the first page in scope. The created-context list is
     // read only here — the persisted-pin and anchor fast paths never need it — and
     // fails closed: a read error aborts rather than widen scope to every context.
     let created = browser.get_browser_contexts().await?;
-    targets
+    let target = targets
         .iter()
         .find(|t| is_page(t) && target_in_context(t, browser_context_id, &created))
         .and_then(|t| {
@@ -1202,7 +1256,8 @@ async fn pick_active_target(
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         })
-        .ok_or_else(|| WebPilotError::NoPage.into())
+        .ok_or(WebPilotError::NoPage)?;
+    Ok((target, vanished))
 }
 
 pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<CdpClient> {
