@@ -66,6 +66,12 @@ impl CdpClient {
             Arc::new(Mutex::new(HashMap::new()));
         let next_id = Arc::new(AtomicU64::new(1));
         let alive = Arc::new(AtomicBool::new(true));
+        // Monotonic count of frames the reader has pulled off the socket. The
+        // heartbeat reads it to tell a live-but-head-of-line-blocked connection
+        // (traffic still arriving, our pong merely queued behind it) from a
+        // genuinely silent one — so a burst of events or a large in-flight
+        // response can never make a working connection look dead.
+        let activity = Arc::new(AtomicU64::new(0));
 
         // `settings::init` rejects 0 loudly; the max(1) covers only the lazy
         // library/test path that bypasses init (broadcast panics on 0).
@@ -76,8 +82,14 @@ impl CdpClient {
         let pending_r = pending.clone();
         let events_r = events_tx.clone();
         let alive_r = alive.clone();
+        let activity_r = activity.clone();
         let reader_handle = tokio::spawn(async move {
             while let Some(msg) = reader.next().await {
+                // Any successfully-read frame proves the socket is delivering
+                // data; the heartbeat samples this as its liveness signal.
+                if msg.is_ok() {
+                    activity_r.fetch_add(1, Ordering::Relaxed);
+                }
                 match msg {
                     Ok(Message::Text(text)) => match serde_json::from_str::<Value>(text.as_ref()) {
                         Ok(json) => {
@@ -117,6 +129,7 @@ impl CdpClient {
             let pending = pending.clone();
             let next_id = next_id.clone();
             let alive = alive.clone();
+            let activity = activity.clone();
             let interval = webpilot::settings::timeouts().heartbeat;
             Arc::new(Mutex::new(Some(tokio::spawn(async move {
                 let mut consecutive_misses: u32 = 0;
@@ -155,26 +168,33 @@ impl CdpClient {
                     }
 
                     let timeout = std::time::Duration::from_secs(HEARTBEAT_TIMEOUT_S);
+                    let activity_before = activity.load(Ordering::Relaxed);
                     match tokio::time::timeout(timeout, rx).await {
                         Ok(Ok(_)) => consecutive_misses = 0, // healthy
                         _ => {
-                            // A single late reply is usually head-of-line
-                            // blocking: the shared reader is busy parsing a large
-                            // response (full AX tree, full-page screenshot) and
-                            // hasn't reached our pong yet — the connection is fine
-                            // and the big request is about to complete. Drop our
-                            // own stale entry, but never drain unrelated in-flight
-                            // requests on one miss. Only sustained silence across
-                            // several beats means the socket is genuinely dead.
+                            // Our pong did not come back in time. Drop our own
+                            // stale entry, but never drain unrelated in-flight
+                            // requests on a miss. If the reader pulled ANY other
+                            // frame off the socket while we waited, the
+                            // connection is alive — our beat is just queued
+                            // behind a backlog (a burst of events, or a large
+                            // response the shared reader is still parsing), i.e.
+                            // head-of-line blocking, not death. Only genuine
+                            // silence — no frame at all across the wait — counts
+                            // toward declaring the socket dead.
                             pending.lock().await.remove(&id);
-                            consecutive_misses += 1;
-                            if consecutive_misses >= HEARTBEAT_MAX_MISSES {
-                                tracing::warn!(
-                                    "CDP heartbeat unanswered {consecutive_misses}× — marking connection dead"
-                                );
-                                alive.store(false, Ordering::Release);
-                                pending.lock().await.drain();
-                                break;
+                            if activity.load(Ordering::Relaxed) != activity_before {
+                                consecutive_misses = 0;
+                            } else {
+                                consecutive_misses += 1;
+                                if consecutive_misses >= HEARTBEAT_MAX_MISSES {
+                                    tracing::warn!(
+                                        "CDP heartbeat unanswered {consecutive_misses}× with no socket activity — marking connection dead"
+                                    );
+                                    alive.store(false, Ordering::Release);
+                                    pending.lock().await.drain();
+                                    break;
+                                }
                             }
                         }
                     }

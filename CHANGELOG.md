@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.144] - 2026-06-10
+
+### Fixed
+
+- **The headless CDP heartbeat no longer declares a live-but-busy connection
+  dead.** It probed with `Browser.getVersion` and counted a miss whenever its
+  own pong did not return within the timeout; three consecutive misses tore the
+  whole connection down (every in-flight and subsequent command failing with
+  `ConnectionLost`). But the shared reader processes one message at a time, so a
+  sustained burst of events — or a large response queued ahead of the pong —
+  could delay three beats in a row on a perfectly healthy socket. The heartbeat
+  now keys liveness on **socket activity**, not just its own pong: the reader
+  counts every frame it pulls off the socket, and a missed beat only counts
+  toward death when *no* frame at all arrived during the wait (genuine silence).
+  Traffic still flowing means alive — head-of-line blocking, not death. A truly
+  half-open socket (no frames) is still detected after the same bound, and a
+  clean close/read-error is still caught by the reader as before.
+
 ## [0.4.143] - 2026-06-10
 
 ### Fixed
