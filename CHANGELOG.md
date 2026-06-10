@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.133] - 2026-06-10
+
+### Fixed
+
+- **The Native Messaging host no longer deletes a successor host's live socket
+  on exit.** The host unconditionally unlinked the fixed per-user socket path
+  when Chrome disconnected. If a new host had already started and rebound that
+  path to its own listener (an extension reload / service-worker restart while
+  the old host was still shutting down), the old host's exit deleted the live
+  socket — leaving `--browser` commands reporting the host unreachable while one
+  was actually running. The bind-time unlink in `ipc::start_server` is now the
+  single cleanup point (run where socket ownership is established); a stale
+  socket a clean exit leaves behind is harmless — a connect to it fails as
+  `ConnectionLost`, the same bucket as an absent socket, and the next host's
+  bind clears it.
+
 ## [0.4.132] - 2026-06-10
 
 ### Fixed

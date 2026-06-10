@@ -75,7 +75,16 @@ pub async fn run_host() -> anyhow::Result<()> {
 
     // The reader exits when Chrome disconnects — that's our shutdown signal.
     let _ = nm_reader_handle.await;
-    let _ = std::fs::remove_file(ipc::socket_path());
+    // Deliberately do NOT unlink the socket here. The path is a fixed per-user
+    // location, so a successor host that started while we were still alive has
+    // already rebound it to ITS listener — the bind-time unlink in
+    // `ipc::start_server` is the single cleanup point, run where ownership is
+    // established. Removing
+    // it on our exit would delete the live successor's socket, leaving
+    // `--browser` commands reporting the host unreachable while one is running.
+    // A stale socket we leave behind is harmless: a connect to it fails as
+    // `ConnectionLost` (the same bucket as an absent socket), and the next
+    // host's bind clears it.
 
     drop(nm_tx);
     let _ = nm_writer_handle.await;
