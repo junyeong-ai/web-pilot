@@ -954,6 +954,11 @@
             );
           }
           r.target.value = action.value;
+          // A real selection fires `input` THEN `change` (both bubble). The
+          // bridge fired only `change`, so a <select> wired to `oninput` — or a
+          // framework that observes `input` — silently ignored the choice while
+          // the command still reported success. Fire both, like `reliableType`.
+          r.target.dispatchEvent(new Event("input", { bubbles: true }));
           r.target.dispatchEvent(new Event("change", { bubbles: true }));
           return { success: true };
         }

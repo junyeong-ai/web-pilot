@@ -224,6 +224,19 @@ fn headless_behavioral_flow() {
         "the sibling enabled <option> must still select: {}",
         stdout(&og_enabled)
     );
+    // A real selection fires `input` AND `change`. A <select> wired to `oninput`
+    // (or a framework that observes input) must see the choice — firing only
+    // `change` would silently drop it while the command reports success. The
+    // rejected disabled-option select above fired neither, so both counters read
+    // exactly 1 from this one enabled select.
+    let og_evt = fx.run(&["eval", "window.__oginput===1 && window.__ogchange===1"]);
+    let oge: serde_json::Value = serde_json::from_str(&stdout(&og_evt)).expect("eval json");
+    assert_eq!(
+        oge["result"].as_str(),
+        Some("true"),
+        "action select must fire both `input` and `change` exactly once each: {}",
+        stdout(&og_evt)
+    );
 
     // 2a1. Free-text values that start with `-` are values, not flags
     //      (allow_hyphen_values): an agent evaluating a negative expression or

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.127] - 2026-06-10
+
+### Fixed
+
+- **`action select` now fires an `input` event as well as `change`, matching a
+  real user selection.** A real selection in a `<select>` fires `input` then
+  `change`; the bridge dispatched only `change`, so a `<select>` wired to
+  `oninput` — or a framework that observes the `input` event — silently ignored
+  the agent's choice while the command still reported success. It now fires both
+  (bubbling), the same way `reliableType` does for text fields. Shared
+  `bridge.js`, so both modes are fixed at once.
+
 ## [0.4.126] - 2026-06-10
 
 ### Fixed
