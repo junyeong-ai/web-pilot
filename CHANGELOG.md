@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.153] - 2026-06-10
+
+### Fixed
+
+- **`wait selector` now pierces open shadow roots, like `capture`, `find`, and
+  `wait text`.** The selector poll used a plain `document.querySelector`, which
+  stops at the shadow boundary — so waiting for an element that lives inside a
+  web component's open shadow root timed out even though `capture` already
+  indexed it (a guaranteed timeout for `capture` → `wait selector
+  <shadow-hosted-element>`). It now falls back to the same shadow-piercing walk
+  the capture uses (`queryAllDeepMulti`) when the light-DOM query misses, so the
+  light-DOM common case still pays nothing extra. The MutationObserver stays on
+  the light tree, with the 100 ms poll covering shadow mutations — the same
+  belt-and-suspenders `wait text` uses. One shared bridge path for both modes.
+
 ## [0.4.152] - 2026-06-10
 
 ### Fixed

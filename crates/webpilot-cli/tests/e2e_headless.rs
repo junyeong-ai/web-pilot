@@ -209,6 +209,17 @@ fn headless_behavioral_flow() {
         ]))
     );
 
+    // 1c-sel. `wait selector` pierces open shadow roots too, like capture/find
+    //     and `wait text` above: `#shadowbtn` lives only in `#shadowhost`'s open
+    //     shadow root, so a plain `document.querySelector` misses it and the
+    //     wait would time out on an element capture already indexes.
+    assert_eq!(
+        code(&fx.run(&["wait", "--timeout", "3", "selector", "#shadowbtn"])),
+        0,
+        "wait selector must pierce open shadow roots (find shadow-only #shadowbtn): {}",
+        stdout(&fx.run(&["wait", "--timeout", "3", "selector", "#shadowbtn"]))
+    );
+
     // 1d. `console read` / `network read` BEFORE the corresponding `start` is a
     //     typed not-active error (exit 7), not an empty buffer reported as
     //     success — which an agent would misread as "the page logged nothing /

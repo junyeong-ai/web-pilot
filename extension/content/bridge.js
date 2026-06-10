@@ -1138,9 +1138,20 @@
           // the wait satisfied instead of a typed InvalidArgument.
           return finish(err("InvalidArgument", `Invalid CSS selector: ${JSON.stringify(cond.value)}`));
         }
-        if (initial) return finish({ success: true });
+        // Shadow-PIERCING, like the `--include text` capture, `find`, and `wait
+        // text`: a selector for an element inside an open shadow root must
+        // satisfy the wait, not time out on an element the agent's capture
+        // already indexed. The light-DOM query runs first (the common case, and
+        // the selector is known-valid past the guard above); the shadow walk
+        // runs only on a miss, so a shadow-free page pays nothing extra.
+        const matchesDeep = () =>
+          !!document.querySelector(cond.value) ||
+          queryAllDeepMulti([cond.value], document, { hosts: SHADOW_HOST_BUDGET }).some(
+            (m) => m.length,
+          );
+        if (initial || matchesDeep()) return finish({ success: true });
         observer = new MutationObserver(() => {
-          if (document.querySelector(cond.value)) finish({ success: true });
+          if (matchesDeep()) finish({ success: true });
         });
         // `attributes: true` as well as `childList`: a selector can start
         // matching not only when a node is inserted but when an existing node
