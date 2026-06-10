@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.134] - 2026-06-10
+
+### Fixed
+
+- **`cookie set` and `session import` now detect a cookie Chrome refused,
+  instead of reporting a false success.** Both paths ignored the result of the
+  set — headless dropped `Network.setCookie`'s `success` field, browser dropped
+  `chrome.cookies.set`'s return — so a cookie Chrome rejected (a `SameSite=None`
+  cookie without `--secure`, a `__Host-`/`__Secure-` name that breaks the prefix
+  rules, an invalid domain/value) was reported as set while it silently was not.
+  - `cookie set` now returns `InvalidArgument` (exit 7) with the likely cause.
+  - `session import`'s cookie loop counted only transport errors, so a refused
+    cookie slipped through and the import claimed full success while the restored
+    session was quietly missing auth cookies; it now counts a refusal too and
+    reports it in the not-imported tally.
+  An agent restoring an auth cookie would otherwise believe it succeeded and then
+  fail to authenticate with no signal. Verified empirically: `cookie set
+  --same-site none` without `--secure` leaves no cookie and now reports it. Both
+  modes.
+
 ## [0.4.133] - 2026-06-10
 
 ### Fixed

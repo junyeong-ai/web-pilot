@@ -1376,6 +1376,24 @@ fn headless_behavioral_flow() {
         stdout(&clist2)
     );
 
+    // A SameSite=None cookie REQUIRES Secure — Chrome silently refuses it
+    // otherwise (`Network.setCookie` returns success:false). The set must
+    // surface that refusal as InvalidArgument (exit 7), not a false success that
+    // hides a cookie the agent's auth depends on, and the refused cookie must be
+    // absent from the list.
+    let none_no_secure = fx.run(&["cookie", "set", &base, "nsec", "v", "--same-site", "none"]);
+    assert_eq!(
+        code(&none_no_secure),
+        7,
+        "cookie set --same-site none without --secure must fail InvalidArgument (7), not falsely succeed: {}",
+        stdout(&none_no_secure)
+    );
+    assert!(
+        !stdout(&fx.run(&["cookie", "list", &base])).contains("nsec"),
+        "a cookie Chrome refused must not appear in the list: {}",
+        stdout(&fx.run(&["cookie", "list", &base]))
+    );
+
     // `session import` of a non-object JSON (here an array) is a typed
     // InvalidArgument (exit 7), never a false `success` reporting an import that
     // applied nothing.
@@ -1426,6 +1444,24 @@ fn headless_behavioral_flow() {
         !stdout(&fx.run(&["cookie", "list", &base])).contains("atomic_canary"),
         "session import must NOT apply cookies when storage validation fails (atomicity): {}",
         stdout(&fx.run(&["cookie", "list", &base]))
+    );
+
+    // A cookie Chrome REFUSES during import (SameSite=None defaults to insecure,
+    // which Chrome rejects) must be reported as not-imported, not slipped through
+    // while the import claims full success — the cookie loop now counts a
+    // `Network.setCookie` `success:false`, not only a transport error, so a
+    // refused auth cookie surfaces instead of a session quietly missing it.
+    let refused_session = home.join("refused-session.json");
+    std::fs::write(
+        &refused_session,
+        br#"{"version":1,"cookies":[{"name":"refusedck","value":"v","domain":"127.0.0.1","path":"/","same_site":"none"}]}"#,
+    )
+    .expect("write refused-cookie session fixture");
+    let ri = fx.run(&["session", "import", refused_session.to_str().unwrap()]);
+    assert!(
+        stdout(&ri).contains("refused by the browser"),
+        "a session import whose cookie Chrome refuses must report it as not-imported, not silent success: {}",
+        stdout(&ri)
     );
 
     // The `*`-new marker is suppressed for a fresh DOCUMENT (no baseline), but a

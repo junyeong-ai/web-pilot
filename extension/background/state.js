@@ -213,6 +213,9 @@ function isHttpUrl(url) {
   }
 }
 
+const COOKIE_REFUSED =
+  "Chrome refused to set the cookie — common causes: SameSite=None without --secure, a __Host-/__Secure- name that doesn't meet the prefix rules, or an invalid domain/value";
+
 async function handleCookieSet(command) {
   // The cookie URL must be a valid http(s) URL, as the headless CDP
   // `Network.setCookie` enforces — it rejects a malformed URL (`http://` with no
@@ -243,10 +246,27 @@ async function handleCookieSet(command) {
     }
     // Absolute Unix-epoch expiry; omitted = a session cookie. Mirrors headless.
     if (command.expires != null) params.expirationDate = command.expires;
-    await chrome.cookies.set(params);
+    const set = await chrome.cookies.set(params);
+    // Reporting success when Chrome refused the cookie would hide a
+    // silently-unset auth cookie. `chrome.cookies.set` can defensively resolve
+    // null on refusal (the throw path is in the catch below). Mirrors the
+    // headless `Network.setCookie` `success:false` check.
+    if (!set) {
+      return {
+        type: "CookieResult",
+        success: false,
+        error: err("InvalidArgument", COOKIE_REFUSED),
+      };
+    }
     return { type: "CookieResult", success: true };
-  } catch (e) {
-    return { type: "CookieResult", success: false, error: exceptionErr(e) };
+  } catch {
+    // Chrome refuses some cookies by THROWING ("Failed to parse or set
+    // cookie") — SameSite=None without Secure, a `__Host-`/`__Secure-` prefix
+    // violation, an invalid domain/value. The URL is already validated above,
+    // so the set is the only thing that throws here. That is an invalid cookie
+    // spec, not an infra fault, so report InvalidArgument (exit 7) to match the
+    // headless `Network.setCookie` `success:false` path — never Other (exit 1).
+    return { type: "CookieResult", success: false, error: err("InvalidArgument", COOKIE_REFUSED) };
   }
 }
 
@@ -571,7 +591,13 @@ async function handleSessionImport(rawData) {
         continue;
       }
       try {
-        await chrome.cookies.set({
+        // Count a refusal too, not just a throw: a cookie Chrome rejects comes
+        // back as a thrown "Failed to parse or set cookie" (caught below) and
+        // can defensively resolve null — either way it didn't restore, so
+        // counting it keeps the import from reporting a session silently missing
+        // auth cookies. Mirrors the headless `Network.setCookie success:false`
+        // check.
+        const set = await chrome.cookies.set({
           url: `http${c.secure ? "s" : ""}://${c.domain.replace(/^\./, "")}${c.path}`,
           name: c.name, value: c.value, path: c.path,
           // A host-only cookie is set by URL with no `domain`, so Chrome scopes
@@ -586,6 +612,7 @@ async function handleSessionImport(rawData) {
           // zero and keep the cookie instead of expiring it.
           expirationDate: c.expiration == null ? undefined : c.expiration,
         });
+        if (!set) cookiesFailed++;
       } catch {
         cookiesFailed++;
       }

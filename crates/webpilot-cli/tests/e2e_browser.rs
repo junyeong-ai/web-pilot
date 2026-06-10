@@ -669,6 +669,23 @@ fn browser_behavioral_flow() {
         stdout(&clist_attr)
     );
 
+    // 4d-none. Browser-mode parity: a SameSite=None cookie without Secure is
+    //     refused by Chrome — `chrome.cookies.set` resolves null — so the set
+    //     must be InvalidArgument (exit 7), not a false success, and the refused
+    //     cookie must be absent from the list, matching headless.
+    let none_no_secure = fx.run(&["cookie", "set", &base, "nsec", "v", "--same-site", "none"]);
+    assert_eq!(
+        code(&none_no_secure),
+        7,
+        "browser cookie set --same-site none without --secure must fail InvalidArgument (7): {}",
+        stdout(&none_no_secure)
+    );
+    assert!(
+        !stdout(&fx.run(&["cookie", "list", &base])).contains("nsec"),
+        "a cookie Chrome refused must not appear in the browser cookie list: {}",
+        stdout(&fx.run(&["cookie", "list", &base]))
+    );
+
     // 4e. Browser-mode parity for the session-import guard: a non-object JSON is
     //     a typed InvalidArgument (exit 7), not a false success reporting an
     //     import that applied nothing.

@@ -66,7 +66,25 @@ impl LocalTransport {
         if let Some(exp) = spec.expires {
             params["expires"] = exp.into();
         }
-        self.page.send("Network.setCookie", Some(params)).await?;
+        let result = self.page.send("Network.setCookie", Some(params)).await?;
+        // `Network.setCookie` reports `success:false` when Chrome refuses the
+        // cookie — SameSite=None without Secure, a `__Host-`/`__Secure-` name
+        // whose attributes break the prefix rules, an invalid domain/value.
+        // Reporting success then would tell the agent an auth cookie is set when
+        // it silently is not.
+        if result.get("success").and_then(|v| v.as_bool()) == Some(false) {
+            return Ok(ResponseData::CookieResult {
+                success: false,
+                error: Some(WebPilotError::InvalidArgument {
+                    detail: format!(
+                        "Chrome refused to set cookie '{}' — common causes: SameSite=None \
+                         without --secure, a __Host-/__Secure- name that doesn't meet the \
+                         prefix rules, or an invalid domain/value",
+                        spec.name
+                    ),
+                }),
+            });
+        }
         Ok(ResponseData::CookieResult {
             success: true,
             error: None,
@@ -356,12 +374,20 @@ impl LocalTransport {
                     cookies_malformed += 1;
                     continue;
                 };
-                if self
+                // Count a refusal too, not just a transport error: a cookie
+                // Chrome rejects (SameSite=None without Secure, a broken
+                // `__Host-`/`__Secure-` prefix, an invalid domain) comes back as
+                // `{success:false}`, and ignoring it would restore a session
+                // silently missing auth cookies while reporting full success.
+                let set_failed = match self
                     .page
                     .send("Network.setCookie", Some(cookie_info_to_cdp(&info)))
                     .await
-                    .is_err()
                 {
+                    Ok(r) => r.get("success").and_then(|v| v.as_bool()) == Some(false),
+                    Err(_) => true,
+                };
+                if set_failed {
                     cookies_failed += 1;
                 }
             }
