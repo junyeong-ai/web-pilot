@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.169] - 2026-06-11
+
+### Fixed
+
+- **An ambiguous `tab find --url` fails loud instead of silently switching to
+  the first match**, completing the strict-selector contract `frame url`
+  adopted in 0.4.152: a pattern matching more than one tab is a typed
+  `InvalidArgument` naming the count and the matching URLs, so the agent
+  refines the pattern or picks a tab id directly. A unique match still
+  switches; zero matches stay `TabNotFound`. Mode-generic (the handler runs the
+  shared `TabList`→`TabSwitch` path); an e2e pins both the unique-switch and
+  the ambiguity rejection.
+
 ## [0.4.168] - 2026-06-11
 
 ### Fixed

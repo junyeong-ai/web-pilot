@@ -2140,5 +2140,38 @@ fn headless_behavioral_flow() {
         stdout(&dead_pin_list)
     );
 
+    // 9b. `tab find --url` is strict about ambiguity, like `frame url`: one
+    //     match switches, two matches fail loud with the list — never a silent
+    //     switch to whichever tab listed first.
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &format!("{base}/second")])),
+        0,
+        "tab new /second failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "find", "--url", "/second"])),
+        0,
+        "a uniquely-matching tab find must switch: {}",
+        stdout(&fx.run(&["tab", "find", "--url", "/second"]))
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &format!("{base}/second")])),
+        0,
+        "tab new /second (2) failed"
+    );
+    let ambiguous_find = fx.run(&["tab", "find", "--url", "/second"]);
+    assert_eq!(
+        code(&ambiguous_find),
+        7,
+        "an ambiguous tab find (two tabs match) must be InvalidArgument (7), not a silent first-switch: {}",
+        stdout(&ambiguous_find)
+    );
+    assert!(
+        stdout(&ambiguous_find).contains("tabs match"),
+        "the ambiguity error must name the match count: {}",
+        stdout(&ambiguous_find)
+    );
+
     drop(fx);
 }

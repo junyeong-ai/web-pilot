@@ -134,16 +134,34 @@ async fn find_tab<T: Transport>(transport: &mut T, pattern: &str) -> Result<Comm
     let result = transport.send(Command::TabList).await?;
     match result {
         ResponseData::Tabs { tabs } => {
-            if let Some(tab) = tabs
+            // A pattern matching MORE than one tab is ambiguous: switching to
+            // whichever listed first would silently retarget the agent — the
+            // same contract `frame url` enforces. Fail loud with the match list
+            // so the agent refines the pattern or picks an id directly.
+            let hits: Vec<_> = tabs
                 .iter()
-                .find(|t| webpilot::url_glob::matches(pattern, &t.url))
-            {
-                switch_tab(transport, tab.id.clone()).await
-            } else {
-                Err(webpilot::WebPilotError::TabNotFound {
+                .filter(|t| webpilot::url_glob::matches(pattern, &t.url))
+                .collect();
+            match hits.as_slice() {
+                [] => Err(webpilot::WebPilotError::TabNotFound {
                     tab_id: pattern.to_string(),
                 }
-                .into())
+                .into()),
+                [tab] => switch_tab(transport, tab.id.clone()).await,
+                many => {
+                    let urls = many
+                        .iter()
+                        .map(|t| webpilot::types::line_safe(&t.url).into_owned())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    Err(webpilot::WebPilotError::InvalidArgument {
+                        detail: format!(
+                            "{} tabs match \"{pattern}\" — refine it or use `tab switch <id>` to pick one: {urls}",
+                            many.len()
+                        ),
+                    }
+                    .into())
+                }
             }
         }
         ResponseData::Error { error } => Err(error.into()),
