@@ -925,15 +925,43 @@ fn browser_behavioral_flow() {
         "capture --include pdf while an iframe is active must be InvalidArgument (7) in browser mode too: {}",
         stdout(&pdf_in_frame)
     );
-    // `--include screenshot` likewise (headless parity): `Page.captureScreenshot`
-    // is top-level too, so it would be TOP-page pixels under an iframe-labelled
-    // header — the wrong image with correct-looking metadata.
-    let shot_in_frame = fx.run(&["capture", "--include", "screenshot"]);
+    // `--include screenshot` DEGRADES while an iframe is active (headless
+    // parity): the shot is top-level only, but it is often an add-on to a
+    // frame-scoped DOM request — so the capture succeeds, the refusal rides in
+    // `screenshot_error`, no image is produced, and the frame DOM still returns.
+    let shot_in_frame = fx.run(&["capture", "--include", "dom", "screenshot"]);
     assert_eq!(
         code(&shot_in_frame),
-        7,
-        "capture --include screenshot while an iframe is active must be InvalidArgument (7) in browser mode too: {}",
+        0,
+        "dom+screenshot while an iframe is active must still return the DOM (browser): {}",
         stdout(&shot_in_frame)
+    );
+    let shot_json: serde_json::Value =
+        serde_json::from_str(&stdout(&shot_in_frame)).expect("capture json");
+    assert!(
+        shot_json["screenshot_error"]
+            .as_str()
+            .is_some_and(|e| e.contains("main-frame only")),
+        "the refused screenshot must surface in screenshot_error (browser): {}",
+        stdout(&shot_in_frame)
+    );
+    assert!(
+        shot_json["screenshot_path"].is_null(),
+        "no top-page image may be produced while an iframe is active (browser): {}",
+        stdout(&shot_in_frame)
+    );
+    assert!(
+        shot_json["elements"].is_array(),
+        "the frame-scoped DOM must still return alongside the refused screenshot (browser): {}",
+        stdout(&shot_in_frame)
+    );
+    // ...but a screenshot-ONLY request refuses loud (headless parity).
+    let shot_only = fx.run(&["capture", "--include", "screenshot"]);
+    assert_eq!(
+        code(&shot_only),
+        7,
+        "a screenshot-ONLY capture while an iframe is active must be InvalidArgument (7) (browser): {}",
+        stdout(&shot_only)
     );
     // An ACTION's own --capture while switched into the iframe must scope the
     // subframe count to the active frame too — not just a standalone `capture`.

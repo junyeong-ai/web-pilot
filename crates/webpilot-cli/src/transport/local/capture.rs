@@ -42,15 +42,6 @@ impl LocalTransport {
         if include.contains(&CaptureField::Pdf) {
             self.require_main_frame("capture --include pdf").await?;
         }
-        // `Page.captureScreenshot` is top-level for the same reason — there is
-        // no frame-scoped capture — so a screenshot while an iframe is active
-        // would be TOP-page pixels under an iframe-labelled header: the wrong
-        // image with correct-looking metadata. Refuse it identically.
-        if include.contains(&CaptureField::Screenshot) {
-            self.require_main_frame("capture --include screenshot")
-                .await?;
-        }
-
         let want = |f: CaptureField| include.contains(&f);
         let want_dom = want(CaptureField::Dom) || opts.annotate;
         let want_text = want(CaptureField::Text);
@@ -89,6 +80,26 @@ impl LocalTransport {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
             }
+        }
+
+        // `Page.captureScreenshot` is top-level (no frame-scoped capture), so a
+        // screenshot while an iframe is active would be TOP-page pixels under an
+        // iframe-labelled header — the wrong image with correct-looking
+        // metadata. When the screenshot is the request's ONLY output, refuse
+        // loud (success with no artifact would be a lie); when it rides along a
+        // frame-scoped DOM/text/AX request, it degrades through the standing
+        // `screenshot_error` channel so the valid outputs still return.
+        // (`--annotate` in a frame was already refused above; pdf likewise.)
+        let frame_scoped = self.active_frame_id.lock().await.is_some();
+        let want_screenshot = want_screenshot && !frame_scoped;
+        if want(CaptureField::Screenshot) && frame_scoped {
+            if !want_dom && !want_text && !want_ax {
+                self.require_main_frame("capture --include screenshot")
+                    .await?;
+            }
+            screenshot_error = Some(
+                "screenshots are main-frame only and an iframe is active. Switch back first: webpilot frame switch main".into(),
+            );
         }
 
         if want_screenshot {

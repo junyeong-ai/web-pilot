@@ -84,14 +84,15 @@ async function handleCapture(command) {
   if (include.has("pdf") && activeFrameId !== 0) {
     return topErr(err("InvalidArgument", "'capture --include pdf' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
   }
-  // `Page.captureScreenshot` is top-level for the same reason — there is no
-  // frame-scoped capture — so a screenshot while an iframe is active would be
-  // TOP-page pixels under an iframe-labelled header: the wrong image with
-  // correct-looking metadata. Refuse it identically (headless parity).
-  if (include.has("screenshot") && activeFrameId !== 0) {
+  // A screenshot-ONLY capture while an iframe is active refuses loud (success
+  // with no artifact would be a lie); with frame-scoped outputs alongside it
+  // degrades instead — handled at the screenshot step below (headless parity).
+  if (
+    include.has("screenshot") && activeFrameId !== 0
+    && !include.has("dom") && !include.has("text") && !include.has("accessibility")
+  ) {
     return topErr(err("InvalidArgument", "'capture --include screenshot' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
   }
-
   const result = {
     type: "Capture",
     dom: null,
@@ -227,7 +228,16 @@ async function handleCapture(command) {
   // agent receives them — matching headless `want_screenshot = want(Screenshot)
   // || opts.annotate`. Without this, `--browser capture --annotate` drew boxes
   // and returned no image.
-  if (include.has("screenshot") || opts.annotate) {
+  // `Page.captureScreenshot` is top-level (no frame-scoped capture), so a shot
+  // while an iframe is active would be TOP-page pixels under an iframe-labelled
+  // header. Screenshot-ONLY requests were already refused loud up front; here
+  // the screenshot rides along a frame-scoped DOM/text/AX request, so it
+  // degrades through `screenshot_error` and the valid outputs still return
+  // (headless parity). `--annotate` in a frame was refused above too.
+  if (include.has("screenshot") && activeFrameId !== 0) {
+    result.screenshot_error =
+      "screenshots are main-frame only and an iframe is active. Switch back first: webpilot frame switch main";
+  } else if (include.has("screenshot") || opts.annotate) {
     try {
       // CDP captures the target's own surface, so a screenshot never depends
       // on the tab being the active tab of a foreground window. That is what

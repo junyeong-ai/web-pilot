@@ -709,10 +709,10 @@
     const a = el.closest("a[href]");
     if (a) {
       let target = (a.target || "").trim().toLowerCase();
-      // `_blank` is a reserved keyword that ALWAYS opens a new context — it is
-      // never matched against frame names (so a page that sets
-      // `window.name = "_blank"` can't trick the lookup into `_self`).
-      if (target === "_blank") return null;
+      // `_blank` (always a new context) and `_unfencedTop` (fenced frames) are
+      // reserved keywords — never matched against frame names, so a page that
+      // names a frame after one can't trick the lookup into `_self`.
+      if (target === "_blank" || target === "_unfencedtop") return null;
       if (target && target !== "_self" && target !== "_top" && target !== "_parent") {
         // Not a keyword: resolve the raw (case-sensitive) name to a frame this
         // click would actually navigate, or bail as a popup.
@@ -747,8 +747,8 @@
     if (btn && btn.form && (btn.tagName !== "BUTTON" || btn.type === "submit")) {
       const raw = (btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "").trim();
       let t = raw.toLowerCase();
-      // `_blank` is reserved — always a new context, never a frame-name match.
-      if (t === "_blank") return null;
+      // `_blank` / `_unfencedTop` are reserved — never a frame-name match.
+      if (t === "_blank" || t === "_unfencedtop") return null;
       if (t && t !== "_self" && t !== "_top" && t !== "_parent") {
         // Same name resolution as the link path: a form targeting an existing
         // frame's name submits INTO that frame, not a popup.

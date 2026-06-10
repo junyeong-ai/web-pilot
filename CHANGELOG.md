@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.165] - 2026-06-11
+
+### Fixed
+
+- **A combined `dom`+`screenshot` capture while an iframe is active keeps the
+  frame-scoped DOM instead of failing whole.** 0.4.160's screenshot guard
+  refused the entire capture up front, which threw away the valid frame-scoped
+  DOM/text/AX the agent also asked for. The semantics are now split by what the
+  request actually wants: a screenshot-**only** capture still refuses loud with
+  the typed `InvalidArgument` (success with no artifact would be a lie), while
+  a screenshot riding along frame-scoped outputs degrades through the standing
+  `screenshot_error` channel — no image is produced, the refusal and its
+  switch-back guidance ride in the error field, and the valid outputs return.
+  Both modes; both e2e suites pin both cases.
+- **`_unfencedTop` joins `_blank` as a reserved target keyword** in the bridge's
+  named-target resolution: a frame named after either can no longer capture a
+  special-target click into a current-frame navigation hint.
+
 ## [0.4.164] - 2026-06-11
 
 ### Fixed
