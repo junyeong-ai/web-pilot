@@ -312,6 +312,21 @@ fn browser_behavioral_flow() {
         "capture --include text must include open-shadow-root text in browser mode too: {}",
         stdout(&text_cap)
     );
+    // Browser parity: `wait --until text` is case-insensitive and shadow-piercing,
+    // like find/text-capture. "go" matches the "Go" button; "SHADOWONLYPROSE"
+    // matches the shadow-only prose.
+    assert_eq!(
+        code(&fx.run(&["wait", "--timeout", "3", "text", "go"])),
+        0,
+        "browser wait text must be case-insensitive: {}",
+        stdout(&fx.run(&["wait", "--timeout", "3", "text", "go"]))
+    );
+    assert_eq!(
+        code(&fx.run(&["wait", "--timeout", "3", "text", "SHADOWONLYPROSE"])),
+        0,
+        "browser wait text must pierce open shadow roots: {}",
+        stdout(&fx.run(&["wait", "--timeout", "3", "text", "SHADOWONLYPROSE"]))
+    );
 
     let button_index = elements
         .iter()

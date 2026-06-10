@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.137] - 2026-06-10
+
+### Fixed
+
+- **`wait --until text` is now case-insensitive and pierces open shadow roots,
+  matching `find --text` and the `--include text` capture.** It compared raw
+  `document.body.innerText` case-sensitively and stopped at the shadow boundary —
+  so `wait --until text submit` never matched a `Submit` button, and text living
+  only inside a web component's shadow root never unblocked the wait, even though
+  `find --text` matches both and the text capture now surfaces shadow text. It
+  now lowercases both sides and falls back to the shadow-aware text walk (fast
+  light-DOM check first, so a page without shadow-only text pays nothing extra).
+  Shared `bridge.js`, both modes.
+
 ## [0.4.136] - 2026-06-10
 
 ### Fixed

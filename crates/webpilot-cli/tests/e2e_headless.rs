@@ -166,6 +166,23 @@ fn headless_behavioral_flow() {
         stdout(&text_cap)
     );
 
+    // 1c. `wait --until text` matches like `find --text` / the text capture:
+    //     case-insensitive and shadow-piercing. "go" must match the "Go" button
+    //     (case), and the shadow-only "shadowonlyprose" must match via
+    //     "SHADOWONLYPROSE" (case + shadow) — raw innerText alone misses both.
+    assert_eq!(
+        code(&fx.run(&["wait", "--timeout", "3", "text", "go"])),
+        0,
+        "wait text must be case-insensitive (match 'Go' for 'go'): {}",
+        stdout(&fx.run(&["wait", "--timeout", "3", "text", "go"]))
+    );
+    assert_eq!(
+        code(&fx.run(&["wait", "--timeout", "3", "text", "SHADOWONLYPROSE"])),
+        0,
+        "wait text must pierce open shadow roots (match shadow-only 'shadowonlyprose'): {}",
+        stdout(&fx.run(&["wait", "--timeout", "3", "text", "SHADOWONLYPROSE"]))
+    );
+
     // 2. Click the button by its captured index; its onclick sets the title.
     let click = fx.run(&["action", "click", &button_index.to_string()]);
     assert_eq!(code(&click), 0, "click failed: {}", stdout(&click));

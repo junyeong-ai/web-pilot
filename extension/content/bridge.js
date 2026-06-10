@@ -1122,7 +1122,18 @@
         break;
       }
       case "text": {
-        const hasText = () => (document.body?.innerText || "").includes(cond.value);
+        // Match like `find --text` and the `--include text` capture:
+        // case-INSENSITIVE and shadow-PIERCING, so `wait text submit` matches a
+        // "Submit" button and text that lives only inside an open shadow root
+        // unblocks the wait. Raw `innerText` alone is case-sensitive and stops at
+        // the shadow boundary, diverging from how the agent's other text matching
+        // behaves. The fast light-DOM check runs first (the common case); the
+        // shadow-aware walk runs only when it misses, so a page without
+        // shadow-only text pays nothing extra.
+        const needle = cond.value.toLowerCase();
+        const hasText = () =>
+          (document.body?.innerText || "").toLowerCase().includes(needle) ||
+          bodyTextWithShadow().toLowerCase().includes(needle);
         if (hasText()) {
           return finish({ success: true });
         }
