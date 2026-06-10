@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.146] - 2026-06-10
+
+### Fixed
+
+- **A `<select multiple>` now renders every selected option, not just the
+  first.** The DOM text showed `selected="<first>"` via a `.find()` that
+  short-circuited on the first chosen option, so an agent inspecting a
+  multi-select saw incomplete form state and could not tell which values were
+  actually selected — even though the bridge already captured every option's
+  `selected` flag. The renderer now collects all selected options
+  (`selected="B, C"`); a single-select renders its one value unchanged and an
+  empty selection renders empty. Shared by both modes (one rendering path).
+
 ## [0.4.145] - 2026-06-10
 
 ### Fixed

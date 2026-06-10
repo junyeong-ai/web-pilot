@@ -640,16 +640,21 @@ impl DomSnapshot {
                 out.push_str("[focused] ");
             }
             if let Some(ref opts) = el.state.options {
-                let sel = opts
+                // Every selected option, not just the first — a `<select
+                // multiple>` can have several, and showing only one would hand
+                // the agent incomplete form state. A single-select renders its
+                // one value unchanged; none selected renders empty.
+                let selected = opts
                     .iter()
-                    .find(|o| o.selected)
+                    .filter(|o| o.selected)
                     .map(|o| o.text.as_str())
-                    .unwrap_or("");
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 out.push_str(&format!(
                     "options({}{}) selected=\"{}\" ",
                     opts.len(),
                     if el.state.options_truncated { "+" } else { "" },
-                    line_safe(sel)
+                    line_safe(&selected)
                 ));
             }
             if el.spatial.occluded == Some(true) {
@@ -886,6 +891,51 @@ mod tests {
         assert!(make(false).contains("options(1)"));
         assert!(!make(false).contains("options(1+)"));
         assert!(make(true).contains("options(1+)"));
+    }
+
+    #[test]
+    fn to_text_renders_every_selected_option_not_just_the_first() {
+        let opt = |t: &str, selected: bool| SelectOption {
+            value: t.into(),
+            text: t.into(),
+            selected,
+        };
+        let el = InteractiveElement {
+            index: 1,
+            tag: "select".into(),
+            id: None,
+            role: None,
+            text: String::new(),
+            semantics: ElementSemantics::default(),
+            state: ElementState {
+                // A `<select multiple>` with two of three options chosen.
+                options: Some(vec![opt("A", false), opt("B", true), opt("C", true)]),
+                options_truncated: false,
+                ..Default::default()
+            },
+            spatial: ElementSpatial::default(),
+        };
+        let text = DomSnapshot {
+            elements: vec![el],
+            total_nodes: 1,
+            page_url: "x".into(),
+            page_title: "y".into(),
+            scroll: ScrollInfo::default(),
+            scroll_percent: 0,
+            extraction_ms: 0,
+            subframes: 0,
+            shadow_truncated: false,
+            text_content: None,
+            text_truncated: false,
+            accessibility_tree: None,
+        }
+        .to_text();
+        // Both selected values render — stopping at the first would hand the
+        // agent incomplete multi-select state.
+        assert!(
+            text.contains(r#"selected="B, C""#),
+            "every selected option must render, got: {text}"
+        );
     }
 
     #[test]
