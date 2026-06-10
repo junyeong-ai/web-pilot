@@ -317,6 +317,35 @@ fn headless_behavioral_flow() {
         stdout(&og_evt)
     );
 
+    // 2a-multi. On a `<select multiple>`, `action select` ADDS to the selection
+    //   instead of replacing it: assigning `.value` would deselect every other
+    //   chosen option, so an agent could never pick more than one. Choose two
+    //   options in turn; both must remain selected, and the capture must render
+    //   both (the multi-select renderer shows every selected option).
+    let cap_ms = fx.run(&["capture", "--include", "dom"]);
+    let ms_idx = index_of(&cap_ms, "multisel");
+    assert_eq!(
+        code(&fx.run(&["action", "select", &ms_idx, "mb"])),
+        0,
+        "selecting mb in the multi-select failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["action", "select", &ms_idx, "mc"])),
+        0,
+        "selecting mc in the multi-select failed"
+    );
+    let ms_sel = fx.run(&[
+        "eval",
+        "[...document.getElementById('multisel').selectedOptions].map(o=>o.value).join(',')",
+    ]);
+    let msj: serde_json::Value = serde_json::from_str(&stdout(&ms_sel)).expect("eval json");
+    assert_eq!(
+        msj["result"].as_str(),
+        Some("\"mb,mc\""),
+        "a multi-select must accumulate both choices (additive), not clobber the first: {}",
+        stdout(&ms_sel)
+    );
+
     // 2a1. Free-text values that start with `-` are values, not flags
     //      (allow_hyphen_values): an agent evaluating a negative expression or
     //      typing a negative number must not hit a clap usage error — and a

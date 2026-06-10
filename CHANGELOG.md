@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.147] - 2026-06-10
+
+### Fixed
+
+- **`action select` on a `<select multiple>` now adds to the selection instead
+  of replacing it.** The bridge set the choice with `el.value = ...`, which on a
+  multi-select deselects every other chosen option — so an agent calling
+  `select` twice silently clobbered the first choice on the second call and
+  could never build a multi-option selection, while each call still reported
+  success. It now sets the matched option's `selected` flag on a multi-select
+  (additive, leaving other choices intact) and keeps `el.value =` for a
+  single-select (where only one option can be chosen). The existing
+  option-exists / disabled / hidden guards and the `input`+`change` dispatch are
+  unchanged. Shared by both modes (one bridge path).
+
 ## [0.4.146] - 2026-06-10
 
 ### Fixed

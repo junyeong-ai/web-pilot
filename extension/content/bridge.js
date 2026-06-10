@@ -1004,7 +1004,16 @@
               `<option> "${action.value}" is ${isDisabled(match) ? "disabled" : "hidden"} — a real user can't select it`,
             );
           }
-          r.target.value = action.value;
+          // On a `<select multiple>`, assigning `.value` deselects every other
+          // chosen option and leaves only this one, so an agent could never
+          // build a multi-option selection — each call would clobber the last.
+          // Add to the selection instead; a single-select still replaces, since
+          // only one option can be chosen.
+          if (r.target.multiple) {
+            match.selected = true;
+          } else {
+            r.target.value = action.value;
+          }
           // A real selection fires `input` THEN `change` (both bubble). The
           // bridge fired only `change`, so a <select> wired to `oninput` — or a
           // framework that observes `input` — silently ignored the choice while
