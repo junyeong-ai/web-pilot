@@ -192,6 +192,27 @@ async fn run_headless_mode(
     } else {
         context.as_deref()
     };
+    // A denied command must not even launch Chrome. The directly-gated
+    // headless-only commands carry static keys, so their verdict is decided
+    // BEFORE the transport opens (the handler's own enforce stays as the sink
+    // backstop — the same `enforce_key`, so the two can't disagree).
+    // Transport-routed commands keep sink enforcement: `send` gates before
+    // anything reaches the browser, and pre-resolving their key here would
+    // duplicate `Command::policy_key`.
+    match &command {
+        Cmd::Context(args)
+            if matches!(
+                args.command,
+                commands::context::ContextCommand::Close { .. }
+            ) =>
+        {
+            crate::policy::enforce_key(webpilot::types::PolicyKey::ContextClose)?;
+        }
+        Cmd::Device(_) => {
+            crate::policy::enforce_key(webpilot::types::PolicyKey::Device)?;
+        }
+        _ => {}
+    }
     let mut transport = LocalTransport::open(open_context).await?;
 
     let result = match command {

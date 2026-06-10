@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.173] - 2026-06-11
+
+### Fixed
+
+- **A denied `context close` / `device` command no longer launches Chrome on
+  its way to the refusal.** These directly-gated headless-only commands
+  enforced their policy key inside the handler — after `LocalTransport::open`
+  had already started a session — so under `policy default deny` the refused
+  command still left a live Chrome behind. Their keys are static, so the
+  verdict is now decided before the transport opens (the handler's enforce
+  stays as the sink backstop; both call the same `enforce_key`, so they cannot
+  disagree). Transport-routed commands keep sink enforcement unchanged —
+  pre-resolving their keys would duplicate `Command::policy_key`. A
+  Chrome-free integration test pins it: under default-deny both commands exit
+  `PolicyDenied` and `status` confirms no session was started.
+
 ## [0.4.172] - 2026-06-11
 
 ### Fixed
