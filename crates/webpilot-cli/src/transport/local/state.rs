@@ -297,6 +297,9 @@ impl LocalTransport {
         let data = json!({
             "version": SESSION_SCHEMA_VERSION,
             "exported_at": epoch_ms() as u64,
+            // Storage is origin-scoped; the bridge records whose it is so the
+            // import can refuse to write it into a different origin.
+            "origin": storage.get("origin"),
             "cookies": cookies,
             "local_storage": storage.get("localStorage"),
             "session_storage": storage.get("sessionStorage"),
@@ -412,6 +415,10 @@ impl LocalTransport {
             let resp = self
                 .invoke_bridge(&json!({
                     "type": "importStorage",
+                    // The bridge enforces the export's origin against the page
+                    // it is about to write — origin-scoped state must not land
+                    // on a different origin under a success status.
+                    "origin": parsed.get("origin").cloned().unwrap_or(Value::Null),
                     "localStorage": local_storage.cloned().unwrap_or_else(|| json!({})),
                     "sessionStorage": session_storage.cloned().unwrap_or_else(|| json!({})),
                 }))

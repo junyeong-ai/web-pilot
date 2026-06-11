@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.177] - 2026-06-11
+
+### Fixed
+
+- **`session import` refuses to write another origin's storage into the current
+  page.** The export carried no origin, so importing a session taken on
+  `https://A.com` while sitting on `https://B.com` wrote A's
+  localStorage/sessionStorage into B and reported "Session imported" — silent
+  state corruption of the wrong origin, with the right one getting nothing.
+  The export now records `origin` (read by the bridge from the same frame the
+  storage came from, both modes), and the import — enforced in the shared
+  bridge at the moment it is about to write — rejects a mismatch as a typed
+  `InvalidArgument` naming both origins and the remediation (navigate there
+  first), before anything lands. A matching origin imports unchanged; cookies
+  are unaffected either way (each carries its own domain and applies through
+  the cookie API); a hand-written file may omit `origin` to skip the check —
+  the same explicit opt-out the `version` field already has.
+
 ## [0.4.176] - 2026-06-11
 
 ### Fixed

@@ -1870,6 +1870,55 @@ fn headless_behavioral_flow() {
         stdout(&ri)
     );
 
+    // Storage is ORIGIN-scoped: an import whose recorded export origin differs
+    // from the current page's is a typed InvalidArgument naming both origins,
+    // BEFORE any write — never origin-A state silently written into origin B
+    // under a success status. A matching origin imports as before. (Cookies
+    // are unaffected either way — each carries its own domain.)
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &base])),
+        0,
+        "navigate for the origin-scope test failed"
+    );
+    let foreign_session = home.join("foreign-origin-session.json");
+    std::fs::write(
+        &foreign_session,
+        br#"{"version":1,"origin":"http://192.0.2.1:1","local_storage":{"wp_foreign":"1"}}"#,
+    )
+    .expect("write foreign-origin session fixture");
+    let fo = fx.run(&["session", "import", foreign_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&fo),
+        7,
+        "importing another origin's storage must be a typed InvalidArgument, not a silent cross-origin write: {}",
+        stdout(&fo)
+    );
+    assert!(
+        stdout(&fo).contains("navigate there before importing"),
+        "the origin error must point at the remediation: {}",
+        stdout(&fo)
+    );
+    assert!(
+        stdout(&fx.run(&["eval", "localStorage.getItem('wp_foreign') === null"])).contains("true"),
+        "a rejected cross-origin import must write NOTHING"
+    );
+    let matching_session = home.join("matching-origin-session.json");
+    std::fs::write(
+        &matching_session,
+        format!(r#"{{"version":1,"origin":"{base}","local_storage":{{"wp_origin_ok":"1"}}}}"#)
+            .as_bytes(),
+    )
+    .expect("write matching-origin session fixture");
+    assert_eq!(
+        code(&fx.run(&["session", "import", matching_session.to_str().unwrap()])),
+        0,
+        "a matching-origin import must succeed"
+    );
+    assert!(
+        stdout(&fx.run(&["eval", "localStorage.getItem('wp_origin_ok') === '1'"])).contains("true"),
+        "the matching-origin import must actually write the storage"
+    );
+
     // The `*`-new marker is suppressed for a fresh DOCUMENT (no baseline), but a
     // same-document `pushState`/hash change keeps the baseline — so an element it
     // inserts IS flagged new. Capture a baseline, then push a new URL state and

@@ -491,6 +491,9 @@ async function handleSessionExport() {
     const data = {
       version: SESSION_SCHEMA_VERSION,
       exported_at: Date.now(),
+      // Storage is origin-scoped; the bridge records whose it is so the import
+      // can refuse to write it into a different origin (headless parity).
+      origin: storage.origin ?? null,
       cookies: all.map(toCookieInfo),
       local_storage: storage.localStorage || {},
       session_storage: storage.sessionStorage || {},
@@ -587,6 +590,10 @@ async function handleSessionImport(rawData) {
       await ensureBridge(tab.id, activeFrameId);
       const r = await sendToContent(tab.id, {
         type: "importStorage",
+        // The bridge enforces the export's origin against the page it is about
+        // to write — origin-scoped state must not land on a different origin
+        // under a success status (headless parity).
+        origin: data.origin ?? null,
         // Shape is validated above; an absent/empty field is `{}` (a no-op),
         // matching headless's `unwrap_or_else(|| json!({}))`. The bridge then
         // validates the values (must be strings) as it imports.

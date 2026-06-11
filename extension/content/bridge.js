@@ -1342,10 +1342,25 @@
       const k = sessionStorage.key(i);
       if (k != null) sessionObj[k] = sessionStorage.getItem(k);
     }
-    return { localStorage: localObj, sessionStorage: sessionObj };
+    // Storage is origin-scoped state, so the export records WHOSE it is — the
+    // import refuses to write it into a page on a different origin.
+    return { origin: location.origin, localStorage: localObj, sessionStorage: sessionObj };
   }
 
   function importStorage(msg) {
+    // Storage is origin-scoped: writing an export taken on origin A into a
+    // page on origin B would corrupt B's app state under a success status —
+    // the agent believes the session is restored while the right origin got
+    // nothing. An export always records its origin; enforce it when present
+    // (a hand-written file may omit it, the same explicit opt-out the
+    // `version` field has). Cookies are unaffected — each carries its own
+    // domain and is applied through the cookie API, not the current page.
+    if (msg.origin != null && msg.origin !== location.origin) {
+      return err(
+        "InvalidArgument",
+        `session storage was exported from ${msg.origin} but the page is on ${location.origin} — navigate there before importing`,
+      );
+    }
     // setItem throws on a full quota; count the rejects and report them typed
     // rather than letting one throw abort the rest and surface as a generic
     // exception — the agent learns it imported less than the file held.
