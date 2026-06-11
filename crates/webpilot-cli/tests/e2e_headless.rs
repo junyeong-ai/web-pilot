@@ -2323,8 +2323,9 @@ fn headless_behavioral_flow() {
     // A wait whose timeout exceeds the CDP-send timeout must run its full
     // in-page loop, not be truncated to a false CDP-level error. With a 1s
     // cdp-send and a 3s wait, the timeout that surfaces must be the bridge's
-    // own (`kind: "wait"`), proving the loop ran past the CDP-send bound — and
-    // the connection must survive (a response timeout must not kill it).
+    // own (the condition-naming `wait selector …` kind), proving the loop ran
+    // past the CDP-send bound — and the connection must survive (a response
+    // timeout must not kill it).
     let lw = fx.run_env(
         &["wait", "--timeout", "3", "selector", "#never-exists"],
         &[("WEBPILOT_CDP_SEND_TIMEOUT_MS", "1000")],
@@ -2333,7 +2334,7 @@ fn headless_behavioral_flow() {
     let lwj: serde_json::Value = serde_json::from_str(&stdout(&lw)).expect("wait json");
     assert_eq!(
         lwj["error"]["kind"].as_str(),
-        Some("wait"),
+        Some(r##"wait selector "#never-exists""##),
         "the wait must run its own loop past the CDP-send bound, not be cut by it: {}",
         stdout(&lw)
     );
@@ -2626,6 +2627,46 @@ fn headless_behavioral_flow() {
         code(&fx.run(&["tab", "new", &base])),
         0,
         "re-pin after the wait-vanish test failed"
+    );
+
+    // 8g. A `wait selector` whose document NAVIGATES mid-poll must survive:
+    //     the condition's intent transfers to the new document (a redirect
+    //     landing on the page the agent is waiting for), so the wait re-arms
+    //     with the remaining budget instead of dying as an untyped "Execution
+    //     context was destroyed" infra error (exit 1). /slowredir
+    //     self-navigates to /redirtarget (#navgoal) ~800ms in — after the
+    //     wait below is already polling in-page.
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/slowredir")])),
+        0,
+        "navigate to /slowredir failed"
+    );
+    let surv = fx.run(&["wait", "--timeout", "10", "selector", "#navgoal"]);
+    assert_eq!(
+        code(&surv),
+        0,
+        "wait selector must survive a mid-poll document navigation and satisfy \
+         against the NEW document: {}",
+        stdout(&surv)
+    );
+    // ...and a timed-out wait names WHAT was waited for — a self-contained
+    // error, not a bare "wait timed out" that forces a re-read of the call.
+    let wto = fx.run(&["wait", "--timeout", "1", "selector", "#never_appears"]);
+    assert_eq!(
+        code(&wto),
+        5,
+        "a never-matching selector must time out (5): {}",
+        stdout(&wto)
+    );
+    assert!(
+        stdout(&wto).contains("wait selector") && stdout(&wto).contains("#never_appears"),
+        "the wait timeout must name the condition it waited for: {}",
+        stdout(&wto)
+    );
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &base])),
+        0,
+        "re-home after the wait-survival test failed"
     );
 
     // 9. Closing the ACTIVE tab leaves a dead pin. A pin-INDEPENDENT command

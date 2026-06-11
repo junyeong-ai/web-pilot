@@ -1247,8 +1247,15 @@
       resolve(result);
     };
 
+    // Name the CONDITION in the timeout, not a bare "wait": the error must be
+    // self-contained in an agent transcript — "wait timed out" with no hint of
+    // what was waited for forces a re-read of the issuing call. JSON.stringify
+    // quotes and escapes the agent-supplied value, keeping the message one line.
+    const condDesc = cond.value != null
+      ? `wait ${cond.until} ${JSON.stringify(String(cond.value))}`
+      : `wait ${cond.until}`;
     const timer = setTimeout(() => {
-      finish(err("Timeout", "Wait timed out", { kind: "wait", elapsed_ms: timeout }));
+      finish(err("Timeout", `${condDesc} timed out`, { kind: condDesc, elapsed_ms: timeout }));
     }, timeout);
 
     const root = document.body || document.documentElement;

@@ -110,11 +110,19 @@ async function injectBridgeOnly(tabId, frameId = 0) {
 
 const SEND_TIMEOUT_MSG = "Page did not respond in time";
 
-async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
-  const sendOnce = () => Promise.race([
+// One-shot bridge send with NO re-inject retry. The wait re-arm loop in
+// query.js runs its own frame-probe + ensureBridge + remaining-budget
+// accounting per round, so the generic retry below — which re-sends with the
+// FULL original budget — would overshoot the agent's deadline.
+function sendToContentOnce(tabId, message, frameId = 0, timeoutMs = 10000) {
+  return Promise.race([
     chrome.tabs.sendMessage(tabId, message, { frameId }),
     new Promise((_, r) => setTimeout(() => r(new Error(SEND_TIMEOUT_MSG)), timeoutMs)),
   ]);
+}
+
+async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
+  const sendOnce = () => sendToContentOnce(tabId, message, frameId, timeoutMs);
 
   try {
     return await sendOnce();
@@ -139,4 +147,4 @@ async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
   }
 }
 
-export { ensureBridge, frameVanishedError, injectBridgeOnly, installDialogOverride, sendToContent };
+export { ensureBridge, frameVanishedError, injectBridgeOnly, installDialogOverride, sendToContent, sendToContentOnce };

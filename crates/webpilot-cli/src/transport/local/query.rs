@@ -13,6 +13,20 @@ use super::LocalTransport;
 /// and a body that does is failed loud rather than read unbounded.
 const FETCH_MAX_BODY_BYTES: u64 = 10 * 1024 * 1024;
 
+/// The condition rendered for a wait Timeout's `kind` — self-contained
+/// (`wait selector "#x"`, never a bare "wait"), mirroring the bridge's own
+/// timeout wording so the deadline-race edge in `do_wait` reads identically to
+/// a normal in-page expiry. `{:?}` quotes and escapes the agent-supplied value,
+/// keeping the message one line.
+fn wait_kind(condition: &WaitCondition) -> String {
+    match condition {
+        WaitCondition::Selector { value } => format!("wait selector {value:?}"),
+        WaitCondition::Text { value } => format!("wait text {value:?}"),
+        WaitCondition::Navigation => "wait navigation".into(),
+        WaitCondition::Idle => "wait idle".into(),
+    }
+}
+
 impl LocalTransport {
     /// Whether `code` compiles as a single expression. Decided by COMPILING —
     /// never by executing and retrying: a runtime `throw new SyntaxError(...)`
@@ -140,36 +154,77 @@ impl LocalTransport {
         // The bridge runs the poll loop in-page and resolves only at its own
         // `timeout_ms`; give the CDP round-trip that long plus the normal
         // `cdp_send` slack, so a long wait isn't truncated to a false Timeout.
-        let cdp_timeout = std::time::Duration::from_millis(timeout_ms)
-            .saturating_add(webpilot::settings::timeouts().cdp_send);
-        let raw = self
-            .invoke_bridge_with_timeout(
-                &json!({
-                    "type": "wait",
-                    "condition": condition,
-                    "timeout_ms": timeout_ms,
-                }),
-                cdp_timeout,
-            )
-            .await?;
-
-        match Self::parse_bridge_response(raw) {
-            Ok(_) => Ok(ResponseData::Wait {
-                success: true,
-                error: None,
-            }),
-            Err(e) => {
-                let err = e
-                    .downcast_ref::<WebPilotError>()
-                    .cloned()
-                    .unwrap_or_else(|| WebPilotError::Other {
-                        detail: e.to_string(),
+        //
+        // A document navigation mid-poll destroys the bridge context and fails
+        // the in-flight evaluate with the typed `ContextDestroyedMidFlight` —
+        // which does not invalidate the wait's intent: the condition may well
+        // be satisfied by the NEW document (a redirect landing on the page the
+        // agent is waiting for). Re-arm against it with the REMAINING budget
+        // (browser mode re-arms identically; Playwright's selector waits
+        // survive navigations the same way) instead of surfacing an untyped
+        // infra error. A frame REMOVED mid-wait ends differently: its bridge
+        // context never reappears, so the re-arm's `bridge_context_id` is a
+        // typed FrameNotFound.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let raw = match self
+                .invoke_bridge_with_timeout(
+                    &json!({
+                        "type": "wait",
+                        "condition": &condition,
+                        "timeout_ms": remaining.as_millis() as u64,
+                    }),
+                    remaining.saturating_add(webpilot::settings::timeouts().cdp_send),
+                )
+                .await
+            {
+                Ok(raw) => raw,
+                Err(e)
+                    if e.downcast_ref::<crate::cdp::ContextDestroyedMidFlight>()
+                        .is_some() =>
+                {
+                    if std::time::Instant::now() < deadline {
+                        continue;
+                    }
+                    // Destroyed exactly as the budget ran out: the condition
+                    // went unsatisfied within the ask — a Timeout, as the
+                    // in-page timer would have reported, never an infra error.
+                    return Ok(ResponseData::Wait {
+                        success: false,
+                        error: Some(WebPilotError::Timeout {
+                            kind: wait_kind(&condition),
+                            elapsed_ms: timeout_ms,
+                        }),
                     });
-                Ok(ResponseData::Wait {
-                    success: false,
-                    error: Some(err),
-                })
-            }
+                }
+                Err(e) => return Err(e),
+            };
+
+            return match Self::parse_bridge_response(raw) {
+                Ok(_) => Ok(ResponseData::Wait {
+                    success: true,
+                    error: None,
+                }),
+                Err(e) => {
+                    let mut err = e
+                        .downcast_ref::<WebPilotError>()
+                        .cloned()
+                        .unwrap_or_else(|| WebPilotError::Other {
+                            detail: e.to_string(),
+                        });
+                    // The bridge's per-round timer knows only its own
+                    // (post-re-arm) residual budget; the agent asked for
+                    // `timeout_ms` total. Report the full ask.
+                    if let WebPilotError::Timeout { elapsed_ms, .. } = &mut err {
+                        *elapsed_ms = timeout_ms;
+                    }
+                    Ok(ResponseData::Wait {
+                        success: false,
+                        error: Some(err),
+                    })
+                }
+            };
         }
     }
 

@@ -34,6 +34,24 @@ impl std::fmt::Display for ContextGone {
 
 impl std::error::Error for ContextGone {}
 
+/// CDP reported that the execution context died WHILE an evaluation was in
+/// flight — a navigation tore the document down under an awaited call. Distinct
+/// from [`ContextGone`], where the targeted id no longer *resolved* and the call
+/// never started (safe for any caller to re-issue): here the work may already
+/// have run, so only an idempotent caller — the `wait` re-arm loop — may retry
+/// on it. Everywhere else it surfaces as itself, which still beats the raw
+/// `CDP error: {...}` blob it would otherwise collapse into.
+#[derive(Debug)]
+pub struct ContextDestroyedMidFlight;
+
+impl std::fmt::Display for ContextDestroyedMidFlight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("execution context was destroyed mid-call (the document navigated)")
+    }
+}
+
+impl std::error::Error for ContextDestroyedMidFlight {}
+
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWriter = futures_util::stream::SplitSink<WsStream, Message>;
 
@@ -339,6 +357,24 @@ impl CdpClient {
                 && message.is_some_and(|m| m.contains("Cannot find context with specified id"))
             {
                 return Err(ContextGone.into());
+            }
+            // The context died while THIS call was in flight (vs. never
+            // resolving, above) — `-32000` plus either stable protocol wording:
+            // "Execution context was destroyed" when a frame's document is
+            // swapped out under the evaluation, "Inspected target navigated or
+            // closed" when the TOP document navigates (measured; this is what a
+            // page-initiated redirect produces). The "or closed" half is safe
+            // under the same type: a re-issued call against a genuinely closed
+            // target fails ConnectionLost on the next send. Typed by the same
+            // rule as `ContextGone`: matched by type downstream, never by
+            // re-parsing a stringified error.
+            if code == Some(-32000)
+                && message.is_some_and(|m| {
+                    m.contains("Execution context was destroyed")
+                        || m.contains("Inspected target navigated or closed")
+                })
+            {
+                return Err(ContextDestroyedMidFlight.into());
             }
             anyhow::bail!("CDP error: {error}");
         }

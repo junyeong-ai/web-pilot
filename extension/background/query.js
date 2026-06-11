@@ -4,7 +4,7 @@
 import { err, exceptionErr, noPageErr, otherErr, timeoutErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, resolveActiveTab, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
-import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
+import { ensureBridge, frameVanishedError, sendToContent, sendToContentOnce } from "./content.js";
 
 // ── Eval ───────────────────────────────────────────────────────────────────
 
@@ -238,25 +238,49 @@ async function handleWait(command) {
     }
   }
 
-  // Selector / text / idle — delegate to bridge.js with the same condition shape.
-  try {
-    const frameGone = await frameVanishedError(tab.id, activeFrameId);
-    if (frameGone) return { type: "Wait", success: false, error: frameGone };
-    await ensureBridge(tab.id, activeFrameId);
-    const r = await sendToContent(
-      tab.id,
-      { type: "wait", condition: cond, timeout_ms: timeoutMs },
-      activeFrameId,
-      timeoutMs + 2000,
-    );
-    if (r.success) return { type: "Wait", success: true };
-    return { type: "Wait", success: false, error: r.error || timeoutErr("wait", timeoutMs) };
-  } catch (e) {
-    // A thrown exception here is the bridge CALL failing (the content script is
-    // gone, eval was refused), not the wait condition timing out — the real
-    // timeout comes back as `r.error` above. Surface it typed (BridgeUnavailable
-    // keeps exit 3) instead of masking every infra failure as a Timeout.
-    return { type: "Wait", success: false, error: exceptionErr(e) };
+  // Selector / text / idle — delegate to bridge.js with the same condition
+  // shape. A document navigation mid-poll tears the content script down and
+  // rejects the in-flight send — which does not invalidate the wait's intent:
+  // the condition may well be satisfied by the NEW document (a redirect landing
+  // on the page the agent is waiting for). Re-arm against it with the
+  // REMAINING budget (headless re-arms identically; Playwright's selector
+  // waits survive navigations the same way). Typed failures from the re-probe
+  // — TabNotFound / FrameNotFound / BridgeUnavailable — are root causes and
+  // surface immediately; only the untyped port-death class re-arms.
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const frameGone = await frameVanishedError(tab.id, activeFrameId);
+      if (frameGone) return { type: "Wait", success: false, error: frameGone };
+      await ensureBridge(tab.id, activeFrameId);
+      const remaining = Math.max(0, deadline - Date.now());
+      const r = await sendToContentOnce(
+        tab.id,
+        { type: "wait", condition: cond, timeout_ms: remaining },
+        activeFrameId,
+        remaining + 2000,
+      );
+      if (r.success) return { type: "Wait", success: true };
+      const error = r.error || timeoutErr("wait", timeoutMs);
+      // The bridge's per-round timer knows only its own (post-re-arm) residual
+      // budget; the agent asked for `timeoutMs` total. Report the full ask.
+      if (error.code === "Timeout") error.elapsed_ms = timeoutMs;
+      return { type: "Wait", success: false, error };
+    } catch (e) {
+      // A thrown exception here is the bridge CALL failing, not the wait
+      // condition timing out — the real timeout comes back as `r.error` above.
+      // Typed = root cause (BridgeUnavailable keeps exit 3, a vanished tab or
+      // frame exit 4); untyped past the deadline = the budget is spent, which
+      // is the Timeout the in-page timer would have reported. Untyped BEFORE
+      // the deadline is the document going away under the poll — re-arm.
+      if (e?.code) return { type: "Wait", success: false, error: exceptionErr(e) };
+      if (Date.now() >= deadline) {
+        const desc = cond.value != null
+          ? `wait ${cond.until} ${JSON.stringify(String(cond.value))}`
+          : `wait ${cond.until}`;
+        return { type: "Wait", success: false, error: timeoutErr(desc, timeoutMs) };
+      }
+    }
   }
 }
 

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.203] - 2026-06-11
+
+### Fixed
+
+- **`wait selector`/`text`/`idle` survive document navigations.** A page
+  redirecting mid-wait used to kill the in-flight poll — headless died with an
+  untyped "Execution context was destroyed" infra error (exit 1); browser mode
+  happened to survive exactly one navigation via the generic send retry, with
+  the full timeout silently reset. Both modes now re-arm the wait against the
+  new document with the **remaining** budget (Playwright-validated semantics:
+  the condition's intent transfers to the document a redirect lands on), so
+  `wait selector` for an element expected only after a redirect just works.
+  Headless types the in-flight context teardown (`ContextDestroyedMidFlight`,
+  distinct from the never-started `ContextGone` so non-idempotent calls are
+  never blindly re-issued); the browser worker loops with deadline accounting
+  instead of leaning on the full-budget send retry. A frame removed mid-wait
+  still ends as a typed `FrameNotFound`, and a vanished tab as `TabNotFound`.
+- **Wait timeouts name the condition.** `wait selector "#results" timed out
+  after 10000ms` instead of the bare "wait timed out" — the error is
+  self-contained in an agent transcript, in both modes, and a re-armed wait
+  reports the full requested budget, never the residual round's.
+
 ## [0.4.202] - 2026-06-11
 
 ### Fixed

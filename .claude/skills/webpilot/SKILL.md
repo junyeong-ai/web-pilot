@@ -127,6 +127,11 @@ webpilot wait navigation            --timeout 15   # next load event
 webpilot wait idle                  --timeout 10   # 500ms DOM-mutation idle
 ```
 
+`selector`/`text`/`idle` waits survive document navigations: if the page
+redirects mid-wait, the condition re-arms against the new document with the
+remaining budget — so it's safe to `wait selector` for an element you expect
+only after a redirect lands.
+
 ## Inspect / mutate page
 
 ```bash

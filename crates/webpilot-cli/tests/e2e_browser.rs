@@ -603,6 +603,43 @@ fn browser_behavioral_flow() {
         stdout(&landed)
     );
 
+    // 2c. A `wait selector` whose document NAVIGATES mid-poll must survive
+    //     (headless parity): the in-flight bridge send dies with the content
+    //     script, and the worker re-arms against the new document with the
+    //     remaining budget — /slowredir self-navigates to /redirtarget
+    //     (#navgoal) ~800ms in, after the wait below is already polling.
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/slowredir")])),
+        0,
+        "navigate to /slowredir failed"
+    );
+    let surv = fx.run(&["wait", "--timeout", "10", "selector", "#navgoal"]);
+    assert_eq!(
+        code(&surv),
+        0,
+        "browser wait selector must survive a mid-poll document navigation and \
+         satisfy against the NEW document: {}",
+        stdout(&surv)
+    );
+    // ...and a timed-out wait names WHAT was waited for (self-contained error).
+    let wto = fx.run(&["wait", "--timeout", "1", "selector", "#never_appears"]);
+    assert_eq!(
+        code(&wto),
+        5,
+        "a never-matching selector must time out (5): {}",
+        stdout(&wto)
+    );
+    assert!(
+        stdout(&wto).contains("wait selector") && stdout(&wto).contains("#never_appears"),
+        "the browser wait timeout must name the condition it waited for: {}",
+        stdout(&wto)
+    );
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &base])),
+        0,
+        "re-home after the wait-survival test failed"
+    );
+
     // 3. Stale-snapshot guard (the bridge is shared, so the typed error must
     //    hold in this mode too).
     let recap = fx.run(&["capture", "--include", "dom"]);

@@ -121,6 +121,17 @@ pub const LOG: &str = r#"<!doctype html><html><head><title>log-page</title></hea
 pub const LATE_ALERT: &str = r#"<!doctype html><html><head><title>late-alert</title></head>
 <body><script>setTimeout(function(){alert('late')},400)</script></body></html>"#;
 
+/// Self-navigates to `/redirtarget` a beat after loading — long enough that a
+/// `wait selector` issued right after the navigate is already polling in-page
+/// when the document is torn down. The wait must survive the navigation and
+/// satisfy against the NEW document (`#navgoal`), in both modes.
+pub const SLOW_REDIR: &str = r#"<!doctype html><html><head><title>slow-redir</title></head>
+<body><p>leaving soon</p><script>setTimeout(function(){location.href='/redirtarget'},800)</script></body></html>"#;
+
+/// Where `/slowredir` lands — carries the element the surviving wait keys on.
+pub const REDIR_TARGET: &str = r#"<!doctype html><html><head><title>redir-target</title></head>
+<body><div id="navgoal">navgoal arrived</div></body></html>"#;
+
 const CSP_HEADER: &str = "Content-Security-Policy: script-src 'self'\r\n";
 
 /// Minimal HTTP server: serves the fixture page for `/`, the inner document for
@@ -162,6 +173,10 @@ pub fn spawn_server() -> String {
                     (CSP_FRAME, CSP_HEADER)
                 } else if req.starts_with("GET /csp") {
                     (CSP_PAGE, CSP_HEADER)
+                } else if req.starts_with("GET /slowredir") {
+                    // Before `/slow`: `starts_with("GET /slow")` would swallow
+                    // this route and serve the delayed page instead.
+                    (SLOW_REDIR, "")
                 } else if req.starts_with("GET /slow") {
                     std::thread::sleep(std::time::Duration::from_millis(800));
                     (SLOW, "")
@@ -169,6 +184,8 @@ pub fn spawn_server() -> String {
                     (LOG, "")
                 } else if req.starts_with("GET /latealert") {
                     (LATE_ALERT, "")
+                } else if req.starts_with("GET /redirtarget") {
+                    (REDIR_TARGET, "")
                 } else {
                     (PAGE, "")
                 };
