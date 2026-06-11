@@ -75,6 +75,7 @@ impl LocalTransport {
         if result.get("success").and_then(|v| v.as_bool()) == Some(false) {
             return Ok(ResponseData::CookieResult {
                 success: false,
+                deleted: None,
                 error: Some(WebPilotError::InvalidArgument {
                     detail: format!(
                         "Chrome refused to set cookie '{}' — common causes: SameSite=None \
@@ -87,19 +88,53 @@ impl LocalTransport {
         }
         Ok(ResponseData::CookieResult {
             success: true,
+            deleted: None,
             error: None,
         })
     }
 
     pub(super) async fn do_cookie_delete(&self, url: &str, name: &str) -> Result<ResponseData> {
-        self.page
-            .send(
-                "Network.deleteCookies",
-                Some(json!({"url": url, "name": name})),
-            )
+        // List first: a delete of a cookie that does not exist must be the
+        // typed CookieNotFound (`cookie get`'s contract), never a silent
+        // success — and same-name cookies coexist across scopes (a `.domain`
+        // legacy cookie beside a host-only one, different paths), so EVERY
+        // matching scope is deleted precisely (name+domain+path) and the count
+        // reported, rather than whatever a bare url+name delete happens to hit.
+        let listed = self
+            .page
+            .send("Network.getCookies", Some(json!({"urls": [url]})))
             .await?;
+        let matches: Vec<Value> = listed
+            .get("cookies")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter(|c| c.get("name").and_then(|v| v.as_str()) == Some(name))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        if matches.is_empty() {
+            return Err(WebPilotError::CookieNotFound {
+                name: name.to_string(),
+            }
+            .into());
+        }
+        for c in &matches {
+            self.page
+                .send(
+                    "Network.deleteCookies",
+                    Some(json!({
+                        "name": name,
+                        "domain": c.get("domain"),
+                        "path": c.get("path"),
+                    })),
+                )
+                .await?;
+        }
         Ok(ResponseData::CookieResult {
             success: true,
+            deleted: Some(matches.len() as u64),
             error: None,
         })
     }

@@ -295,18 +295,19 @@ async function handleCapture(command) {
   // `tab.title` would mislabel an iframe capture with the top page's title.
   if (!result.page_url || !result.page_title) {
     try {
-      if (activeFrameId !== 0) {
-        const [hit] = await chrome.scripting.executeScript({
-          target: { tabId, frameIds: [activeFrameId] },
-          func: () => [location.href, document.title],
-        });
-        const [u, t] = hit?.result || ["", ""];
-        result.page_url = result.page_url || u || "";
-        result.page_title = result.page_title || t || "";
-      } else {
-        const tab = await chrome.tabs.get(tabId);
-        result.page_url = result.page_url || tab.url || "";
-        result.page_title = result.page_title || tab.title || "";
+      // One probe for EVERY frame, the main frame included: the document's own
+      // location/title are the authority. `tab.title` is never consulted — for
+      // an untitled page Chrome synthesizes a tab title (≈ the URL), which
+      // would paper over the honest "" headless reports (it reads
+      // document.title the same way).
+      const [hit] = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [activeFrameId] },
+        func: () => [location.href, document.title],
+      });
+      const [u, t] = hit?.result || ["", ""];
+      result.page_url = result.page_url || u || "";
+      if (!result.page_title && typeof t === "string") {
+        result.page_title = t;
       }
     } catch {}
   }

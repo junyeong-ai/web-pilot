@@ -151,12 +151,31 @@ pub async fn run<T: Transport>(transport: &mut T, args: CookieArgs) -> Result<Co
             .await
         }
         CookieCommand::Delete { url, name } => {
-            simple(
-                transport,
-                Command::CookieDelete { url, name },
-                "Cookie deleted",
-            )
-            .await
+            let result = transport
+                .send(Command::CookieDelete {
+                    url,
+                    name: name.clone(),
+                })
+                .await?;
+            match result {
+                ResponseData::CookieResult {
+                    success,
+                    deleted,
+                    error,
+                } => {
+                    // The count makes "all of them" verifiable: same-name
+                    // cookies coexist across scopes (domain vs host-only,
+                    // paths) and every matching scope was deleted.
+                    let n = deleted.unwrap_or(1);
+                    lift_error(
+                        success,
+                        error,
+                        CommandOutput::Ok(format!("Deleted {n} cookie(s) named '{name}'")),
+                    )
+                }
+                ResponseData::Error { error } => Err(error.into()),
+                _ => anyhow::bail!("Unexpected response shape"),
+            }
         }
     }
 }
@@ -168,7 +187,7 @@ async fn simple<T: Transport>(
 ) -> Result<CommandOutput> {
     let result = transport.send(cmd).await?;
     match result {
-        ResponseData::CookieResult { success, error } => {
+        ResponseData::CookieResult { success, error, .. } => {
             lift_error(success, error, CommandOutput::Ok(ok_msg.into()))
         }
         ResponseData::Error { error } => Err(error.into()),

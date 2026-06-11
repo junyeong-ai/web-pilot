@@ -343,6 +343,11 @@ pub enum ResponseData {
     },
     CookieResult {
         success: bool,
+        /// How many cookies a `cookie delete` actually removed — same-name
+        /// cookies coexist across scopes (domain vs host-only, paths), so the
+        /// count makes "all of them" verifiable. Absent for `cookie set`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deleted: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<WebPilotError>,
     },

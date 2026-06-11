@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.201] - 2026-06-11
+
+### Fixed
+
+- **`cookie delete` deletes every matching scope, reports the count, and a
+  missing cookie is `CookieNotFound`.** Deleting an absent cookie reported
+  success while removing nothing (the silent empty-success class `cookie get`
+  shed in 0.4.136), and same-name cookies coexisting across scopes (a
+  `.domain` legacy cookie beside a host-only one, different paths) were only
+  partially removed by the bare url+name delete while the command claimed
+  completion. Both modes now list first — absent → typed `CookieNotFound`
+  (exit 4) — then delete each matching scope precisely and report
+  `Deleted N cookie(s)`; the wire carries the count (`deleted`).
+
+- **Browser-mode capture metadata never substitutes the synthesized tab title
+  (r99).** The no-DOM fill-in's main-frame branch fell back to `tab.title` —
+  for an untitled page Chrome synthesizes one (≈ the URL), papering over the
+  honest `""` headless reports. One probe now serves every frame (the main
+  frame included), reading `location.href` / `document.title` from the
+  document itself; `tab.title` is never consulted.
+
 ## [0.4.200] - 2026-06-11
 
 ### Changed

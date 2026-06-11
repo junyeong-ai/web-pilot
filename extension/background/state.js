@@ -268,8 +268,26 @@ async function handleCookieDelete(command) {
     };
   }
   try {
-    await chrome.cookies.remove({ url: command.url, name: command.name });
-    return { type: "CookieResult", success: true };
+    // List first (headless parity): a delete of a cookie that does not exist
+    // is the typed CookieNotFound, never a silent success — and same-name
+    // cookies coexist across scopes (a `.domain` legacy cookie beside a
+    // host-only one, different paths), so EVERY matching scope is removed via
+    // a per-cookie reconstructed URL (chrome.cookies.remove cannot target
+    // domain/path directly) and the count reported.
+    const matches = await chrome.cookies.getAll({ url: command.url, name: command.name });
+    if (matches.length === 0) {
+      return {
+        type: "CookieResult",
+        success: false,
+        error: err("CookieNotFound", `Cookie not found: ${command.name}. List: webpilot cookie list URL`, { name: command.name }),
+      };
+    }
+    for (const c of matches) {
+      const host = c.domain.startsWith(".") ? c.domain.slice(1) : c.domain;
+      const cookieUrl = `${c.secure ? "https" : "http"}://${host}${c.path}`;
+      await chrome.cookies.remove({ url: cookieUrl, name: command.name, storeId: c.storeId });
+    }
+    return { type: "CookieResult", success: true, deleted: matches.length };
   } catch (e) {
     return { type: "CookieResult", success: false, error: exceptionErr(e) };
   }

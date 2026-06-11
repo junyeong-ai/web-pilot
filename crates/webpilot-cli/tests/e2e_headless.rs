@@ -2072,6 +2072,35 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["cookie", "list", &base]))
     );
 
+    // `cookie delete` mirrors `cookie get`'s contract: deleting an ABSENT
+    // cookie is the typed CookieNotFound (exit 4), never a silent success that
+    // claims a deletion which removed nothing — and a real delete reports HOW
+    // MANY scoped cookies it removed (same-name cookies can coexist across
+    // domain/path scopes).
+    let del_absent = fx.run(&["cookie", "delete", &base, "no_such_cookie"]);
+    assert_eq!(
+        code(&del_absent),
+        4,
+        "deleting an absent cookie must be CookieNotFound (4), not silent success: {}",
+        stdout(&del_absent)
+    );
+    let del_real = fx.run(&["cookie", "delete", &base, "ses2"]);
+    assert_eq!(
+        code(&del_real),
+        0,
+        "deleting an existing cookie failed: {}",
+        stdout(&del_real)
+    );
+    assert!(
+        stdout(&del_real).contains("Deleted 1 cookie(s)"),
+        "the delete must report the scoped count: {}",
+        stdout(&del_real)
+    );
+    assert!(
+        !stdout(&fx.run(&["cookie", "list", &base])).contains("ses2"),
+        "the deleted cookie must be gone from the list"
+    );
+
     // `cookie get NAME` of an ABSENT cookie is a typed not-found (exit 4), like
     // `find`/`click` on a missing target — not a "(0 cookies)" list reported as
     // success (exit 0), which an agent checking an auth cookie by exit code would
