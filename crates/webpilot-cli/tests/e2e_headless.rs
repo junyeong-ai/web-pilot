@@ -2733,6 +2733,55 @@ fn headless_behavioral_flow() {
         "re-home after the wait-survival test failed"
     );
 
+    // 8g-shot. A screenshot reports its SAVED dimensions — and a full-page
+    //     shot of this tall page (3000px spacer) exceeds the long-edge cap, so
+    //     the downscale ratio must ride along too: pixel coordinates on the
+    //     saved image map to page pixels via `÷ scale`, and a silent resize
+    //     would break that math (pre-fix the dimensions died in a debug log).
+    let vshot = fx.run(&["capture", "--include", "screenshot"]);
+    assert_eq!(
+        code(&vshot),
+        0,
+        "viewport screenshot failed: {}",
+        stdout(&vshot)
+    );
+    let vs: serde_json::Value = serde_json::from_str(&stdout(&vshot)).expect("shot json");
+    assert!(
+        vs["screenshot_width"].as_u64().is_some() && vs["screenshot_height"].as_u64().is_some(),
+        "a screenshot must report its saved dimensions: {}",
+        stdout(&vshot)
+    );
+    assert!(
+        vs["screenshot_scale"].is_null(),
+        "an unscaled viewport shot must NOT claim a downscale: {}",
+        stdout(&vshot)
+    );
+    let fshot = fx.run(&["capture", "--include", "screenshot", "--full-page"]);
+    assert_eq!(
+        code(&fshot),
+        0,
+        "full-page screenshot failed: {}",
+        stdout(&fshot)
+    );
+    let fs: serde_json::Value = serde_json::from_str(&stdout(&fshot)).expect("full shot json");
+    assert!(
+        fs["screenshot_scale"]
+            .as_f64()
+            .is_some_and(|s| s > 0.0 && s < 1.0),
+        "a tall full-page shot exceeds the long-edge cap and must report its \
+         downscale ratio: {}",
+        stdout(&fshot)
+    );
+    let cap_edge = fs["screenshot_width"]
+        .as_u64()
+        .unwrap_or(0)
+        .max(fs["screenshot_height"].as_u64().unwrap_or(0));
+    assert!(
+        cap_edge > 0 && cap_edge <= 1568,
+        "the reported dimensions must be the SAVED image's (long edge at the cap): {}",
+        stdout(&fshot)
+    );
+
     // 8h. The same mid-wait close while switched INTO AN IFRAME must also be
     //     the root-cause TabNotFound — not the FrameNotFound the dead re-arm's
     //     frame probe would otherwise collapse into (sending the agent

@@ -74,6 +74,21 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
                 .map(|v| format!("{label}: {}", line_safe(v)))
         })
         .collect();
+    // The screenshot's saved dimensions are numbers, so the string label table
+    // skips them — surface them with the downscale ratio when one was applied,
+    // so an agent reading the human/MCP render can map image pixels back to
+    // page pixels (`image px ÷ scale`) without dropping to the JSON.
+    if let (Some(w), Some(h)) = (
+        extra.get("screenshot_width").and_then(|v| v.as_u64()),
+        extra.get("screenshot_height").and_then(|v| v.as_u64()),
+    ) {
+        let scale = extra
+            .get("screenshot_scale")
+            .and_then(|v| v.as_f64())
+            .map(|s| format!(" (downscaled — page px = image px ÷ {s:.3})"))
+            .unwrap_or_default();
+        lines.push(format!("Screenshot size: {w}x{h}{scale}"));
+    }
     // `new_tab` is the adopted popup — an object, not a string, so the label
     // table skips it and the JSON channel alone would carry it. Surface it: the
     // snapshot's `page_url` shows WHERE the agent landed, but only this tells it

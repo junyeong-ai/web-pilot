@@ -66,6 +66,11 @@ webpilot capture --include screenshot --full-page            # entire scrollable
 webpilot capture --include dom --url URL                     # navigate first, then capture
 ```
 
+The output also carries `screenshot_width`/`screenshot_height` (the saved
+image's pixels) and, when the capture exceeded the long-edge cap and was
+downscaled, `screenshot_scale` — map image pixels back to page pixels with
+`image px ÷ scale` before doing any coordinate math on a full-page shot.
+
 `Read` the file paths returned in `screenshot_path` / `pdf_path` / `accessibility_path` — they are absolute, so just open them. (They live under the per-user cache: `~/Library/Caches/webpilot/artifacts/` on macOS, `$XDG_RUNTIME_DIR`/`$XDG_CACHE_HOME`/`~/.cache/webpilot/artifacts/` on Linux, or `$WEBPILOT_HOME` when set — always trust the returned path rather than guessing.)
 
 ## Action

@@ -18,6 +18,11 @@ pub struct ScreenshotResult {
     pub path: PathBuf,
     pub width: u32,
     pub height: u32,
+    /// Downscale ratio applied to fit the long-edge cap (saved ÷ captured) —
+    /// `1.0` when the capture was saved as-is. Callers surface it so pixel
+    /// coordinates measured on the saved image can be mapped back to page
+    /// pixels (`coord / scale`); a silent downscale would break that math.
+    pub scale: f64,
     pub bytes: usize,
     pub estimated_tokens: u32,
 }
@@ -40,16 +45,17 @@ pub fn process_and_save(b64_data: &str, dest: &Path) -> Result<ScreenshotResult,
     // Resize if needed
     let max_long_edge = crate::settings::get().capture.screenshot_max_long_edge;
     let long_edge = orig_w.max(orig_h);
-    let (new_w, new_h) = if long_edge > max_long_edge {
+    let (new_w, new_h, scale) = if long_edge > max_long_edge {
         let scale = max_long_edge as f64 / long_edge as f64;
         // Clamp to at least 1px: an extreme aspect ratio can round the short
         // edge to 0, which would make the resize step fail.
         (
             ((orig_w as f64 * scale).round() as u32).max(1),
             ((orig_h as f64 * scale).round() as u32).max(1),
+            scale,
         )
     } else {
-        (orig_w, orig_h)
+        (orig_w, orig_h, 1.0)
     };
 
     // Always emit PNG bytes for the `.png` artifact — browser-mode captures
@@ -74,6 +80,7 @@ pub fn process_and_save(b64_data: &str, dest: &Path) -> Result<ScreenshotResult,
         path: dest.to_path_buf(),
         width: new_w,
         height: new_h,
+        scale,
         bytes: final_bytes.len(),
         estimated_tokens,
     })

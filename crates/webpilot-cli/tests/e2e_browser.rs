@@ -1509,6 +1509,15 @@ fn browser_behavioral_flow() {
         "full-page screenshot must be persisted to a path: {}",
         stdout(&full)
     );
+    // The saved dimensions ride the output (headless parity) — without them,
+    // coordinate math on a downscaled image is silently wrong.
+    let full_json: serde_json::Value = serde_json::from_str(&stdout(&full)).expect("full json");
+    assert!(
+        full_json["screenshot_width"].as_u64().is_some()
+            && full_json["screenshot_height"].as_u64().is_some(),
+        "a browser screenshot must report its saved dimensions: {}",
+        stdout(&full)
+    );
 
     // 9. A click-opened tab (`rel=noopener`, so correlation can't lean on
     //    `window.opener`) is reported as `new_tab` and the pin follows it —

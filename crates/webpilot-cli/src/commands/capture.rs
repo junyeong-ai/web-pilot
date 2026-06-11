@@ -41,6 +41,9 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
         ResponseData::Capture {
             dom,
             screenshot_path,
+            screenshot_width,
+            screenshot_height,
+            screenshot_scale,
             screenshot_error,
             pdf_path,
             pdf_b64,
@@ -82,6 +85,19 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
                 if let Some(v) = value {
                     extra.insert(key.into(), serde_json::json!(v));
                 }
+            }
+            // The saved image's dimensions — and the downscale ratio when the
+            // capture exceeded the long-edge cap — so coordinate math on the
+            // image is possible (`coord / scale` = page pixels). Withholding
+            // them made a downscaled full-page shot silently unmappable.
+            if let Some(w) = screenshot_width {
+                extra.insert("screenshot_width".into(), serde_json::json!(w));
+            }
+            if let Some(h) = screenshot_height {
+                extra.insert("screenshot_height".into(), serde_json::json!(h));
+            }
+            if let Some(s) = screenshot_scale {
+                extra.insert("screenshot_scale".into(), serde_json::json!(s));
             }
 
             if let Some(mut snapshot) = dom {

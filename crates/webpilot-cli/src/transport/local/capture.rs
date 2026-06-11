@@ -52,6 +52,9 @@ impl LocalTransport {
 
         let mut snapshot: Option<DomSnapshot> = None;
         let mut screenshot_path: Option<String> = None;
+        let mut screenshot_width: Option<u32> = None;
+        let mut screenshot_height: Option<u32> = None;
+        let mut screenshot_scale: Option<f64> = None;
         let mut screenshot_error: Option<String> = None;
         let mut text_content: Option<String> = None;
         let mut text_truncated = false;
@@ -152,7 +155,17 @@ impl LocalTransport {
             }
             match shot {
                 Ok(b64) => match save_screenshot(&b64) {
-                    Ok(p) => screenshot_path = Some(p),
+                    Ok(info) => {
+                        screenshot_path = Some(info.path.to_string_lossy().into_owned());
+                        screenshot_width = Some(info.width);
+                        screenshot_height = Some(info.height);
+                        // Surface the downscale only when one happened — pixel
+                        // coordinates on the saved image map to page pixels via
+                        // `coord / scale`, and a silent resize breaks that math.
+                        if info.scale != 1.0 {
+                            screenshot_scale = Some(info.scale);
+                        }
+                    }
                     Err(e) => screenshot_error = Some(e.to_string()),
                 },
                 Err(e) => screenshot_error = Some(e.to_string()),
@@ -270,6 +283,9 @@ impl LocalTransport {
         Ok(ResponseData::Capture {
             dom: snapshot,
             screenshot_path,
+            screenshot_width,
+            screenshot_height,
+            screenshot_scale,
             screenshot_error,
             pdf_path,
             // Headless writes files directly; the inline-bytes path is browser-only.
@@ -374,8 +390,9 @@ fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
 
 /// Resize via the same pipeline browser-mode uses (long-edge clamp at
 /// MAX_LONG_EDGE), so headless and browser screenshots are tokenwise
-/// interchangeable.
-fn save_screenshot(b64: &str) -> Result<String> {
+/// interchangeable. Returns the full result — the caller surfaces the saved
+/// dimensions (and any downscale ratio) to the agent, not just the path.
+fn save_screenshot(b64: &str) -> Result<webpilot::screenshot::ScreenshotResult> {
     let info = webpilot::screenshot::process_and_save(b64, &dirs::artifact_path("capture", "png"))
         .map_err(|e| anyhow::anyhow!("screenshot save failed: {e}"))?;
     tracing::debug!(
@@ -386,5 +403,5 @@ fn save_screenshot(b64: &str) -> Result<String> {
         tokens = info.estimated_tokens,
         "screenshot saved",
     );
-    Ok(info.path.to_string_lossy().into_owned())
+    Ok(info)
 }

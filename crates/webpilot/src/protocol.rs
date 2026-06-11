@@ -247,6 +247,17 @@ pub enum ResponseData {
         dom: Option<DomSnapshot>,
         #[serde(skip_serializing_if = "Option::is_none")]
         screenshot_path: Option<String>,
+        /// Saved image's pixel dimensions, and the downscale ratio applied
+        /// when the capture exceeded the long-edge cap (`scale` present only
+        /// then). Pixel coordinates measured on the saved image map back to
+        /// page pixels via `coord / scale` — withholding the scale would make
+        /// any coordinate math on a downscaled full-page shot silently wrong.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        screenshot_width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        screenshot_height: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        screenshot_scale: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         screenshot_error: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]

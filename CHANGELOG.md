@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.206] - 2026-06-11
+
+### Fixed
+
+- **Screenshot output reports the saved dimensions — and the downscale ratio
+  when one was applied.** A capture whose long edge exceeds the cap (default
+  1568px; any full-page shot of a tall page) was silently downscaled: the
+  dimensions died in a debug log and only the path reached the agent, so any
+  pixel-coordinate math on the image (a vision model picking a click target,
+  an `eval` click by coordinates) was wrong by an unknowable factor. Both
+  modes now return `screenshot_width`/`screenshot_height` (always) and
+  `screenshot_scale` (only when downscaled; page px = image px ÷ scale), in
+  the JSON, the human render, and the MCP text block.
+
 ## [0.4.205] - 2026-06-11
 
 ### Fixed

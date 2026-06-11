@@ -222,6 +222,15 @@ fn process_nm_message(
                         "screenshot_path".into(),
                         serde_json::json!(info.path.to_string_lossy()),
                     );
+                    // The saved dimensions — and the downscale ratio when one
+                    // was applied — ride along (headless parity): pixel
+                    // coordinates on the saved image map to page pixels via
+                    // `coord / scale`, and a silent resize breaks that math.
+                    obj.insert("screenshot_width".into(), serde_json::json!(info.width));
+                    obj.insert("screenshot_height".into(), serde_json::json!(info.height));
+                    if info.scale != 1.0 {
+                        obj.insert("screenshot_scale".into(), serde_json::json!(info.scale));
+                    }
                     obj.remove("screenshot_b64");
                 }
             }
