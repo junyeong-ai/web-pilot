@@ -24,7 +24,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <div id="cardwrap" style="cursor:pointer">clickable card<input id="hiddenchild" style="display:none"></div>
 <div id="presdiv" role="presentation" onclick="document.title='pres-clicked'">presentation click target</div>
 <p id="wsp">whitespace<br>collapse<br>marker</p>
-<nav><div id="shadowhost"></div></nav>
+<nav><div id="shadowhost"><span slot="s">SL</span></div></nav>
 <iframe src="/frame" name="innerfr"></iframe>
 <div style="height:3000px"></div>
 <button id="deepbtn" onclick="document.title='deep-clicked'">deep button</button>
@@ -40,7 +40,11 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
     }
   });
   const sr = document.getElementById('shadowhost').attachShadow({ mode: 'open' });
-  sr.innerHTML = '<input id="shadowfile" type="file"><button id="shadowbtn">shadow</button><p>shadowonlyprose</p>';
+  // `slotbtn` paints its visible content through a slotted LIGHT span — the
+  // occlusion hit-test over its label lands on light DOM, which the composed
+  // walk must relate back through the slot assignment, or the shadow button
+  // would read occluded by its own label.
+  sr.innerHTML = '<input id="shadowfile" type="file"><button id="shadowbtn">shadow</button><p>shadowonlyprose</p><button id="slotbtn"><slot name="s"></slot></button>';
 </script>
 <div id="ce" contenteditable>hello</div>
 <input id="num" type="number">

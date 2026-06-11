@@ -526,6 +526,22 @@ fn headless_behavioral_flow() {
         "an uncovered shadow-root control must not be falsely occluded by its own host: {}",
         sb
     );
+    // A shadow button whose visible content is a SLOTTED light span: the hit
+    // over its label lands on light DOM, which the composed walk relates back
+    // through the slot assignment — never "occluded by its own label".
+    let slb = occ_json["elements"]
+        .as_array()
+        .expect("occ elements")
+        .iter()
+        .find(|e| e["id"] == "slotbtn")
+        .expect("slotbtn indexed in occlusion capture")
+        .clone();
+    assert_ne!(
+        slb["occluded"],
+        serde_json::Value::Bool(true),
+        "a shadow control with slotted light content must not be occluded by its own slotted label: {}",
+        slb
+    );
 
     // 2a-ce. `type` into a contenteditable APPENDS at the end, like an <input>:
     //     after a programmatic focus the caret sits at a stale/start position,

@@ -478,15 +478,29 @@
     return el;
   }
 
+  // The next composed-tree boundary above `n`: a slotted ancestor continues at
+  // its assigned <slot> (inside the shadow tree that RENDERS it — slotted
+  // content paints there, so the hit-test relation must follow it), otherwise
+  // the tree's host. Slot forwarding and nested hosts terminate: each hop
+  // either follows the finite slot-assignment chain or exits one shadow level.
+  function flatTreeHop(n) {
+    for (let p = n; p; p = p.parentElement) {
+      if (p.assignedSlot) return p.assignedSlot;
+    }
+    return n.getRootNode().host || null;
+  }
+
   // Composed-tree relatedness: one of the two contains the other once shadow
-  // boundaries are hopped host-by-host (a button's icon, a hit retargeted to
-  // a closed shadow's host). `contains` alone is tree-scoped and would call
-  // every cross-boundary pair "unrelated".
+  // boundaries are hopped — host-by-host, and through slot assignment (a
+  // shadow button whose visible content is a slotted light <span> must relate
+  // to that span, or every sampled hit on its own label would read as a
+  // blocker). `contains` alone is tree-scoped and would call every
+  // cross-boundary pair "unrelated".
   function composedRelated(a, b) {
-    for (let n = b; n; n = n.getRootNode().host || null) {
+    for (let n = b; n; n = flatTreeHop(n)) {
       if (a.contains(n)) return true;
     }
-    for (let n = a; n; n = n.getRootNode().host || null) {
+    for (let n = a; n; n = flatTreeHop(n)) {
       if (b.contains(n)) return true;
     }
     return false;

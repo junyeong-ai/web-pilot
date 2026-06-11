@@ -56,7 +56,14 @@ pub async fn run<T: Transport>(transport: &mut T, args: FetchArgs) -> Result<Com
             let stdout = body.clone().unwrap_or_default();
             Ok(CommandOutput::Content {
                 stdout: if stdout.is_empty() {
-                    format!("HTTP {}", status.unwrap_or(0))
+                    // An absent status renders as unknown, never fabricated as
+                    // 0 — "HTTP 0" is the XHR network-error convention, so
+                    // inventing it would actively mislead. The JSON channel
+                    // carries the honest `status: null` either way.
+                    match status {
+                        Some(s) => format!("HTTP {s}"),
+                        None => "HTTP status unknown".into(),
+                    }
                 } else {
                     stdout
                 },

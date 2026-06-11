@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.182] - 2026-06-11
+
+### Fixed
+
+- **The occlusion composed-walk follows slot assignment, so a shadow control
+  is never "occluded by its own slotted label".** A shadow button whose
+  visible content is a slotted light element (`<my-button><span>Go</span>
+  </my-button>` — the standard design-system pattern) had its sampled hits
+  land on the light span, which the host-hopping walk alone could not relate
+  back to the shadow button: the control read `occluded:true` under
+  `--occlusion`. The composed walk now hops through `assignedSlot` (a slotted
+  ancestor continues at the slot that renders it) as well as hosts. Shared
+  bridge, both modes; the fixture pins a slot-labelled shadow button reading
+  not-occluded.
+
+- **`fetch`'s human output no longer fabricates `HTTP 0` when the status is
+  absent.** `status.unwrap_or(0)` invented a value that reads as the XHR
+  network-error convention; an absent status now renders "HTTP status
+  unknown" (the JSON channel already carried the honest `status: null`).
+
 ## [0.4.181] - 2026-06-11
 
 ### Fixed
