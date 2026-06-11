@@ -504,6 +504,35 @@ fn browser_behavioral_flow() {
         "confirm must answer true and prompt must return its default (headless parity)"
     );
 
+    // 2e-mkif. A dialog from a frame the click handler CREATED must be
+    //     intercepted too: the per-action override covers only frames that
+    //     existed when the action started, so the pinned tab's onCommitted
+    //     hook injects the override into each newly committed document.
+    //     `#mkif` spawns an iframe whose script alerts at +400ms — without
+    //     the hook the native modal wedges the tab and the capture below
+    //     times out instead of succeeding.
+    let cap_mkif = fx.run(&["capture", "--include", "dom"]);
+    let mkif_index = serde_json::from_str::<serde_json::Value>(&stdout(&cap_mkif))
+        .expect("capture json")["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "mkif")
+        .and_then(|e| e["index"].as_u64())
+        .expect("mkif indexed")
+        .to_string();
+    assert_eq!(
+        code(&fx.run(&["action", "click", &mkif_index])),
+        0,
+        "clicking the iframe-spawning button failed"
+    );
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        code(&fx.run(&["capture", "--include", "dom"])),
+        0,
+        "a late alert from a handler-created iframe must be intercepted, never wedge the tab"
+    );
+
     // 2f. A click that triggers a SAME-TAB navigation (here `location.href` to a
     //     deliberately-slow `/slow`) must be detected and waited out: the action
     //     registers a commit watch before dispatching, settles on the new

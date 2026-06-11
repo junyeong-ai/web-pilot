@@ -6,6 +6,34 @@
 import { sleep } from "./session.js";
 import { err } from "./errors.js";
 
+// The MAIN-world dialog override: a native alert/confirm/prompt modal blocks
+// the page thread until a human clicks — under automation that wedges every
+// later command on the tab. Accept-with-default semantics mirror the headless
+// dialog responder (Page.handleJavaScriptDialog accept:true), so a page
+// branching on a dialog behaves identically in both modes. Idempotent
+// (sentinel-guarded), so re-installing is a no-op. Scoped to the agent's
+// pinned tab only — the user's other tabs keep their native dialogs.
+async function installDialogOverride(tabId, target) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, ...target },
+      world: "MAIN",
+      func: () => {
+        if (!window.__webpilot_dialogs) {
+          window.__webpilot_dialogs = [];
+          window.alert = (msg) => { window.__webpilot_dialogs.push({ type: "alert", message: String(msg) }); };
+          window.confirm = (msg) => { window.__webpilot_dialogs.push({ type: "confirm", message: String(msg) }); return true; };
+          // A real `prompt` returns the DEFAULT stringified when accepted —
+          // `prompt(msg, 0)` yields "0" and `prompt(msg, null)` yields
+          // "null" (WebIDL DOMString coercion, like alert(null)); only a
+          // MISSING argument (undefined) takes the parameter default "".
+          window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return def === undefined ? "" : String(def); };
+        }
+      },
+    });
+  } catch {}
+}
+
 // A bridge call (capture, wait, dom get/set) routed to a since-vanished iframe
 // must read as FrameNotFound (exit 4 → recapture), not the BridgeUnavailable
 // (exit 3 → infra) a failed injection into a missing frame would otherwise
@@ -111,4 +139,4 @@ async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
   }
 }
 
-export { ensureBridge, frameVanishedError, injectBridgeOnly, sendToContent };
+export { ensureBridge, frameVanishedError, injectBridgeOnly, installDialogOverride, sendToContent };

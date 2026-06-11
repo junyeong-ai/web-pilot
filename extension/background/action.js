@@ -4,7 +4,7 @@
 import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
-import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
+import { ensureBridge, frameVanishedError, installDialogOverride, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
 import { countHttpSubframes } from "./capture.js";
@@ -41,24 +41,7 @@ async function handleAction(command) {
     return { type: "Action", success: false, error: noPageErr() };
   }
   if (tab) {
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        world: "MAIN",
-        func: () => {
-          if (!window.__webpilot_dialogs) {
-            window.__webpilot_dialogs = [];
-            window.alert = (msg) => { window.__webpilot_dialogs.push({ type: "alert", message: String(msg) }); };
-            window.confirm = (msg) => { window.__webpilot_dialogs.push({ type: "confirm", message: String(msg) }); return true; };
-            // A real `prompt` returns the DEFAULT stringified when accepted —
-            // `prompt(msg, 0)` yields "0" and `prompt(msg, null)` yields
-            // "null" (WebIDL DOMString coercion, like alert(null)); only a
-            // MISSING argument (undefined) takes the parameter default "".
-            window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return def === undefined ? "" : String(def); };
-          }
-        },
-      });
-    } catch {}
+    await installDialogOverride(tab.id, { allFrames: true });
   }
 
   // Viewport-coordinate / main-document actions cannot target an iframe: their

@@ -8,7 +8,7 @@
 console.log("[WebPilot] Service Worker loaded");
 
 import { pruneCdpLock } from "./cdp.js";
-import { injectBridgeOnly } from "./content.js";
+import { injectBridgeOnly, installDialogOverride } from "./content.js";
 import { connectToHost, isHostConnected } from "./host.js";
 import { activeTabId, ensureRestored } from "./session.js";
 import { rearmMonitors } from "./state.js";
@@ -20,6 +20,25 @@ import { rearmMonitors } from "./state.js";
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   pruneCdpLock(tabId);
+});
+
+// Every document COMMITTED in the pinned tab gets the dialog override at the
+// earliest moment the extension can reach it — the per-action injection covers
+// only the frames that exist when the action starts, so an iframe a click
+// handler CREATES (whose script then calls alert) would otherwise raise a
+// native modal and wedge the tab. Scoped to the pinned tab: the user's other
+// tabs keep their native dialogs. Includes non-http child documents
+// (about:srcdoc, about:blank) — those are exactly where handler-spawned
+// dialogs live; the pin itself is always http, which resolveActiveTab
+// guarantees.
+chrome.webNavigation.onCommitted.addListener(async (details) => {
+  try {
+    await ensureRestored();
+  } catch {
+    return;
+  }
+  if (details.tabId !== activeTabId) return;
+  await installDialogOverride(details.tabId, { frameIds: [details.frameId] });
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

@@ -27,6 +27,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <nav><div id="shadowhost"><span slot="s">SL</span></div></nav>
 <iframe src="/frame" name="innerfr"></iframe>
 <button id="dlg" onclick="window.__dlg=[confirm('c?'), prompt('p?', 'dv')]; document.title='dlg-done'">dialogs</button>
+<button id="mkif" onclick="const f=document.createElement('iframe'); f.src='/latealert'; document.body.appendChild(f)">mk iframe</button>
 <div style="height:3000px"></div>
 <button id="deepbtn" onclick="document.title='deep-clicked'">deep button</button>
 <script>
@@ -100,6 +101,14 @@ pub const SLOW: &str = r#"<!doctype html><html><head><title>slow-final</title></
 pub const LOG: &str = r#"<!doctype html><html><head><title>log-page</title></head>
 <body><script>setTimeout(function(){console.log('postnav-monitor-marker')},200)</script></body></html>"#;
 
+/// Fires an `alert` a beat after loading — the destination of the iframe a
+/// click handler CREATES (`#mkif`). A dialog from a frame that did not exist
+/// when the action started must still be intercepted (browser mode injects the
+/// override per committed document; headless answers via the CDP responder),
+/// or the native modal wedges every later command on the tab.
+pub const LATE_ALERT: &str = r#"<!doctype html><html><head><title>late-alert</title></head>
+<body><script>setTimeout(function(){alert('late')},400)</script></body></html>"#;
+
 const CSP_HEADER: &str = "Content-Security-Policy: script-src 'self'\r\n";
 
 /// Minimal HTTP server: serves the fixture page for `/`, the inner document for
@@ -146,6 +155,8 @@ pub fn spawn_server() -> String {
                     (SLOW, "")
                 } else if req.starts_with("GET /log") {
                     (LOG, "")
+                } else if req.starts_with("GET /latealert") {
+                    (LATE_ALERT, "")
                 } else {
                     (PAGE, "")
                 };
