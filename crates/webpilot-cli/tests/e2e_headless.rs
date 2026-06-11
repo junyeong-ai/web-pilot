@@ -191,6 +191,20 @@ fn headless_behavioral_flow() {
         "capture --include text must include open-shadow-root text, not just light innerText: {}",
         stdout(&text_cap)
     );
+    // An UNASSIGNED slot renders its FALLBACK children from the shadow side —
+    // text the base innerText never sees and an assigned-slot skip must not
+    // drop. The assigned slot's light content ("SL") must still appear exactly
+    // once (no double-count).
+    let tx = text_json["text_content"].as_str().unwrap_or("");
+    assert!(
+        tx.contains("slotfallbackprose"),
+        "slot FALLBACK text must reach the text capture: {tx}"
+    );
+    assert_eq!(
+        tx.matches("SL").count(),
+        1,
+        "assigned slotted content must appear exactly once (no double-count): {tx}"
+    );
 
     // 1c. `wait --until text` matches like `find --text` / the text capture:
     //     case-insensitive and shadow-piercing. "go" must match the "Go" button
@@ -2502,16 +2516,6 @@ fn headless_behavioral_flow() {
         "a read keeps serving its deterministic first match under truncation"
     );
 
-    // 9. Closing the ACTIVE tab leaves a dead pin. A pin-INDEPENDENT command
-    //    (`tab` list) must still work so the agent can find a survivor and
-    //    recover — not fail with a spurious TabNotFound. A page ACTION, by
-    //    contrast, must fail loud rather than silently retarget onto a fallback
-    //    survivor (the never-silent-retarget contract). The persisted pin is
-    //    dropped after one resolve, so each case sets up its own dead pin. The
-    //    new tab's id isn't in `tab new`'s output, so read it from the `active`
-    //    flag in the list (`tab new` pins the tab it created). Runs LAST: it
-    //    churns the active-tab pin, which would disturb earlier tab-bound steps.
-    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
     let active_id = |list: &Output| -> String {
         serde_json::from_str::<serde_json::Value>(&stdout(list))
             .expect("tab list json")
@@ -2523,6 +2527,55 @@ fn headless_behavioral_flow() {
             .expect("an active tab")
             .to_string()
     };
+
+    // 8f. Headless `wait navigation` classifies a tab that CLOSES mid-wait as
+    //     TabNotFound (exit 4), like browser mode's tabs.onRemoved arm — the
+    //     page socket died but Chrome is fine, so neither an infra
+    //     ConnectionLost nor a sat-out Timeout is the truth. The close runs
+    //     from a second process while the wait is in flight.
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "tab new (wait-vanish setup) failed"
+    );
+    let wt_id = active_id(&fx.run(&["tab"]));
+    let wait_out = std::thread::scope(|s| {
+        let waiter = s.spawn(|| fx.run(&["wait", "--timeout", "15", "navigation"]));
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert_eq!(
+            code(&fx.run(&["tab", "close", &wt_id])),
+            0,
+            "closing the awaited tab failed"
+        );
+        waiter.join().expect("wait thread")
+    });
+    assert_eq!(
+        code(&wait_out),
+        4,
+        "a tab closing mid-wait must be TabNotFound (4), not ConnectionLost/Timeout: {}",
+        stdout(&wait_out)
+    );
+    assert!(
+        stdout(&wait_out).contains("Tab not found"),
+        "the wait error must name the gone tab: {}",
+        stdout(&wait_out)
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "re-pin after the wait-vanish test failed"
+    );
+
+    // 9. Closing the ACTIVE tab leaves a dead pin. A pin-INDEPENDENT command
+    //    (`tab` list) must still work so the agent can find a survivor and
+    //    recover — not fail with a spurious TabNotFound. A page ACTION, by
+    //    contrast, must fail loud rather than silently retarget onto a fallback
+    //    survivor (the never-silent-retarget contract). The persisted pin is
+    //    dropped after one resolve, so each case sets up its own dead pin. The
+    //    new tab's id isn't in `tab new`'s output, so read it from the `active`
+    //    flag in the list (`tab new` pins the tab it created). Runs LAST: it
+    //    churns the active-tab pin, which would disturb earlier tab-bound steps.
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
     assert_eq!(
         code(&fx.run(&["tab", "new", &base])),
         0,

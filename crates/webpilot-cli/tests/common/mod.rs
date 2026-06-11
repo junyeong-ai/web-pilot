@@ -54,7 +54,11 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
   // while its light ancestors carry no landmark at all — the landmark walk
   // must follow the slot assignment, not the light parent chain.
   const sr2 = document.getElementById('slothost2').attachShadow({ mode: 'open' });
-  sr2.innerHTML = '<aside><slot name="t"></slot></aside>';
+  // The named slot carries an ASSIGNED light node; the second slot is
+  // UNASSIGNED, so its FALLBACK text renders from the shadow side — the text
+  // capture must include it (the base innerText never sees it) without
+  // double-counting the assigned slot's light content.
+  sr2.innerHTML = '<aside><slot name="t"></slot><slot name="empty">slotfallbackprose</slot></aside>';
 </script>
 <div id="ce" contenteditable>hello</div>
 <input id="num" type="number">

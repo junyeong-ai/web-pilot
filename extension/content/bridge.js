@@ -283,17 +283,20 @@
   }
 
   // Visible text owned by a shadow root: its own nodes' text, descending nested
-  // open shadow roots, but SKIPPING `<slot>` — a slot renders light-tree content
-  // that the base `innerText` already carries. A shadow host's own light
-  // children are unrendered unless slotted (and slotted ones surface via the
-  // base), so a host is descended through its shadow root, never its light kids.
+  // open shadow roots, but SKIPPING an ASSIGNED `<slot>` — it renders
+  // light-tree content the base `innerText` already carries. An UNASSIGNED
+  // slot renders its own FALLBACK children (shadow-side text the base never
+  // sees), so those are descended like any shadow node. A shadow host's own
+  // light children are unrendered unless slotted (and slotted ones surface via
+  // the base), so a host is descended through its shadow root, never its light
+  // kids.
   function shadowOwnText(root) {
     let out = "";
     for (const child of root.childNodes) {
       if (child.nodeType === Node.TEXT_NODE) {
         out += `${child.textContent} `;
       } else if (child.nodeType === Node.ELEMENT_NODE) {
-        if (child.localName === "slot") continue;
+        if (child.localName === "slot" && child.assignedNodes().length > 0) continue;
         if (child.checkVisibility && !child.checkVisibility()) continue;
         out +=
           child.shadowRoot?.mode === "open"

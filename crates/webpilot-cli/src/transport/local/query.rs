@@ -98,8 +98,7 @@ impl LocalTransport {
                     success: true,
                     error: None,
                 }),
-                Err(e) => Ok(ResponseData::Wait {
-                    success: false,
+                Err(e) => {
                     // A typed error from the wait — a dropped CDP socket
                     // (ConnectionLost) or an inconclusive event-buffer overflow
                     // (a Timeout carrying the loss) — is preserved as itself.
@@ -107,13 +106,34 @@ impl LocalTransport {
                     // navigation Timeout; mapping every error there would have
                     // told the agent navigation merely didn't finish when in
                     // fact the connection had died.
-                    error: Some(e.downcast::<WebPilotError>().unwrap_or_else(|_| {
-                        WebPilotError::Timeout {
-                            kind: "navigation".into(),
-                            elapsed_ms: timeout_ms,
-                        }
-                    })),
-                }),
+                    let mut err =
+                        e.downcast::<WebPilotError>()
+                            .unwrap_or_else(|_| WebPilotError::Timeout {
+                                kind: "navigation".into(),
+                                elapsed_ms: timeout_ms,
+                            });
+                    // A page socket that died because the TAB closed is
+                    // tab-gone truth, not infra: the browser client outlives
+                    // the page and can say whether the target still exists —
+                    // classify like browser mode's tabs.onRemoved arm (exit 4
+                    // → recover via `tab`), keeping ConnectionLost for a
+                    // genuinely dead Chrome.
+                    if matches!(err, WebPilotError::ConnectionLost { .. })
+                        && let Ok(targets) = self.browser.get_targets().await
+                        && !targets.iter().any(|t| {
+                            t.get("targetId").and_then(|v| v.as_str())
+                                == Some(self.target_id.as_str())
+                        })
+                    {
+                        err = WebPilotError::TabNotFound {
+                            tab_id: self.target_id.clone(),
+                        };
+                    }
+                    Ok(ResponseData::Wait {
+                        success: false,
+                        error: Some(err),
+                    })
+                }
             };
         }
 

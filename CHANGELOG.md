@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.197] - 2026-06-11
+
+### Fixed
+
+- **Headless `wait navigation` classifies a tab that closes mid-wait as
+  `TabNotFound`, matching browser mode.** The page socket dying took the
+  `ConnectionLost` path (exit 3, "infra — retry") even though Chrome itself
+  was fine and the truth was tab-gone (exit 4 — recover via `tab`). On a
+  `ConnectionLost` inside the navigation wait, the still-alive browser client
+  now checks whether the pinned target exists; absent → the typed
+  `TabNotFound` browser mode's `tabs.onRemoved` arm reports, while a genuinely
+  dead Chrome keeps `ConnectionLost`. Pinned by a concurrent e2e: a second
+  process closes the awaited tab mid-wait and the wait must exit 4 naming the
+  gone tab.
+
+- **Slot fallback text reaches the text capture and `wait text`.** The
+  shadow-text walk skipped every `<slot>` to avoid double-counting assigned
+  light content — but an UNASSIGNED slot renders its own fallback children,
+  shadow-side text the base `innerText` never sees, so visible fallback prose
+  (a "Loading…" placeholder) was invisible to `capture --include text` and
+  `wait text` timed out on text that was on screen. Only an assigned slot is
+  skipped now; an unassigned one is descended like any shadow node. Pinned by
+  e2e: fallback prose must appear, and assigned slotted content still appears
+  exactly once.
+
 ## [0.4.196] - 2026-06-11
 
 ### Fixed
