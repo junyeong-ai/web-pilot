@@ -505,6 +505,50 @@ fn headless_behavioral_flow() {
         "a selector matching a light element AND a shadow twin must be ambiguous: {}",
         stdout(&fx.run(&["dom", "set-text", "p", "x"]))
     );
+
+    // 2a-dlg. Javascript dialogs never wedge the page, and both modes share
+    //     accept-with-default semantics: with a CDP client holding Page
+    //     enabled, Chrome STOPS its headless auto-dismiss and waits for
+    //     Page.handleJavaScriptDialog — without the dialog responder a bare
+    //     alert() would block the renderer until every command times out.
+    //     confirm() answers true and prompt() returns its default, the same
+    //     contract the browser-mode override implements.
+    let alerted = fx.run(&["eval", "alert('hi'); 'ok'"]);
+    assert_eq!(
+        code(&alerted),
+        0,
+        "an alert must be auto-answered, never wedge the renderer: {}",
+        stdout(&alerted)
+    );
+    assert!(
+        stdout(&alerted).contains("ok"),
+        "eval must complete past the alert: {}",
+        stdout(&alerted)
+    );
+    let cap_dlg = fx.run(&["capture", "--include", "dom"]);
+    let dlg_index = index_of(&cap_dlg, "dlg");
+    assert_eq!(
+        code(&fx.run(&["action", "click", &dlg_index])),
+        0,
+        "clicking the dialog button failed"
+    );
+    assert!(
+        stdout(&fx.run(&[
+            "eval",
+            "window.__dlg && window.__dlg[0] === true && window.__dlg[1] === 'dv' ? 'parity' : JSON.stringify(window.__dlg)",
+        ]))
+        .contains("parity"),
+        "confirm must answer true and prompt must return its default (accept-with-default)"
+    );
+    // The click scrolled #dlg into view; restore the top so later sections'
+    // captures keep the full element set (the cursor:pointer pass is
+    // deliberately viewport-bounded — an off-screen pointer-only target like
+    // #cardwrap reappears only once scrolled back).
+    assert_eq!(
+        code(&fx.run(&["eval", "scrollTo(0,0); 'reset'"])),
+        0,
+        "scroll reset failed"
+    );
     // `--occlusion` must not mislabel a shadow-root control:
     // document.elementFromPoint retargets a shadow-interior hit to its HOST,
     // which tree-scoped contains() would call a blocker — the deep hit-test

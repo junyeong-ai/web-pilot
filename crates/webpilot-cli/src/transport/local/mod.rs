@@ -1302,6 +1302,11 @@ pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<Cdp
     let page_ws_url = format!("{authority}/devtools/page/{target_id}");
     let cdp = CdpClient::connect(&page_ws_url).await?;
     cdp.send("Page.enable", None).await?;
+    // With Page enabled, Chrome stops auto-dismissing javascript dialogs and
+    // waits for an answer — an unanswered alert() would wedge the renderer.
+    // Accept-with-default mirrors the browser-mode dialog override, so a page
+    // branching on confirm()/prompt() behaves identically in both modes.
+    cdp.spawn_dialog_responder();
     cdp.send("Runtime.enable", None).await?;
     Ok(cdp)
 }

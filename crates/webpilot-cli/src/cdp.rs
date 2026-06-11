@@ -352,6 +352,65 @@ impl CdpClient {
         self.events.subscribe()
     }
 
+    /// Auto-answer page javascript dialogs (alert/confirm/prompt/beforeunload).
+    ///
+    /// With a CDP client holding `Page` enabled, Chrome STOPS its headless
+    /// auto-dismiss and waits for `Page.handleJavaScriptDialog` — an unanswered
+    /// `alert()` would wedge the renderer, timing out every later command on
+    /// the page. Accept with the prompt's default, matching the browser-mode
+    /// dialog override (confirm → true, prompt → its default stringified), so
+    /// page flows branching on a dialog proceed identically in both modes.
+    ///
+    /// The answer is written fire-and-forget (no pending entry): the reader
+    /// drops a response whose id has no waiter, and a failed write means the
+    /// connection is dead anyway. The task ends with the event channel.
+    pub fn spawn_dialog_responder(&self) {
+        let mut events = self.events.subscribe();
+        let writer = self.writer.clone();
+        let next_id = self.next_id.clone();
+        let alive = self.alive.clone();
+        tokio::spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(ev) => {
+                        if ev.get("method").and_then(Value::as_str)
+                            != Some("Page.javascriptDialogOpening")
+                        {
+                            continue;
+                        }
+                        if !alive.load(Ordering::Acquire) {
+                            break;
+                        }
+                        let prompt_text = ev
+                            .pointer("/params/defaultPrompt")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        let id = next_id.fetch_add(1, Ordering::Relaxed);
+                        let msg = serde_json::json!({
+                            "id": id,
+                            "method": "Page.handleJavaScriptDialog",
+                            "params": { "accept": true, "promptText": prompt_text },
+                        });
+                        let Ok(payload) = serde_json::to_string(&msg) else {
+                            continue;
+                        };
+                        if writer
+                            .lock()
+                            .await
+                            .send(Message::Text(payload.into()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
     pub async fn evaluate(&self, expression: &str) -> Result<Value> {
         let result = self
             .send(

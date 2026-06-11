@@ -21,13 +21,14 @@ async function handleAction(command) {
   // a socket writer and is deliberately NOT a gate; writing the socket
   // directly would bypass it, which is why the host re-validates.)
 
-  // Inject the dialog override before any action runs in the page. Cover the
-  // MAIN frame AND the active frame: an action runs in `activeFrameId`, so a
-  // click/keypress that triggers `alert`/`confirm`/`prompt` fires in THAT frame's
-  // window — and a native modal there blocks the page thread until the action's
-  // content call times out, with no recovery (headless mode needs no override:
-  // headless Chrome auto-dismisses dialogs in every frame). The override is
-  // idempotent, so re-installing into the main frame each time is a no-op.
+  // Inject the dialog override before any action runs in the page — into
+  // EVERY frame: a click's handler can call `alert`/`confirm`/`prompt` from
+  // any frame (a third-party iframe included), and a native modal in any of
+  // them blocks the page thread until the action's content call times out,
+  // with no recovery. Accept-with-default semantics mirror the headless
+  // dialog responder (Page.handleJavaScriptDialog accept:true), so a page
+  // branching on a dialog behaves identically in both modes. The override is
+  // idempotent, so re-installing on each action is a no-op.
   // `navigate` resolves its own target (the bound tab whatever its scheme, or a
   // fresh one) via `navigateBoundTab` below — it is how an agent REACHES an http
   // page, so it must NOT require one to start from. Every OTHER action needs an
@@ -42,10 +43,7 @@ async function handleAction(command) {
   if (tab) {
     try {
       await chrome.scripting.executeScript({
-        target: {
-          tabId: tab.id,
-          frameIds: activeFrameId === 0 ? [0] : [0, activeFrameId],
-        },
+        target: { tabId: tab.id, allFrames: true },
         world: "MAIN",
         func: () => {
           if (!window.__webpilot_dialogs) {
@@ -53,9 +51,10 @@ async function handleAction(command) {
             window.alert = (msg) => { window.__webpilot_dialogs.push({ type: "alert", message: String(msg) }); };
             window.confirm = (msg) => { window.__webpilot_dialogs.push({ type: "confirm", message: String(msg) }); return true; };
             // A real `prompt` returns the DEFAULT stringified when accepted —
-            // `prompt(msg, 0)` yields "0", not "" (`||` would coerce every
-            // falsy default away and page logic branching on it would misfire).
-            window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return def == null ? "" : String(def); };
+            // `prompt(msg, 0)` yields "0" and `prompt(msg, null)` yields
+            // "null" (WebIDL DOMString coercion, like alert(null)); only a
+            // MISSING argument (undefined) takes the parameter default "".
+            window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return def === undefined ? "" : String(def); };
           }
         },
       });

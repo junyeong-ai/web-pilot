@@ -476,6 +476,34 @@ fn browser_behavioral_flow() {
         stdout(&bin)
     );
 
+    // 2e-dlg. A click whose handler fires confirm()/prompt() must not raise a
+    //     native modal on the tab (the override covers EVERY frame), and the
+    //     accept-with-default semantics match headless: confirm answers true,
+    //     prompt returns its default stringified.
+    let cap_dlg = fx.run(&["capture", "--include", "dom"]);
+    let dlg_index = serde_json::from_str::<serde_json::Value>(&stdout(&cap_dlg))
+        .expect("capture json")["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "dlg")
+        .and_then(|e| e["index"].as_u64())
+        .expect("dlg indexed")
+        .to_string();
+    assert_eq!(
+        code(&fx.run(&["action", "click", &dlg_index])),
+        0,
+        "clicking the dialog button failed"
+    );
+    assert!(
+        stdout(&fx.run(&[
+            "eval",
+            "window.__dlg && window.__dlg[0] === true && window.__dlg[1] === 'dv' ? 'parity' : JSON.stringify(window.__dlg)",
+        ]))
+        .contains("parity"),
+        "confirm must answer true and prompt must return its default (headless parity)"
+    );
+
     // 2f. A click that triggers a SAME-TAB navigation (here `location.href` to a
     //     deliberately-slow `/slow`) must be detected and waited out: the action
     //     registers a commit watch before dispatching, settles on the new

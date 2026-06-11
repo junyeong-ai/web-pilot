@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.187] - 2026-06-11
+
+### Fixed
+
+- **A page javascript dialog can no longer wedge a headless session, and both
+  modes share accept-with-default dialog semantics.** With a CDP client
+  holding `Page` enabled, Chrome stops its headless auto-dismiss and *waits*
+  for `Page.handleJavaScriptDialog` — WebPilot never answered, so a bare
+  `alert()` blocked the renderer and every later command timed out; and where
+  auto-dismiss did apply it *cancels*, so `if (confirm(...))` took the
+  opposite branch headless vs browser. Every page connection now spawns a
+  dialog responder answering accept-with-default (confirm → true, prompt →
+  its default), the exact contract the browser-mode override implements —
+  page flows branching on a dialog behave identically in both modes, pinned
+  by parity e2e in both suites.
+
+- **The browser-mode dialog override covers every frame.** It injected only
+  into the main and active frames, so a dialog fired from a third frame (a
+  third-party iframe's handler) still raised a native modal that wedged the
+  user's tab. The override now injects `allFrames`.
+
+- **`prompt(msg, null)` returns `"null"`, matching WebIDL.** A `DOMString`
+  parameter stringifies an explicit `null` (like `alert(null)`); only a
+  missing argument takes the parameter default `""`.
+
 ## [0.4.186] - 2026-06-11
 
 ### Fixed
