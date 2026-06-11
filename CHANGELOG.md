@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.204] - 2026-06-11
+
+### Fixed
+
+- **Partitioned (CHIPS) cookies round-trip through session export/import.**
+  The partition key is part of a cookie's identity: dropping it re-imported an
+  unpartitioned twin — one the partitioned (embedded) context never sends —
+  under a clean success, silently losing partitioned auth state. Browser mode
+  was worse: a bare `chrome.cookies.getAll({})` never even saw partitioned
+  cookies, so they vanished from the export entirely. `CookieInfo` now carries
+  `partition_key` (`top_level_site` + `has_cross_site_ancestor`, the shape CDP
+  and `chrome.cookies` share), populated by both readers, forwarded by both
+  setters, and exported via `getAll({partitionKey: {}})`; a malformed
+  `partition_key` row counts as malformed in both modes — it never imports the
+  cookie unpartitioned. Older session files (no field) import unchanged.
+- **A tab closing mid-wait while a frame is switched is `TabNotFound`, not
+  `FrameNotFound`.** Both modes' frame probes collapsed "the tab can't be
+  probed at all" into a frame answer, sending the agent recapturing frames on
+  a tab that no longer exists. `frameVanishedError` (browser) now probes the
+  tab first — the same tab-first split `ensureBridge` already makes — and
+  headless `do_wait` reclassifies a ConnectionLost/FrameNotFound poll failure
+  against the browser client's live target list, the same check its
+  `wait navigation` arm already ran.
+
 ## [0.4.203] - 2026-06-11
 
 ### Fixed

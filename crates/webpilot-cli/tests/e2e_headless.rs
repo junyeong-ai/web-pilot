@@ -2255,6 +2255,41 @@ fn headless_behavioral_flow() {
         "an opaque export origin must be refused, not string-matched: {}",
         stdout(&oq)
     );
+
+    // CHIPS: a PARTITIONED cookie round-trips with its partition key — the key
+    // is part of the cookie's IDENTITY, so an export that dropped it would
+    // re-import an unpartitioned twin under a clean success (silently absent
+    // from the embedded context that set it). 127.0.0.1 is a trustworthy
+    // origin, so Secure+Partitioned is settable over plain http.
+    let _ = fx.run(&[
+        "eval",
+        "document.cookie = 'wp_part=pv; Secure; Path=/; Partitioned'; 'set'",
+    ]);
+    let part_session = home.join("partitioned-session.json");
+    let pexp = fx.run(&[
+        "session",
+        "export",
+        "--output",
+        part_session.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code(&pexp),
+        0,
+        "session export (partitioned) failed: {}",
+        stdout(&pexp)
+    );
+    let pfile = std::fs::read_to_string(&part_session).expect("read exported session");
+    assert!(
+        pfile.contains("wp_part") && pfile.contains("partition_key"),
+        "the export must carry the partitioned cookie WITH its partition_key: {pfile}"
+    );
+    let pim = fx.run(&["session", "import", part_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&pim),
+        0,
+        "re-importing a partitioned cookie must restore it into its partition, not refuse: {}",
+        stdout(&pim)
+    );
     assert!(
         stdout(&oq).contains("opaque origin"),
         "the opaque-origin error must name the cause: {}",
@@ -2668,6 +2703,52 @@ fn headless_behavioral_flow() {
         0,
         "re-home after the wait-survival test failed"
     );
+
+    // 8h. The same mid-wait close while switched INTO AN IFRAME must also be
+    //     the root-cause TabNotFound — not the FrameNotFound the dead re-arm's
+    //     frame probe would otherwise collapse into (sending the agent
+    //     recapturing frames on a tab that no longer exists), and not
+    //     ConnectionLost (Chrome is fine).
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "tab new (iframe wait-vanish setup) failed"
+    );
+    let _ = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(
+        code(&fx.run(&["frame", "url", "/frame"])),
+        0,
+        "frame switch (iframe wait-vanish setup) failed"
+    );
+    let fw_id = active_id(&fx.run(&["tab"]));
+    let fwait_out = std::thread::scope(|s| {
+        let waiter = s.spawn(|| fx.run(&["wait", "--timeout", "15", "selector", "#never_appears"]));
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert_eq!(
+            code(&fx.run(&["tab", "close", &fw_id])),
+            0,
+            "closing the iframe-scoped awaited tab failed"
+        );
+        waiter.join().expect("iframe wait thread")
+    });
+    assert_eq!(
+        code(&fwait_out),
+        4,
+        "a tab closing mid-wait while iframe-scoped must be TabNotFound (4), \
+         not FrameNotFound/ConnectionLost: {}",
+        stdout(&fwait_out)
+    );
+    assert!(
+        stdout(&fwait_out).contains("Tab not found"),
+        "the iframe-scoped wait error must name the gone TAB (root cause): {}",
+        stdout(&fwait_out)
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "re-pin after the iframe wait-vanish test failed"
+    );
+    let _ = fx.run(&["frame", "main"]);
 
     // 9. Closing the ACTIVE tab leaves a dead pin. A pin-INDEPENDENT command
     //    (`tab` list) must still work so the agent can find a survivor and

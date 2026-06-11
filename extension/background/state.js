@@ -306,6 +306,16 @@ function toCookieInfo(c) {
   // exported session file is byte-identical across modes (headless's
   // CookieInfo skips the field when absent).
   if (c.expirationDate != null) info.expiration = c.expirationDate;
+  // CHIPS: carry the partition key — it is part of the cookie's IDENTITY, so a
+  // round-trip that dropped it would re-import an unpartitioned twin the
+  // partitioned (embedded) context never sends. Both fields always written,
+  // matching headless CookieInfo's serialization field-for-field.
+  if (c.partitionKey && typeof c.partitionKey.topLevelSite === "string") {
+    info.partition_key = {
+      top_level_site: c.partitionKey.topLevelSite,
+      has_cross_site_ancestor: c.partitionKey.hasCrossSiteAncestor === true,
+    };
+  }
   return info;
 }
 
@@ -523,7 +533,11 @@ async function handleNetworkClear() {
 
 async function handleSessionExport() {
   try {
-    const all = await chrome.cookies.getAll({});
+    // `partitionKey: {}` matches partitioned AND unpartitioned cookies alike —
+    // a bare `getAll({})` returns only unpartitioned ones, so a CHIPS
+    // partitioned auth cookie would silently vanish from the export (headless
+    // `Storage.getCookies` sees every partition).
+    const all = await chrome.cookies.getAll({ partitionKey: {} });
     const tab = await resolveActiveTab();
     // No http page (e.g. only chrome://newtab focused) means Web Storage can't be
     // read at all — fail rather than write a session file with silently empty
@@ -685,7 +699,18 @@ async function handleSessionImport(rawData) {
           || (c.secure !== undefined && typeof c.secure !== "boolean")
           || (c.http_only !== undefined && typeof c.http_only !== "boolean")
           || (c.host_only !== undefined && typeof c.host_only !== "boolean")
-          || (c.expiration != null && typeof c.expiration !== "number")) {
+          || (c.expiration != null && typeof c.expiration !== "number")
+          // A present `partition_key` must carry a string `top_level_site` and
+          // (when present) a boolean `has_cross_site_ancestor`, exactly as the
+          // Rust `Option<PartitionKey>` demands — a malformed key must count
+          // as malformed, never import the cookie UNPARTITIONED (the silent
+          // identity change this field exists to prevent). `null` is accepted
+          // as absent, matching serde's Option.
+          || (c.partition_key != null
+            && (typeof c.partition_key !== "object" || Array.isArray(c.partition_key)
+              || typeof c.partition_key.top_level_site !== "string"
+              || (c.partition_key.has_cross_site_ancestor !== undefined
+                && typeof c.partition_key.has_cross_site_ancestor !== "boolean")))) {
         cookiesMalformed++;
         continue;
       }
@@ -696,8 +721,22 @@ async function handleSessionImport(rawData) {
         // counting it keeps the import from reporting a session silently missing
         // auth cookies. Mirrors the headless `Network.setCookie success:false`
         // check.
+        // The scheme is normally implied by `secure` — but a FIRST-PARTY
+        // partition (has_cross_site_ancestor=false) means the cookie's site IS
+        // the partition's top-level site, and Chrome validates the url ↔
+        // topLevelSite pair SCHEMEFULLY: a Secure cookie partitioned on a
+        // trustworthy plain-http origin (http://localhost dev setups) would be
+        // refused as "not first party" against the https URL the secure flag
+        // suggests. Take the partition's own scheme there; a cross-site
+        // partition keeps the secure-implied scheme (its url and topLevelSite
+        // are different sites by construction).
+        let scheme = c.secure ? "https" : "http";
+        if (c.partition_key && c.partition_key.has_cross_site_ancestor !== true) {
+          const m = /^([a-z][a-z0-9+.-]*):\/\//i.exec(c.partition_key.top_level_site);
+          if (m) scheme = m[1];
+        }
         const set = await chrome.cookies.set({
-          url: `http${c.secure ? "s" : ""}://${c.domain.replace(/^\./, "")}${c.path}`,
+          url: `${scheme}://${c.domain.replace(/^\./, "")}${c.path}`,
           name: c.name, value: c.value, path: c.path,
           // A host-only cookie is set by URL with no `domain`, so Chrome scopes
           // it to exactly its host and the round-trip can't widen it to
@@ -710,6 +749,15 @@ async function handleSessionImport(rawData) {
           // `expires: 0`, not a session cookie — `|| undefined` would drop the
           // zero and keep the cookie instead of expiring it.
           expirationDate: c.expiration == null ? undefined : c.expiration,
+          // CHIPS: restore the cookie into its original partition — omitting
+          // the key would create an unpartitioned twin instead of the cookie
+          // the partitioned (embedded) context actually sends.
+          ...(c.partition_key != null ? {
+            partitionKey: {
+              topLevelSite: c.partition_key.top_level_site,
+              hasCrossSiteAncestor: c.partition_key.has_cross_site_ancestor === true,
+            },
+          } : {}),
         });
         if (!set) cookiesFailed++;
       } catch {

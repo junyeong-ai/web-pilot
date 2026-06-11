@@ -45,6 +45,18 @@ pub enum SameSite {
 serde_plain::derive_display_from_serialize!(SameSite);
 serde_plain::derive_fromstr_from_deserialize!(SameSite);
 
+/// CHIPS cookie partition key — the top-level site a partitioned cookie is
+/// keyed under, the shape CDP (`Network.CookiePartitionKey`) and
+/// `chrome.cookies` (`CookiePartitionKey`) share.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PartitionKey {
+    pub top_level_site: String,
+    /// Whether the cookie was set under a cross-site ancestor frame — part of
+    /// the key in both APIs. Default false matches the common shape.
+    #[serde(default)]
+    pub has_cross_site_ancestor: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CookieInfo {
     pub name: String,
@@ -65,6 +77,13 @@ pub struct CookieInfo {
     /// domain cookie, unchanged.
     #[serde(default)]
     pub host_only: bool,
+    /// CHIPS partition key — present only for a partitioned cookie. Chrome
+    /// keys cookie IDENTITY by partition, so dropping this on a session
+    /// round-trip would re-import an unpartitioned twin the partitioned
+    /// (embedded) context never sends, under a clean success. Absent for
+    /// regular cookies and in older session files (which import unchanged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_key: Option<PartitionKey>,
 }
 
 // ── Policy ───────────────────────────────────────────────────────────────────

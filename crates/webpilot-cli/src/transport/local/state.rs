@@ -5,7 +5,9 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use webpilot::WebPilotError;
 use webpilot::protocol::ResponseData;
-use webpilot::types::{ConsoleEntry, ConsoleLevel, CookieInfo, NetworkEntry, SameSite};
+use webpilot::types::{
+    ConsoleEntry, ConsoleLevel, CookieInfo, NetworkEntry, PartitionKey, SameSite,
+};
 
 use super::{LocalTransport, epoch_ms};
 
@@ -605,6 +607,15 @@ fn cookie_info_to_cdp(c: &CookieInfo) -> Value {
     if let Some(expires) = c.expiration {
         params["expires"] = expires.into();
     }
+    if let Some(pk) = &c.partition_key {
+        // CHIPS: restore the cookie into its original partition — omitting the
+        // key would create an unpartitioned twin instead of the cookie the
+        // partitioned (embedded) context actually sends.
+        params["partitionKey"] = json!({
+            "topLevelSite": pk.top_level_site,
+            "hasCrossSiteAncestor": pk.has_cross_site_ancestor,
+        });
+    }
     params
 }
 
@@ -656,6 +667,17 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
             Some(secs) if secs >= 0.0 => Some(secs),
             _ => None,
         },
+        // CHIPS: carry the partition key — it is part of the cookie's IDENTITY
+        // (see CookieInfo::partition_key), so a round-trip must preserve it.
+        partition_key: c.get("partitionKey").and_then(|pk| {
+            Some(PartitionKey {
+                top_level_site: pk.get("topLevelSite")?.as_str()?.to_string(),
+                has_cross_site_ancestor: pk
+                    .get("hasCrossSiteAncestor")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+        }),
     }
 }
 
@@ -789,6 +811,7 @@ mod tests {
             same_site: SameSite::Lax,
             expiration: None,
             host_only: false,
+            partition_key: None,
         }
     }
 
@@ -852,6 +875,7 @@ mod tests {
             same_site: SameSite::Strict,
             expiration: Some(1_700_000_000.0),
             host_only: false,
+            partition_key: None,
         };
         let mut raw = cookie_info_to_cdp(&original);
         raw["expires"] = original.expiration.unwrap().into();
@@ -866,6 +890,28 @@ mod tests {
         assert_eq!(recovered.http_only, original.http_only);
         assert_eq!(recovered.same_site, original.same_site);
         assert_eq!(recovered.expiration, original.expiration);
+    }
+
+    #[test]
+    fn partitioned_cookie_round_trips_with_its_key() {
+        // CHIPS: the partition key is part of the cookie's IDENTITY — a
+        // round-trip that dropped it would re-import an unpartitioned twin the
+        // partitioned context never sends, under a clean success.
+        let mut original = base();
+        original.partition_key = Some(PartitionKey {
+            top_level_site: "https://example.com".into(),
+            has_cross_site_ancestor: true,
+        });
+        let raw = cookie_info_to_cdp(&original);
+        assert_eq!(raw["partitionKey"]["topLevelSite"], "https://example.com");
+        assert_eq!(raw["partitionKey"]["hasCrossSiteAncestor"], true);
+        let recovered = parse_cdp_cookie(raw);
+        assert_eq!(recovered.partition_key, original.partition_key);
+
+        // ...and an unpartitioned cookie stays free of the field entirely.
+        let plain = cookie_info_to_cdp(&base());
+        assert!(plain.get("partitionKey").is_none());
+        assert_eq!(parse_cdp_cookie(plain).partition_key, None);
     }
 
     #[test]

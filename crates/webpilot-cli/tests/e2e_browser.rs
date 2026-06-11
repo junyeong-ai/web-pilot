@@ -904,6 +904,42 @@ fn browser_behavioral_flow() {
         stdout(&bst)
     );
 
+    // 4e-chips. A PARTITIONED cookie round-trips with its partition key
+    //     (headless parity): the key is part of the cookie's IDENTITY, so an
+    //     export that dropped it — or a bare `getAll({})` that never even SAW
+    //     the partitioned cookie — would re-import an unpartitioned twin under
+    //     a clean success. 127.0.0.1 is a trustworthy origin, so
+    //     Secure+Partitioned is settable over plain http.
+    let _ = fx.run(&[
+        "eval",
+        "document.cookie = 'wp_part=pv; Secure; Path=/; Partitioned; SameSite=None'; 'set'",
+    ]);
+    let part_session = fx.home.join("partitioned-session.json");
+    let pexp = fx.run(&[
+        "session",
+        "export",
+        "--output",
+        part_session.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code(&pexp),
+        0,
+        "browser session export (partitioned) failed: {}",
+        stdout(&pexp)
+    );
+    let pfile = std::fs::read_to_string(&part_session).expect("read exported session");
+    assert!(
+        pfile.contains("wp_part") && pfile.contains("partition_key"),
+        "the browser export must carry the partitioned cookie WITH its partition_key: {pfile}"
+    );
+    let pim = fx.run(&["session", "import", part_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&pim),
+        0,
+        "re-importing a partitioned cookie must restore it into its partition, not refuse: {}",
+        stdout(&pim)
+    );
+
     // 4f. A malformed cookie URL with a valid scheme prefix but no host
     //     (`http://`) is a typed InvalidArgument (exit 7) — matching headless,
     //     which rejects it at the CDP sink — not the generic chrome.cookies.set
@@ -1261,6 +1297,54 @@ fn browser_behavioral_flow() {
         "after frame main, eval must run in the main frame again: {}",
         stdout(&href_main)
     );
+
+    // 6b. A tab that CLOSES while an IFRAME-scoped wait is polling must be the
+    //     root-cause TabNotFound, not the FrameNotFound the dead-tab frame
+    //     probe (getAllFrames → null) used to collapse into — a gone tab makes
+    //     any frame answer moot, and FrameNotFound would send the agent
+    //     recapturing frames on a tab that no longer exists. The tab closes
+    //     ITSELF (window.close() scheduled before the wait; legal because the
+    //     `tab new` tab has a one-entry history): a `tab close` from a second
+    //     process would queue behind the in-flight wait in the worker's
+    //     serialized command queue and never race it.
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "tab new (iframe wait-vanish setup) failed"
+    );
+    let _ = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(
+        code(&fx.run(&[
+            "eval",
+            "setTimeout(function(){window.close()},2500); 'scheduled'",
+        ])),
+        0,
+        "scheduling the self-close failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["frame", "url", "/frame"])),
+        0,
+        "frame switch (iframe wait-vanish setup) failed"
+    );
+    let iw = fx.run(&["wait", "--timeout", "15", "selector", "#never_appears"]);
+    assert_eq!(
+        code(&iw),
+        4,
+        "a tab closing mid-wait while iframe-scoped must be TabNotFound (4), \
+         not FrameNotFound: {}",
+        stdout(&iw)
+    );
+    assert!(
+        stdout(&iw).contains("Tab not found"),
+        "the iframe-scoped wait error must name the gone TAB (root cause): {}",
+        stdout(&iw)
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "re-pin after the iframe wait-vanish test failed"
+    );
+    let _ = fx.run(&["frame", "main"]);
 
     // 7a-frag. A SAME-DOCUMENT top navigation (a `#fragment`) leaves the document
     //          and its frame tree intact, so a frame the agent switched into stays

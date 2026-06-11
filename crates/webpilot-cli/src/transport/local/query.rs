@@ -94,6 +94,30 @@ impl LocalTransport {
         }
     }
 
+    /// Reclassify `err` as the root-cause `TabNotFound` when the page's TARGET
+    /// no longer exists: a socket that died (ConnectionLost) or a frame probe
+    /// that found nothing (FrameNotFound) because the tab itself closed is
+    /// tab-gone truth, not infra or frame scope — the browser client outlives
+    /// the page and can say which. The original error is kept for a live tab
+    /// (a genuinely dead Chrome stays ConnectionLost; a removed iframe on a
+    /// living tab stays FrameNotFound). The browser-mode twin is
+    /// `frameVanishedError`'s tab-first split.
+    async fn reclassify_if_tab_gone(&self, err: WebPilotError) -> WebPilotError {
+        if matches!(
+            err,
+            WebPilotError::ConnectionLost { .. } | WebPilotError::FrameNotFound { .. }
+        ) && let Ok(targets) = self.browser.get_targets().await
+            && !targets.iter().any(|t| {
+                t.get("targetId").and_then(|v| v.as_str()) == Some(self.target_id.as_str())
+            })
+        {
+            return WebPilotError::TabNotFound {
+                tab_id: self.target_id.clone(),
+            };
+        }
+        err
+    }
+
     pub(super) async fn do_wait(
         &self,
         condition: WaitCondition,
@@ -120,32 +144,15 @@ impl LocalTransport {
                     // navigation Timeout; mapping every error there would have
                     // told the agent navigation merely didn't finish when in
                     // fact the connection had died.
-                    let mut err =
+                    let err =
                         e.downcast::<WebPilotError>()
                             .unwrap_or_else(|_| WebPilotError::Timeout {
                                 kind: "navigation".into(),
                                 elapsed_ms: timeout_ms,
                             });
-                    // A page socket that died because the TAB closed is
-                    // tab-gone truth, not infra: the browser client outlives
-                    // the page and can say whether the target still exists —
-                    // classify like browser mode's tabs.onRemoved arm (exit 4
-                    // → recover via `tab`), keeping ConnectionLost for a
-                    // genuinely dead Chrome.
-                    if matches!(err, WebPilotError::ConnectionLost { .. })
-                        && let Ok(targets) = self.browser.get_targets().await
-                        && !targets.iter().any(|t| {
-                            t.get("targetId").and_then(|v| v.as_str())
-                                == Some(self.target_id.as_str())
-                        })
-                    {
-                        err = WebPilotError::TabNotFound {
-                            tab_id: self.target_id.clone(),
-                        };
-                    }
                     Ok(ResponseData::Wait {
                         success: false,
-                        error: Some(err),
+                        error: Some(self.reclassify_if_tab_gone(err).await),
                     })
                 }
             };
@@ -198,7 +205,23 @@ impl LocalTransport {
                         }),
                     });
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    // The poll's failure may be tab-gone truth in disguise:
+                    // the socket died, or the re-arm's frame probe found
+                    // nothing, because the TAB itself closed mid-wait.
+                    // Classify like the navigation arm (exit 4 → recover via
+                    // `tab`), keeping the original error for a live tab —
+                    // a FrameNotFound here would send the agent recapturing
+                    // frames on a tab that no longer exists.
+                    let err = match e.downcast::<WebPilotError>() {
+                        Ok(typed) => self.reclassify_if_tab_gone(typed).await,
+                        Err(e) => return Err(e),
+                    };
+                    return Ok(ResponseData::Wait {
+                        success: false,
+                        error: Some(err),
+                    });
+                }
             };
 
             return match Self::parse_bridge_response(raw) {

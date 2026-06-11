@@ -210,6 +210,7 @@ mod tests {
             same_site: SameSite::Unspecified,
             expiration: None,
             host_only: false,
+            partition_key: None,
         }
     }
 

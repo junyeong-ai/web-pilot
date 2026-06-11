@@ -44,11 +44,23 @@ async function installDialogOverride(tabId, target) {
 async function frameVanishedError(tabId, frameId, frames = null) {
   if (frameId === 0) return null;
   // getAllFrames resolves `null` (not a rejection) when the tab is gone, so the
-  // `.catch` alone would not guard it — the `list &&` does. Any non-array result
-  // means the frame can't be confirmed present, which for a non-main active
-  // frame is FrameNotFound (exit 4 → recapture), never a thrown TypeError.
+  // `.catch` alone would not guard it — the `list &&` does.
   const list = frames || (await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null));
   if (list && list.some((f) => f.frameId === frameId && f.url?.startsWith("http"))) return null;
+  // A non-array result means the TAB could not be probed at all — split it the
+  // way ensureBridge does (a gone tab makes any frame answer moot): a closed
+  // tab is TabNotFound, the root cause the agent must recover from via `tab`,
+  // not a FrameNotFound that would send it recapturing frames on a tab that no
+  // longer exists. A live tab whose frame list simply no longer carries this
+  // frame stays FrameNotFound (exit 4 → recapture); never a thrown TypeError.
+  if (!Array.isArray(list)) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) {
+      return err("TabNotFound", `Tab not found: ${tabId}. List: webpilot tab`, {
+        tab_id: String(tabId),
+      });
+    }
+  }
   const sel = `frame ${frameId}`;
   return err("FrameNotFound", `Frame not found: ${sel}`, { selector: sel });
 }
@@ -89,9 +101,12 @@ async function ensureBridge(tabId, frameId = 0) {
   }
   const gone = await frameVanishedError(tabId, frameId);
   if (gone) {
-    const fe = new Error(gone.message);
-    fe.code = gone.code;
-    fe.data = { selector: gone.selector };
+    // Carry the err's wire fields generically — frameVanishedError can now
+    // return TabNotFound (tab_id) as well as FrameNotFound (selector).
+    const { code, message, ...data } = gone;
+    const fe = new Error(message);
+    fe.code = code;
+    fe.data = data;
     throw fe;
   }
   const e = new Error("Page is not responding — try reloading the page");
