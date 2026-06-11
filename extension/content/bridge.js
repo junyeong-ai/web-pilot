@@ -463,6 +463,35 @@
   // control occluded) and under-reports (a transparent gap at the exact centre
   // pixel hides a real overlay). Sample the centre plus four inset corners and
   // judge by majority of the points that actually fall inside the viewport.
+  // Hit-test that descends into open shadow roots: `document.elementFromPoint`
+  // retargets a shadow-interior hit to its HOST, and tree-scoped `contains`
+  // cannot relate the host to the element inside its shadow — so without the
+  // descent every shadow-root control would read occluded by its own host.
+  // Each root's own `elementFromPoint` resolves the real innermost hit.
+  function deepElementFromPoint(x, y) {
+    let el = document.elementFromPoint(x, y);
+    while (el?.shadowRoot) {
+      const inner = el.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === el) break;
+      el = inner;
+    }
+    return el;
+  }
+
+  // Composed-tree relatedness: one of the two contains the other once shadow
+  // boundaries are hopped host-by-host (a button's icon, a hit retargeted to
+  // a closed shadow's host). `contains` alone is tree-scoped and would call
+  // every cross-boundary pair "unrelated".
+  function composedRelated(a, b) {
+    for (let n = b; n; n = n.getRootNode().host || null) {
+      if (a.contains(n)) return true;
+    }
+    for (let n = a; n; n = n.getRootNode().host || null) {
+      if (b.contains(n)) return true;
+    }
+    return false;
+  }
+
   function isOccluded(el, rect) {
     const inset = 0.15;
     const xs = [0.5, inset, 1 - inset, inset, 1 - inset];
@@ -474,8 +503,8 @@
       const py = rect.top + rect.height * ys[i];
       if (px < 0 || py < 0 || px >= innerWidth || py >= innerHeight) continue;
       tested++;
-      const top = document.elementFromPoint(px, py);
-      if (top && top !== el && !el.contains(top) && !top.contains(el)) blocked++;
+      const top = deepElementFromPoint(px, py);
+      if (top && top !== el && !composedRelated(el, top)) blocked++;
     }
     return tested > 0 && blocked * 2 > tested;
   }
@@ -1308,9 +1337,11 @@
   // first, then each open shadow root in document order), the same
   // budget-bounded traversal the capture uses.
   function queryDeepOrErr(selector) {
+    const budget = { hosts: SHADOW_HOST_BUDGET, truncated: false };
     try {
       return {
-        all: queryAllDeepMulti([selector], document, { hosts: SHADOW_HOST_BUDGET })[0],
+        all: queryAllDeepMulti([selector], document, budget)[0],
+        truncated: budget.truncated,
       };
     } catch {
       // An invalid CSS selector throws a SyntaxError. Surface it as a typed
@@ -1339,6 +1370,19 @@
   function uniqueSelectorOrErr(selector) {
     const r = queryDeepOrErr(selector);
     if (r.error) return r;
+    // A budget-clipped traversal proves nothing about uniqueness — an unseen
+    // shadow twin may exist past the cap, and "unique so far" would write the
+    // wrong element. Writes fail honest (the same truncation the capture
+    // surfaces as `shadow_truncated`); reads keep their deterministic
+    // light-first first match.
+    if (r.truncated) {
+      return {
+        error: err(
+          "InvalidArgument",
+          "the shadow-DOM traversal budget was exhausted before the selector's uniqueness could be established — dom set needs a unique match; target the element another way (eval)",
+        ),
+      };
+    }
     if (r.all.length === 0) return { error: selectorNotFound(selector) };
     if (r.all.length > 1) {
       return {

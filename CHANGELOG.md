@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.181] - 2026-06-11
+
+### Fixed
+
+- **`--occlusion` no longer mislabels every shadow-root control as occluded.**
+  `document.elementFromPoint` retargets a shadow-interior hit to its HOST, and
+  tree-scoped `contains()` cannot relate the host to the element inside its
+  shadow — so an uncovered component control read `occluded:true` at every
+  sampled point. The hit-test now descends through open shadow roots (each
+  root's own `elementFromPoint`), and containment walks the composed tree
+  (host-hopping), which also keeps a closed-shadow control honest via its
+  host. A genuinely covered shadow element (a sibling overlay in the same
+  root) still reads occluded. Shared bridge, both modes.
+
+- **A budget-clipped shadow traversal refuses a `dom set-*` instead of
+  trusting a partial uniqueness check.** Past the shadow-host budget the deep
+  walker stops early; "unique so far" could write the wrong element while an
+  unseen twin sits beyond the cap. The write now fails typed naming the
+  budget — the same truncation honesty the capture's `shadow_truncated`
+  already has — while reads keep their deterministic light-first first match.
+
 ## [0.4.180] - 2026-06-11
 
 ### Fixed

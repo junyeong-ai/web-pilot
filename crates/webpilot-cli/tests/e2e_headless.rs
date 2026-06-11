@@ -505,6 +505,27 @@ fn headless_behavioral_flow() {
         "a selector matching a light element AND a shadow twin must be ambiguous: {}",
         stdout(&fx.run(&["dom", "set-text", "p", "x"]))
     );
+    // `--occlusion` must not mislabel a shadow-root control:
+    // document.elementFromPoint retargets a shadow-interior hit to its HOST,
+    // which tree-scoped contains() would call a blocker — the deep hit-test
+    // descends into the shadow root instead. #shadowbtn is uncovered, so it
+    // must not read occluded.
+    let occ = fx.run(&["capture", "--include", "dom", "--occlusion"]);
+    assert_eq!(code(&occ), 0, "occlusion capture failed: {}", stdout(&occ));
+    let occ_json: serde_json::Value = serde_json::from_str(&stdout(&occ)).expect("occ json");
+    let sb = occ_json["elements"]
+        .as_array()
+        .expect("occ elements")
+        .iter()
+        .find(|e| e["id"] == "shadowbtn")
+        .expect("shadowbtn indexed in occlusion capture")
+        .clone();
+    assert_ne!(
+        sb["occluded"],
+        serde_json::Value::Bool(true),
+        "an uncovered shadow-root control must not be falsely occluded by its own host: {}",
+        sb
+    );
 
     // 2a-ce. `type` into a contenteditable APPENDS at the end, like an <input>:
     //     after a programmatic focus the caret sits at a stale/start position,
@@ -2314,6 +2335,39 @@ fn headless_behavioral_flow() {
          wait), not the embedded frame's load that would leave the capture on \
          /frame: {}",
         stdout(&after_back)
+    );
+
+    // 8e. A budget-clipped shadow traversal cannot prove set-uniqueness: past
+    //     the host budget the deep walker stops early, and "unique so far"
+    //     could write the wrong element — the WRITE fails honest (the same
+    //     truncation capture surfaces as `shadow_truncated`), while a READ
+    //     keeps its deterministic light-first first match. Spawn 5001 empty
+    //     shadow hosts to exhaust the budget; section 9 navigates away,
+    //     restoring a clean page.
+    assert_eq!(
+        code(&fx.run(&[
+            "eval",
+            "for(let i=0;i<5001;i++){const d=document.createElement('div');d.attachShadow({mode:'open'});document.body.appendChild(d)} 'spawned'",
+        ])),
+        0,
+        "spawning shadow hosts failed"
+    );
+    let trunc = fx.run(&["dom", "set-text", "#wsp", "y"]);
+    assert_eq!(
+        code(&trunc),
+        7,
+        "a budget-clipped traversal must refuse the write (uniqueness unproven): {}",
+        stdout(&trunc)
+    );
+    assert!(
+        stdout(&trunc).contains("budget"),
+        "the truncation error must name the budget: {}",
+        stdout(&trunc)
+    );
+    assert_eq!(
+        code(&fx.run(&["dom", "get-text", "#wsp"])),
+        0,
+        "a read keeps serving its deterministic first match under truncation"
     );
 
     // 9. Closing the ACTIVE tab leaves a dead pin. A pin-INDEPENDENT command
