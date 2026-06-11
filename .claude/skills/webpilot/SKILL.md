@@ -97,6 +97,11 @@ webpilot action click N --capture                  # auto-capture DOM after succ
 
 Action responses include `url_changed` if navigation happened and `new_tab` if a `target="_blank"` opened (it is auto-switched to; `--capture` then snapshots the tab you're now on). If the `--capture` snapshot itself fails, the response carries `capture_error` while `success` stays true — the action's side effect already ran, so **do not retry the action**; just run `capture --include dom`.
 
+Javascript dialogs are **auto-answered** so they never block automation:
+`alert` is dismissed, `confirm` answers **true**, `prompt` returns its
+**default value** — identically in both modes. A flow that needs the
+cancel/false branch must drive the page another way (e.g. `eval`).
+
 ## Find (semantic search → optional chained action)
 
 ```bash
