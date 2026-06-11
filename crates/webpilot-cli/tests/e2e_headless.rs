@@ -273,6 +273,23 @@ fn headless_behavioral_flow() {
         "network read before network start must be a typed not-active error (exit 7): {}",
         stdout(&fx.run(&["network", "read"]))
     );
+    // `clear` holds the same contract — and must NOT create the buffer it
+    // failed to find: an unconditional `= []` would defeat the read's
+    // hook-absent guard (the `undefined` sentinel) in a document whose re-arm
+    // an `eval` deny suppressed, turning a later read into an empty success
+    // while the monitor is off.
+    assert_eq!(
+        code(&fx.run(&["console", "clear"])),
+        7,
+        "console clear before start must be typed (sentinel-preserving), not a buffer-creating success: {}",
+        stdout(&fx.run(&["console", "clear"]))
+    );
+    assert_eq!(
+        code(&fx.run(&["network", "clear"])),
+        7,
+        "network clear before start must be typed (sentinel-preserving): {}",
+        stdout(&fx.run(&["network", "clear"]))
+    );
 
     // 2. Click the button by its captured index; its onclick sets the title.
     let click = fx.run(&["action", "click", &button_index.to_string()]);

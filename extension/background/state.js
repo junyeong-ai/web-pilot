@@ -395,11 +395,26 @@ async function handleConsoleClear() {
   const tab = await resolveActiveTab();
   if (!tab) return topErr(noPageErr());
   try {
-    await chrome.scripting.executeScript({
+    // Sentinel-preserving (headless parity): an unconditional `= []` would
+    // CREATE the buffer in a document whose hook was never installed (an
+    // `eval` deny suppressed the re-arm), and the read's hook-absent guard —
+    // which keys on `undefined` — would then report an empty success while
+    // the monitor is in fact off.
+    const [hit] = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
       world: "MAIN",
-      func: () => { window.__webpilot_console = []; },
+      func: () => {
+        if (window.__webpilot_console === undefined) return false;
+        window.__webpilot_console = [];
+        return true;
+      },
     });
+    if (hit?.result !== true) {
+      return topErr(err(
+        "InvalidArgument",
+        "the console monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot console start`",
+      ));
+    }
     return { type: "CommandResult", success: true };
   } catch (e) {
     return topErr(exceptionErr(e));
@@ -482,11 +497,22 @@ async function handleNetworkClear() {
   const tab = await resolveActiveTab();
   if (!tab) return topErr(noPageErr());
   try {
-    await chrome.scripting.executeScript({
+    // Sentinel-preserving — see handleConsoleClear.
+    const [hit] = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
       world: "MAIN",
-      func: () => { window.__webpilot_network = []; },
+      func: () => {
+        if (window.__webpilot_network === undefined) return false;
+        window.__webpilot_network = [];
+        return true;
+      },
     });
+    if (hit?.result !== true) {
+      return topErr(err(
+        "InvalidArgument",
+        "the network monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot network start`",
+      ));
+    }
     return { type: "CommandResult", success: true };
   } catch (e) {
     return topErr(exceptionErr(e));

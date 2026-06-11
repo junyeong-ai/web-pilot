@@ -220,9 +220,24 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_console_clear(&self) -> Result<ResponseData> {
-        self.page
-            .evaluate("window.__webpilot_console = []; true")
+        // Sentinel-preserving: an unconditional `= []` would CREATE the buffer
+        // in a document whose hook was never installed (an `eval` deny
+        // suppressed the re-arm), and the read's hook-absent guard — which
+        // keys on `undefined` — would then report an empty success while the
+        // monitor is in fact off. Clear only what exists; absent is the same
+        // typed signal the read gives.
+        let result = self
+            .page
+            .evaluate(
+                "(()=>{const a=window.__webpilot_console;if(a===undefined)return null;window.__webpilot_console=[];return true;})()",
+            )
             .await?;
+        if result.is_null() {
+            return Err(WebPilotError::InvalidArgument {
+                detail: MONITOR_NOT_INSTALLED_CONSOLE.into(),
+            }
+            .into());
+        }
         Ok(ok_command_result())
     }
 
@@ -303,9 +318,19 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_network_clear(&self) -> Result<ResponseData> {
-        self.page
-            .evaluate("window.__webpilot_network = []; true")
+        // Sentinel-preserving — see do_console_clear.
+        let result = self
+            .page
+            .evaluate(
+                "(()=>{const a=window.__webpilot_network;if(a===undefined)return null;window.__webpilot_network=[];return true;})()",
+            )
             .await?;
+        if result.is_null() {
+            return Err(WebPilotError::InvalidArgument {
+                detail: MONITOR_NOT_INSTALLED_NETWORK.into(),
+            }
+            .into());
+        }
         Ok(ok_command_result())
     }
 

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.202] - 2026-06-11
+
+### Fixed
+
+- **`console clear` / `network clear` are sentinel-preserving.** An
+  unconditional `= []` CREATED the buffer in a document whose hook was never
+  installed — and the read's hook-absent guard keys on the `undefined`
+  sentinel, so after `start` → an `eval` policy deny → a navigation (re-arm
+  suppressed) → `clear`, a later `read` returned an empty success while the
+  monitor was in fact off: exactly the lie the guard exists to prevent. Both
+  modes now clear only an existing buffer; an absent one is the same typed
+  not-installed error the read gives, and `clear` before `start` joins the
+  typed not-active contract (pinned in e2e).
+
 ## [0.4.201] - 2026-06-11
 
 ### Fixed
