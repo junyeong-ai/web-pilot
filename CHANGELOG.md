@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.196] - 2026-06-11
+
+### Fixed
+
+- **A slotted control inherits its flat-tree landmark (and rendered
+  visibility).** `flatTreeParent` walked element parents and hopped shadow
+  hosts but never followed `assignedSlot` — a light-DOM control slotted into a
+  shadow tree read its LIGHT ancestors' landmark (usually none) instead of the
+  shadow-side one the accessibility tree actually places it under, and the
+  opacity-inheritance visibility walk missed a transparent shadow wrapper
+  above the slot for the same reason. The flat-tree parent of a slotted node
+  is now its `<slot>`, fixing both consumers at the single helper. Pinned by
+  e2e: a slotted button whose only landmark is the shadow `<aside>` must
+  report `@aside`.
+
 ## [0.4.195] - 2026-06-11
 
 ### Fixed

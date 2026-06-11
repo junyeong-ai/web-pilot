@@ -25,6 +25,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <div id="cardwrap" style="cursor:pointer">clickable card<input id="hiddenchild" style="display:none"></div>
 <div id="presdiv" role="presentation" onclick="document.title='pres-clicked'">presentation click target</div>
 <p id="wsp">whitespace<br>collapse<br>marker</p>
+<div id="slothost2"><button id="slottedbtn" slot="t">SB</button></div>
 <nav><div id="shadowhost"><span slot="s">SL</span></div></nav>
 <iframe src="/frame" name="innerfr"></iframe>
 <button id="dlg" onclick="window.__dlg=[confirm('c?'), prompt('p?', 'dv')]; document.title='dlg-done'">dialogs</button>
@@ -48,6 +49,12 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
   // walk must relate back through the slot assignment, or the shadow button
   // would read occluded by its own label.
   sr.innerHTML = '<input id="shadowfile" type="file"><button id="shadowbtn">shadow</button><p>shadowonlyprose</p><button id="slotbtn"><slot name="s"></slot></button>';
+  // A slotted LIGHT control rendering inside a SHADOW landmark: the flat tree
+  // (which the a11y tree follows) places #slottedbtn under the shadow <aside>,
+  // while its light ancestors carry no landmark at all — the landmark walk
+  // must follow the slot assignment, not the light parent chain.
+  const sr2 = document.getElementById('slothost2').attachShadow({ mode: 'open' });
+  sr2.innerHTML = '<aside><slot name="t"></slot></aside>';
 </script>
 <div id="ce" contenteditable>hello</div>
 <input id="num" type="number">

@@ -917,6 +917,23 @@ fn headless_behavioral_flow() {
          its host (flat-tree walk crosses the shadow boundary): {}",
         stdout(&cap_sf_after)
     );
+    // The REVERSE projection: a slotted LIGHT control renders inside a SHADOW
+    // landmark (the flat tree the a11y tree follows), while its light
+    // ancestors carry none — the walk must follow the slot assignment.
+    let slotted_landmark = sf_json["elements"]
+        .as_array()
+        .expect("elements array")
+        .iter()
+        .find(|e| e["id"] == "slottedbtn")
+        .and_then(|e| e["landmark"].as_str())
+        .unwrap_or("");
+    assert_eq!(
+        slotted_landmark,
+        "aside",
+        "a slotted control must inherit its flat-tree (shadow-side) landmark, \
+         not its light ancestors': {}",
+        stdout(&cap_sf_after)
+    );
 
     // 2e. `fetch` runs as a debugger-routed MAIN-world eval in both modes (no
     //     contextId, CSP-exempt) and returns the response body — a same-origin

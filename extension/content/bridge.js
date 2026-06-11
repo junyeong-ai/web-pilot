@@ -248,13 +248,15 @@
   // style reads cover visibility and the element's own opacity on every
   // Chrome version. A zero-area box is never actionable, so real layout is
   // still required.
-  // The element directly above `node` in the FLAT tree: its element parent, or —
-  // when `node` is the top of an open shadow root — the host that projects it
-  // into the outer tree. Returns null at the document root. This is how the a11y
-  // tree flattens shadow content into its host's position, so ancestor walks
-  // (visibility, landmark) see the outer context a bare `parentElement` would
-  // miss at the shadow boundary.
+  // The element directly above `node` in the FLAT tree: a slotted node's
+  // parent is its <slot> (it RENDERS there — the a11y tree, landmarks, and
+  // inherited rendering state like opacity all follow that projection); else
+  // its element parent; at the top of an open shadow root, the host that
+  // projects it into the outer tree. Returns null at the document root. So
+  // ancestor walks (visibility, landmark) see the rendered context a bare
+  // `parentElement` would miss at either side of a shadow boundary.
   function flatTreeParent(node) {
+    if (node.assignedSlot) return node.assignedSlot;
     const root = node.getRootNode();
     return node.parentElement || (root instanceof ShadowRoot ? root.host : null);
   }
