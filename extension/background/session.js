@@ -1,14 +1,20 @@
-// // Worker session state: the active tab/frame pins, armed-monitor sets, and
+// // Worker session state: the active tab/frame pins, armed-monitor flags, and
 // // host-pushed config — persisted across MV3 suspensions and restored before
 // // any command runs. Mirrors the persisted-pin state in transport/local/mod.rs.
 
 let activeFrameId = 0;
 let activeTabId = null;
-const monitoringState = { console: new Set(), network: new Set() };
+// The armed-monitor intent is AGENT-level, not per-tab — the headless model
+// exactly (one persisted flag per kind, re-armed on the pinned tab at every
+// pin move and navigation settle). Keying it by tab id would tie the intent to
+// one tab's lifetime: closing the pinned tab would silently disarm a monitor
+// the agent started and never stopped, and the next `read` would claim
+// "monitoring is not active" — a lie about the agent's own state.
+const monitoringState = { console: false, network: false };
 
 // An MV3 service worker is killed when idle and restarted on the next event,
 // losing in-memory state. `activeTabId`, `activeFrameId` and the monitoring
-// sets are persisted to session storage and restored here before any command
+// flags are persisted to session storage and restored here before any command
 // runs — otherwise the first command after a restart would silently target the
 // wrong tab or the main frame instead of the iframe the agent had switched to.
 //
@@ -28,13 +34,13 @@ function ensureRestored() {
       const data = await chrome.storage.session.get([
         "activeTabId",
         "activeFrameId",
-        "monitoringTabs",
+        "monitoring",
       ]);
       if (data?.activeTabId != null) activeTabId = data.activeTabId;
       if (data?.activeFrameId != null) activeFrameId = data.activeFrameId;
-      if (data?.monitoringTabs) {
-        (data.monitoringTabs.console || []).forEach((id) => monitoringState.console.add(id));
-        (data.monitoringTabs.network || []).forEach((id) => monitoringState.network.add(id));
+      if (data?.monitoring) {
+        monitoringState.console = !!data.monitoring.console;
+        monitoringState.network = !!data.monitoring.network;
       }
       sessionRestored = true;
     })().finally(() => {
@@ -58,20 +64,11 @@ function setActiveTabId(id) {
 
 function saveMonitoringState() {
   chrome.storage.session?.set({
-    monitoringTabs: {
-      console: [...monitoringState.console],
-      network: [...monitoringState.network],
+    monitoring: {
+      console: monitoringState.console,
+      network: monitoringState.network,
     },
   });
-}
-
-// A closed tab's monitoring entries must not accumulate for the worker's
-// lifetime. The pin is deliberately NOT cleared on tab removal: a vanished
-// pin is a typed TabNotFound at the next command, never a silent retarget.
-function pruneTabMonitoring(tabId) {
-  const hadConsole = monitoringState.console.delete(tabId);
-  const hadNetwork = monitoringState.network.delete(tabId);
-  if (hadConsole || hadNetwork) saveMonitoringState();
 }
 
 function sleep(ms) {
@@ -147,4 +144,4 @@ async function resolveActiveTab() {
   return focused;
 }
 
-export { PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, pruneTabMonitoring, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };
+export { PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };

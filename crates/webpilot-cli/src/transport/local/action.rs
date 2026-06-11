@@ -760,55 +760,76 @@ impl LocalTransport {
         .into_iter()
         .filter_map(|(on, m)| on.then_some(m))
         .collect();
+        // A modifier that went down MUST come back up even when a later send
+        // fails on a still-live connection (a transient timeout): a latched
+        // Control would turn every subsequent click into a ctrl-click. So the
+        // presses and the main key run first, recording what actually went
+        // down; the releases then always run, in reverse, before any error is
+        // propagated — the main error first, else the first release failure
+        // (a stuck key reported as success would be the same lie).
+        let mut pressed: Vec<&(&str, &str, u32, u32)> = Vec::new();
         let mut acc = 0u32;
-        for (mkey, mcode, mvk, bit) in &held {
-            acc |= bit;
+        let main = async {
+            for m in &held {
+                let (mkey, mcode, mvk, bit) = m;
+                acc |= bit;
+                self.page
+                    .send(
+                        "Input.dispatchKeyEvent",
+                        Some(json!({
+                            "type": "rawKeyDown",
+                            "modifiers": acc,
+                            "key": mkey,
+                            "code": mcode,
+                            "windowsVirtualKeyCode": mvk,
+                        })),
+                    )
+                    .await?;
+                pressed.push(m);
+            }
+
+            // `nativeVirtualKeyCode` is deliberately omitted: it is the
+            // platform-native scan code (different on macOS vs Windows), and
+            // sending the Windows code on macOS makes Chrome mis-map the key to
+            // an unrelated browser accelerator. `windowsVirtualKeyCode` +
+            // `key` + `code` is the portable set Chrome resolves from on every
+            // platform.
+            let mut down = json!({
+                "type": "keyDown",
+                "modifiers": modifiers,
+                "key": key,
+                "code": code,
+                "windowsVirtualKeyCode": vk,
+            });
+            if let Some(t) = &text {
+                down["text"] = json!(t);
+            }
+            self.page.send("Input.dispatchKeyEvent", Some(down)).await?;
             self.page
                 .send(
                     "Input.dispatchKeyEvent",
                     Some(json!({
-                        "type": "rawKeyDown",
-                        "modifiers": acc,
-                        "key": mkey,
-                        "code": mcode,
-                        "windowsVirtualKeyCode": mvk,
+                        "type": "keyUp",
+                        "modifiers": modifiers,
+                        "key": key,
+                        "code": code,
+                        "windowsVirtualKeyCode": vk,
                     })),
                 )
-                .await?;
+                .await
         }
+        .await;
 
-        // `nativeVirtualKeyCode` is deliberately omitted: it is the
-        // platform-native scan code (different on macOS vs Windows), and
-        // sending the Windows code on macOS makes Chrome mis-map the key to an
-        // unrelated browser accelerator. `windowsVirtualKeyCode` + `key` +
-        // `code` is the portable set Chrome resolves from on every platform.
-        let mut down = json!({
-            "type": "keyDown",
-            "modifiers": modifiers,
-            "key": key,
-            "code": code,
-            "windowsVirtualKeyCode": vk,
-        });
-        if let Some(t) = &text {
-            down["text"] = json!(t);
-        }
-        self.page.send("Input.dispatchKeyEvent", Some(down)).await?;
-        self.page
-            .send(
-                "Input.dispatchKeyEvent",
-                Some(json!({
-                    "type": "keyUp",
-                    "modifiers": modifiers,
-                    "key": key,
-                    "code": code,
-                    "windowsVirtualKeyCode": vk,
-                })),
-            )
-            .await?;
-
-        for (mkey, mcode, mvk, bit) in held.iter().rev() {
+        // Release every modifier that actually went down — regardless of how
+        // the chord fared. One failed release still tries the rest (maximal
+        // cleanup); the first release error is kept so a stuck key is never
+        // silent.
+        let mut acc = pressed.iter().fold(0u32, |m, (_, _, _, bit)| m | bit);
+        let mut release_err: Option<anyhow::Error> = None;
+        for (mkey, mcode, mvk, bit) in pressed.iter().rev() {
             acc &= !bit;
-            self.page
+            if let Err(e) = self
+                .page
                 .send(
                     "Input.dispatchKeyEvent",
                     Some(json!({
@@ -819,9 +840,13 @@ impl LocalTransport {
                         "windowsVirtualKeyCode": mvk,
                     })),
                 )
-                .await?;
+                .await
+            {
+                release_err.get_or_insert(e);
+            }
         }
-        Ok(())
+        main?;
+        release_err.map_or(Ok(()), Err)
     }
 
     /// Drive a same-document history navigation (`history.back()`/`forward()`).

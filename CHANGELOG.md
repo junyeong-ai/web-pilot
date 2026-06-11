@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.175] - 2026-06-11
+
+### Fixed
+
+- **A key-press chord can no longer leave a modifier latched after a mid-chord
+  failure.** The modifier keys went down (rawKeyDown) before the main key, but
+  any send failing after that — a transient CDP timeout on a still-live
+  connection — returned before the releases ran, leaving Control/Shift/Alt/Meta
+  held in the renderer: every subsequent click became a ctrl-click. Both modes
+  now record what actually went down and always release it in reverse before
+  any error propagates — the chord's own error first; a release failure
+  surfaces when the chord succeeded (a stuck key must never be silent), and one
+  failed release still tries the rest.
+
+- **The browser-mode armed-monitor intent is agent-level, matching headless —
+  closing the pinned tab no longer silently disarms it.** The armed state was a
+  per-tab set, pruned when its tab closed: after `network start` → the pinned
+  tab closes → re-pin, `network read` failed with "monitoring is not active" —
+  a lie about the agent's own state, which it never stopped. The intent is now
+  one flag per kind (exactly the headless persisted-flag model), re-armed on
+  the pinned tab at every pin move and navigation settle, so it survives tab
+  churn; the per-tab carry/prune bookkeeping is gone. The `load`-time re-arm
+  backstop is scoped to the pinned tab, so the agent's monitor never injects
+  MAIN-world hooks into an unrelated tab the user is browsing.
+
+- `context close` no longer carries an unreachable handler-level duplicate of
+  the name-XOR-`--all` rule the parser already enforces.
+
 ## [0.4.174] - 2026-06-11
 
 ### Fixed

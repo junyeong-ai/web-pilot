@@ -1363,5 +1363,43 @@ fn browser_behavioral_flow() {
         stdout(&fx.run(&["console", "read"]))
     );
 
+    // The armed intent is AGENT-level, not per-tab: closing the pinned tab must
+    // not disarm a monitor the agent started and never stopped. Close the
+    // pinned tab, re-pin, and the monitor must still be active — `console read`
+    // succeeds (headless persists its armed flag the same way) instead of an
+    // InvalidArgument claiming monitoring was never started.
+    let tabs = fx.run(&["tab"]);
+    let pinned = serde_json::from_str::<serde_json::Value>(&stdout(&tabs))
+        .expect("tabs json")
+        .as_array()
+        .expect("tabs array")
+        .iter()
+        .find(|t| t["active"] == serde_json::Value::Bool(true))
+        .and_then(|t| {
+            t["id"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| t["id"].as_u64().map(|n| n.to_string()))
+        })
+        .expect("a pinned tab");
+    assert_eq!(
+        code(&fx.run(&["tab", "close", &pinned])),
+        0,
+        "closing the pinned tab failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "re-pin after closing the monitored tab failed"
+    );
+    let survived = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&survived),
+        0,
+        "an armed monitor must survive the pinned tab closing (agent-level \
+         intent, not per-tab): {}",
+        stdout(&survived)
+    );
+
     drop(fx);
 }

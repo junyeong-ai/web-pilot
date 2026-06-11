@@ -107,17 +107,6 @@ async fn close_contexts(
     // forbid. (`context list`, a read, is not gated.)
     crate::policy::enforce_key(webpilot::types::PolicyKey::ContextClose)?;
 
-    // `--all` wipes EVERY context (and every agent's tabs), so a `name` alongside
-    // it is a contradictory request — reject it rather than silently take the far
-    // more destructive all-branch and report it as the single named close the
-    // agent asked for. Require exactly one of the two.
-    if all && name.is_some() {
-        return Err(WebPilotError::InvalidArgument {
-            detail: "specify a context name OR --all, not both".into(),
-        }
-        .into());
-    }
-
     let browser = local.browser();
 
     if all {

@@ -43,45 +43,26 @@ function setMonitorPolicy(mp) {
 // `reinstall_monitors()` the instant a navigation settles; browser must do the
 // same right after `waitNavigationSettled`, not wait for the `load`-time
 // `webNavigation.onCompleted`, or a fetch/console the new page emits after
-// DOMContentLoaded but before a slow `load` is lost from the buffer. A no-op
-// unless the tab is actually being monitored, so a plain navigation pays
-// nothing.
+// DOMContentLoaded but before a slow `load` is lost from the buffer. The armed
+// intent is agent-level (headless parity), so this is also the whole of "the
+// monitor follows the pin": every pin move (tab switch / new / popup adoption)
+// re-arms the new working tab. A no-op unless armed, so a plain navigation
+// pays nothing.
 async function rearmMonitors(tabId) {
   // `&& monitorPolicy.X`: re-injecting a MAIN-world hook is the same effect
   // `console start` / `network start` are gated on (`eval`), so a deny that
   // landed after arming must stop the re-arm too — exactly as headless
-  // `reinstall_monitors` re-checks the gate. The armed set is left intact.
-  if (monitoringState.console.has(tabId) && monitorPolicy.console) {
+  // `reinstall_monitors` re-checks the gate. The armed flag is left intact.
+  if (monitoringState.console && monitorPolicy.console) {
     try {
       await injectConsoleMonitoring(tabId);
     } catch {}
   }
-  if (monitoringState.network.has(tabId) && monitorPolicy.network) {
+  if (monitoringState.network && monitorPolicy.network) {
     try {
       await injectNetworkMonitoring(tabId);
     } catch {}
   }
-}
-
-// When the agent's working tab moves (tab switch / new / popup adoption), the
-// monitors it armed must follow so `console read` / `network read` see the new
-// tab. Headless re-installs its global monitor on every pin move (each routes
-// through `do_tab_switch` → `reinstall_monitors`); browser's per-tab armed set
-// has no such global, so carry the armed kinds from the old pinned tab onto the
-// new one and inject their hooks. The old tab's flag is left to be pruned when it
-// closes — a later switch back re-arms it — so a round trip never loses state.
-async function carryMonitorsToTab(fromTabId, toTabId) {
-  if (fromTabId != null && fromTabId !== toTabId) {
-    let changed = false;
-    for (const kind of ["console", "network"]) {
-      if (monitoringState[kind].has(fromTabId) && !monitoringState[kind].has(toTabId)) {
-        monitoringState[kind].add(toTabId);
-        changed = true;
-      }
-    }
-    if (changed) saveMonitoringState();
-  }
-  await rearmMonitors(toTabId);
 }
 
 async function injectConsoleMonitoring(tabId) {
@@ -308,7 +289,7 @@ async function handleConsoleStart() {
   if (!tab) return { type: "CommandResult", success: false, error: noPageErr() };
   try {
     await injectConsoleMonitoring(tab.id);
-    monitoringState.console.add(tab.id);
+    monitoringState.console = true;
     saveMonitoringState();
     return { type: "CommandResult", success: true };
   } catch (e) {
@@ -323,7 +304,7 @@ async function handleConsoleRead(since) {
   // indistinguishable from "the page logged nothing" — so an agent could
   // conclude there were no messages when the monitor was simply never armed.
   // Fail loud, matching headless do_console_read.
-  if (!monitoringState.console.has(tab.id)) {
+  if (!monitoringState.console) {
     return topErr(
       err("InvalidArgument", "console monitoring is not active — run `webpilot console start` first"),
     );
@@ -397,7 +378,7 @@ async function handleNetworkStart() {
   if (!tab) return { type: "CommandResult", success: false, error: noPageErr() };
   try {
     await injectNetworkMonitoring(tab.id);
-    monitoringState.network.add(tab.id);
+    monitoringState.network = true;
     saveMonitoringState();
     return { type: "CommandResult", success: true };
   } catch (e) {
@@ -410,7 +391,7 @@ async function handleNetworkRead(since) {
   if (!tab) return topErr(noPageErr());
   // See handleConsoleRead: an empty read before `network start` would read as
   // "no requests" rather than "monitor not armed". Fail loud.
-  if (!monitoringState.network.has(tab.id)) {
+  if (!monitoringState.network) {
     return topErr(
       err("InvalidArgument", "network monitoring is not active — run `webpilot network start` first"),
     );
@@ -690,4 +671,4 @@ async function handleSessionImport(rawData) {
   }
 }
 
-export { carryMonitorsToTab, handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, rearmMonitors, setMonitorPolicy };
+export { handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, rearmMonitors, setMonitorPolicy };

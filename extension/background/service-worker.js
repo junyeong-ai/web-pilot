@@ -10,7 +10,7 @@ console.log("[WebPilot] Service Worker loaded");
 import { pruneCdpLock } from "./cdp.js";
 import { injectBridgeOnly } from "./content.js";
 import { connectToHost, isHostConnected } from "./host.js";
-import { ensureRestored, pruneTabMonitoring } from "./session.js";
+import { activeTabId, ensureRestored } from "./session.js";
 import { rearmMonitors } from "./state.js";
 
 // Every chrome.* event listener is registered HERE, synchronously, at the top
@@ -20,7 +20,6 @@ import { rearmMonitors } from "./state.js";
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   pruneCdpLock(tabId);
-  pruneTabMonitoring(tabId);
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -57,12 +56,17 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
   }
   // Re-inject the bridge here: the manifest content script does not re-run on a
   // bfcache restore, so this refreshes its `onMessage` listener for the restored
-  // document. Monitor re-arm is the BACKSTOP — the command paths (navigate /
-  // back / forward / reload / click-nav / `capture --url`) re-arm at settle,
-  // earlier than this `load`-time event, so a fetch the new page fires before
-  // `load` is still caught.
+  // document.
   await injectBridgeOnly(tabId, 0);
-  await rearmMonitors(tabId);
+  // Monitor re-arm is the BACKSTOP — the command paths (navigate / back /
+  // forward / reload / click-nav / `capture --url`) re-arm at settle, earlier
+  // than this `load`-time event, so a fetch the new page fires before `load`
+  // is still caught. Scoped to the PINNED tab: the armed intent is agent-level,
+  // and the agent's monitor must never inject MAIN-world hooks into an
+  // unrelated tab the user is browsing.
+  if (tabId === activeTabId) {
+    await rearmMonitors(tabId);
+  }
 });
 
 connectToHost();

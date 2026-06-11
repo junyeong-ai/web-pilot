@@ -8,7 +8,7 @@ import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
 import { countHttpSubframes } from "./capture.js";
-import { carryMonitorsToTab, rearmMonitors } from "./state.js";
+import { rearmMonitors } from "./state.js";
 
 // ── Action ─────────────────────────────────────────────────────────────────
 
@@ -322,24 +322,48 @@ async function dispatchKeyPress(tabId, action) {
       m.shift && ["Shift", "ShiftLeft", 16, 8],
       m.meta && ["Meta", "MetaLeft", 91, 4],
     ].filter(Boolean);
-    let acc = 0;
-    for (const [mkey, mcode, mvk, bit] of held) {
-      acc |= bit;
-      await cdpSend(tid, "Input.dispatchKeyEvent", {
-        type: "rawKeyDown", modifiers: acc, key: mkey, code: mcode, windowsVirtualKeyCode: mvk,
-      });
+    // A modifier that went down MUST come back up even when a later send
+    // throws on a still-live connection (a transient failure): a latched
+    // Control would turn every subsequent click into a ctrl-click. `pressed`
+    // records what actually went down; the finally releases it in reverse
+    // before any error propagates. One failed release still tries the rest
+    // (maximal cleanup), and the first release error surfaces when the chord
+    // itself succeeded — a stuck key must never be silent. Headless parity.
+    const pressed = [];
+    let chordErr = null;
+    try {
+      let acc = 0;
+      for (const m of held) {
+        acc |= m[3];
+        await cdpSend(tid, "Input.dispatchKeyEvent", {
+          type: "rawKeyDown", modifiers: acc, key: m[0], code: m[1], windowsVirtualKeyCode: m[2],
+        });
+        pressed.push(m);
+      }
+      const base = { modifiers, key: shiftLetter(action.key), code, windowsVirtualKeyCode: vk };
+      await cdpSend(tid, "Input.dispatchKeyEvent", text != null
+        ? { ...base, type: "keyDown", text }
+        : { ...base, type: "keyDown" });
+      await cdpSend(tid, "Input.dispatchKeyEvent", { ...base, type: "keyUp" });
+    } catch (e) {
+      chordErr = e;
     }
-    const base = { modifiers, key: shiftLetter(action.key), code, windowsVirtualKeyCode: vk };
-    await cdpSend(tid, "Input.dispatchKeyEvent", text != null
-      ? { ...base, type: "keyDown", text }
-      : { ...base, type: "keyDown" });
-    await cdpSend(tid, "Input.dispatchKeyEvent", { ...base, type: "keyUp" });
-    for (const [mkey, mcode, mvk, bit] of [...held].reverse()) {
-      acc &= ~bit;
-      await cdpSend(tid, "Input.dispatchKeyEvent", {
-        type: "keyUp", modifiers: acc, key: mkey, code: mcode, windowsVirtualKeyCode: mvk,
-      });
+    let racc = pressed.reduce((mask, [, , , bit]) => mask | bit, 0);
+    let releaseErr = null;
+    for (const [mkey, mcode, mvk, bit] of [...pressed].reverse()) {
+      racc &= ~bit;
+      try {
+        await cdpSend(tid, "Input.dispatchKeyEvent", {
+          type: "keyUp", modifiers: racc, key: mkey, code: mcode, windowsVirtualKeyCode: mvk,
+        });
+      } catch (e) {
+        releaseErr = releaseErr ?? e;
+      }
     }
+    // The chord's own error wins; else a release failure must surface rather
+    // than report a stuck key as success.
+    if (chordErr) throw chordErr;
+    if (releaseErr) throw releaseErr;
     // Enter can submit a form, and that navigation is QUEUED — its commit may
     // land after this response, so hint `navigates` for Enter (the only native
     // key that loads a document) so `settledActionUrl` waits the PROBE for it
@@ -478,7 +502,7 @@ async function dispatchActionToPage(tab, action) {
         // Armed monitors follow the agent's working tab onto the adopted popup
         // (headless re-arms on every pin move) — after it settles so the hooks
         // land on the real document.
-        await carryMonitorsToTab(tab.id, newTab.id);
+        await rearmMonitors(newTab.id);
         const settled = (await chrome.tabs.get(newTab.id).catch(() => null)) || newTab;
         result.new_tab = {
           id: String(settled.id),
