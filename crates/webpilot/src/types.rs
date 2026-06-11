@@ -668,6 +668,12 @@ impl DomSnapshot {
             if el.spatial.in_viewport == Some(false) {
                 out.push_str("[offscreen] ");
             }
+            // Present only when the agent asked (`--bounds`): the text channel
+            // must carry what was explicitly requested, not silently drop it
+            // into the JSON-only path.
+            if let Some(ref b) = el.spatial.bounds {
+                out.push_str(&format!("bounds=({},{},{},{}) ", b.x, b.y, b.w, b.h));
+            }
             if let Some(ref desc) = el.semantics.description {
                 out.push_str(&format!("description=\"{}\" ", line_safe(desc)));
             }
@@ -900,6 +906,53 @@ mod tests {
         assert!(make(false).contains("options(1)"));
         assert!(!make(false).contains("options(1+)"));
         assert!(make(true).contains("options(1+)"));
+    }
+
+    #[test]
+    fn to_text_renders_bounds_only_when_requested() {
+        let make = |bounds: Option<Bounds>| {
+            let el = InteractiveElement {
+                index: 1,
+                tag: "button".into(),
+                id: None,
+                role: None,
+                text: "go".into(),
+                semantics: ElementSemantics::default(),
+                state: ElementState::default(),
+                spatial: ElementSpatial {
+                    bounds,
+                    ..Default::default()
+                },
+            };
+            DomSnapshot {
+                elements: vec![el],
+                total_nodes: 1,
+                page_url: "x".into(),
+                page_title: "y".into(),
+                scroll: Some(ScrollInfo::default()),
+                scroll_percent: 0,
+                extraction_ms: 0,
+                subframes: 0,
+                shadow_truncated: false,
+                text_content: None,
+                text_truncated: false,
+                accessibility_tree: None,
+            }
+            .to_text()
+        };
+        // `--bounds` data must reach the text channel, not just JSON…
+        assert!(
+            make(Some(Bounds {
+                x: 10,
+                y: -5,
+                w: 120,
+                h: 30
+            }))
+            .contains("bounds=(10,-5,120,30)"),
+            "requested bounds must render in the text channel"
+        );
+        // …and stay absent when not requested (no default noise).
+        assert!(!make(None).contains("bounds="));
     }
 
     #[test]

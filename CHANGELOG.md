@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.185] - 2026-06-11
+
+### Fixed
+
+- **`capture --bounds` coordinates reach the text channel.** The requested
+  `bounds` rendered only into JSON; the terminal and MCP text render (the
+  same `to_text`) silently dropped the x/y/w/h the agent explicitly asked
+  for. An element line now carries `bounds=(x,y,w,h)` exactly when `--bounds`
+  was requested — no default noise, since the field is only populated on
+  request.
+
 ## [0.4.184] - 2026-06-11
 
 ### Fixed
