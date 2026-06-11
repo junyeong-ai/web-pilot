@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.195] - 2026-06-11
+
+### Fixed
+
+- **Browser-mode `wait navigation` reports a closed pinned tab as
+  `TabNotFound`, not a sat-out `Timeout`.** If the tab closed during the wait
+  (a `window.close()` in a load handler, the user closing it), the awaited
+  navigation could never complete — yet the wait ran its full timeout and then
+  claimed "navigation didn't finish" (exit 5), misfiring the agent's
+  error-handling branch. A `tabs.onRemoved` arm now ends the wait immediately
+  with the typed `TabNotFound` (exit 4 → recover via `tab`).
+
+- **Docs de-drifted against the code** (a maintainer-contract audit): the
+  iframe trailer is quoted as actually rendered (`enter: webpilot frame url
+  <pattern>` — also correcting the wrong "alignment" 0.4.194 introduced in the
+  skill), `CookieNotFound` joins the exit-4 table, the extension rules state
+  the agent-level monitor-flag model, and the host's exit-with-Chrome
+  lifecycle is documented.
+
 ## [0.4.194] - 2026-06-11
 
 ### Changed

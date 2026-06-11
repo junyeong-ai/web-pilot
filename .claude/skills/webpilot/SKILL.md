@@ -162,7 +162,7 @@ webpilot frame find "window.foo === 1"    # JS predicate per-frame
 webpilot frame main                       # back to top frame
 ```
 
-`capture` is always scoped to one frame — the active frame, or the main frame by default. It never merges frames, so an element's `[N]` index is the same index its action resolves against in that frame. When the main frame contains HTTP iframes, capture appends `--- N iframe(s) not shown — list: webpilot frame, enter: webpilot frame switch ---`; enter one with `frame switch` to capture and act inside it, then `frame main` to return. After switching, eval / dom / capture / actions all scope to that frame until you switch back. (Viewport-coordinate actions — `hover`, `drag`, `upload` — only work in the main frame; run them after `frame main`.)
+`capture` is always scoped to one frame — the active frame, or the main frame by default. It never merges frames, so an element's `[N]` index is the same index its action resolves against in that frame. When the main frame contains HTTP iframes, capture appends `--- N iframe(s) not shown — list: webpilot frame, enter: webpilot frame url <pattern> ---`; enter one with `frame url`/`frame switch` to capture and act inside it, then `frame main` to return. After switching, eval / dom / capture / actions all scope to that frame until you switch back. (Viewport-coordinate actions — `hover`, `drag`, `upload` — only work in the main frame; run them after `frame main`.)
 
 ## Tabs
 

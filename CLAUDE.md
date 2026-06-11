@@ -63,7 +63,7 @@ MCP exposes a curated subset of commands — adding a command is not an MCP chan
 [2] button "Go" @search
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
---- 1 iframe(s) not shown — list: webpilot frame, enter: webpilot frame switch ---
+--- 1 iframe(s) not shown — list: webpilot frame, enter: webpilot frame url <pattern> ---
 ```
 
 `[index]` is the argument to `action click N`. **Indices are bound to the last
@@ -115,7 +115,7 @@ hand-written match tables.
 | 0 | success | — |
 | 1 | `Other`, `Session` | unknown / session |
 | 3 | `ConnectionLost`, `BridgeUnavailable`, `VersionMismatch` | infra |
-| 4 | `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `TabNotFound`, `ContextNotFound`, `FrameNotFound` | not-found |
+| 4 | `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `TabNotFound`, `ContextNotFound`, `CookieNotFound`, `FrameNotFound` | not-found |
 | 5 | `Timeout` | timeout |
 | 6 | `PolicyDenied` | security |
 | 7 | `InvalidArgument` | user error |

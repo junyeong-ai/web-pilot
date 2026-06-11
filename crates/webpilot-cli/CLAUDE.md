@@ -65,6 +65,9 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   **re-serialized parsed command** (stripping unmodeled fields). Version gate:
   compares the extension's Ping version to the bundled version, rejecting with
   `VersionMismatch`. The NM writer skips an oversized message instead of wedging.
+  The host's lifetime is Chrome's: stdin EOF (Chrome gone) exits the process —
+  a graceful teardown is unreachable (the blocking writer ends only when every
+  channel sender drops, and detached per-connection tasks hold them).
 - `output.rs` — `CommandOutput` → human/json `render()`. `to_agent_text()` reuses
   the same renderers to build MCP tool results.
 - `mcp.rs` — `webpilot mcp`: a stdio JSON-RPC (MCP) server, hand-rolled with no

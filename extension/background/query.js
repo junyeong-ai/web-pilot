@@ -196,6 +196,7 @@ async function handleWait(command) {
     // scheme-agnostic, so unlike a `tabs.onUpdated` + `http` filter it doesn't
     // miss a navigation to a non-http document.
     let listener;
+    let removedListener;
     try {
       await Promise.race([
         new Promise((resolve) => {
@@ -208,13 +209,32 @@ async function handleWait(command) {
           };
           chrome.webNavigation.onCompleted.addListener(listener);
         }),
+        // The pinned tab can CLOSE during the wait (window.close() in a load
+        // handler, the user closing it) — the awaited navigation then cannot
+        // ever complete, and sitting out the full timeout to report `Timeout`
+        // would tell the agent "navigation didn't finish" when the truth is
+        // "the tab is gone" (exit 4 → recover via `tab`).
+        new Promise((_, rej) => {
+          removedListener = (closedId) => {
+            if (closedId === tab.id) rej(new Error("tab-closed"));
+          };
+          chrome.tabs.onRemoved.addListener(removedListener);
+        }),
         new Promise((_, rej) => setTimeout(() => rej(new Error("nav-timeout")), timeoutMs)),
       ]);
       return { type: "Wait", success: true };
-    } catch {
+    } catch (e) {
+      if (e?.message === "tab-closed") {
+        return {
+          type: "Wait",
+          success: false,
+          error: err("TabNotFound", `Tab not found: ${tab.id}. List: webpilot tab`, { tab_id: String(tab.id) }),
+        };
+      }
       return { type: "Wait", success: false, error: timeoutErr("navigation", timeoutMs) };
     } finally {
       if (listener) chrome.webNavigation.onCompleted.removeListener(listener);
+      if (removedListener) chrome.tabs.onRemoved.removeListener(removedListener);
     }
   }
 
