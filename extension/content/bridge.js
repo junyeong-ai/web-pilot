@@ -862,6 +862,25 @@
 
     const newVal = clear ? text : (el.value || "") + text;
 
+    // `maxlength` bounds what a USER can type — a real keyboard stops at the
+    // cap — but a programmatic value set sails past it, leaving the field
+    // holding a value the UI can never produce while the command reports
+    // success. Reject typed instead, BEFORE any mutation. Enforced only where
+    // the browser itself enforces maxlength (textarea + the textual input
+    // types); e.g. `type=number` ignores the attribute, so rejecting there
+    // would invent a constraint the page doesn't have.
+    const maxlengthApplies =
+      el instanceof HTMLTextAreaElement ||
+      (el instanceof HTMLInputElement &&
+        ["text", "search", "url", "tel", "email", "password"].includes(el.type));
+    if (maxlengthApplies && el.maxLength >= 0 && newVal.length > el.maxLength) {
+      return err(
+        "InvalidArgument",
+        `The field caps input at ${el.maxLength} characters (maxlength) but the result would be ${newVal.length} — a real keyboard would stop at the cap; send a shorter value`,
+        { requested: text },
+      );
+    }
+
     try {
       const proto = el instanceof HTMLTextAreaElement
         ? HTMLTextAreaElement
@@ -1293,6 +1312,33 @@
     return el ? { el } : { error: selectorNotFound(selector) };
   }
 
+  // The strict-selector contract for WRITES (`frame url`, `tab find`,
+  // `find --click`): a `dom set-*` whose selector matches several elements
+  // would silently mutate whichever matched first — one row of a hundred,
+  // with a bare success and no signal the others existed. Require a unique
+  // match and name the count; reads keep standard first-match semantics
+  // (recoverable, and the value identifies what was read).
+  function uniqueSelectorOrErr(selector) {
+    let all;
+    try {
+      all = document.querySelectorAll(selector);
+    } catch {
+      return {
+        error: err("InvalidArgument", `Invalid CSS selector: ${JSON.stringify(selector)}`),
+      };
+    }
+    if (all.length === 0) return { error: selectorNotFound(selector) };
+    if (all.length > 1) {
+      return {
+        error: err(
+          "InvalidArgument",
+          `${all.length} elements match ${JSON.stringify(selector)} — dom set writes one element; refine the selector (#id, :nth-of-type(n))`,
+        ),
+      };
+    }
+    return { el: all[0] };
+  }
+
   // ── Annotations ──────────────────────────────────────────────────────────
 
   function addAnnotations(msg) {
@@ -1355,11 +1401,24 @@
     // (a hand-written file may omit it, the same explicit opt-out the
     // `version` field has). Cookies are unaffected — each carries its own
     // domain and is applied through the cookie API, not the current page.
-    if (msg.origin != null && msg.origin !== location.origin) {
-      return err(
-        "InvalidArgument",
-        `session storage was exported from ${msg.origin} but the page is on ${location.origin} — navigate there before importing`,
-      );
+    if (msg.origin != null) {
+      // An OPAQUE origin (file://, a sandboxed frame) serializes as "null" —
+      // every such page shares that string while being same-origin with
+      // nothing, even itself. Equality between two "null"s would write storage
+      // across genuinely unrelated pages, so opaque origins are refused on
+      // either side rather than matched by their serialization.
+      if (msg.origin === "null" || location.origin === "null") {
+        return err(
+          "InvalidArgument",
+          "session storage cannot be ported to or from an opaque origin (a file:// or sandboxed page)",
+        );
+      }
+      if (msg.origin !== location.origin) {
+        return err(
+          "InvalidArgument",
+          `session storage was exported from ${msg.origin} but the page is on ${location.origin} — navigate there before importing`,
+        );
+      }
     }
     // setItem throws on a full quota; count the rejects and report them typed
     // rather than letting one throw abort the rest and surface as a generic
@@ -1490,19 +1549,19 @@
         return { success: true };
       }
       case "setHtml": {
-        const r = querySelectorOrErr(msg.selector);
+        const r = uniqueSelectorOrErr(msg.selector);
         if (r.error) return r.error;
         r.el.innerHTML = msg.value;
         return { success: true };
       }
       case "setText": {
-        const r = querySelectorOrErr(msg.selector);
+        const r = uniqueSelectorOrErr(msg.selector);
         if (r.error) return r.error;
         r.el.textContent = msg.value;
         return { success: true };
       }
       case "setAttr": {
-        const r = querySelectorOrErr(msg.selector);
+        const r = uniqueSelectorOrErr(msg.selector);
         if (r.error) return r.error;
         r.el.setAttribute(msg.attr, msg.value);
         return { success: true };

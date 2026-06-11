@@ -133,11 +133,14 @@ webpilot dom get-text "h1"
 webpilot dom get-html ".card"
 webpilot dom get-attr "a.download" "href"   # reads the HTML attribute
 webpilot dom set-text "h1" "New title"
-webpilot dom set-html "td" "<p>cell</p>"
-webpilot dom set-attr "input" "value" "x"
+webpilot dom set-html "#cell-3" "<p>cell</p>"
+webpilot dom set-attr "#agree" "checked" ""
 # get-attr reads the HTML *attribute*, not the live DOM *property*. A value
 # the user typed lives on the `.value` property, so `get-attr input value`
 # returns null — read a typed value with `eval 'el.value'` or `--include dom`.
+# `dom set-*` requires the selector to match exactly ONE element (an ambiguous
+# selector fails loud naming the count — refine with #id / :nth-of-type).
+# `dom get-*` reads the first match (standard querySelector semantics).
 ```
 
 ## Frames (iframes)

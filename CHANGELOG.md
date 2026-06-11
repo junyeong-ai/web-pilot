@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.178] - 2026-06-11
+
+### Fixed
+
+- **`action type` respects `maxlength` instead of silently setting a value the
+  UI can never produce.** A programmatic value set sails past the cap a real
+  keyboard stops at, so typing 4 characters into `maxlength="3"` reported
+  success while the field held over-cap content — invalid-by-construction form
+  state. It is now a typed `InvalidArgument` naming the cap and the requested
+  length, before any mutation. Enforced only where the browser itself enforces
+  maxlength (textarea + the textual input types — `type=number` ignores the
+  attribute, so rejecting there would invent a constraint the page doesn't
+  have). Shared bridge, both modes.
+
+- **An ambiguous `dom set-text` / `set-html` / `set-attr` fails loud instead of
+  mutating whichever element matched first.** A selector matching 100 elements
+  wrote one of them and returned a bare success — silent mutation of an
+  unintended element with no signal the others existed. The write paths now
+  require a unique match (typed `InvalidArgument` naming the count, pointing at
+  `#id` / `:nth-of-type`), completing the strict-selector contract for writes
+  (`frame url` 0.4.152, `tab find` 0.4.169, `find --click` 0.4.176).
+  `dom get-*` keeps standard first-match read semantics — a read is
+  recoverable and its value identifies what was read. Shared bridge, both
+  modes.
+
+- **The session-storage origin gate refuses opaque origins instead of
+  string-matching them.** An opaque origin (a `file://` or sandboxed page)
+  serializes as `"null"` — shared by every such page while being same-origin
+  with nothing, even itself — so the 0.4.177 equality check would have written
+  storage across two genuinely unrelated pages that merely share the
+  serialization. Either side being opaque is now a typed `InvalidArgument`
+  naming the cause.
+
 ## [0.4.177] - 2026-06-11
 
 ### Fixed

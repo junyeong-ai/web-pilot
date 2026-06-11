@@ -399,6 +399,74 @@ fn headless_behavioral_flow() {
         stdout(&tv)
     );
 
+    // 2a-max. `maxlength` bounds what a user can type; a programmatic set past
+    //     it would hold a value the UI can never produce while reporting
+    //     success. `#maxed` caps at 3: typing 4 chars is a typed
+    //     InvalidArgument naming the cap, BEFORE any mutation; 3 chars land.
+    let maxed_index = index_of(&cap, "maxed");
+    let over = fx.run(&["action", "type", &maxed_index, "abcd", "--clear"]);
+    assert_eq!(
+        code(&over),
+        7,
+        "typing past maxlength must be a typed InvalidArgument, not a silent over-cap set: {}",
+        stdout(&over)
+    );
+    assert!(
+        stdout(&over).contains("maxlength"),
+        "the over-cap error must name the constraint: {}",
+        stdout(&over)
+    );
+    assert!(
+        stdout(&fx.run(&["eval", "document.getElementById('maxed').value === ''"]))
+            .contains("true"),
+        "a rejected over-cap type must mutate NOTHING"
+    );
+    assert_eq!(
+        code(&fx.run(&["action", "type", &maxed_index, "abc", "--clear"])),
+        0,
+        "typing exactly maxlength chars must succeed"
+    );
+
+    // 2a-domset. `dom set-*` enforces the strict-selector contract for writes:
+    //     an ambiguous selector (here "input", many matches) is a typed
+    //     InvalidArgument naming the count — never a silent mutation of
+    //     whichever matched first. A unique selector still writes, and
+    //     `dom get-*` keeps standard first-match read semantics.
+    let amb_set = fx.run(&["dom", "set-text", "input", "x"]);
+    assert_eq!(
+        code(&amb_set),
+        7,
+        "an ambiguous dom set must be a typed InvalidArgument, not a first-match write: {}",
+        stdout(&amb_set)
+    );
+    // The count is a NUMBER in the message (not just the phrase), parsed
+    // rather than hard-coded so fixture growth doesn't break the assertion.
+    let amb_out = stdout(&amb_set);
+    let phrase_at = amb_out
+        .find(" elements match")
+        .expect("the dom-set ambiguity error must name the count");
+    let count: String = amb_out[..phrase_at]
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    assert!(
+        count.parse::<usize>().is_ok_and(|n| n > 1),
+        "a numeric match count must precede 'elements match': {amb_out}"
+    );
+    assert_eq!(
+        code(&fx.run(&["dom", "set-text", "#wsp", "rewritten"])),
+        0,
+        "a unique dom set must write"
+    );
+    assert!(
+        stdout(&fx.run(&["dom", "get-text", "#wsp"])).contains("rewritten"),
+        "the unique dom set must actually land"
+    );
+
     // 2a-ce. `type` into a contenteditable APPENDS at the end, like an <input>:
     //     after a programmatic focus the caret sits at a stale/start position,
     //     so the bridge collapses the selection to the end before inserting.
@@ -1901,6 +1969,28 @@ fn headless_behavioral_flow() {
     assert!(
         stdout(&fx.run(&["eval", "localStorage.getItem('wp_foreign') === null"])).contains("true"),
         "a rejected cross-origin import must write NOTHING"
+    );
+    // An OPAQUE origin serializes as the string "null" — shared by every
+    // file:// and sandboxed page while being same-origin with nothing, even
+    // itself. The gate refuses it on either side rather than matching two
+    // unrelated pages by their serialization.
+    let opaque_session = home.join("opaque-origin-session.json");
+    std::fs::write(
+        &opaque_session,
+        br#"{"version":1,"origin":"null","local_storage":{"wp_opaque":"1"}}"#,
+    )
+    .expect("write opaque-origin session fixture");
+    let oq = fx.run(&["session", "import", opaque_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&oq),
+        7,
+        "an opaque export origin must be refused, not string-matched: {}",
+        stdout(&oq)
+    );
+    assert!(
+        stdout(&oq).contains("opaque origin"),
+        "the opaque-origin error must name the cause: {}",
+        stdout(&oq)
     );
     let matching_session = home.join("matching-origin-session.json");
     std::fs::write(

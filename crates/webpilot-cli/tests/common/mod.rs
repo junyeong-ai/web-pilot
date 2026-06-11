@@ -15,6 +15,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <select id="ogsel" oninput="window.__oginput=(window.__oginput||0)+1" onchange="window.__ogchange=(window.__ogchange||0)+1"><optgroup label="g" disabled><option value="ogx">ogx</option></optgroup><option value="ogy">ogy</option></select>
 <select id="multisel" multiple><option value="ma">ma</option><option value="mb">mb</option><option value="mc">mc</option></select>
 <input id="q" type="text" placeholder="Search">
+<input id="maxed" type="text" maxlength="3">
 <input id="file" type="file">
 <button id="slownav" onclick="location.href='/slow'">slow nav</button>
 <a id="nav" href="/second">go second</a>
