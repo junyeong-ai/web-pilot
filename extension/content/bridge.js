@@ -296,7 +296,20 @@
       if (child.nodeType === Node.TEXT_NODE) {
         out += `${child.textContent} `;
       } else if (child.nodeType === Node.ELEMENT_NODE) {
-        if (child.localName === "slot" && child.assignedNodes().length > 0) continue;
+        if (child.localName === "slot") {
+          // Assigned → light content the base innerText already carries.
+          if (child.assignedNodes().length > 0) continue;
+          // Unassigned → its FALLBACK children render shadow-side. The slot
+          // itself is display:contents (no box — checkVisibility() is false
+          // by nature, not by hiding), so gate only on an author's explicit
+          // display:none and descend; each fallback child still runs its own
+          // visibility check below.
+          try {
+            if (getComputedStyle(child).display === "none") continue;
+          } catch {}
+          out += `${shadowOwnText(child)} `;
+          continue;
+        }
         if (child.checkVisibility && !child.checkVisibility()) continue;
         out +=
           child.shadowRoot?.mode === "open"

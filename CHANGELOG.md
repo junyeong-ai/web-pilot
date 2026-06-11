@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.198] - 2026-06-11
+
+### Fixed
+
+- **0.4.197's slot-fallback descent actually fires.** A `<slot>` is
+  `display:contents` — no box, so `checkVisibility()` is false *by nature*,
+  and the general per-child visibility gate skipped the unassigned slot before
+  the fallback descent could run (0.4.197's own e2e caught it). The slot
+  branch now precedes the gate: assigned → skip (light content the base
+  carries), unassigned → descend its fallback unless an author explicitly set
+  `display:none`; each fallback child still runs its own visibility check.
+
 ## [0.4.197] - 2026-06-11
 
 ### Fixed
