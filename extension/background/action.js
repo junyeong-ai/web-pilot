@@ -52,7 +52,10 @@ async function handleAction(command) {
             window.__webpilot_dialogs = [];
             window.alert = (msg) => { window.__webpilot_dialogs.push({ type: "alert", message: String(msg) }); };
             window.confirm = (msg) => { window.__webpilot_dialogs.push({ type: "confirm", message: String(msg) }); return true; };
-            window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return def || ""; };
+            // A real `prompt` returns the DEFAULT stringified when accepted —
+            // `prompt(msg, 0)` yields "0", not "" (`||` would coerce every
+            // falsy default away and page logic branching on it would misfire).
+            window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return def == null ? "" : String(def); };
           }
         },
       });
