@@ -44,6 +44,19 @@ async function ensureBridge(tabId, frameId = 0) {
     } catch {}
     console.warn(`[WebPilot] Bridge verify failed (attempt ${attempt + 1}/3, tab=${tabId}, frame=${frameId})`);
   }
+  // Callers probe the frame BEFORE calling here, but a subframe can vanish in
+  // the async gap (an iframe mid-navigation) — and then every inject/ping
+  // above failed for a reason that is NOT infra. Re-probe at the failure
+  // point: a gone frame is FrameNotFound (exit 4 → recapture), reserving
+  // BridgeUnavailable (exit 3 → infra) for a frame that exists but won't
+  // answer — the same split headless `bridge_context_id` makes.
+  const gone = await frameVanishedError(tabId, frameId);
+  if (gone) {
+    const fe = new Error(gone.message);
+    fe.code = gone.code;
+    fe.data = { selector: gone.selector };
+    throw fe;
+  }
   const e = new Error("Page is not responding — try reloading the page");
   e.code = "BridgeUnavailable";
   throw e;
@@ -77,8 +90,13 @@ async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
     // is exactly the message-parsing the typed-error convention forbids.
     try {
       await ensureBridge(tabId, frameId);
-    } catch {
-      throw firstError; // can't even re-inject — surface the original failure
+    } catch (e) {
+      // A TYPED re-inject failure is the root cause — FrameNotFound (the
+      // frame vanished; exit 4 → recapture) or BridgeUnavailable (exit 3) —
+      // and outranks the untyped first send error, which would collapse to
+      // Other. Only an untyped throw falls back to the original failure.
+      if (e?.code) throw e;
+      throw firstError;
     }
     return await sendOnce();
   }

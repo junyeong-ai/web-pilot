@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.183] - 2026-06-11
+
+### Fixed
+
+- **A subframe that vanishes mid-operation is `FrameNotFound`, not
+  `BridgeUnavailable` (browser mode).** Callers probe the frame before
+  injecting the bridge, but an iframe can navigate away in the async gap —
+  every inject/ping then failed for a reason that is not infrastructure, yet
+  the agent got exit 3 ("connection lost, retry infra") instead of exit 4
+  ("stale frame, re-capture"). `ensureBridge` now re-probes the frame at its
+  failure point and throws the typed `FrameNotFound` when it is gone,
+  reserving `BridgeUnavailable` for a frame that exists but will not answer —
+  the same split headless `bridge_context_id` makes. One choke point, so
+  every bridge-routed command (capture, wait, dom, action, session storage)
+  inherits the correct semantics. The `sendToContent` retry path completes
+  the contract: a TYPED re-inject failure (the root cause) now outranks the
+  untyped first send error, which would have collapsed it to `Other`.
+
 ## [0.4.182] - 2026-06-11
 
 ### Fixed
