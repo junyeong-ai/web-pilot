@@ -237,11 +237,11 @@ async function readFrameName(tabId, frameId) {
     .catch(() => null);
 }
 
-// A pattern frame selector (`name` / `url`) that matched more than one frame is
-// ambiguous: switching into whichever came first would silently scope every
-// later command to a frame the agent may not have meant. Fail loud with the
-// match list (headless parity) so the agent refines the pattern or uses a
-// `frame predicate` — the precise escape hatch, which stays first-match.
+// A frame selector that matched more than one frame is ambiguous: switching
+// into whichever came first would silently scope every later command to a
+// frame the agent may not have meant. Fail loud with the match list (headless
+// parity) so the agent refines the pattern — the same contract every selector
+// kind holds, predicates included.
 function ambiguousFrameSwitch(hits, what) {
   if (hits.length <= 1) return null;
   const urls = hits.map((f) => f.url).join(", ");
@@ -310,6 +310,7 @@ async function handleFrameSwitch(selector) {
     const probe = await withCdp(tab.id, async (tid) => {
       await cdpSend(tid, "Runtime.enable", {});
       let error = null;
+      const frames = [];
       for (const f of httpFrames) {
         const uniqueContextId = await frameWorldContextId(tid, tab.id, f.frameId, "MAIN");
         if (uniqueContextId == null) continue;
@@ -325,11 +326,24 @@ async function handleFrameSwitch(selector) {
           continue;
         }
         if (r && r.success === false && r.error) { error = r.error; continue; }
-        if (r?.success && r.result && JSON.parse(r.result) === true) return { frame: f };
+        if (r?.success && r.result && JSON.parse(r.result) === true) frames.push(f);
       }
-      return { error };
+      return { frames, error };
     });
-    matched = probe.frame || null;
+    // The strict-selector contract (`frame url`, `tab find`, `find --click`):
+    // a predicate true in MORE than one frame would silently scope every later
+    // command to whichever matched first. Fail loud naming the frames
+    // (headless parity).
+    if (probe.frames.length > 1) {
+      const urls = probe.frames.map((f) => f.url).join(", ");
+      return {
+        type: "FrameSwitched",
+        success: false,
+        frame_id: activeFrameIdWire(),
+        error: err("InvalidArgument", `${probe.frames.length} frames match the predicate — narrow it (urls: ${urls})`),
+      };
+    }
+    matched = probe.frames[0] || null;
     if (!matched && probe.error) {
       return { type: "FrameSwitched", success: false, frame_id: activeFrameIdWire(), error: probe.error };
     }

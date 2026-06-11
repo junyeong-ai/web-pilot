@@ -9,12 +9,11 @@ use webpilot::types::{FrameInfo, TabInfo};
 
 use super::{LocalTransport, action_success, connect_to_page, target_in_context};
 
-/// A pattern frame selector (`name` / `url`) that matched more than one frame is
-/// ambiguous: switching into whichever came first in document order would
-/// silently scope every later command to a frame the agent may not have meant.
-/// Fail loud with the match list so the agent refines the pattern or reaches for
-/// a `frame predicate`. (The `predicate` selector is the precise escape hatch
-/// and stays first-match — it is what this message points to.)
+/// A frame selector that matched more than one frame is ambiguous: switching
+/// into whichever came first in document order would silently scope every
+/// later command to a frame the agent may not have meant. Fail loud with the
+/// match list so the agent refines the selector — the same contract every
+/// selector kind holds, predicates included.
 fn ambiguous_frame_switch(hits: &[&FrameInfo], what: String) -> ResponseData {
     let urls = hits
         .iter()
@@ -381,7 +380,7 @@ impl LocalTransport {
                 let candidate_ids: Vec<String> =
                     candidates.iter().map(|f| f.frame_id.clone()).collect();
                 self.settle_frame_contexts(&candidate_ids).await;
-                let mut found = None;
+                let mut matches: Vec<&_> = Vec::new();
                 let mut predicate_error = None;
                 for f in &candidates {
                     let Some(cid) = self.frame_contexts.lock().await.get(&f.frame_id).cloned()
@@ -391,8 +390,7 @@ impl LocalTransport {
                     match self.eval_in_context(&form, Some(&cid), true).await {
                         Ok(v) => {
                             if v.get("value").and_then(|v| v.as_bool()) == Some(true) {
-                                found = Some(*f);
-                                break;
+                                matches.push(f);
                             }
                         }
                         // A predicate that THREW (a broken expression) is not a
@@ -402,12 +400,30 @@ impl LocalTransport {
                         Err(e) => predicate_error = Some(e),
                     }
                 }
-                if found.is_none()
+                // The strict-selector contract (`frame url`, `tab find`,
+                // `find --click`): a predicate true in MORE than one frame
+                // would silently scope every later command to whichever
+                // matched first. Fail loud naming the matching frames.
+                if matches.len() > 1 {
+                    let urls: Vec<String> = matches
+                        .iter()
+                        .map(|f| webpilot::types::line_safe(&f.url).into_owned())
+                        .collect();
+                    return Err(WebPilotError::InvalidArgument {
+                        detail: format!(
+                            "{} frames match the predicate — narrow it (urls: {})",
+                            matches.len(),
+                            urls.join(", ")
+                        ),
+                    }
+                    .into());
+                }
+                if matches.is_empty()
                     && let Some(e) = predicate_error
                 {
                     return Err(e);
                 }
-                found
+                matches.pop().copied()
             }
         };
 

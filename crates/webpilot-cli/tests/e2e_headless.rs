@@ -1861,6 +1861,22 @@ fn headless_behavioral_flow() {
         0,
         "navigate for the dead-pin AX test failed"
     );
+    // A predicate true in MORE than one frame fails loud (the strict-selector
+    // contract, completing it for predicates): base embeds /frame and its
+    // /nested child, so `true` matches both — exit 7 naming the frames, and
+    // the active scope is untouched.
+    let amb_pred = fx.run(&["frame", "find", "true"]);
+    assert_eq!(
+        code(&amb_pred),
+        7,
+        "an ambiguous frame predicate must fail loud, not first-match: {}",
+        stdout(&amb_pred)
+    );
+    assert!(
+        stdout(&amb_pred).contains("frames match"),
+        "the ambiguity error must name the frames: {}",
+        stdout(&amb_pred)
+    );
     assert_eq!(
         code(&fx.run(&["frame", "url", "/frame"])),
         0,

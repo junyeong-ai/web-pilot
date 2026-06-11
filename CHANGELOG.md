@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.199] - 2026-06-11
+
+### Fixed
+
+Three verdicts overturned by an adversarial re-audit of earlier "by design"
+rulings:
+
+- **`diff --screenshot`'s `changed` verdict is exact.** Every mitigating field
+  (`changed_pixels`, the percent, the red overlay) derived from the same noise
+  threshold, so a pair whose every pixel shifted subtly read
+  `changed: false, 0/total` — an identity claim, not coarse reporting.
+  `changed` now keys on exact pixel inequality (or a size change);
+  `changed_pixels` counts exact mismatches, and the threshold remains a
+  reporting aid as `pixels_above_noise` / `percent_above_noise` with the
+  overlay unchanged.
+
+- **An ambiguous `frame find` predicate fails loud**, completing the
+  strict-selector contract for the last selector kind: a predicate true in
+  more than one frame silently scoped every later command to whichever
+  matched first. Both modes now evaluate all candidates and reject >1 match
+  naming the frame URLs; one match switches, zero keeps the existing
+  typed-error paths.
+
+- **The browser-mode NM frame-limit error names the remedy.** Export persists
+  through an asymmetric (larger) read path, so a big exported session was
+  importable only outside `--browser` — and the error didn't say so. It now
+  reads "retry without --browser (headless reads the file directly)".
+
+(The fourth re-audited ruling — page-clock monitor stamps — stands: an
+install-time clock capture still inherits a pre-install mock, so the
+documented best-effort boundary is unchanged.)
+
 ## [0.4.198] - 2026-06-11
 
 ### Fixed

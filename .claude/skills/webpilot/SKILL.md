@@ -158,7 +158,7 @@ webpilot dom set-attr "#agree" "checked" ""
 webpilot frame                            # list, with active_frame_id
 webpilot frame switch "frame-name"        # name attribute
 webpilot frame url "*pattern*"            # URL substring
-webpilot frame find "window.foo === 1"    # JS predicate per-frame
+webpilot frame find "window.foo === 1"    # JS predicate per-frame (must match exactly ONE)
 webpilot frame main                       # back to top frame
 ```
 

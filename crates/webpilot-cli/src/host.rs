@@ -448,7 +448,7 @@ async fn handle_one_cli_request(
             cli_id,
             WebPilotError::InvalidArgument {
                 detail: format!(
-                    "command is {} bytes, over the {}-byte Native Messaging limit",
+                    "command is {} bytes, over the {}-byte Native Messaging frame limit — retry without --browser (headless reads the file directly)",
                     encoded.len(),
                     native_messaging::MAX_WRITE_SIZE
                 ),

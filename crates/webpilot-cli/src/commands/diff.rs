@@ -173,6 +173,7 @@ fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
     let rgba_b = img_b.to_rgba8();
 
     let mut diff_count = 0u64;
+    let mut exact_count = 0u64;
     let total = (w as u64) * (h as u64);
     let mut diff_img = image::RgbaImage::new(w, h);
 
@@ -180,6 +181,14 @@ fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
         for x in 0..w {
             let pa = rgba_a.get_pixel(x, y);
             let pb = rgba_b.get_pixel(x, y);
+            // EXACT inequality drives the `changed` verdict: a page whose every
+            // pixel shifted subtly (all below the noise threshold) HAS changed,
+            // and reporting "0/total" there would be an identity claim, not
+            // coarse reporting. The threshold stays what the overlay and the
+            // noise-filtered count key on.
+            if pa != pb {
+                exact_count += 1;
+            }
             let dist = ((pa[0] as i32 - pb[0] as i32).pow(2)
                 + (pa[1] as i32 - pb[1] as i32).pow(2)
                 + (pa[2] as i32 - pb[2] as i32).pow(2)) as f64;
@@ -212,7 +221,12 @@ fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
         .context("Cannot save diff image")?;
 
     let mut human = format!(
-        "Changed: {:.1}% ({diff_count}/{total} pixels)\nDiff image: {}",
+        "Changed: {} — {exact_count} px differ exactly; {:.1}% above the noise threshold ({diff_count}/{total})\nDiff image: {}",
+        if exact_count > 0 || dimensions_differ {
+            "yes"
+        } else {
+            "no"
+        },
         pct,
         diff_path.display()
     );
@@ -228,15 +242,18 @@ fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
 
     Ok(CommandOutput::Data {
         json: serde_json::json!({
-            // Explicit verdict: a differing pixel (above the per-pixel threshold)
-            // OR a size change is "changed" — two images of different dimensions
-            // are not the same image even if their overlapping region matches, so
-            // a cropped/resized page never reads as unchanged. Mirrors the DOM
-            // diff; the exit code stays 0 (success) — it names an error class,
-            // not a domain result.
-            "changed": diff_count > 0 || dimensions_differ,
-            "changed_percent": format!("{:.1}", pct),
-            "changed_pixels": diff_count,
+            // Explicit verdict from EXACT pixel inequality (or a size change —
+            // two images of different dimensions are not the same image even if
+            // their overlap matches): every mitigating field used to derive
+            // from the same noise threshold, so a page whose pixels all shifted
+            // subtly read "changed: false, 0/total" — an identity claim. The
+            // threshold remains a reporting aid: `pixels_above_noise` and the
+            // red overlay key on it. Exit code stays 0 (success) — it names an
+            // error class, not a domain result.
+            "changed": exact_count > 0 || dimensions_differ,
+            "changed_pixels": exact_count,
+            "pixels_above_noise": diff_count,
+            "percent_above_noise": format!("{:.1}", pct),
             "total_pixels": total,
             "diff_image": diff_path.to_string_lossy(),
             "compared_region": { "width": w, "height": h },
