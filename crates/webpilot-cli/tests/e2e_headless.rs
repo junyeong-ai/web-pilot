@@ -480,6 +480,31 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["dom", "get-text", "#wsp"])).contains("rewritten"),
         "the unique dom set must actually land"
     );
+    // The selector surface pierces open shadow roots, like the element index
+    // and `wait selector`: a component's field is readable and writable
+    // without eval. `#shadowbtn` lives only in the shadow root — get reads it,
+    // a unique set writes it (an inert data attribute), and a selector with a
+    // light-DOM element AND a shadow twin ("p": light #wsp + the shadow
+    // prose) is TWO candidates — ambiguous, never a silent light-only write.
+    assert!(
+        stdout(&fx.run(&["dom", "get-text", "#shadowbtn"])).contains("shadow"),
+        "dom get must pierce an open shadow root"
+    );
+    assert_eq!(
+        code(&fx.run(&["dom", "set-attr", "#shadowbtn", "data-wp", "marked"])),
+        0,
+        "a unique shadow-root dom set must write"
+    );
+    assert!(
+        stdout(&fx.run(&["dom", "get-attr", "#shadowbtn", "data-wp"])).contains("marked"),
+        "the shadow-root attribute write must read back"
+    );
+    assert_eq!(
+        code(&fx.run(&["dom", "set-text", "p", "x"])),
+        7,
+        "a selector matching a light element AND a shadow twin must be ambiguous: {}",
+        stdout(&fx.run(&["dom", "set-text", "p", "x"]))
+    );
 
     // 2a-ce. `type` into a contenteditable APPENDS at the end, like an <input>:
     //     after a programmatic focus the caret sits at a stale/start position,

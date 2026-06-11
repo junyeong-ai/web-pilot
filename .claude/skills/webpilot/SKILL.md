@@ -140,7 +140,8 @@ webpilot dom set-attr "#agree" "checked" ""
 # returns null — read a typed value with `eval 'el.value'` or `--include dom`.
 # `dom set-*` requires the selector to match exactly ONE element (an ambiguous
 # selector fails loud naming the count — refine with #id / :nth-of-type).
-# `dom get-*` reads the first match (standard querySelector semantics).
+# `dom get-*` reads the first match. Selectors pierce open shadow roots in
+# both directions (light DOM first), so a web component's field works here.
 ```
 
 ## Frames (iframes)

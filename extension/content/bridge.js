@@ -1301,10 +1301,17 @@
 
   // ── DOM property helpers ─────────────────────────────────────────────────
 
-  function querySelectorOrErr(selector) {
-    let el;
+  // One deep, budgeted lookup behind every `dom get-*`/`set-*` selector: the
+  // element index and `wait selector` pierce open shadow roots, so the DOM
+  // selector surface does too — a web component's field is readable and
+  // writable without falling back to eval. Per-root matching (light DOM
+  // first, then each open shadow root in document order), the same
+  // budget-bounded traversal the capture uses.
+  function queryDeepOrErr(selector) {
     try {
-      el = document.querySelector(selector);
+      return {
+        all: queryAllDeepMulti([selector], document, { hosts: SHADOW_HOST_BUDGET })[0],
+      };
     } catch {
       // An invalid CSS selector throws a SyntaxError. Surface it as a typed
       // InvalidArgument instead of letting it propagate — in browser mode an
@@ -1313,34 +1320,35 @@
         error: err("InvalidArgument", `Invalid CSS selector: ${JSON.stringify(selector)}`),
       };
     }
-    return el ? { el } : { error: selectorNotFound(selector) };
+  }
+
+  function querySelectorOrErr(selector) {
+    const r = queryDeepOrErr(selector);
+    if (r.error) return r;
+    return r.all.length > 0 ? { el: r.all[0] } : { error: selectorNotFound(selector) };
   }
 
   // The strict-selector contract for WRITES (`frame url`, `tab find`,
   // `find --click`): a `dom set-*` whose selector matches several elements
   // would silently mutate whichever matched first — one row of a hundred,
   // with a bare success and no signal the others existed. Require a unique
-  // match and name the count; reads keep standard first-match semantics
-  // (recoverable, and the value identifies what was read).
+  // match ACROSS shadow boundaries (a light-DOM element and a shadow twin
+  // sharing the selector are two candidates, not a unique hit) and name the
+  // count; reads keep standard first-match semantics (recoverable, and the
+  // value identifies what was read).
   function uniqueSelectorOrErr(selector) {
-    let all;
-    try {
-      all = document.querySelectorAll(selector);
-    } catch {
-      return {
-        error: err("InvalidArgument", `Invalid CSS selector: ${JSON.stringify(selector)}`),
-      };
-    }
-    if (all.length === 0) return { error: selectorNotFound(selector) };
-    if (all.length > 1) {
+    const r = queryDeepOrErr(selector);
+    if (r.error) return r;
+    if (r.all.length === 0) return { error: selectorNotFound(selector) };
+    if (r.all.length > 1) {
       return {
         error: err(
           "InvalidArgument",
-          `${all.length} elements match ${JSON.stringify(selector)} — dom set writes one element; refine the selector (#id, :nth-of-type(n))`,
+          `${r.all.length} elements match ${JSON.stringify(selector)} — dom set writes one element; refine the selector (#id, :nth-of-type(n))`,
         ),
       };
     }
-    return { el: all[0] };
+    return { el: r.all[0] };
   }
 
   // ── Annotations ──────────────────────────────────────────────────────────

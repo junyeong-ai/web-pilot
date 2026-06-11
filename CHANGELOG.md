@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.180] - 2026-06-11
+
+### Fixed
+
+- **`dom get-*` / `set-*` selectors pierce open shadow roots, and the set
+  uniqueness check counts shadow matches.** The selector surface was light-DOM
+  only while the element index, `wait selector`, and the text capture all
+  pierce — so a web component's field was unreadable/unwritable without eval,
+  and worse, the 0.4.178 uniqueness check could see one light-DOM match where
+  a shadow twin also existed, judge it "unique", and silently write the wrong
+  element. Both helpers now run the same budget-bounded deep traversal the
+  capture uses (light DOM first, then each open shadow root in document
+  order): get reads the first deep match, set requires a unique match across
+  shadow boundaries — a light element and a shadow twin are two candidates,
+  never a silent light-only write. Shared bridge, both modes.
+
 ## [0.4.179] - 2026-06-11
 
 ### Fixed
