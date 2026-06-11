@@ -102,9 +102,13 @@ Action responses include `url_changed` if navigation happened and `new_tab` if a
 ```bash
 webpilot find --role button --text "Submit"        # at least one filter required
 webpilot find --label "Email" --fill "a@b.com"     # find + type
-webpilot find --placeholder "Search" --click       # find + click first match
+webpilot find --placeholder "Search" --click       # find + click
 webpilot find --tag input
 ```
+
+`--click`/`--fill` require the filter to match **exactly one** element — an
+ambiguous filter fails loud listing the matches (narrow it, or use
+`action click N`). A bare `find` lists every match.
 
 ## Wait
 

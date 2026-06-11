@@ -23,10 +23,12 @@ pub struct FindArgs {
     pub placeholder: Option<String>,
     #[arg(long)]
     pub tag: Option<String>,
-    /// Click the first match. Mutually exclusive with --fill.
+    /// Click the match (the filter must match exactly one element).
+    /// Mutually exclusive with --fill.
     #[arg(long, conflicts_with = "fill")]
     pub click: bool,
-    /// Type into the first match. Mutually exclusive with --click.
+    /// Type into the match (the filter must match exactly one element).
+    /// Mutually exclusive with --click.
     #[arg(long, allow_hyphen_values = true)]
     pub fill: Option<String>,
 }
@@ -111,6 +113,29 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
     let summary = format!("({} matches)", matches.len());
     let mut items = serde_json::json!({"matches": matches, "count": matches.len()});
     let mut human_lines = human_lines;
+
+    // The strict-selector contract (`frame url` v0.4.152, `tab find` v0.4.169):
+    // a chained action on an ambiguous filter would silently act on whichever
+    // element matched first — a side-effecting guess with no signal the others
+    // existed (the wrong form submitted, the wrong field filled). Fail loud
+    // naming the matches; the agent narrows the filter or acts by index. A
+    // bare `find` (no action) still lists every match — that is its job.
+    if (args.click || args.fill.is_some()) && matches.len() > 1 {
+        let listed: Vec<String> = matches
+            .iter()
+            .take(5)
+            .map(|el| format!("[{}] {} \"{}\"", el.index, el.tag, line_safe(&el.text)))
+            .collect();
+        return Err(webpilot::WebPilotError::InvalidArgument {
+            detail: format!(
+                "{} elements match the filter; narrow it or act by index (webpilot action click N): {}{}",
+                matches.len(),
+                listed.join(", "),
+                if matches.len() > 5 { ", …" } else { "" }
+            ),
+        }
+        .into());
+    }
 
     let first_index = matches[0].index;
 

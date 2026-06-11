@@ -758,6 +758,47 @@ fn headless_behavioral_flow() {
         stdout(&bin)
     );
 
+    // 2e-find. A chained `find --click`/`--fill` enforces the strict-selector
+    //     contract (`frame url` v0.4.152, `tab find` v0.4.169): an ambiguous
+    //     filter fails loud BEFORE any side effect, never a silent act on the
+    //     first match. The fixture has many <input>s, so `--tag input` is
+    //     ambiguous; the placeholder filter is unique and still chains. The
+    //     handler is mode-generic (shared Capture → Action path), so both
+    //     modes get the contract.
+    let ambiguous = fx.run(&["find", "--tag", "input", "--fill", "never-lands"]);
+    assert_eq!(
+        code(&ambiguous),
+        7,
+        "an ambiguous find --fill must be a typed InvalidArgument, not a silent first-match fill: {}",
+        stdout(&ambiguous)
+    );
+    assert!(
+        stdout(&ambiguous).contains("elements match"),
+        "the ambiguity error must name the match count: {}",
+        stdout(&ambiguous)
+    );
+    let unique = fx.run(&[
+        "find",
+        "--placeholder",
+        "Search",
+        "--fill",
+        "wp-find-unique",
+    ]);
+    assert_eq!(
+        code(&unique),
+        0,
+        "a unique find --fill must chain: {}",
+        stdout(&unique)
+    );
+    assert!(
+        stdout(&fx.run(&[
+            "eval",
+            "document.getElementById('q').value === 'wp-find-unique'"
+        ]))
+        .contains("true"),
+        "the unique match must actually be filled"
+    );
+
     // 2f. The bridge runs in an isolated world, so page JS that overwrites the
     //     MAIN-world `__webpilot_handle` / `__webpilot_state` cannot corrupt how
     //     an index resolves. Tamper in MAIN, then capture + click and confirm

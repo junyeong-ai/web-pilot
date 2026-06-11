@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.176] - 2026-06-11
+
+### Fixed
+
+- **An ambiguous `find --click` / `--fill` fails loud instead of silently
+  acting on the first match**, completing the strict-selector contract
+  (`frame url` 0.4.152, `tab find` 0.4.169) for chained element actions: a
+  filter matching more than one element is a typed `InvalidArgument` naming
+  the count and the matches (line-safed, capped at five), so the agent narrows
+  the filter or acts by index — never a side-effecting guess that may have
+  submitted the wrong form or filled the wrong field with no signal the other
+  matches existed. A unique match still chains; a bare `find` (no action)
+  still lists every match — that is its job. The handler is mode-generic, so
+  both modes get the contract.
+
 ## [0.4.175] - 2026-06-11
 
 ### Fixed
