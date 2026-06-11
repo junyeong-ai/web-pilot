@@ -14,12 +14,24 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// `ElementNotFound` guidance: a populated page names its valid range; an
+/// empty one says so plainly — "[1]-[0]" would be a nonsensical empty range.
+fn element_not_found_text(requested: u32, available: u32) -> String {
+    if available == 0 {
+        format!(
+            "Element [{requested}] not found — the page has no interactive elements. Re-capture: webpilot capture --include dom"
+        )
+    } else {
+        format!(
+            "Element [{requested}] not found (page has [1]-[{available}]). Re-capture: webpilot capture --include dom"
+        )
+    }
+}
+
 /// Structured error type. Use `Display` for AI-friendly guidance.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum WebPilotError {
-    #[error(
-        "Element [{requested}] not found (page has [1]-[{available}]). Re-capture: webpilot capture --include dom"
-    )]
+    #[error("{}", element_not_found_text(*.requested, *.available))]
     ElementNotFound { requested: u32, available: u32 },
 
     #[error(
@@ -279,6 +291,23 @@ mod tests {
         assert!(s.contains("[5]"));
         assert!(s.contains("[1]-[3]"));
         assert_eq!(e.exit_code(), 4);
+    }
+
+    #[test]
+    fn element_not_found_on_an_empty_page_says_so_not_an_empty_range() {
+        let e = WebPilotError::ElementNotFound {
+            requested: 1,
+            available: 0,
+        };
+        let s = e.to_string();
+        assert!(
+            s.contains("no interactive elements"),
+            "an empty page must be named plainly: {s}"
+        );
+        assert!(
+            !s.contains("[1]-[0]"),
+            "never render the nonsensical empty range: {s}"
+        );
     }
 
     #[test]

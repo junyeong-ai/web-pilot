@@ -44,12 +44,21 @@ async function ensureBridge(tabId, frameId = 0) {
     } catch {}
     console.warn(`[WebPilot] Bridge verify failed (attempt ${attempt + 1}/3, tab=${tabId}, frame=${frameId})`);
   }
-  // Callers probe the frame BEFORE calling here, but a subframe can vanish in
-  // the async gap (an iframe mid-navigation) — and then every inject/ping
-  // above failed for a reason that is NOT infra. Re-probe at the failure
-  // point: a gone frame is FrameNotFound (exit 4 → recapture), reserving
-  // BridgeUnavailable (exit 3 → infra) for a frame that exists but won't
-  // answer — the same split headless `bridge_context_id` makes.
+  // Callers resolve the tab and probe the frame BEFORE calling here, but
+  // either can vanish in the async gap (the pinned tab closes; an iframe
+  // navigates away) — and then every inject/ping above failed for a reason
+  // that is NOT infra. Re-probe at the failure point, tab first (a gone tab
+  // makes any frame answer moot): a closed tab is TabNotFound and a gone
+  // frame is FrameNotFound (both exit 4 → recover), reserving
+  // BridgeUnavailable (exit 3 → infra) for a page that exists but won't
+  // answer — the same split the headless transport makes.
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) {
+    const te = new Error(`Tab not found: ${tabId}. List: webpilot tab`);
+    te.code = "TabNotFound";
+    te.data = { tab_id: String(tabId) };
+    throw te;
+  }
   const gone = await frameVanishedError(tabId, frameId);
   if (gone) {
     const fe = new Error(gone.message);

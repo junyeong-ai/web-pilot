@@ -47,7 +47,9 @@
   const elementNotFound = (requested, available) =>
     err(
       "ElementNotFound",
-      `Index ${requested} out of range (1-${available})`,
+      available > 0
+        ? `Index ${requested} out of range (1-${available})`
+        : `Index ${requested} out of range — the page has no interactive elements`,
       { requested, available },
     );
 

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.184] - 2026-06-11
+
+### Fixed
+
+- **A pinned tab that closes mid-operation is `TabNotFound`, not
+  `BridgeUnavailable` (browser mode)** — completing the 0.4.183 typed split
+  symmetrically: callers resolve the tab before injecting the bridge, but the
+  tab can close in the same async gap the subframe case had, and the agent got
+  exit 3 ("infra, retry" — a retry loop) instead of exit 4 ("gone, recover").
+  `ensureBridge`'s failure path now probes the tab first (a gone tab makes any
+  frame answer moot), then the frame, then falls to `BridgeUnavailable` only
+  for a page that exists but will not answer.
+
+- **`ElementNotFound` on an empty page says so instead of rendering the
+  nonsensical range `[1]-[0]`.** With zero interactive elements captured, the
+  guidance now reads "the page has no interactive elements" (both the Rust
+  `Display` both modes re-render from, and the bridge's advisory message).
+
 ## [0.4.183] - 2026-06-11
 
 ### Fixed
