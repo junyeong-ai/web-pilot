@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.194] - 2026-06-11
+
+### Changed
+
+- **The skill's contract caught up with the code** (a claims-vs-behavior
+  audit): the policy-key list now includes `device` and `context_close` (an
+  agent building a `default deny` allowlist would have missed them); the
+  session section states the storage origin gate (export records the origin,
+  import writes storage only on that same origin — cookies import regardless);
+  the iframe trailer is quoted exactly as rendered.
+
 ## [0.4.193] - 2026-06-11
 
 ### Fixed

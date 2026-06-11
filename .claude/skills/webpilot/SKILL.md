@@ -162,7 +162,7 @@ webpilot frame find "window.foo === 1"    # JS predicate per-frame
 webpilot frame main                       # back to top frame
 ```
 
-`capture` is always scoped to one frame — the active frame, or the main frame by default. It never merges frames, so an element's `[N]` index is the same index its action resolves against in that frame. When the main frame contains HTTP iframes, capture appends `--- N iframe(s) not shown ---`; enter one with `frame switch` to capture and act inside it, then `frame main` to return. After switching, eval / dom / capture / actions all scope to that frame until you switch back. (Viewport-coordinate actions — `hover`, `drag`, `upload` — only work in the main frame; run them after `frame main`.)
+`capture` is always scoped to one frame — the active frame, or the main frame by default. It never merges frames, so an element's `[N]` index is the same index its action resolves against in that frame. When the main frame contains HTTP iframes, capture appends `--- N iframe(s) not shown — list: webpilot frame, enter: webpilot frame switch ---`; enter one with `frame switch` to capture and act inside it, then `frame main` to return. After switching, eval / dom / capture / actions all scope to that frame until you switch back. (Viewport-coordinate actions — `hover`, `drag`, `upload` — only work in the main frame; run them after `frame main`.)
 
 ## Tabs
 
@@ -187,7 +187,7 @@ webpilot session export --output /tmp/s.json
 webpilot session import /tmp/s.json                # cookies + localStorage
 ```
 
-`session export` covers all browser cookies (scoped to the active `--context` if set), plus `localStorage` and `sessionStorage` of the active page.
+`session export` covers all browser cookies (scoped to the active `--context` if set), plus `localStorage` and `sessionStorage` of the active page. Storage is **origin-scoped**: the export records the page's origin, and `import` writes storage only when the current page is on that same origin (navigate there first; a mismatch is a typed error and nothing is written). Cookies import regardless — each carries its own domain.
 
 ## Network + console (live monitors, per page)
 
@@ -257,7 +257,7 @@ for exactly what the task needs. Deny `eval` first when locking down — with
 `eval` allowed, page JS can reproduce navigate/fetch/cookie effects, so
 narrower denies are advisory.
 
-`--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus the non-action operations that run code, mutate state, or move credentials: `eval`, `fetch`, `dom_set` (gate `dom set`), `tab_close`, `cookie_list` (gate `cookie list` **and** `cookie get` — both return live cookie values), `cookie_set` / `cookie_delete`, and `session_export` / `session_import`.
+`--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus the non-action operations that run code, mutate state, or move credentials: `eval`, `fetch`, `dom_set` (gate `dom set`), `tab_close`, `cookie_list` (gate `cookie list` **and** `cookie get` — both return live cookie values), `cookie_set` / `cookie_delete`, `session_export` / `session_import`, `device` (emulation: viewport + UA spoofing), and `context_close` (`context close` destroys a context and all its tabs).
 
 Keys gate by **effect**, not command name:
 - `navigate` blocks every URL load — the `navigate` action, `capture --url`, and `tab new URL` — so denying it actually prevents the agent from reaching new pages.
