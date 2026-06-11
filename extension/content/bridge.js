@@ -609,8 +609,12 @@
           expanded:
             el.getAttribute("aria-expanded") === "true" ? true :
             el.getAttribute("aria-expanded") === "false" ? false : undefined,
+          // The same tri-state as checked/expanded: `aria-selected="false"`
+          // (a selectable-but-unselected tab) is distinct from "not a
+          // selectable widget" and survives the wire as `false`.
           selected:
             el.getAttribute("aria-selected") === "true" ? true :
+            el.getAttribute("aria-selected") === "false" ? false :
             el.selected === true ? true : undefined,
           required: el.required || undefined,
           readonly: el.readOnly || undefined,
@@ -673,7 +677,7 @@
               (entry[k] === false &&
                 k !== "disabled" && k !== "focused" &&
                 k !== "checked" && k !== "expanded" &&
-                k !== "in_viewport")) {
+                k !== "selected" && k !== "in_viewport")) {
             delete entry[k];
           }
         }

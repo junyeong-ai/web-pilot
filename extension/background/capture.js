@@ -158,8 +158,13 @@ async function handleCapture(command) {
         result.dom = result.dom || emptyDom();
         result.dom.text_content = r.text;
         result.dom.text_truncated = r.truncated === true;
+        // typeof for the title too, like the text above: an untitled page's
+        // `""` is the honest title (headless reports the same
+        // `document.title`), not a gap to paper over with a prior value. A
+        // settled document's URL is never legitimately empty, so truthiness
+        // stays right for it.
         result.page_url = r.url || result.page_url;
-        result.page_title = r.title || result.page_title;
+        result.page_title = typeof r.title === "string" ? r.title : result.page_title;
       }
     } catch (e) {
       return topErr(exceptionErr(e));

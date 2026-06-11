@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.192] - 2026-06-11
+
+### Fixed
+
+- **`aria-selected="false"` survives the wire as the tri-state it is.** A
+  selectable-but-unselected widget (a tab) is distinct from "not a selectable
+  widget", exactly like the `checked`/`expanded` tri-states already on the
+  keep-list — the bridge now maps the explicit `"false"` and keeps it through
+  the payload cleanup, so the JSON channel distinguishes the two.
+
+- **An untitled page's empty title is reported honestly (browser mode).** The
+  text-capture path papered an empty `document.title` over with the prior
+  value (`||`), and a `tab new` whose settled document is untitled resurrected
+  the transient creation-time title. Both now respect the honest `""` —
+  matching headless, which reports `document.title` as-is.
+
 ## [0.4.191] - 2026-06-11
 
 ### Fixed

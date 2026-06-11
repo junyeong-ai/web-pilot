@@ -49,7 +49,9 @@ async function handleTabNew(url) {
     new_tab: {
       id: String(created.id),
       url: settled?.url || created.url || url,
-      title: settled?.title || created.title || "",
+      // `??`: a settled tab whose document is untitled reports the honest ""
+      // — `||` would resurrect the transient creation-time title.
+      title: settled?.title ?? created.title ?? "",
       active: true,
     },
   };
