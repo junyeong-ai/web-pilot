@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.193] - 2026-06-11
+
+### Fixed
+
+- **An accessibility capture against a dead frame pin is `FrameNotFound`
+  (headless).** The AX path sent `Accessibility.getFullAXTree` with the raw
+  pinned frame id, so a pin whose frame had navigated away out-of-band
+  surfaced the generic CDP error as `Other` (exit 1) instead of the
+  recoverable `FrameNotFound` (exit 4) every other frame-scoped command
+  returns. The pin is now validated through the same resolver every bridge
+  call uses — browser mode already resolves the live context this way. Pinned
+  by a deterministic e2e: switch into the fixture iframe, navigate the top
+  page away out-of-band, and the AX capture must exit 4.
+
+- **The NM host exits when Chrome disconnects instead of leaking an orphan
+  process per Chrome restart.** Its graceful teardown was unreachable: the NM
+  writer is a blocking task that ends only when every channel sender drops,
+  and the detached per-connection IPC tasks each hold one — the accept task
+  alone kept the await pending forever, so every Chrome exit left a live
+  orphan host (dozens accumulated across sessions, verified empirically).
+  Chrome's death is the host's end of life: it now exits the process after
+  the reader observes EOF. The socket handling is unchanged (a successor
+  rebinds the fixed path at bind time), and a CLI mid-request observes the
+  close as `ConnectionLost` — exactly "Chrome died mid-command". Verified
+  empirically: a host with closed stdin now exits immediately.
+
 ## [0.4.192] - 2026-06-11
 
 ### Fixed

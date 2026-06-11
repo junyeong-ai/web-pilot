@@ -73,24 +73,22 @@ pub async fn run_host() -> anyhow::Result<()> {
 
     tracing::info!("Host ready");
 
-    // The reader exits when Chrome disconnects — that's our shutdown signal.
+    // The reader exits when Chrome disconnects — the host's lifetime IS
+    // Chrome's.
     let _ = nm_reader_handle.await;
-    // Deliberately do NOT unlink the socket here. The path is a fixed per-user
-    // location, so a successor host that started while we were still alive has
-    // already rebound it to ITS listener — the bind-time unlink in
-    // `ipc::start_server` is the single cleanup point, run where ownership is
-    // established. Removing
-    // it on our exit would delete the live successor's socket, leaving
-    // `--browser` commands reporting the host unreachable while one is running.
-    // A stale socket we leave behind is harmless: a connect to it fails as
-    // `ConnectionLost` (the same bucket as an absent socket), and the next
-    // host's bind clears it.
-
-    drop(nm_tx);
-    let _ = nm_writer_handle.await;
-    ipc_handle.abort();
-
-    Ok(())
+    drop((nm_tx, nm_writer_handle, ipc_handle));
+    // Exit the process, not a graceful teardown: the NM writer is a BLOCKING
+    // task that ends only when every `nm_tx` clone drops, and the detached
+    // per-connection IPC tasks each hold one — so awaiting the writer here
+    // pended forever (the accept task alone was enough) and every Chrome
+    // restart leaked an orphan host. Nothing we hold outlives Chrome
+    // usefully: the socket is deliberately NOT unlinked (a successor host
+    // rebinds the fixed per-user path at bind time in `ipc::start_server`;
+    // unlinking here would delete a live successor's socket), and a CLI
+    // mid-request observes the closing socket as `ConnectionLost` — exactly
+    // "Chrome died mid-command".
+    tracing::info!("Chrome disconnected — host exiting");
+    std::process::exit(0);
 }
 
 fn spawn_nm_writer(mut rx: mpsc::Receiver<serde_json::Value>) -> tokio::task::JoinHandle<()> {

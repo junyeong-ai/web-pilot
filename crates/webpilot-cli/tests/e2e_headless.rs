@@ -1818,6 +1818,50 @@ fn headless_behavioral_flow() {
     let back_to_main = fx.run(&["frame", "main"]);
     assert_eq!(code(&back_to_main), 0);
 
+    // 7c-ax. An AX-only capture against a DEAD frame pin is a typed
+    //     FrameNotFound (exit 4 → recapture / `frame main`), not the generic
+    //     Other a raw getFullAXTree surfaces — the pin is validated through
+    //     the same resolver every bridge call uses (browser mode resolves the
+    //     live context the same way). Switch into the fixture iframe, navigate
+    //     the TOP page out-of-band (the pin is deliberately KEPT on an
+    //     out-of-band nav), then ask for the AX tree.
+    assert_eq!(
+        code(&fx.run(&["capture", "--include", "dom", "--url", &base])),
+        0,
+        "navigate for the dead-pin AX test failed"
+    );
+    assert_eq!(
+        code(&fx.run(&["frame", "url", "/frame"])),
+        0,
+        "frame switch for the dead-pin AX test failed"
+    );
+    // `window.top`: eval runs in the SWITCHED frame, and it is the TOP page
+    // that must navigate away (killing the pinned frame). Settle via the
+    // pin-independent `tab` list — every frame-scoped read is dead by design
+    // here, which is exactly what the test exercises.
+    let _ = fx.run(&["eval", "window.top.location.href='/second'; 'go'"]);
+    let mut settled = false;
+    for _ in 0..40 {
+        if stdout(&fx.run(&["tab"])).contains("/second") {
+            settled = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    assert!(settled, "the out-of-band top nav must reach /second");
+    let dead_ax = fx.run(&["capture", "--include", "accessibility"]);
+    assert_eq!(
+        code(&dead_ax),
+        4,
+        "an AX capture on a dead frame pin must be FrameNotFound (4), not Other: {}",
+        stdout(&dead_ax)
+    );
+    assert_eq!(
+        code(&fx.run(&["frame", "main"])),
+        0,
+        "frame main must clear the dead pin"
+    );
+
     // 7d. Device emulation persists across CLI processes. A UA override does
     //     NOT survive a CDP client disconnect on its own, so `device set` must
     //     persist it and `open` must re-apply it — every WebPilot command is a

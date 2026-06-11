@@ -187,12 +187,24 @@ impl LocalTransport {
             // do: with an iframe switched in, an unscoped getFullAXTree returns the
             // ROOT document's tree while the footer/URL report the iframe — the
             // agent would read accessibility for a frame it isn't looking at.
-            let params = self
-                .active_frame_id
-                .lock()
-                .await
-                .clone()
-                .map(|fid| json!({ "frameId": fid }));
+            // Bind the clone FIRST: a `match` scrutinee's temporaries live for
+            // the whole match, so locking inline would hold the frame-pin
+            // mutex across `bridge_context_id().await` — which locks it again.
+            let active = self.active_frame_id.lock().await.clone();
+            let params = match active {
+                Some(fid) => {
+                    // Validate the pinned frame through the same resolver every
+                    // bridge call uses: a dead pin (the frame navigated away
+                    // out-of-band) is a typed FrameNotFound (exit 4 → recapture
+                    // or `frame main`), never the generic CDP error a raw
+                    // getFullAXTree against a gone frame would surface as
+                    // Other — the split browser mode's live context resolution
+                    // already makes.
+                    self.bridge_context_id().await?;
+                    Some(json!({ "frameId": fid }))
+                }
+                None => None,
+            };
             let r = self
                 .page
                 .send("Accessibility.getFullAXTree", params)
