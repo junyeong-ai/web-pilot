@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 
 use crate::output::CommandOutput;
 
-/// Per-pixel Euclidean RGB distance above which a pixel counts as changed.
-/// Coarse by design — anti-aliasing and JPEG artifacts sit just below typical
-/// edge deltas, so small thresholds drown real diffs in rendering noise. This
-/// is a reporting aid, not a gate; treat `changed_percent` as approximate.
+/// Per-pixel Euclidean RGB distance above which a pixel counts toward the
+/// NOISE-FILTERED report (`pixels_above_noise` / `percent_above_noise` and the
+/// red overlay). Coarse by design — anti-aliasing and JPEG artifacts sit just
+/// below typical edge deltas. The `changed` verdict itself keys on EXACT pixel
+/// inequality, never this threshold.
 const PIXEL_DIFF_THRESHOLD: f64 = 30.0;
 
 /// Refuse to load a diff input larger than this. The inputs are arbitrary

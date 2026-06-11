@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.200] - 2026-06-11
+
+### Changed
+
+- The screenshot-diff threshold's doc comment names the fields that exist
+  (`pixels_above_noise` / `percent_above_noise`) and states that the `changed`
+  verdict keys on exact inequality, never the threshold — 0.4.199's rename had
+  left the old `changed_percent` name in the comment.
+
 ## [0.4.199] - 2026-06-11
 
 ### Fixed
