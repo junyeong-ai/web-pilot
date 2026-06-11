@@ -123,15 +123,21 @@ impl LocalTransport {
             .into());
         }
         for c in &matches {
+            let mut params = json!({
+                "name": name,
+                "domain": c.get("domain"),
+                "path": c.get("path"),
+            });
+            // A PARTITIONED cookie is deleted only within its partition —
+            // measured: `Network.deleteCookies` without the key leaves the
+            // partitioned cookie alive, while the match above came from the
+            // partition-SPANNING `getCookies`, so "Deleted 1" would be a lie
+            // the survival check catches. Thread the matched cookie's own key.
+            if let Some(pk) = c.get("partitionKey") {
+                params["partitionKey"] = pk.clone();
+            }
             self.page
-                .send(
-                    "Network.deleteCookies",
-                    Some(json!({
-                        "name": name,
-                        "domain": c.get("domain"),
-                        "path": c.get("path"),
-                    })),
-                )
+                .send("Network.deleteCookies", Some(params))
                 .await?;
         }
         Ok(ResponseData::CookieResult {

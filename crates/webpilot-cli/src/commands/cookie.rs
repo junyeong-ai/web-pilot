@@ -8,9 +8,10 @@ use crate::transport::{Transport, lift_error};
 
 /// One agent-facing cookie row: name, a value preview, the domain+path scope,
 /// and the security/lifetime flags. Every attribute `CookieInfo` carries is
-/// shown — `secure`/`httpOnly`/`hostOnly`, the `sameSite` mode (when set), and
-/// the lifetime (`expires=<unix>` or `session`) — so an agent reasoning about a
-/// cookie's scope or auth behaviour never has to drop to the JSON to see it.
+/// shown — `secure`/`httpOnly`/`hostOnly`, the `sameSite` mode (when set), the
+/// CHIPS partition (when partitioned), and the lifetime (`expires=<unix>` or
+/// `session`) — so an agent reasoning about a cookie's scope or auth behaviour
+/// never has to drop to the JSON to see it.
 fn cookie_row(c: &CookieInfo) -> String {
     let mut flags: Vec<String> = Vec::new();
     if c.secure {
@@ -24,6 +25,20 @@ fn cookie_row(c: &CookieInfo) -> String {
     }
     if !matches!(c.same_site, SameSite::Unspecified) {
         flags.push(format!("sameSite={}", c.same_site));
+    }
+    if let Some(pk) = &c.partition_key {
+        // The partition is part of the cookie's IDENTITY: a partitioned `sid`
+        // and an unpartitioned `sid` are different cookies, so the row must
+        // tell them apart.
+        let xsite = if pk.has_cross_site_ancestor {
+            ",xsite"
+        } else {
+            ""
+        };
+        flags.push(format!(
+            "partitioned={}{xsite}",
+            line_safe(&pk.top_level_site)
+        ));
     }
     flags.push(match c.expiration {
         Some(ts) => format!("expires={}", ts as i64),
@@ -232,6 +247,35 @@ mod tests {
         assert!(row.contains("hostOnly"), "{row}");
         assert!(row.contains("sameSite=strict"), "{row}");
         assert!(row.contains("expires=1799000000"), "{row}");
+    }
+
+    #[test]
+    fn cookie_row_names_the_partition() {
+        // The partition is part of the cookie's IDENTITY — a partitioned `sid`
+        // and an unpartitioned `sid` are different cookies, and the row must
+        // tell them apart (the unpartitioned row carries no partition flag).
+        let mut c = cookie("sid");
+        c.partition_key = Some(webpilot::types::PartitionKey {
+            top_level_site: "https://example.com".into(),
+            has_cross_site_ancestor: false,
+        });
+        let row = cookie_row(&c);
+        assert!(row.contains("partitioned=https://example.com"), "{row}");
+        assert!(
+            !row.contains(",xsite"),
+            "first-party key has no xsite: {row}"
+        );
+
+        c.partition_key.as_mut().unwrap().has_cross_site_ancestor = true;
+        let row = cookie_row(&c);
+        assert!(
+            row.contains("partitioned=https://example.com,xsite"),
+            "a cross-site-ancestor key is marked: {row}"
+        );
+        assert!(
+            !cookie_row(&cookie("sid")).contains("partitioned"),
+            "an unpartitioned cookie carries no partition flag"
+        );
     }
 
     #[test]

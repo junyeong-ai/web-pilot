@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.205] - 2026-06-11
+
+### Fixed
+
+- **The cookie family is partition-aware, like the session round-trip
+  (v0.4.204).** Browser `cookie list`/`get` used a bare `getAll({url})`, which
+  omits CHIPS partitioned cookies entirely — the same page listed a
+  partitioned auth cookie in headless and reported it absent (a false
+  `CookieNotFound`) in browser mode. Worse, `cookie delete` was dishonest in
+  BOTH modes: the match came from a partition-spanning read but the delete ran
+  partition-less, so the partitioned cookie survived behind a clean
+  "Deleted 1" (measured in headless — `Network.deleteCookies` without the key
+  leaves it alive). List/get/delete now span partitions
+  (`getAll({partitionKey:{}})`), and every delete threads the matched cookie's
+  own partition key (`Network.deleteCookies` / `chrome.cookies.remove`). Both
+  suites pin the survival check: delete then re-list — the cookie must be
+  gone.
+- **`cookie list`/`get` rows name the partition.** `partitioned=<top-level
+  site>` (plus `,xsite` for a cross-site-ancestor key) — the partition is part
+  of the cookie's identity, so a partitioned `sid` and an unpartitioned `sid`
+  no longer render as identical rows.
+
 ## [0.4.204] - 2026-06-11
 
 ### Fixed

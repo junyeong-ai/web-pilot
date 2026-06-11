@@ -939,6 +939,35 @@ fn browser_behavioral_flow() {
         "re-importing a partitioned cookie must restore it into its partition, not refuse: {}",
         stdout(&pim)
     );
+    // ...and the partitioned cookie is first-class in the COOKIE family too
+    // (headless parity): a bare getAll({url}) never even SAW it — `cookie
+    // list` reported it absent and `cookie delete` a false CookieNotFound —
+    // and a partition-less remove() would leave it alive behind "Deleted 1".
+    // The survival check below catches both lies.
+    let plist = fx.run(&["cookie", "list", &base]);
+    assert!(
+        stdout(&plist).contains("wp_part") && stdout(&plist).contains("partition_key"),
+        "browser cookie list must show the partitioned cookie WITH its partition: {}",
+        stdout(&plist)
+    );
+    let pdel = fx.run(&["cookie", "delete", &base, "wp_part"]);
+    assert_eq!(
+        code(&pdel),
+        0,
+        "browser partitioned cookie delete failed: {}",
+        stdout(&pdel)
+    );
+    assert!(
+        stdout(&pdel).contains("Deleted 1"),
+        "browser partitioned delete must report its true count: {}",
+        stdout(&pdel)
+    );
+    assert!(
+        !stdout(&fx.run(&["cookie", "list", &base])).contains("wp_part"),
+        "the partitioned cookie must actually be GONE after delete — survival here \
+         means the partition key was dropped on the remove path: {}",
+        stdout(&fx.run(&["cookie", "list", &base]))
+    );
 
     // 4f. A malformed cookie URL with a valid scheme prefix but no host
     //     (`http://`) is a typed InvalidArgument (exit 7) — matching headless,

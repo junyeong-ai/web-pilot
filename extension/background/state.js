@@ -183,7 +183,11 @@ async function handleCookieList(url) {
   if (!isHttpUrl(url)) {
     return topErr(err("InvalidArgument", "cookie url must be a valid http or https URL"));
   }
-  const cookies = await chrome.cookies.getAll({ url });
+  // `partitionKey: {}` spans partitioned AND unpartitioned cookies — a bare
+  // `getAll({url})` silently omits CHIPS partitioned cookies, so the same page
+  // would list a partitioned auth cookie in headless and report it absent
+  // here. Same form the session export uses.
+  const cookies = await chrome.cookies.getAll({ url, partitionKey: {} });
   return {
     type: "Cookies",
     cookies: cookies.map(toCookieInfo),
@@ -274,7 +278,11 @@ async function handleCookieDelete(command) {
     // host-only one, different paths), so EVERY matching scope is removed via
     // a per-cookie reconstructed URL (chrome.cookies.remove cannot target
     // domain/path directly) and the count reported.
-    const matches = await chrome.cookies.getAll({ url: command.url, name: command.name });
+    // `partitionKey: {}` so a CHIPS partitioned cookie is FOUND (a bare getAll
+    // omits it → a false CookieNotFound for a cookie that exists)…
+    const matches = await chrome.cookies.getAll({
+      url: command.url, name: command.name, partitionKey: {},
+    });
     if (matches.length === 0) {
       return {
         type: "CookieResult",
@@ -285,7 +293,13 @@ async function handleCookieDelete(command) {
     for (const c of matches) {
       const host = c.domain.startsWith(".") ? c.domain.slice(1) : c.domain;
       const cookieUrl = `${c.secure ? "https" : "http"}://${host}${c.path}`;
-      await chrome.cookies.remove({ url: cookieUrl, name: command.name, storeId: c.storeId });
+      // …and the matched cookie's own key rides the remove: without it Chrome
+      // targets the unpartitioned namespace, so the partitioned cookie would
+      // survive a reported "Deleted 1" (headless threads the key identically).
+      await chrome.cookies.remove({
+        url: cookieUrl, name: command.name, storeId: c.storeId,
+        ...(c.partitionKey ? { partitionKey: c.partitionKey } : {}),
+      });
     }
     return { type: "CookieResult", success: true, deleted: matches.length };
   } catch (e) {

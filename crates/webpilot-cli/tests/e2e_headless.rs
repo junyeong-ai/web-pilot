@@ -2290,6 +2290,35 @@ fn headless_behavioral_flow() {
         "re-importing a partitioned cookie must restore it into its partition, not refuse: {}",
         stdout(&pim)
     );
+    // ...and the partitioned cookie is first-class in the COOKIE family too:
+    // `cookie list` shows it with its partition (identity-distinguishing), and
+    // `cookie delete` actually removes it from its partition — measured before
+    // the fix: a partition-less `Network.deleteCookies` left the cookie alive
+    // behind a clean "Deleted 1". The survival check below catches that lie.
+    let plist = fx.run(&["cookie", "list", &base]);
+    assert!(
+        stdout(&plist).contains("wp_part") && stdout(&plist).contains("partition_key"),
+        "cookie list must show the partitioned cookie WITH its partition: {}",
+        stdout(&plist)
+    );
+    let pdel = fx.run(&["cookie", "delete", &base, "wp_part"]);
+    assert_eq!(
+        code(&pdel),
+        0,
+        "partitioned cookie delete failed: {}",
+        stdout(&pdel)
+    );
+    assert!(
+        stdout(&pdel).contains("Deleted 1"),
+        "partitioned delete must report its true count: {}",
+        stdout(&pdel)
+    );
+    assert!(
+        !stdout(&fx.run(&["cookie", "list", &base])).contains("wp_part"),
+        "the partitioned cookie must actually be GONE after delete — survival here \
+         means the partition key was dropped on the delete path: {}",
+        stdout(&fx.run(&["cookie", "list", &base]))
+    );
     assert!(
         stdout(&oq).contains("opaque origin"),
         "the opaque-origin error must name the cause: {}",
