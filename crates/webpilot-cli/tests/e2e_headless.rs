@@ -149,6 +149,20 @@ fn headless_behavioral_flow() {
         elements.iter().any(|e| e["id"] == "presdiv"),
         "a role=presentation element with onclick must be indexed (none/presentation = no role): {dom}"
     );
+    // `in_viewport:false` must SURVIVE the wire (the bridge's false-strip
+    // keep-list): it is the offscreen signal — `[offscreen]` in the rendered
+    // DOM, and the annotation overlay skips it — not a mere property absence.
+    // `#deepbtn` sits below a 3000px spacer, so the fresh capture must carry
+    // the flag explicitly false.
+    let deep = elements
+        .iter()
+        .find(|e| e["id"] == "deepbtn")
+        .expect("the below-fold #deepbtn must be indexed");
+    assert_eq!(
+        deep["in_viewport"],
+        serde_json::Value::Bool(false),
+        "a below-fold element must carry in_viewport:false on the wire (offscreen signal): {dom}"
+    );
 
     let button_index = elements
         .iter()

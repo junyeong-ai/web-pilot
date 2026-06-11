@@ -26,6 +26,8 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <p id="wsp">whitespace<br>collapse<br>marker</p>
 <nav><div id="shadowhost"></div></nav>
 <iframe src="/frame" name="innerfr"></iframe>
+<div style="height:3000px"></div>
+<button id="deepbtn" onclick="document.title='deep-clicked'">deep button</button>
 <script>
   // A DOCUMENT-level delegated click listener: it fires for a click inside the
   // shadow root only if the synthetic event is `composed` (crosses the boundary).

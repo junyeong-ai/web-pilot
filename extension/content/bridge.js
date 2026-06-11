@@ -616,12 +616,16 @@
         // mere absence of a property. `checked` and `expanded` are genuine
         // tri-states — `false` means "unchecked checkbox" / "collapsed
         // disclosure", distinct from "not a checkbox" / "not expandable" — so
-        // they survive alongside `disabled`/`focused`.
+        // they survive alongside `disabled`/`focused`. `in_viewport` is the
+        // same: `false` is the signal ("[offscreen]" in the rendered DOM, and
+        // the annotation overlay skips it), not an absence — stripping it
+        // would erase the offscreen marker entirely.
         for (const k of Object.keys(entry)) {
           if (entry[k] === undefined ||
               (entry[k] === false &&
                 k !== "disabled" && k !== "focused" &&
-                k !== "checked" && k !== "expanded")) {
+                k !== "checked" && k !== "expanded" &&
+                k !== "in_viewport")) {
             delete entry[k];
           }
         }

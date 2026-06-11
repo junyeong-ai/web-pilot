@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.179] - 2026-06-11
+
+### Fixed
+
+- **The `[offscreen]` marker works again: `in_viewport:false` survives the
+  wire.** The bridge's payload cleanup strips `false` fields that mean mere
+  property absence, but `in_viewport` is a genuine boolean whose *false* is
+  the signal — a below-fold element — exactly like the `checked`/`expanded`
+  tri-states already on the keep-list. Stripping it left the Rust side reading
+  `None`, so no element ever rendered `[offscreen]` and the agent had no
+  signal that a control sits outside the viewport (the annotation overlay's
+  in-viewport filter kept working only because `true` survived). One keep-list
+  entry; shared bridge, both modes. The e2e fixture now carries a below-fold
+  control pinning the flag end-to-end.
+
 ## [0.4.178] - 2026-06-11
 
 ### Fixed
