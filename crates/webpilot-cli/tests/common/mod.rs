@@ -19,6 +19,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <input id="file" type="file">
 <button id="slownav" onclick="location.href='/slow'">slow nav</button>
 <a id="nav" href="/second">go second</a>
+<a id="selfref" href="">selfref</a>
 <a id="pop" href="/second" target="_blank" rel="noopener">open popup</a>
 <form action="/second" method="get"><input id="forminput" type="text"><button type="submit" id="formsubmit">submit form</button></form>
 <div id="cardwrap" style="cursor:pointer">clickable card<input id="hiddenchild" style="display:none"></div>

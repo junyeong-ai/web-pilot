@@ -598,7 +598,10 @@
             ? clip(String(el.value), 100)
             : undefined,
           placeholder: el.placeholder || undefined,
-          href: el.getAttribute("href") || undefined,
+          // `?? undefined`, not `||`: `href=""` is a real link to the current
+          // page (focusable, ARIA role `link`) — collapsing the empty string
+          // would strip its implicit role and `find --role link` would miss it.
+          href: el.getAttribute("href") ?? undefined,
           input_type: tag === "input" ? (el.type || undefined) : undefined,
           disabled: isDisabled(el),
           focused: active === el,

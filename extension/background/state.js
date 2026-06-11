@@ -176,6 +176,13 @@ async function injectNetworkMonitoring(tabId) {
 // ── Cookies ────────────────────────────────────────────────────────────────
 
 async function handleCookieList(url) {
+  // Same guard as `handleCookieSet`: a malformed URL must be the typed
+  // InvalidArgument (exit 7) headless CDP returns, not the `Other` (exit 1) a
+  // raw chrome.cookies throw would read as — one rejection across commands
+  // and modes.
+  if (!isHttpUrl(url)) {
+    return topErr(err("InvalidArgument", "cookie url must be a valid http or https URL"));
+  }
   const cookies = await chrome.cookies.getAll({ url });
   return {
     type: "Cookies",
@@ -252,6 +259,14 @@ async function handleCookieSet(command) {
 }
 
 async function handleCookieDelete(command) {
+  // Same guard as `handleCookieSet` — see handleCookieList.
+  if (!isHttpUrl(command.url)) {
+    return {
+      type: "CookieResult",
+      success: false,
+      error: err("InvalidArgument", "cookie url must be a valid http or https URL"),
+    };
+  }
   try {
     await chrome.cookies.remove({ url: command.url, name: command.name });
     return { type: "CookieResult", success: true };

@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.191] - 2026-06-11
+
+### Fixed
+
+- **An empty-`href` anchor keeps its implicit `link` role.** `href=""` is a
+  real link to the current page (focusable, ARIA role `link`), but the bridge
+  collapsed the empty string with `||`, so the Rust side saw no `href` and
+  granted no implicit role — `find --role link` missed such anchors. The wire
+  now preserves the empty string (`?? undefined`); only a genuinely absent
+  attribute is omitted. Shared bridge, both modes; pinned by a `find --role
+  link` e2e against a bare-href fixture anchor.
+
+- **Browser-mode `cookie list` / `delete` reject a malformed URL as
+  `InvalidArgument`, like `cookie set` and headless.** Only the set handler
+  validated the URL; list and delete let the raw `chrome.cookies` throw read
+  as `Other` (exit 1), diverging from the rest of the cookie family and from
+  headless CDP's typed rejection (exit 7). One guard now covers all three,
+  pinned by browser e2e.
+
 ## [0.4.190] - 2026-06-11
 
 ### Changed

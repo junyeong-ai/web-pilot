@@ -878,6 +878,21 @@ fn browser_behavioral_flow() {
         "a malformed cookie URL must be InvalidArgument in browser mode too, not Other: {}",
         stdout(&bad_cookie_url)
     );
+    // The same guard covers the whole cookie family — list and delete used to
+    // let the raw chrome.cookies throw read as Other (exit 1), diverging from
+    // both `cookie set` and headless CDP's InvalidArgument.
+    assert_eq!(
+        code(&fx.run(&["cookie", "list", "http://"])),
+        7,
+        "a malformed cookie LIST URL must be InvalidArgument: {}",
+        stdout(&fx.run(&["cookie", "list", "http://"]))
+    );
+    assert_eq!(
+        code(&fx.run(&["cookie", "delete", "http://", "k"])),
+        7,
+        "a malformed cookie DELETE URL must be InvalidArgument: {}",
+        stdout(&fx.run(&["cookie", "delete", "http://", "k"]))
+    );
 
     // 5. Deterministic tab binding: commands act on the pinned tab, and a
     //    vanished pin is a typed TabNotFound — never a silent retarget to

@@ -965,6 +965,17 @@ fn headless_behavioral_flow() {
         "the ambiguity error must name the match count: {}",
         stdout(&ambiguous)
     );
+    // `href=""` is a real link to the current page (ARIA role `link`): the
+    // wire must keep the empty string (`?? undefined`, not `||`), or the
+    // implicit role is stripped and `--role link` misses it.
+    let selfref = fx.run(&["find", "--role", "link", "--text", "selfref"]);
+    assert_eq!(
+        code(&selfref),
+        0,
+        "an empty-href anchor must carry the implicit link role: {}",
+        stdout(&selfref)
+    );
+
     let unique = fx.run(&[
         "find",
         "--placeholder",
