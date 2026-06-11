@@ -85,8 +85,11 @@ webpilot action key-press Enter --ctrl --shift      # also --alt --meta; real ke
                                                     #   layer headless; use `type --clear` or eval
                                                     #   `el.select()` instead.
 webpilot action navigate "https://…"               # cross-origin reconnect handled
-webpilot action scroll down --amount 600           # or `up`
-webpilot action scroll-to N                        # bring [N] into view
+webpilot action scroll down --amount 600           # or `up` — moves the WINDOW scroller
+webpilot action scroll-to N                        # bring [N] into view (works through
+                                                    #   inner scroll containers too — use this
+                                                    #   on app-shell pages where the window
+                                                    #   doesn't scroll: Scroll line shows 0 below)
 webpilot action back / forward / reload
 webpilot action hover N / focus N
 webpilot action select N "value"                   # <select> option

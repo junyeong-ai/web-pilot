@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.190] - 2026-06-11
+
+### Changed
+
+- **The skill names the window-vs-container scroll split.** `action scroll`
+  moves the window scroller; on an app-shell page whose content pane is an
+  inner scroll container the window has nothing to scroll (the capture's
+  Scroll line shows `0 below`), and `scroll-to N` — which works through inner
+  containers natively — is the right primitive. The agent now learns the
+  recovery up front instead of reading a no-op scroll as page exhaustion.
+
 ## [0.4.189] - 2026-06-11
 
 ### Changed
