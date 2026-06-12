@@ -78,7 +78,11 @@ downscaled, `screenshot_scale` — map image pixels back to page pixels with
 Take an action by element index from the most recent capture.
 
 ```bash
-webpilot action click N
+webpilot action click N                            # --ctrl/--shift/--alt/--meta set the modifier
+                                                    #   flags the PAGE's handlers see (app-level
+                                                    #   ctrl multi-select, shift range-select);
+                                                    #   browser-level open-in-new-tab doesn't apply
+                                                    #   to a synthetic click — use `tab new URL`
 webpilot action type N "text" --clear              # --clear replaces existing value
 webpilot action key-press Enter --ctrl --shift      # also --alt --meta; real key event
                                                     #   (Tab/Backspace/arrows/Enter-submit work;
@@ -99,6 +103,9 @@ webpilot action back / forward / reload
 webpilot action hover N / focus N
 webpilot action select N "value"                   # <select> option
 webpilot action drag SRC TGT --steps 5             # mouse-driven drag between two indices
+                                                    #   (mousedown/move/up only — sliders and
+                                                    #   mouse-based sortables work; an HTML5
+                                                    #   dragstart/drop-API sortable won't react)
 webpilot action upload N "/abs/path/file.pdf"      # works in both modes
 webpilot action click N --capture                  # auto-capture DOM after success
 ```

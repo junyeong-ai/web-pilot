@@ -624,6 +624,10 @@ fn headless_behavioral_flow() {
     //     `#ce` starts with "hello"; typing "more" (default, no --clear) must
     //     yield "hellomore", never "morehello".
     let ce_index = index_of(&cap, "ce");
+    let _ = fx.run(&[
+        "eval",
+        "window.__ceInputs = 0; document.getElementById('ce').addEventListener('input', () => window.__ceInputs++); 'armed'",
+    ]);
     let ce_typed = fx.run(&["action", "type", &ce_index, "more"]);
     assert_eq!(
         code(&ce_typed),
@@ -638,6 +642,18 @@ fn headless_behavioral_flow() {
         Some("\"hellomore\""),
         "type into a contenteditable must append at the end (hello+more), not prepend: {}",
         stdout(&ce_text)
+    );
+    // ...and exactly ONE `input` event for one insert: execCommand fires its
+    // own, and the bridge's fallback dispatch must fire only when the native
+    // one did not — unconditional dispatch doubled the event (a raw oninput
+    // counter or an append-per-input editor saw a phantom second edit).
+    let ce_inputs = fx.run(&["eval", "window.__ceInputs"]);
+    let cij: serde_json::Value = serde_json::from_str(&stdout(&ce_inputs)).expect("eval json");
+    assert_eq!(
+        cij["result"].as_str(),
+        Some("1"),
+        "one contenteditable insert must fire exactly one input event: {}",
+        stdout(&ce_inputs)
     );
 
     // 2a-num. A typed control silently sanitizes a value it can't parse to "".
@@ -740,6 +756,33 @@ fn headless_behavioral_flow() {
         Some("true"),
         "shift+ArrowLeft must extend the selection (4..5) via the bracketed modifier: {}",
         stdout(&sel)
+    );
+
+    // 2b-modclick. `click --ctrl/--shift` carries the modifier flags through
+    //     the synthetic event sequence, so the page's own handlers see them
+    //     (app-level ctrl multi-select, shift range-select). Browser-level
+    //     defaults (open-in-new-tab) intentionally don't apply to a synthetic
+    //     click — that path is `tab new URL`. Pre-fix no surface could express
+    //     click modifiers at all.
+    let _ = fx.run(&[
+        "eval",
+        "document.body.insertAdjacentHTML('beforeend', '<button id=modbtn onclick=\"this.dataset.mods=[event.ctrlKey,event.shiftKey,event.altKey,event.metaKey].join()\">mod</button>'); 'ok'",
+    ]);
+    let mod_cap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&mod_cap), 0, "modbtn capture failed");
+    let modbtn = index_of(&mod_cap, "modbtn");
+    assert_eq!(
+        code(&fx.run(&["action", "click", &modbtn, "--ctrl", "--shift"])),
+        0,
+        "modifier click failed"
+    );
+    let mods_read = fx.run(&["eval", "document.getElementById('modbtn').dataset.mods"]);
+    let mj: serde_json::Value = serde_json::from_str(&stdout(&mods_read)).expect("eval json");
+    assert_eq!(
+        mj["result"].as_str(),
+        Some("\"true,true,false,false\""),
+        "the page's click handler must see ctrl+shift (and not alt/meta): {}",
+        stdout(&mods_read)
     );
 
     // 2b-click. A click must focus a focusable target, like a real click —

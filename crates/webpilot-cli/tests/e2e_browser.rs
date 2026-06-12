@@ -640,6 +640,39 @@ fn browser_behavioral_flow() {
         "re-home after the wait-survival test failed"
     );
 
+    // 2d. `click --ctrl/--shift` carries the modifier flags to the page's own
+    //     handlers (headless parity — the wire path differs: router →
+    //     dispatchActionToPage → the shared bridge).
+    let _ = fx.run(&[
+        "eval",
+        "document.body.insertAdjacentHTML('beforeend', '<button id=modbtn onclick=\"this.dataset.mods=[event.ctrlKey,event.shiftKey,event.altKey,event.metaKey].join()\">mod</button>'); 'ok'",
+    ]);
+    let mod_cap = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&mod_cap), 0, "modbtn capture failed");
+    let mod_snap: serde_json::Value =
+        serde_json::from_str(&stdout(&mod_cap)).expect("modbtn capture json");
+    let modbtn = mod_snap["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["id"] == "modbtn")
+        .and_then(|e| e["index"].as_u64())
+        .expect("modbtn index")
+        .to_string();
+    assert_eq!(
+        code(&fx.run(&["action", "click", &modbtn, "--ctrl", "--shift"])),
+        0,
+        "browser modifier click failed"
+    );
+    let mods_read = fx.run(&["eval", "document.getElementById('modbtn').dataset.mods"]);
+    let mj: serde_json::Value = serde_json::from_str(&stdout(&mods_read)).expect("eval json");
+    assert_eq!(
+        mj["result"].as_str(),
+        Some("\"true,true,false,false\""),
+        "the page's click handler must see ctrl+shift in browser mode too: {}",
+        stdout(&mods_read)
+    );
+
     // 3. Stale-snapshot guard (the bridge is shared, so the typed error must
     //    hold in this mode too).
     let recap = fx.run(&["capture", "--include", "dom"]);

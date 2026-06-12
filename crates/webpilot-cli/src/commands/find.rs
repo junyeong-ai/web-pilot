@@ -140,7 +140,14 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
     let first_index = matches[0].index;
 
     let effect = if args.click {
-        chain_action(transport, Action::Click { index: first_index }).await?
+        chain_action(
+            transport,
+            Action::Click {
+                index: first_index,
+                modifiers: Default::default(),
+            },
+        )
+        .await?
     } else if let Some(text) = args.fill {
         chain_action(
             transport,

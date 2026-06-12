@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.207] - 2026-06-12
+
+### Added
+
+- **`action click` takes modifier flags.** `--ctrl/--shift/--alt/--meta` ride
+  every event of the synthetic click sequence (pointerdown → click), so the
+  page's own handlers see them — an app-level ctrl multi-select, a shift
+  range-select. Browser-level defaults (open-in-new-tab) intentionally don't
+  apply to a synthetic click; that path is `tab new URL`, and the help text
+  says so. Same `Modifiers` definition `key-press` already uses — a misspelled
+  modifier is still a typed rejection. Pre-fix no surface could express click
+  modifiers at all.
+
+### Fixed
+
+- **One `type` into a contenteditable fires exactly one `input` event.**
+  `execCommand("insertText")` fires `input` natively on success, and the
+  bridge unconditionally dispatched a second one — a raw `oninput` counter or
+  an append-per-input editor saw a phantom second edit on every insert. The
+  bridge now probes whether the native event fired (one-shot capture listener)
+  and dispatches the fallback only when it did not — the fallback still covers
+  an empty text, an unsupported command, and a framework that swallowed the
+  edit. The synthetic `change` (contenteditable never fires one natively) is
+  unchanged.
+- **`action drag` documents its boundary**: mouse-event sequence only —
+  sliders and mouse-based sortables work; an HTML5 dragstart/drop-API sortable
+  won't react (no silent expectation gap in the SKILL).
+
 ## [0.4.206] - 2026-06-11
 
 ### Fixed

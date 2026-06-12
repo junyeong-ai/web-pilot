@@ -13,8 +13,16 @@ pub type ElementIndex = u32;
 #[derive(Subcommand, Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
-    /// Click an element by index.
-    Click { index: ElementIndex },
+    /// Click an element by index. `--ctrl/--shift/--alt/--meta` set the
+    /// modifier flags the page's own handlers see (an app-level ctrl
+    /// multi-select, a shift range-select); browser-level defaults like
+    /// open-in-new-tab don't apply to a synthetic click — use `tab new URL`.
+    Click {
+        index: ElementIndex,
+        #[command(flatten)]
+        #[serde(default)]
+        modifiers: Modifiers,
+    },
 
     /// Type text into an element.
     Type {
@@ -97,7 +105,7 @@ pub enum ScrollDir {
     Down,
 }
 
-/// Modifier keys for `KeyPress`.
+/// Modifier keys for `KeyPress` and `Click`.
 // Every field is optional and defaults to false, so a misspelled key (an MCP
 // caller sending `control`/`command` instead of `ctrl`/`meta`) would otherwise be
 // silently dropped and the chord sent as a bare key with no error. Reject the
@@ -183,7 +191,10 @@ mod tests {
 
     #[test]
     fn action_serializes_with_kind_tag() {
-        let a = Action::Click { index: 3 };
+        let a = Action::Click {
+            index: 3,
+            modifiers: Default::default(),
+        };
         let v = serde_json::to_value(&a).unwrap();
         assert_eq!(v["kind"], "click");
         assert_eq!(v["index"], 3);

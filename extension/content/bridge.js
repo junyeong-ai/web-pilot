@@ -863,7 +863,7 @@
     return window.top === window; // _self
   }
 
-  function reliableClick(el) {
+  function reliableClick(el, mods = {}) {
     el.scrollIntoView({ block: "center", behavior: "instant" });
     const rect = el.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
@@ -874,6 +874,12 @@
       // dispatched on one stops at its shadow root — a host/document delegated
       // click listener would never fire, making the click a silent no-op.
       bubbles: true, composed: true, cancelable: true, clientX: x, clientY: y, button: 0, view: window,
+      // Modifier flags reach the PAGE'S handlers (an app-level ctrl
+      // multi-select, a shift range-select) on every event of the sequence.
+      // Browser-level defaults — open-in-new-tab — do not apply to a synthetic
+      // event; reaching a new tab is `tab new URL`.
+      ctrlKey: mods.ctrl === true, shiftKey: mods.shift === true,
+      altKey: mods.alt === true, metaKey: mods.meta === true,
     };
     el.dispatchEvent(new PointerEvent("pointerdown", opts));
     const mousedownLive = el.dispatchEvent(new MouseEvent("mousedown", opts));
@@ -921,15 +927,24 @@
         sel.removeAllRanges();
         sel.addRange(range);
       }
+      // execCommand fires `input` on its own when it inserts — but an empty
+      // `text`, an unsupported command, or a framework that swallowed it fires
+      // none, and a contenteditable never fires `change` — so a framework-bound
+      // editor (a React onChange) could miss the edit. PROBE whether the native
+      // `input` actually fired and dispatch the fallback only when it did not:
+      // unconditionally dispatching doubled the event on every successful
+      // insert (one action, two `input`s — a raw oninput counter or an
+      // append-per-input editor sees a phantom second edit).
+      let nativeInputFired = false;
+      const probe = () => { nativeInputFired = true; };
+      el.addEventListener("input", probe, { once: true, capture: true });
       document.execCommand("insertText", false, text);
-      // execCommand fires input on its own, but an empty `text` (or a framework
-      // that swallowed it) fires none, and a contenteditable never fires `change`
-      // — so a framework-bound editor (a React onChange) could miss the edit.
-      // Dispatch both; a redundant `input` is harmless since listeners re-read the
-      // live text.
-      el.dispatchEvent(new InputEvent("input", {
-        bubbles: true, inputType: "insertText", data: text,
-      }));
+      el.removeEventListener("input", probe, { capture: true });
+      if (!nativeInputFired) {
+        el.dispatchEvent(new InputEvent("input", {
+          bubbles: true, inputType: "insertText", data: text,
+        }));
+      }
       el.dispatchEvent(new Event("change", { bubbles: true }));
       return;
     }
@@ -1048,7 +1063,7 @@
           // will load a new document — the only signal for an iframe-internal
           // navigation under a switched frame — even before the queued
           // frameStartedLoading is observable.
-          const nav = reliableClick(r.target);
+          const nav = reliableClick(r.target, action.modifiers || {});
           return { success: true, navigates: nav.navigates, frame_navigates: nav.frameNavigates };
         }
 

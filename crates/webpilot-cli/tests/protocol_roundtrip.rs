@@ -19,12 +19,15 @@ where
 
 #[test]
 fn action_click_round_trips() {
-    let a = Action::Click { index: 7 };
+    let a = Action::Click {
+        index: 7,
+        modifiers: Default::default(),
+    };
     let v = serde_json::to_value(&a).unwrap();
     assert_eq!(v["kind"], "click");
     assert_eq!(v["index"], 7);
     let back: Action = serde_json::from_value(v).unwrap();
-    assert!(matches!(back, Action::Click { index: 7 }));
+    assert!(matches!(back, Action::Click { index: 7, .. }));
 }
 
 #[test]
@@ -137,7 +140,10 @@ fn command_policy_key_gates_by_effect() {
     // Gated.
     assert_eq!(
         Command::Action {
-            action: Action::Click { index: 1 },
+            action: Action::Click {
+                index: 1,
+                modifiers: Default::default()
+            },
             capture: false,
         }
         .policy_key(),
@@ -360,7 +366,14 @@ fn action_kind_matches_action_wire_tag() {
     use webpilot::Modifiers;
 
     let cases: Vec<(Action, ActionKind, &str)> = vec![
-        (Action::Click { index: 1 }, ActionKind::Click, "click"),
+        (
+            Action::Click {
+                index: 1,
+                modifiers: Default::default(),
+            },
+            ActionKind::Click,
+            "click",
+        ),
         (
             Action::Type {
                 index: 1,
