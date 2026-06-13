@@ -187,6 +187,32 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
   throw e;
 }
 
+// History-traversal commit window — mirrors the headless `back_forward` timeout
+// (5s default). A real traversal commits within a tick and returns at once; only
+// a genuine no-op waits the full window before surfacing NavigationFailed.
+const HISTORY_COMMIT_MS = 5000;
+
+// Wait — bounded — for a history traversal to actually happen: a main-frame
+// commit (a new document via onCommitted, or a same-document/bfcache hop via
+// onHistoryStateUpdated / onReferenceFragmentUpdated — all recorded on
+// `watch.committed`), or the main frame's URL leaving `beforeUrl` (a commit the
+// poll raced past). Returns whether it happened. A genuine no-op (already at the
+// first/last entry) commits nothing and resolves false — the honest
+// NavigationFailed signal that REPLACES the `navigation.canGoBack/Forward`
+// probe, which only sees the contiguous same-origin run of session history
+// (Navigation API spec) and so falsely denies a cross-origin adjacent entry that
+// `history.back()` traverses to fine.
+async function waitHistoryTraversed(watch, tabId, beforeUrl) {
+  const deadline = Date.now() + HISTORY_COMMIT_MS;
+  while (Date.now() < deadline) {
+    if (watch.committed) return true;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab?.url && tab.url !== beforeUrl) return true;
+    await sleep(50);
+  }
+  return false;
+}
+
 
 // Wait — bounded — for a freshly adopted popup to settle on the document the
 // click actually opened. A click-opened tab commonly exists first as
@@ -333,6 +359,7 @@ export {
   navigateBoundTab,
   settledActionUrl,
   waitActiveFrameSettled,
+  waitHistoryTraversed,
   waitNavigationSettled,
   watchMainFrameCommit,
 };

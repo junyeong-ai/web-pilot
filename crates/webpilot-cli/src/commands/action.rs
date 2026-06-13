@@ -20,15 +20,34 @@ pub struct ActionArgs {
 
 pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Result<CommandOutput> {
     // Resolve an upload path against the CLI's working directory and confirm it
-    // exists BEFORE it crosses the wire. Otherwise a relative path would be
-    // re-interpreted against Chrome's own cwd (browser mode runs a separate
-    // Chrome), and a missing file would surface as a raw CDP error instead of a
-    // typed InvalidArgument. `canonicalize` doubles as the existence check.
+    // is a readable regular file BEFORE it crosses the wire. Otherwise a relative
+    // path would be re-interpreted against Chrome's own cwd (browser mode runs a
+    // separate Chrome), and a bad path would surface as a raw CDP error instead
+    // of a typed InvalidArgument. `canonicalize` proves the path resolves; a
+    // directory, a special file, or an unreadable file (mode 000) would still
+    // pass it and then fail deep in `DOM.setFileInputFiles` as an untyped `Other`
+    // (exit 1) — so confirm a regular, openable file here and fail as a typed
+    // `InvalidArgument` (exit 7) naming the path.
     if let Action::Upload { path, .. } = &mut args.action {
-        *path =
+        let resolved =
             std::fs::canonicalize(&path).map_err(|e| webpilot::WebPilotError::InvalidArgument {
-                detail: format!("upload file not readable: {} ({e})", path.display()),
+                detail: format!("upload path not found: {} ({e})", path.display()),
             })?;
+        if !std::fs::metadata(&resolved)
+            .map_err(|e| webpilot::WebPilotError::InvalidArgument {
+                detail: format!("upload path not readable: {} ({e})", resolved.display()),
+            })?
+            .is_file()
+        {
+            return Err(webpilot::WebPilotError::InvalidArgument {
+                detail: format!("upload path is not a regular file: {}", resolved.display()),
+            }
+            .into());
+        }
+        std::fs::File::open(&resolved).map_err(|e| webpilot::WebPilotError::InvalidArgument {
+            detail: format!("upload file not readable: {} ({e})", resolved.display()),
+        })?;
+        *path = resolved;
     }
     let result = transport
         .send(Command::Action {

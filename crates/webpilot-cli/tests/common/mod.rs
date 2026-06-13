@@ -30,6 +30,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <div role="navigation"><button id="arianavbtn" onclick="">in aria nav</button></div>
 <article><header><button id="artheaderbtn" onclick="">in article header</button></header></article>
 <select id="hidopt"><option value="vis">Visible</option><option value="hid" style="display:none">Hidden</option></select>
+<form action="/second"><input type="image" id="imgbtn" alt="Image submit" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></form>
 <iframe src="/frame" name="innerfr"></iframe>
 <button id="dlg" onclick="window.__dlg=[confirm('c?'), prompt('p?', 'dv')]; document.title='dlg-done'">dialogs</button>
 <button id="mkif" onclick="const f=document.createElement('iframe'); f.src='/latealert'; document.body.appendChild(f)">mk iframe</button>

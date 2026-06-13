@@ -441,34 +441,34 @@
   // page landmark. Reporting `@banner` for an article's header would be a false
   // page-level claim the agent acts on.
   const SECTIONING = new Set(["article", "section", "aside", "nav", "main"]);
-  function hasSectioningAncestor(el) {
-    let p = flatTreeParent(el);
-    while (p && p !== document.body) {
-      if (SECTIONING.has(p.tagName.toLowerCase())) return true;
-      p = flatTreeParent(p);
-    }
-    return false;
-  }
   function findLandmark(el) {
-    // Walk the FLAT tree (crossing open shadow boundaries to the host), not just
-    // `parentElement`: a control inside a shadow root still sits within whatever
-    // landmark wraps its host in the outer tree, but `parentElement` returns null
-    // at the shadow boundary — so a bare walk would strip the landmark from every
-    // shadow-inner element. Mirrors the shadow-aware `isVisible`/`resolveLabel`.
-    let p = flatTreeParent(el);
-    while (p && p !== document.body) {
-      const role = p.getAttribute("role");
+    // Collect the FLAT-tree ancestor chain ONCE (crossing open shadow boundaries
+    // to the host, like the shadow-aware `isVisible`/`resolveLabel` — a bare
+    // `parentElement` walk would strip the landmark from every shadow-inner
+    // element at the shadow boundary), then judge against that array. A
+    // `<header>`/`<footer>` is a landmark only when no sectioning element sits
+    // ABOVE it in the SAME chain, so the check is a slice of the already-walked
+    // ancestors — never a fresh per-header re-walk (which made it O(depth²) on a
+    // deeply nested page).
+    const ancestors = [];
+    for (let p = flatTreeParent(el); p && p !== document.body; p = flatTreeParent(p)) {
+      ancestors.push(p);
+    }
+    for (let i = 0; i < ancestors.length; i++) {
+      const a = ancestors[i];
+      const role = a.getAttribute("role");
       if (role && LANDMARK_ROLES.has(role.toLowerCase())) return role.toLowerCase();
-      const tag = p.tagName.toLowerCase();
+      const tag = a.tagName.toLowerCase();
       const mapped = LANDMARK_TAG_ROLE[tag];
       if (mapped) {
-        if ((tag === "header" || tag === "footer") && hasSectioningAncestor(p)) {
-          p = flatTreeParent(p);
+        if (
+          (tag === "header" || tag === "footer") &&
+          ancestors.slice(i + 1).some((x) => SECTIONING.has(x.tagName.toLowerCase()))
+        ) {
           continue;
         }
         return mapped;
       }
-      p = flatTreeParent(p);
     }
     return null;
   }
@@ -1738,7 +1738,17 @@
       case "setAttr": {
         const r = uniqueSelectorOrErr(msg.selector);
         if (r.error) return r.error;
-        r.el.setAttribute(msg.attr, msg.value);
+        // An invalid attribute name (a space, a leading digit, other illegal
+        // characters) makes `setAttribute` throw an `InvalidCharacterError`
+        // DOMException. Surface it as a typed `InvalidArgument` (exit 7) — the
+        // way the selector path already types its failures — instead of letting
+        // it propagate as an untyped `Other` (exit 1, headless) / unhandled
+        // rejection (browser).
+        try {
+          r.el.setAttribute(msg.attr, msg.value);
+        } catch {
+          return err("InvalidArgument", `Invalid attribute name: ${msg.attr}`);
+        }
         return { success: true };
       }
       case "getHtml": {

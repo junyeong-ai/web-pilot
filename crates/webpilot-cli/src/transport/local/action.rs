@@ -849,37 +849,35 @@ impl LocalTransport {
         release_err.map_or(Ok(()), Err)
     }
 
-    /// Drive a same-document history navigation (`history.back()`/`forward()`).
+    /// Drive a browser history traversal (`history.back()`/`forward()`).
     ///
-    /// The navigation tears down the execution context the expression runs in,
-    /// so the evaluate's own response can come back as a CDP "target navigated"
+    /// Decided by OUTCOME, never prediction. `navigation.canGoBack/Forward` only
+    /// sees the contiguous **same-origin** run of session history (Navigation
+    /// API spec), so it returns `false` for a cross-origin adjacent entry that
+    /// `history.back()` traverses to fine — using it as a guard would falsely
+    /// report "no history entry" across every origin boundary (an OAuth/SSO
+    /// redirect, leaving a search engine for a result), blocking a valid
+    /// traversal. Instead we issue the traversal and settle on what actually
+    /// happened: a real traversal fires a main-frame navigation — a new document
+    /// (`Page.frameNavigated`) or a same-document/bfcache hop
+    /// (`Page.navigatedWithinDocument`) — and returns at once; a genuine no-op
+    /// (already at the first/last entry) fires nothing and surfaces as a typed
+    /// `NavigationFailed` when the window closes.
+    ///
+    /// The traversal tears down the execution context the expression runs in, so
+    /// the evaluate's own response can come back as a CDP "target navigated"
     /// teardown — that is the success path, not a failure. Only typed transport
-    /// failures (`ConnectionLost`/`Timeout`) are propagated; the navigation is
-    /// then confirmed via the frame event and the active frame is reset, just
-    /// as `navigate_reconnect` does.
+    /// failures (`ConnectionLost`/`Timeout`) are propagated.
     async fn history_nav(&self, direction: HistoryNav) -> Result<()> {
-        let (probe, expression) = match direction {
-            HistoryNav::Back => ("navigation.canGoBack", "history.back()"),
-            HistoryNav::Forward => ("navigation.canGoForward", "history.forward()"),
+        let expression = match direction {
+            HistoryNav::Back => "history.back()",
+            HistoryNav::Forward => "history.forward()",
         };
-        // The Navigation API makes a missing history entry an honest, immediate
-        // typed failure — never a success that silently did nothing (browser
-        // mode applies the same check). A probe that cannot resolve (the API
-        // absent) falls through to attempting the traversal: undeterminable is
-        // not the same as impossible.
-        if let Ok(can) = self.page.evaluate(probe).await
-            && can == serde_json::Value::Bool(false)
-        {
-            return Err(WebPilotError::NavigationFailed {
-                url: expression.to_string(),
-                reason: "no history entry".into(),
-            }
-            .into());
-        }
-
-        // Subscribe before issuing the traversal so the new document's parse
-        // event is buffered for `await_document_ready` below — the same
-        // before-the-action ordering `do_action` uses.
+        let before = self.bound_target_url().await;
+        // Subscribe BEFORE issuing the traversal so the outcome events are
+        // buffered for both the traversal check and `await_document_ready` — no
+        // event can fire between the evaluate and a later subscribe and be lost,
+        // the race a fresh `wait_for_event_matching` subscription would open.
         let mut events = self.page.subscribe_events();
         if let Err(e) = self.page.evaluate(expression).await
             && matches!(
@@ -889,21 +887,42 @@ impl LocalTransport {
         {
             return Err(e);
         }
-        // Settle only on the MAIN frame's navigation: a subframe that reloads
-        // during the traversal window would otherwise end this wait at the
-        // pre-traversal document, and the readyState probe below — finding the
-        // old document still `complete` — would return at once, so a following
-        // capture reads the page we navigated *away* from while the command
-        // reports success. (The click-settle path and browser mode both filter
-        // to the main frame for the same reason.)
-        self.page
-            .wait_for_event_matching(
-                "Page.frameNavigated (main frame)",
+        // Settle only on the MAIN frame: a subframe that reloads during the
+        // window must never satisfy the wait, or a cross-origin iframe reloading
+        // on its own would end it at the pre-traversal document (the click-settle
+        // path and browser mode filter the same way). A new document is
+        // `Page.frameNavigated` (no parentId); a same-document/bfcache hop is
+        // `Page.navigatedWithinDocument` for the main frame's id.
+        let main_id = self.main_frame_id.clone();
+        let mut traversed = self
+            .page
+            .wait_on_receiver(
+                &mut events,
                 webpilot::settings::timeouts().back_forward,
-                |ev| main_frame_navigated(ev).is_some(),
+                |ev| {
+                    main_frame_navigated(ev).is_some()
+                        || (ev.get("method").and_then(Value::as_str)
+                            == Some("Page.navigatedWithinDocument")
+                            && ev.pointer("/params/frameId").and_then(Value::as_str)
+                                == Some(main_id.as_str()))
+                },
             )
-            .await
-            .ok();
+            .await;
+        // A burst that overflowed the event buffer could have dropped the very
+        // navigation event mid-wait; before declaring no history entry, confirm
+        // the negative against the observable outcome — the main frame's URL
+        // moved — so a dropped event never fabricates a false `NavigationFailed`.
+        if !traversed {
+            let after = self.bound_target_url().await;
+            traversed = !after.is_empty() && after != before;
+        }
+        if !traversed {
+            return Err(WebPilotError::NavigationFailed {
+                url: expression.to_string(),
+                reason: "no history entry".into(),
+            }
+            .into());
+        }
         // Wait — best-effort — for the traversed-to document to parse, so a
         // following capture reads a ready page, not a committed-but-empty one
         // (browser mode waits the same readyState bar). The immediate readyState

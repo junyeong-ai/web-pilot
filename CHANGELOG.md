@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.223] - 2026-06-13
+
+### Fixed
+
+Four behavioural fixes from a parallel re-review (cross-origin history, an
+`eval`-gate bypass via `set-html`, and two typed-error gaps), each verified
+against a live browser:
+
+- **`action back`/`forward` no longer falsely reports "no history entry" across
+  an origin boundary.** The guard used `navigation.canGoBack`/`canGoForward`,
+  which by spec only sees the contiguous *same-origin* run of session history —
+  so after any cross-origin navigation (an OAuth/SSO redirect, leaving a search
+  engine for a result) it returned `false` and blocked a traversal that
+  `history.back()` performs fine. History traversal is now decided by OUTCOME —
+  a real main-frame navigation, a new document or a same-document/bfcache hop —
+  not a predictive probe; a genuine no-op (already at the first/last entry) still
+  surfaces as a typed `NavigationFailed`. Fixed in both headless and browser
+  modes.
+- **`dom set-html` is now gated by `eval`, not `dom_set`.** Assigning
+  `innerHTML` parses agent-supplied markup whose inline event handlers
+  (`<img src=x onerror=…>`) run JS immediately — a single-call JS-execution sink
+  equal to `eval`. Gating it under the narrower `dom_set` let an operator who
+  denied `eval` (the least-privilege base) still inject arbitrary JS. `set-text`
+  (literal `textContent`) and `set-attr` (one attribute, no immediate execution)
+  remain `dom_set`.
+- **`dom set-attr` with an invalid attribute name returns a typed
+  `InvalidArgument` (exit 7).** A name with a space or a leading digit makes
+  `setAttribute` throw a DOMException; it previously propagated as an untyped
+  `Other` (exit 1). It is now caught and typed, mirroring the selector path.
+- **`action upload` rejects a directory or an unreadable file as a typed
+  `InvalidArgument` (exit 7).** The preflight only confirmed the path resolved
+  (`canonicalize`); a directory or a mode-000 file then failed deep in
+  `DOM.setFileInputFiles` as an untyped `Other` (exit 1). It now confirms a
+  readable regular file before the path crosses the wire.
+
 ## [0.4.222] - 2026-06-13
 
 ### Fixed

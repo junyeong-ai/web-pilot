@@ -5,7 +5,7 @@ import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, installDialogOverride, sendToContent } from "./content.js";
-import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
+import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitHistoryTraversed, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId } from "./query.js";
 import { countHttpSubframes } from "./capture.js";
 import { rearmMonitors } from "./state.js";
@@ -88,29 +88,19 @@ async function handleAction(command) {
     case "forward": {
       // History traversal runs in the page (`history.back()`), mirroring the
       // headless transport — `chrome.tabs.goBack` refuses even with history
-      // present in headless Chrome (measured). The Navigation API makes the
-      // no-entry case an honest, immediate typed failure instead of a success
-      // that silently did nothing.
+      // present in headless Chrome (measured). Decided by OUTCOME, not
+      // prediction: `navigation.canGoBack/Forward` only sees the contiguous
+      // same-origin run of session history (Navigation API spec), so it falsely
+      // reports "no history entry" for a cross-origin adjacent entry that
+      // `history.back()` traverses to fine (an OAuth/SSO redirect, leaving a
+      // search engine for a result), blocking a valid traversal. We issue the
+      // traversal and settle on what actually happened — a main-frame commit
+      // (onCommitted / onHistoryStateUpdated / onReferenceFragmentUpdated, all
+      // recorded on `watch.committed`) — and only a genuine no-op surfaces a
+      // typed NavigationFailed. The watch is registered BEFORE the traversal so
+      // a commit that fires immediately is never missed.
       const dir = action.kind;
-      const can = await chrome.scripting
-        .executeScript({
-          target: { tabId: tab.id, frameIds: [0] },
-          world: "MAIN",
-          func: (d) => (d === "back" ? navigation.canGoBack : navigation.canGoForward),
-          args: [dir],
-        })
-        .then((r) => r?.[0]?.result)
-        .catch(() => null);
-      if (can === false) {
-        return {
-          type: "Action",
-          success: false,
-          error: err("NavigationFailed", `Cannot go ${dir}: no history entry`, {
-            url: `history.${dir}()`,
-            reason: "no history entry",
-          }),
-        };
-      }
+      const before = tab.url || "";
       const watch = watchMainFrameCommit(tab.id);
       await chrome.scripting.executeScript({
         target: { tabId: tab.id, frameIds: [0] },
@@ -121,12 +111,21 @@ async function handleAction(command) {
         },
         args: [dir],
       });
-      // Best-effort settle: the traversal was issued (the no-history case above
-      // is the real NavigationFailed), so a slow page that doesn't settle in
-      // time is not a failure of the action — wait for the new document, but
-      // don't turn a still-loading page into an error. Matches headless, which
-      // settles best-effort on history/reload.
-      await waitNavigationSettled(tab.id, tab.url || "", watch, `history.${dir}()`).catch(() => {});
+      if (!(await waitHistoryTraversed(watch, tab.id, before))) {
+        watch.dispose();
+        return {
+          type: "Action",
+          success: false,
+          error: err("NavigationFailed", `Cannot go ${dir}: no history entry`, {
+            url: `history.${dir}()`,
+            reason: "no history entry",
+          }),
+        };
+      }
+      // It committed — settle the document for a following capture. Best-effort:
+      // a slow page that doesn't parse in time is not a failure of a traversal
+      // that already happened (headless parity).
+      await waitNavigationSettled(tab.id, before, watch, `history.${dir}()`).catch(() => {});
       setActiveFrameId(0);
       await rearmMonitors(tab.id);
       result = { type: "Action", success: true };

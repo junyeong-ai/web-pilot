@@ -571,6 +571,42 @@ impl CdpClient {
         }
     }
 
+    /// Wait, on an EXISTING subscription, for an event matching `predicate`,
+    /// returning whether one arrived before `timeout`. The caller subscribes
+    /// *before* triggering the action, so an event fired between the trigger and
+    /// the wait cannot slip through — the race a fresh `wait_for_event_matching`
+    /// subscription opens. Unlike that method this yields a plain outcome bool,
+    /// not a typed error: a dead connection or a dropped-event buffer overflow
+    /// ends the wait as a non-arrival, and the caller confirms the negative
+    /// another way (it never treats absence alone as proof the event never
+    /// fired).
+    pub async fn wait_on_receiver(
+        &self,
+        rx: &mut broadcast::Receiver<Value>,
+        timeout: std::time::Duration,
+        predicate: impl Fn(&Value) -> bool,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if !self.alive.load(Ordering::Acquire) {
+                return false;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let tick = (deadline - now).min(std::time::Duration::from_millis(250));
+            match tokio::time::timeout(tick, rx.recv()).await {
+                Ok(Ok(event)) if predicate(&event) => return true,
+                // A non-match, a buffer overflow (the awaited event may yet
+                // arrive), or a poll tick with no event — keep waiting until the
+                // deadline.
+                Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) | Err(_) => continue,
+                Ok(Err(broadcast::error::RecvError::Closed)) => return false,
+            }
+        }
+    }
+
     /// Viewport screenshot (PNG, base64).
     pub async fn screenshot(&self) -> Result<String> {
         self.screenshot_inner(false).await

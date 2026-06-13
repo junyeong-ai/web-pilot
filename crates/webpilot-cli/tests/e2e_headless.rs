@@ -1842,18 +1842,19 @@ fn headless_behavioral_flow() {
     // 3b. The `eval` gate covers monitor re-injection: a deny that lands AFTER
     //     `console start` must stop the MAIN-world hooks from re-arming on the
     //     next document — `reinstall_monitors` re-checks the gate (browser mode
-    //     mirrors this via host-attached verdicts). First confirm the
-    //     self-logging page IS captured while allowed, so the deny case can't
-    //     pass on a timing miss.
+    //     mirrors this via host-attached verdicts). First confirm a log IS
+    //     captured while allowed, so the deny case can't pass on a timing miss.
+    //     `navigate` awaits `reinstall_monitors`, so once it returns the armed
+    //     hook is in place; drive the log via `eval` (not a page startup timer)
+    //     so the check can't race the re-arm — a log a page fires during its own
+    //     startup, before the hook re-installs, is by design NOT captured
+    //     (extension.md), and timing that against a fixed sleep is flaky.
     let _ = fx.run(&["console", "clear"]);
-    assert_eq!(
-        code(&fx.run(&["action", "navigate", &format!("{base}/log")])),
-        0
-    );
-    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+    let _ = fx.run(&["eval", "console.log('postnav-monitor-marker')"]);
     assert!(
         stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
-        "a self-logging page must be captured while the monitor is armed"
+        "an armed monitor must capture a log on the document navigated to"
     );
     let _ = fx.run(&["console", "clear"]);
     // Arm the network monitor too, so the suppressed-read signal below is
@@ -2052,20 +2053,25 @@ fn headless_behavioral_flow() {
     //     same-tab navigation. `tab new` routes through `do_tab_switch`, which
     //     DEFERS the monitor arm (the new tab is still about:blank there and the
     //     imminent load would wipe it) and re-arms after the document settles —
-    //     so the /log marker (fired +200ms, after the arm) is captured. Without
-    //     the deferred re-arm the new tab would carry no hooks and `console read`
-    //     would silently miss its logs. The console monitor armed at step 3 is
-    //     still running. (Browser-mode mirror: the monitor-follow step in
-    //     e2e_browser.) Restore the pin to a base page for the policy step below.
+    //     and `do_tab_new` AWAITS that re-arm before returning, so once `tab new`
+    //     returns the new tab's hooks are in place. Drive an explicit log via
+    //     `eval` (not the page's own startup timer): a startup log can fire
+    //     BEFORE the re-arm completes — `tab new` is slower than a same-tab
+    //     navigate (create + switch + settle + re-arm), so its re-arm easily
+    //     trails a +200ms timer — and such a startup log is by design not
+    //     captured (extension.md), which would make the test race the re-arm. An
+    //     eval after `tab new` returns cannot. Without the deferred re-arm the new
+    //     tab carries no hooks and the log is lost. (Browser-mode mirror: the
+    //     monitor-follow step in e2e_browser.)
     let _ = fx.run(&["console", "clear"]);
-    let mtab = fx.run(&["tab", "new", &format!("{base}/log")]);
+    let mtab = fx.run(&["tab", "new", &base]);
     assert_eq!(
         code(&mtab),
         0,
         "tab new for monitor-follow failed: {}",
         stdout(&mtab)
     );
-    std::thread::sleep(std::time::Duration::from_millis(700));
+    let _ = fx.run(&["eval", "console.log('postnav-monitor-marker')"]);
     assert!(
         stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
         "an armed console monitor must follow the pin onto a new tab: {}",
@@ -2983,6 +2989,36 @@ fn headless_behavioral_flow() {
          wait), not the embedded frame's load that would leave the capture on \
          /frame: {}",
         stdout(&after_back)
+    );
+
+    // 8d-image. `<input type=image>` is a submit button: it carries an implicit
+    //     ARIA `button` role (its `alt` is the accessible name), so a semantic
+    //     `find --role button` reaches it — pinning the implicit-role mapping end
+    //     to end on a live page, not just the type-level unit test.
+    let img_btn = fx.run(&["find", "--role", "button", "--tag", "input"]);
+    assert!(
+        stdout(&img_btn).contains("Image submit"),
+        "find --role button must match the <input type=image> by its implicit \
+         button role (alt as accessible name): {}",
+        stdout(&img_btn)
+    );
+
+    // 8d-noop. A fresh tab has no back entry. `back`/`forward` are now decided by
+    //     OUTCOME — the traversal fired a real main-frame navigation — having
+    //     dropped the `navigation.canGoBack` probe that only saw the contiguous
+    //     same-origin history run and so falsely denied a cross-origin entry (a
+    //     valid traversal; pinned by review against a live two-origin run). A
+    //     genuine no-op fires no navigation and the URL never moves, so it
+    //     surfaces as a typed NavigationFailed (exit 8) after the window, never a
+    //     false success. This pins that negative; browser mode asserts the mirror.
+    let fresh = fx.run(&["tab", "new", &base]);
+    assert_eq!(code(&fresh), 0, "tab new failed: {}", stdout(&fresh));
+    let no_history = fx.run(&["action", "back"]);
+    assert_eq!(
+        code(&no_history),
+        8,
+        "back with no history must be a typed NavigationFailed: {}",
+        stdout(&no_history)
     );
 
     // 8e. A budget-clipped shadow traversal cannot prove set-uniqueness: past

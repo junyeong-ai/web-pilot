@@ -808,17 +808,19 @@ fn browser_behavioral_flow() {
     //     landing after `console start` must stop the service worker re-arming the
     //     MAIN-world hooks on the next document (the host attaches the verdict;
     //     `rearmMonitors` honours it), matching headless `reinstall_monitors`.
-    //     Confirm the self-logging page IS captured while allowed first, so the
-    //     deny case can't pass on a timing miss.
+    //     Confirm a log IS captured while allowed first, so the deny case can't
+    //     pass on a timing miss. `navigate` awaits `rearmMonitors`, so once it
+    //     returns the armed hook is in place; drive the log via `eval` (not a
+    //     page startup timer) so the check can't race the re-arm — a log a page
+    //     fires during its own startup, before the hook re-installs, is by design
+    //     not captured (extension.md), and timing it against a fixed sleep is
+    //     flaky. Headless mirror in e2e_headless.
     let _ = fx.run(&["console", "clear"]);
-    assert_eq!(
-        code(&fx.run(&["action", "navigate", &format!("{base}/log")])),
-        0
-    );
-    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
+    let _ = fx.run(&["eval", "console.log('postnav-monitor-marker')"]);
     assert!(
         stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
-        "a self-logging page must be captured while the monitor is armed"
+        "an armed monitor must capture a log on the document navigated to"
     );
     let _ = fx.run(&["console", "clear"]);
     // Arm the network monitor too, so the suppressed-read signal below is

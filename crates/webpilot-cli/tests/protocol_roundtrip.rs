@@ -199,6 +199,43 @@ fn command_policy_key_gates_by_effect() {
     // read/clear is bookkeeping and stays ungated.
     assert_eq!(Command::ConsoleStart.policy_key(), Some(PolicyKey::Eval));
     assert_eq!(Command::NetworkStart.policy_key(), Some(PolicyKey::Eval));
+    // `set-html` assigns innerHTML — agent-supplied markup whose inline event
+    // handlers (`<img src=x onerror=…>`) run JS immediately, the same effect as
+    // eval — so it gates under `eval`, not the narrower `dom_set`. `set-text`
+    // (literal textContent) and `set-attr` (one attribute, no immediate
+    // execution) stay `dom_set`.
+    assert_eq!(
+        Command::DomSet {
+            selector: "body".into(),
+            property: DomProperty::Html,
+            value: "<b>x</b>".into(),
+        }
+        .policy_key(),
+        Some(PolicyKey::Eval),
+        "set-html runs inline-handler JS, so it must gate under eval"
+    );
+    assert_eq!(
+        Command::DomSet {
+            selector: "body".into(),
+            property: DomProperty::Text,
+            value: "x".into(),
+        }
+        .policy_key(),
+        Some(PolicyKey::DomSet),
+        "set-text is literal textContent, so it stays dom_set"
+    );
+    assert_eq!(
+        Command::DomSet {
+            selector: "body".into(),
+            property: DomProperty::Attr {
+                name: "data-x".into()
+            },
+            value: "1".into(),
+        }
+        .policy_key(),
+        Some(PolicyKey::DomSet),
+        "set-attr sets one attribute with no immediate execution, so it stays dom_set"
+    );
 
     // Ungated: read-only observation, buffer bookkeeping, structural selection.
     assert_eq!(Command::Status.policy_key(), None);

@@ -154,7 +154,20 @@ impl Command {
             Command::Action { action, .. } => Some(PolicyKey::from(action.kind())),
             Command::Eval { .. } => Some(PolicyKey::Eval),
             Command::Fetch { .. } => Some(PolicyKey::Fetch),
-            Command::DomSet { .. } => Some(PolicyKey::DomSet),
+            // `set-html` assigns `innerHTML`: agent-supplied markup parsed into
+            // the page, and an inline event-handler attribute in it runs JS
+            // immediately — `<img src=x onerror=…>` fires on the failed load — a
+            // direct, single-call JS-execution sink with the same effect as
+            // `eval`. It is therefore gated by `eval`, not `dom_set`: denying
+            // `eval` (the least-privilege base) must also deny this, or set-html
+            // would reproduce arbitrary JS injection behind a narrower key.
+            // `set-text` (textContent, literal) and `set-attr` (one attribute,
+            // no immediate execution — an `on*` handler it sets still needs a
+            // later click/navigate, themselves gated) stay `dom_set`.
+            Command::DomSet { property, .. } => Some(match property {
+                DomProperty::Html => PolicyKey::Eval,
+                DomProperty::Text | DomProperty::Attr { .. } => PolicyKey::DomSet,
+            }),
             Command::TabClose { .. } => Some(PolicyKey::TabClose),
             // `console start` / `network start` install monitoring hooks by
             // executing JS in the page's MAIN world — agent-initiated code
