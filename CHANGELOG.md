@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.232] - 2026-06-14
+
+### Fixed
+
+Closes the two remaining sinks the v0.4.231 `line_safe` bidi fix did not reach
+(found by codex's follow-up; fresh's holistic sweep otherwise reported the
+campaign converged — concurrency, the full agent loop, large-DOM/iframe/CSP
+edges, and build/release integrity all clean).
+
+- **Browser mode: the frame-URL ambiguity error now neutralizes bidi/zero-width
+  spoofs.** `clipUrl` (the JS twin of `line_safe_clip`) stripped only C0/C1
+  controls, so a `U+202E` RIGHT-TO-LEFT OVERRIDE in an iframe `src` could spoof
+  the agent-facing "ambiguous frame" error. It now strips the same bidi controls
+  and zero-width formatters the Rust `line_safe` does.
+- **The no-DOM capture / new-tab render now caps page title/URL.** `dom_extra_lines`
+  (the `Label: value` lines for a screenshot/PDF/AX-only capture and the adopted
+  popup's URL) rendered `page_title`/`page_url`/`new_tab.url` through bare
+  `line_safe` with no length cap — the one agent-facing render the v0.4.231 footer
+  cap missed. Now uses `line_safe_clip(.., 200)` like the DOM footer, so a page
+  can't flood the line; the full value stays in the JSON channel.
+
 ## [0.4.231] - 2026-06-14
 
 ### Fixed

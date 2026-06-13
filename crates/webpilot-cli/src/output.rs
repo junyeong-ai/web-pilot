@@ -6,7 +6,7 @@
 
 use std::io::IsTerminal;
 use webpilot::WebPilotError;
-use webpilot::types::{DomSnapshot, line_safe};
+use webpilot::types::{DomSnapshot, line_safe_clip};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
@@ -68,10 +68,12 @@ const DOM_EXTRA_LABELS: [(&str, &str); 6] = [
 
 /// One `Label: value` line per present capture artefact, in a stable order.
 /// The single source for the CLI renderer, the MCP text block, and the capture
-/// handler's no-DOM path. Every value passes through `line_safe`: `page_title`
-/// and `page_url` are page-controlled, so a title carrying a newline could
-/// otherwise inject a fake `[index]` line into the snapshot an agent reads —
-/// exactly what `DomSnapshot::to_text` already guards against in the DOM footer.
+/// handler's no-DOM path. Every value passes through `line_safe_clip`:
+/// `page_title`/`page_url` are page-controlled, so a value carrying a newline or
+/// a bidi override could otherwise inject a fake `[index]` line or spoof a URL,
+/// and an unbounded title/URL could flood the line — exactly what
+/// `DomSnapshot::to_text` guards against in the DOM footer, at the same 200-char
+/// cap. The full value stays in the JSON channel.
 pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
     let mut lines: Vec<String> = DOM_EXTRA_LABELS
         .iter()
@@ -79,7 +81,7 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
             extra
                 .get(*key)
                 .and_then(|v| v.as_str())
-                .map(|v| format!("{label}: {}", line_safe(v)))
+                .map(|v| format!("{label}: {}", line_safe_clip(v, 200)))
         })
         .collect();
     // The screenshot's saved dimensions are numbers, so the string label table
@@ -107,7 +109,7 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
         .and_then(|t| t.get("url"))
         .and_then(|v| v.as_str())
     {
-        lines.push(format!("New tab: {}", line_safe(url)));
+        lines.push(format!("New tab: {}", line_safe_clip(url, 200)));
     }
     lines
 }

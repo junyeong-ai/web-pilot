@@ -322,8 +322,18 @@ async function readFrameName(tabId, frameId) {
 function clipUrl(u) {
   const safe = Array.from(u || "").map((c) => {
     const cp = c.codePointAt(0);
-    // C0 (0x00..0x1F), DEL (0x7F), C1 (0x80..0x9F) -- the Rust char::is_control set.
-    return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) ? " " : c;
+    // The Rust `line_safe` spoof set: C0 (0x00..0x1F), DEL+C1 (0x7F..0x9F), AND
+    // the bidi controls / zero-width formatters \u2014 a U+202E RIGHT-TO-LEFT OVERRIDE
+    // in an iframe URL would otherwise spoof the agent-facing ambiguity error.
+    const spoof =
+      cp <= 0x1f ||
+      (cp >= 0x7f && cp <= 0x9f) ||
+      (cp >= 0x200b && cp <= 0x200f) ||
+      (cp >= 0x202a && cp <= 0x202e) ||
+      (cp >= 0x2066 && cp <= 0x2069) ||
+      cp === 0x061c ||
+      cp === 0xfeff;
+    return spoof ? " " : c;
   });
   return safe.length > 200 ? safe.slice(0, 200).join("") + "\u2026" : safe.join("");
 }
