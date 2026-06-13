@@ -587,17 +587,36 @@ fn norm_ws(s: &str) -> String {
 
 // ── Human-readable serialization ─────────────────────────────────────────────
 
-/// Collapse ASCII control characters (newlines included) to spaces. The agent
-/// view is line-oriented: a page- or server-controlled string that could embed
-/// `\n` would let a hostile source fabricate rows or forge footers inside the
-/// text the agent trusts (a snapshot element, a cookie row, a tab title, a
+/// Whether `c` is a line/identity-spoofing format character the agent view must
+/// neutralize: an ASCII/C1 control (newline row-forging) OR a Unicode bidi
+/// control / zero-width formatter. The latter visually reorders or hides text so
+/// a page can spoof a URL, filename, or label the agent trusts — e.g. U+202E
+/// RIGHT-TO-LEFT OVERRIDE renders "invoice<RLO>gpj.exe" as "invoiceexe.jpg".
+/// Normal RTL *script* (Arabic/Hebrew letters) and emoji are not format chars
+/// and pass through; only the bidi controls and zero-width formatters are caught.
+fn is_spoof_format(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{200B}'..='\u{200F}'   // ZWSP / ZWNJ / ZWJ / LRM / RLM
+            | '\u{202A}'..='\u{202E}' // LRE / RLE / PDF / LRO / RLO
+            | '\u{2066}'..='\u{2069}' // LRI / RLI / FSI / PDI
+            | '\u{061C}'              // Arabic letter mark
+            | '\u{FEFF}',             // BOM / zero-width no-break space
+        )
+}
+
+/// Collapse line/identity-spoofing format characters to spaces. The agent view
+/// is line-oriented AND trusts the visual order: a page- or server-controlled
+/// string that embeds `\n` could fabricate rows or forge footers, and a bidi
+/// override / zero-width formatter could spoof a URL, filename, or label inside
+/// the text the agent trusts (a snapshot element, a cookie row, a tab title, a
 /// console line). Every renderer that turns such a string into agent-facing
 /// lines routes it through here, so the guarantee holds at one definition.
 pub fn line_safe(s: &str) -> std::borrow::Cow<'_, str> {
-    if s.chars().any(char::is_control) {
+    if s.chars().any(is_spoof_format) {
         std::borrow::Cow::Owned(
             s.chars()
-                .map(|c| if c.is_control() { ' ' } else { c })
+                .map(|c| if is_spoof_format(c) { ' ' } else { c })
                 .collect(),
         )
     } else {
@@ -769,10 +788,15 @@ impl DomSnapshot {
             }
         }
 
+        // Clip like the frame-URL rows: a page can set a multi-megabyte title or
+        // push a giant query string into the URL, and this footer is the one
+        // agent-facing place a page-controlled string would otherwise render
+        // UNBOUNDED (element text is already 300-capped). The full values stay in
+        // the JSON `page_title`/`page_url` fields.
         out.push_str(&format!(
             "--- Page: {} ({}) ---\n",
-            line_safe(&self.page_title),
-            line_safe(&self.page_url)
+            line_safe_clip(&self.page_title, 200),
+            line_safe_clip(&self.page_url, 200)
         ));
 
         // Only a capture that measured layout may speak about scroll; a
@@ -917,6 +941,21 @@ mod tests {
         assert_eq!(line_safe("a\r\n\tb"), "a   b");
         assert!(matches!(
             line_safe("clean text"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn line_safe_neutralizes_bidi_and_zero_width_spoofs() {
+        // A bidi override (U+202E) visually REORDERS text — spoofing a URL,
+        // filename, or label the agent trusts — and a zero-width char hides
+        // content. line_safe must collapse these to spaces like it does newlines.
+        assert_eq!(line_safe("inv\u{202e}gpj.exe"), "inv gpj.exe");
+        assert_eq!(line_safe("a\u{200b}b\u{2069}c\u{feff}d"), "a b c d");
+        // Normal text — Arabic SCRIPT letters and emoji — must pass through
+        // unchanged and borrowed (only the bidi/zero-width FORMAT chars are hit).
+        assert!(matches!(
+            line_safe("مرحبا 🎉 clean"),
             std::borrow::Cow::Borrowed(_)
         ));
     }

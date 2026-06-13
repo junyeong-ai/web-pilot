@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.231] - 2026-06-14
+
+### Fixed
+
+A parallel codex + fresh-context convergence round: the whole campaign
+(v0.4.223–230) re-verified clean except the agent-facing string-sanitization
+layer, plus a hardening of the v0.4.230 ERR_ABORTED fix.
+
+- **`line_safe` now neutralizes Unicode bidi-control / zero-width characters,
+  not just ASCII controls.** It collapsed `char::is_control()` (newline
+  row-forging) but passed every Cf-category char through — including U+202E
+  RIGHT-TO-LEFT OVERRIDE, which renders `invoice<RLO>gpj.exe` as the spoof
+  `invoiceexe.jpg`, and the zero-width formatters. A hostile page could thus
+  spoof a URL, filename, or label in the agent-facing text (a snapshot element,
+  tab title, cookie row, console line) — the same line/identity-forging threat
+  `line_safe` exists to stop, expressed visually instead of via `\n`. It now
+  collapses U+200B–200F, U+202A–202E, U+2066–2069, U+061C, U+FEFF too; normal
+  RTL script (Arabic/Hebrew letters) and emoji pass through. Applies at all 57
+  agent-facing sinks at one definition. (The raw value still lives in the JSON
+  channel.)
+- **The `--- Page: title (url) ---` snapshot footer is now length-capped.** It
+  was the one agent-facing place a page-controlled string rendered unbounded
+  (element text is already 300-capped) — a 100k-char title or query flooded the
+  terminal/MCP block. Clipped to 200 chars like the frame-URL rows; the full
+  value stays in the JSON `page_title`/`page_url`.
+- **`navigate`'s ERR_ABORTED stay-put handling (v0.4.230) is hardened against a
+  transitional-abort race.** A transitional abort (a swap that commits a new
+  document) whose commit lands right at the PROBE boundary could be missed and
+  the previous document returned instead. Headless now takes one final commit
+  check at the deadline (a moved URL re-enters the settle loop on the full
+  deadline); browser mode measures the PROBE window from when the abort was
+  OBSERVED (onErrorOccurred can fire late), not from nav start, so a commit
+  following the abort still settles. Terminal stay-puts (204/download) and normal
+  navigations are unchanged (verified: 204 ~2s, normal ~0.05s).
+
 ## [0.4.230] - 2026-06-14
 
 ### Fixed

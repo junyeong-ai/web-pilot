@@ -678,11 +678,11 @@ impl LocalTransport {
         // full navigation deadline only delays a false NavigationFailed. (A
         // concrete net error already returned above; a send `Err` keeps the long
         // deadline so a real socket drop isn't masked.)
-        let aborted = matches!(
+        let mut aborted = matches!(
             &start_error,
             Some(WebPilotError::NavigationFailed { reason, .. }) if reason == "net::ERR_ABORTED"
         );
-        let deadline = std::time::Instant::now()
+        let mut deadline = std::time::Instant::now()
             + if aborted {
                 PROBE
             } else {
@@ -732,11 +732,26 @@ impl LocalTransport {
 
             if std::time::Instant::now() >= deadline {
                 if aborted {
-                    // No new document committed within PROBE → a TERMINAL stay-put
-                    // (a 204/download/intercepted load): the main frame's load
-                    // stopped without committing, so the PREVIOUS document is live
-                    // and capturable. Return success on it — not a 15s spin to a
-                    // false NavigationFailed.
+                    // A TRANSITIONAL abort's commit can land in the poll→deadline
+                    // gap. Take one more reading before declaring stay-put: if the
+                    // main-tab URL moved (a cross-page commit), it was transitional
+                    // after all — re-enter the loop on the FULL deadline so the
+                    // cross-page branch rebinds the new document. Only a confirmed
+                    // no-move is the TERMINAL stay-put (a 204/download/intercepted
+                    // load): the main frame stopped without committing, so the
+                    // PREVIOUS document is live and capturable — return success on
+                    // it, not a 15s spin to a false NavigationFailed.
+                    let moved = if let Some((tid, turl)) = self.bound_target().await {
+                        tid == self.target_id && turl != before_url
+                    } else {
+                        false
+                    };
+                    if moved {
+                        aborted = false;
+                        deadline =
+                            std::time::Instant::now() + webpilot::settings::timeouts().navigation;
+                        continue;
+                    }
                     self.clear_active_frame().await;
                     self.reinstall_monitors().await;
                     return Ok(());

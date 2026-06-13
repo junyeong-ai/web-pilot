@@ -125,8 +125,16 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
   // navigation timeout only delays a false NavigationFailed. Headless parity:
   // navigate_reconnect bounds ERR_ABORTED by PROBE and returns success on the
   // live previous document.
-  const budget = () =>
-    watch.error === "net::ERR_ABORTED" ? PROBE_MS : navigationTimeoutMs();
+  let abortSeenAt = null;
+  const budget = () => {
+    if (watch.error !== "net::ERR_ABORTED") return navigationTimeoutMs();
+    if (abortSeenAt === null) abortSeenAt = Date.now();
+    // PROBE measured from when the abort was OBSERVED (onErrorOccurred can fire
+    // late), not from nav start — the stay-put window is "PROBE after the abort",
+    // so a TRANSITIONAL abort whose commit follows the abort still settles in the
+    // loop above instead of being cut off and returned as the old document.
+    return abortSeenAt - start + PROBE_MS;
+  };
   try {
     while (Date.now() - start < budget()) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
