@@ -584,6 +584,23 @@ pub fn line_safe(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Line-safe AND length-capped for a one-line display cell whose full value
+/// lives in the JSON channel: a frame URL in a `frame list` row or an
+/// ambiguity error. A page can embed a multi-megabyte `data:` URL in an
+/// iframe `src`; rendering it whole would flood the terminal and the MCP text
+/// block. Clip on a CHAR boundary (never mid-codepoint) and mark with `…` so a
+/// truncated URL is never mistaken for the complete one — the exact value is
+/// always in the structured output.
+pub fn line_safe_clip(s: &str, max_chars: usize) -> String {
+    let safe = line_safe(s);
+    if safe.chars().count() > max_chars {
+        let clipped: String = safe.chars().take(max_chars).collect();
+        format!("{clipped}…")
+    } else {
+        safe.into_owned()
+    }
+}
+
 impl DomSnapshot {
     /// Serialize to LLM-friendly text format. Every page-controlled string
     /// passes through `line_safe`.
@@ -806,6 +823,25 @@ mod tests {
             line_safe("clean text"),
             std::borrow::Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn line_safe_clip_bounds_and_marks_a_long_value() {
+        // Under the cap → returned whole, no marker.
+        assert_eq!(line_safe_clip("https://x/short", 200), "https://x/short");
+        // Over the cap → clipped on a char boundary with a trailing marker, so
+        // a megabyte data: URL can't flood the terminal/MCP text.
+        let long = format!("data:image/png;base64,{}", "A".repeat(5000));
+        let clipped = line_safe_clip(&long, 200);
+        assert_eq!(clipped.chars().count(), 201, "200 chars + the … marker");
+        assert!(clipped.ends_with('…'));
+        // Control chars are still neutralized (line_safe runs first).
+        assert_eq!(line_safe_clip("a\nb", 200), "a b");
+        // A multibyte value clips on a codepoint boundary, never mid-char.
+        let multi = "é".repeat(300);
+        let clipped = line_safe_clip(&multi, 100);
+        assert_eq!(clipped.chars().count(), 101);
+        assert!(clipped.starts_with('é'));
     }
 
     #[test]

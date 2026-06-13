@@ -196,7 +196,14 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
             if let Some(n) = note {
                 eprintln!("{n}");
             }
-            println!("{stdout}");
+            // Suppress the trailing newline for empty content: a `fetch URL >
+            // body.html` on a 204 (status now on the note) must produce an
+            // EMPTY file, not a one-byte `\n` that a `[ -z ]` test reads as
+            // non-empty; a `dom get` of an absent/empty value likewise pipes
+            // nothing rather than a blank line.
+            if !stdout.is_empty() {
+                println!("{stdout}");
+            }
         }
         (CommandOutput::Content { json, .. }, OutputMode::Json) => emit_json(&json),
 

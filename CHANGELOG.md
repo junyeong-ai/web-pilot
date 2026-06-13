@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.212] - 2026-06-13
+
+### Fixed
+
+- **An empty/whitespace `find` filter is refused.** `find --text ""` (a value
+  built from an empty variable) used to silently match every element via
+  `contains("")` — and on a one-element page `--click`/`--fill` would proceed
+  as if the filter discriminated. A present-but-empty filter is now a typed
+  `InvalidArgument` naming the flag, like a fully-absent filter set already
+  was.
+- **Empty `Content` no longer prints a stray newline.** After v0.4.211 moved a
+  `fetch` status to the note channel, a 204/empty body rendered a blank `\n`
+  to stdout — `fetch URL > body.html` produced a one-byte file where a `[ -z ]`
+  test expects empty. Empty content now writes nothing to stdout (the status
+  still rides the note on stderr/MCP).
+- **`frame list` URLs are length-capped (200 chars + `…`).** v0.4.211 dropped
+  the old 60-char clip to keep prefix-sharing iframes distinguishable, but
+  unbounded a multi-megabyte `data:` iframe `src` could flood the terminal and
+  the MCP text block. Capped on a codepoint boundary in both the list rows and
+  the frame-ambiguity error (both modes); the JSON keeps the full URL.
+
 ## [0.4.211] - 2026-06-13
 
 ### Fixed

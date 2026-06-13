@@ -1116,6 +1116,23 @@ fn headless_behavioral_flow() {
         "the ambiguity error must name the match count: {}",
         stdout(&ambiguous)
     );
+    // 2e-empty. A PRESENT-but-empty filter (`--text ""`) is a no-op that
+    //     silently matches every element (contains("")) — an agent that built
+    //     the value from an empty variable would get a surprising match-all and,
+    //     on a one-element page, `--click`/`--fill` would proceed as if it
+    //     discriminated. Reject the empty value loudly, naming the flag.
+    let empty_filter = fx.run(&["find", "--text", ""]);
+    assert_eq!(
+        code(&empty_filter),
+        7,
+        "an empty --text filter must be a typed InvalidArgument, not a match-all: {}",
+        stdout(&empty_filter)
+    );
+    assert!(
+        stdout(&empty_filter).contains("--text") && stdout(&empty_filter).contains("empty"),
+        "the empty-filter error must name the flag and the cause: {}",
+        stdout(&empty_filter)
+    );
     // `href=""` is a real link to the current page (ARIA role `link`): the
     // wire must keep the empty string (`?? undefined`, not `||`), or the
     // implicit role is stripped and `--role link` misses it.

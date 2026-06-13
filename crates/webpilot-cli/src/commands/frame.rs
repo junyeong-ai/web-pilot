@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, FrameSelector, ResponseData};
 
-use webpilot::types::line_safe;
+use webpilot::types::{line_safe, line_safe_clip};
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
@@ -74,12 +74,14 @@ async fn list_frames<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
                     let marker = if is_active { "*" } else { " " };
                     let main = if f.is_main { " [main]" } else { "" };
                     let id_short: String = f.frame_id.chars().take(8).collect();
-                    // The FULL URL, not a 60-char clip: a frame URL is a
-                    // single-line token and its whole point here is to identify
-                    // which frame to `frame url <pattern>` — clipping iframes
-                    // that share a long common prefix made distinct frames look
-                    // identical in the terminal while the JSON kept them apart.
-                    let url_full = line_safe(&f.url).into_owned();
+                    // A generous 200-char cap, not the old 60: a frame URL is a
+                    // single-line token whose point here is to identify which
+                    // frame to `frame url <pattern>`, and clipping iframes that
+                    // share a long common prefix to 60 made distinct frames look
+                    // identical. 200 keeps real URLs whole while still bounding a
+                    // multi-megabyte `data:` iframe `src` from flooding the
+                    // terminal/MCP text; the full URL is always in the JSON.
+                    let url_full = line_safe_clip(&f.url, 200);
                     // Show the name when the frame has one: it is the argument to
                     // `frame switch <name>`, so surfacing it is how that addressing
                     // mode becomes discoverable rather than guess-only.

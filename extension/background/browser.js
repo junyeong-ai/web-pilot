@@ -293,6 +293,15 @@ async function readFrameName(tabId, frameId) {
     .catch(() => null);
 }
 
+// Cap a URL for a one-line ambiguity message — a data-URI iframe `src` can be
+// megabytes, which would flood the error string (and the terminal/MCP text it
+// reaches). The full URLs are in the `frame list` JSON. Codepoint-safe (a clip
+// mid-surrogate would corrupt the JSON), matching the Rust `line_safe_clip`.
+function clipUrl(u) {
+  const chars = Array.from(u || "");
+  return chars.length > 200 ? chars.slice(0, 200).join("") + "…" : (u || "");
+}
+
 // A frame selector that matched more than one frame is ambiguous: switching
 // into whichever came first would silently scope every later command to a
 // frame the agent may not have meant. Fail loud with the match list (headless
@@ -300,7 +309,7 @@ async function readFrameName(tabId, frameId) {
 // kind holds, predicates included.
 function ambiguousFrameSwitch(hits, what) {
   if (hits.length <= 1) return null;
-  const urls = hits.map((f) => f.url).join(", ");
+  const urls = hits.map((f) => clipUrl(f.url)).join(", ");
   return {
     type: "FrameSwitched",
     success: false,
@@ -391,7 +400,7 @@ async function handleFrameSwitch(selector) {
     // command to whichever matched first. Fail loud naming the frames
     // (headless parity).
     if (probe.frames.length > 1) {
-      const urls = probe.frames.map((f) => f.url).join(", ");
+      const urls = probe.frames.map((f) => clipUrl(f.url)).join(", ");
       return {
         type: "FrameSwitched",
         success: false,

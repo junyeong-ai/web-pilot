@@ -15,9 +15,11 @@ use super::{LocalTransport, action_success, connect_to_page, target_in_context};
 /// match list so the agent refines the selector — the same contract every
 /// selector kind holds, predicates included.
 fn ambiguous_frame_switch(hits: &[&FrameInfo], what: String) -> ResponseData {
+    // Cap each URL like `frame list` does — a data-URI iframe among the matches
+    // would otherwise flood the error message with megabytes of base64.
     let urls = hits
         .iter()
-        .map(|f| f.url.as_str())
+        .map(|f| webpilot::types::line_safe_clip(&f.url, 200))
         .collect::<Vec<_>>()
         .join(", ");
     ResponseData::FrameSwitched {

@@ -34,18 +34,37 @@ pub struct FindArgs {
 }
 
 pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<CommandOutput> {
-    if args.role.is_none()
-        && args.text.is_none()
-        && args.label.is_none()
-        && args.placeholder.is_none()
-        && args.tag.is_none()
-    {
+    let named: [(&str, &Option<String>); 5] = [
+        ("role", &args.role),
+        ("text", &args.text),
+        ("label", &args.label),
+        ("placeholder", &args.placeholder),
+        ("tag", &args.tag),
+    ];
+    if named.iter().all(|(_, f)| f.is_none()) {
         return Err(webpilot::WebPilotError::InvalidArgument {
             detail:
                 "at least one filter required: --role, --text, --label, --placeholder, or --tag"
                     .into(),
         }
         .into());
+    }
+    // A filter PRESENT but empty/whitespace is a no-op that silently matches
+    // everything (`--text ""` → `contains("")`) or nothing (`--role ""` → an
+    // exact-match miss) — an agent that built the value from a variable which
+    // happened to be empty would get a surprising match-all, and on a
+    // single-element page `--click`/`--fill` would then proceed as if the
+    // filter discriminated. Reject the empty value loudly instead, naming the
+    // flag, so the intent is never silently dropped.
+    for (name, value) in named {
+        if value.as_deref().is_some_and(|s| s.trim().is_empty()) {
+            return Err(webpilot::WebPilotError::InvalidArgument {
+                detail: format!(
+                    "--{name} was given an empty value — a filter must be a non-empty string"
+                ),
+            }
+            .into());
+        }
     }
 
     let result = transport
