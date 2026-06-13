@@ -1679,6 +1679,51 @@ fn headless_behavioral_flow() {
         "a 10000-char log must be clipped with a marker, not stored whole: len={}",
         clipped_msg.chars().count()
     );
+    // ...and the clip is CODEPOINT-safe: a 5000-emoji log (each an astral pair)
+    // must clip at the 4096-codepoint boundary WITHOUT splitting a surrogate
+    // pair — a lone surrogate would break the entry's JSON serialization through
+    // CDP returnByValue and the read would fail. A clean exit 0 + a marker proves
+    // it round-tripped intact. (`Z` above is ASCII; this is the surrogate case.)
+    let _ = fx.run(&["console", "clear"]);
+    let _ = fx.run(&["eval", "console.log('😀'.repeat(5000)); 'logged'"]);
+    let emoji_read = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&emoji_read),
+        0,
+        "an emoji-clip read must not break serialization with a lone surrogate: {}",
+        stdout(&emoji_read)
+    );
+    let er: serde_json::Value =
+        serde_json::from_str(&stdout(&emoji_read)).expect("emoji read json");
+    assert!(
+        er["entries"]
+            .as_array()
+            .and_then(|a| a
+                .iter()
+                .find(|e| e["message"].as_str().is_some_and(|m| m.contains("😀"))))
+            .and_then(|e| e["message"].as_str())
+            .is_some_and(|m| m.contains("chars]")),
+        "the emoji log must be clipped with a marker and read back intact: {}",
+        stdout(&emoji_read)
+    );
+
+    // 3a-fetchthrow. `fetch()` with no args throws SYNCHRONOUSLY (a TypeError,
+    //     not a rejected promise). The recorded network entry must be stamped
+    //     errored, not left dangling in-flight (duration 0, no status) forever —
+    //     and the page must still see the exception.
+    let _ = fx.run(&["network", "start"]);
+    let _ = fx.run(&["eval", "try { fetch(); } catch (e) {} 'done'"]);
+    let nthrow = fx.run(&["network", "read"]);
+    let nt: serde_json::Value = serde_json::from_str(&stdout(&nthrow)).expect("net throw json");
+    assert!(
+        nt["entries"].as_array().is_some_and(|a| a
+            .iter()
+            .any(|e| e["type"] == "fetch" && e["error"].is_string())),
+        "a synchronous fetch() throw must stamp the entry errored, not leave it dangling: {}",
+        stdout(&nthrow)
+    );
+    let _ = fx.run(&["console", "clear"]);
+    let _ = fx.run(&["network", "clear"]);
 
     // 3a-safe. A page that booby-traps Array.prototype.push must NOT break its
     //     OWN console.log: the monitor hook wraps recording in try/catch and

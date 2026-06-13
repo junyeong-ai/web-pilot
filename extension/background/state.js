@@ -84,12 +84,15 @@ async function injectConsoleMonitoring(tabId) {
       // call. Headless CONSOLE_INSTALL_JS parity.
       const nowFn = Date.now;
       const MAX = 4096;
+      // CODEPOINT-safe clip via Array.from (a bare slice can split an astral
+      // pair into a lone surrogate that breaks the entry's serialization) —
+      // headless CONSOLE_INSTALL_JS parity, same bar as bridge.js's clip.
+      const clip = (s) => { const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
       const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
       ["log", "error", "warn", "info", "debug"].forEach((m) => {
         console[m] = (...args) => {
           try {
-            let msg = args.map((a) => { try { return String(a); } catch { return "[object]"; } }).join(" ");
-            if (msg.length > MAX) msg = msg.slice(0, MAX) + "…[" + msg.length + " chars]";
+            const msg = clip(args.map((a) => { try { return String(a); } catch { return "[object]"; } }).join(" "));
             const buf = window.__webpilot_console;
             buf.push({ level: m, message: msg, timestamp: nowFn() });
             // `truncated` is driven by this eviction flag, not `length >= cap`.
@@ -116,10 +119,15 @@ async function injectNetworkMonitoring(tabId) {
       // capture (a giant data: URL must not balloon the buffer/payload), and
       // every recording wrapped so it can never break the page's own fetch/XHR.
       // Headless NETWORK_INSTALL_JS parity.
+      // Intrinsics captured by binding the receiver (a page swapping Date.now /
+      // performance.now after install can't skew the recording).
       const nowFn = Date.now;
-      const perfNow = () => { try { return performance.now(); } catch (e) { return 0; } };
+      const perfObj = performance;
+      const perfNowRaw = perfObj.now;
+      const perfNow = () => { try { return perfNowRaw.call(perfObj); } catch (e) { return 0; } };
       const MAX = 4096;
-      const clip = (s) => s.length > MAX ? s.slice(0, MAX) + "…[" + s.length + " chars]" : s;
+      // CODEPOINT-safe clip (a lone surrogate breaks serialization — see console).
+      const clip = (s) => { const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
       const origFetch = window.fetch;
       window.fetch = function (...args) {
         let entry = null, t0 = 0;
@@ -140,7 +148,16 @@ async function injectNetworkMonitoring(tabId) {
           buf.push(entry);
           if (buf.length > cap) { buf.shift(); window.__webpilot_network_dropped = true; }
         } catch (e) { entry = null; }
-        const p = origFetch.apply(this, args);
+        // origFetch can throw SYNCHRONOUSLY (`fetch()` with no args is a
+        // TypeError, not a rejected promise). Stamp the entry errored instead of
+        // leaving it in-flight forever, then rethrow so the page sees it.
+        let p;
+        try {
+          p = origFetch.apply(this, args);
+        } catch (e) {
+          if (entry) { try { entry.error = String(e && e.message || e); entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e2) {} }
+          throw e;
+        }
         if (!entry) return p;
         return p.then((response) => {
           // Re-stamp at completion: `--since` polling filters on timestamp, and the

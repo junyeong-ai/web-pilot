@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.218] - 2026-06-13
+
+### Fixed
+
+Three follow-ups to the v0.4.217 monitor hardening:
+
+- **The monitor clip is codepoint-safe.** v0.4.217 clipped a captured message
+  or URL with `slice(0, 4096)`, which cuts by UTF-16 code unit and can split an
+  astral pair (emoji) into a lone surrogate — exactly the hazard the DOM
+  capture's `clip()` already avoids. A lone surrogate breaks the entry's JSON
+  serialization through CDP `returnByValue` / native messaging, dropping it or
+  the whole read. The clip now uses `Array.from` (codepoint boundaries) in both
+  modes. Pinned with a 5000-emoji log that reads back intact.
+- **A synchronous `fetch()` throw no longer leaves a dangling in-flight
+  entry.** `fetch()` with no args throws a `TypeError` synchronously (not a
+  rejected promise); the recorded entry stayed in-flight forever (`duration 0`,
+  no status). The wrapper now catches a synchronous `origFetch` throw, stamps
+  the entry errored, and rethrows so the page sees the same exception.
+- **`performance.now` is captured by binding at install**, like `Date.now`, so
+  a page that swaps it after install can't skew duration recording.
+
 ## [0.4.217] - 2026-06-13
 
 ### Fixed

@@ -725,14 +725,17 @@ if (!window.__webpilot_console_patched) {
     const nowFn = Date.now;
     // Clip a captured message like the DOM capture clips text: a runaway
     // `console.log("x".repeat(5e7))` must not balloon the buffer or the read's
-    // CDP payload. The marker keeps the clip visible, never a silent half-value.
+    // CDP payload. CODEPOINT-safe via Array.from (like bridge.js's clip): a
+    // bare `slice` cuts by UTF-16 code unit and can split an astral pair into a
+    // lone surrogate, which breaks the entry's JSON serialization through CDP
+    // returnByValue / native messaging. The marker keeps the clip visible.
     const MAX = 4096;
+    const clip = (s) => { const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
     const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
     ["log", "error", "warn", "info", "debug"].forEach(m => {
         console[m] = (...args) => {
             try {
-                let msg = args.map(a => { try { return String(a); } catch { return "[object]"; } }).join(" ");
-                if (msg.length > MAX) msg = msg.slice(0, MAX) + "…[" + msg.length + " chars]";
+                const msg = clip(args.map(a => { try { return String(a); } catch { return "[object]"; } }).join(" "));
                 const buf = window.__webpilot_console;
                 buf.push({ level: m, message: msg, timestamp: nowFn() });
                 // Evict the oldest past the cap and RECORD that an eviction
@@ -758,10 +761,16 @@ if (!window.__webpilot_network_active) {
     // (the monitor's honest boundary is "may miss an entry", never "breaks the
     // page"). A captured URL is clipped like the DOM capture so a giant data:
     // URL can't balloon the buffer or the read's CDP payload.
+    // Intrinsics captured by binding the receiver, so a page that swaps
+    // Date.now / performance.now after install can't skew the recording.
     const nowFn = Date.now;
-    const perfNow = () => { try { return performance.now(); } catch (e) { return 0; } };
+    const perfObj = performance;
+    const perfNowRaw = perfObj.now;
+    const perfNow = () => { try { return perfNowRaw.call(perfObj); } catch (e) { return 0; } };
     const MAX = 4096;
-    const clip = (s) => s.length > MAX ? s.slice(0, MAX) + "…[" + s.length + " chars]" : s;
+    // CODEPOINT-safe clip (a lone surrogate from a split astral pair breaks the
+    // entry's JSON serialization — see the console hook).
+    const clip = (s) => { const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
     const origFetch = window.fetch;
     window.fetch = function(...args) {
         let entry = null, t0 = 0;
@@ -781,7 +790,17 @@ if (!window.__webpilot_network_active) {
             buf.push(entry);
             if (buf.length > $CAP) { buf.shift(); window.__webpilot_network_dropped = true; }
         } catch (e) { entry = null; }
-        const p = origFetch.apply(this, args);
+        // origFetch can throw SYNCHRONOUSLY (a bad argument — `fetch()` with no
+        // args is a TypeError, not a rejected promise). Stamp the recorded entry
+        // as errored instead of leaving it in-flight forever, then rethrow so the
+        // page sees the same exception.
+        let p;
+        try {
+            p = origFetch.apply(this, args);
+        } catch (e) {
+            if (entry) { try { entry.error = String(e && e.message || e); entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e2) {} }
+            throw e;
+        }
         if (!entry) return p;
         return p.then(response => {
             // Re-stamp at completion so `--since` polling, which filters on
