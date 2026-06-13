@@ -663,7 +663,7 @@
           index: idx++,
           tag,
           id: elemId,
-          role: el.getAttribute("role") || undefined,
+          role: clip(el.getAttribute("role") || "", 32) || undefined,
           text,
           name: clip(el.getAttribute("aria-label") || el.getAttribute("title") || "", 80) || undefined,
           value: (el.value != null && el.value !== "")
@@ -699,11 +699,11 @@
             rect.bottom > 0 &&
             rect.left < innerWidth &&
             rect.right > 0,
-          autocomplete: el.getAttribute("autocomplete") || undefined,
+          autocomplete: clip(el.getAttribute("autocomplete") || "", 32) || undefined,
         };
 
         const form = el.closest("form");
-        entry.form_id = form?.id || undefined;
+        entry.form_id = form?.id ? clip(form.id, 50) : undefined;
 
         const describedBy = el.getAttribute("aria-describedby");
         if (describedBy) {

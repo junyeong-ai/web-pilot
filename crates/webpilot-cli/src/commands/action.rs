@@ -3,7 +3,7 @@ use clap::Args;
 use webpilot::Action;
 use webpilot::protocol::{Command, ResponseData};
 
-use webpilot::types::line_safe;
+use webpilot::types::line_safe_clip;
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
@@ -84,12 +84,12 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
 
             let mut msg = String::from("OK");
             if let Some(ref url) = url_changed {
-                msg.push_str(&format!("\nURL changed: {}", line_safe(url)));
+                msg.push_str(&format!("\nURL changed: {}", line_safe_clip(url, 200)));
             }
             if let Some(ref tab) = new_tab {
                 msg.push_str(&format!(
                     "\nNew tab opened: {} (switched automatically)",
-                    line_safe(&tab.url)
+                    line_safe_clip(&tab.url, 200)
                 ));
             }
             if let Some(ref ce) = capture_error {

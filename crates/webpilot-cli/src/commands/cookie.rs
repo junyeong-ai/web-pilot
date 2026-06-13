@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, ResponseData};
-use webpilot::types::{CookieInfo, SameSite, line_safe};
+use webpilot::types::{CookieInfo, SameSite, line_safe, line_safe_clip};
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
@@ -37,7 +37,7 @@ fn cookie_row(c: &CookieInfo) -> String {
         };
         flags.push(format!(
             "partitioned={}{xsite}",
-            line_safe(&pk.top_level_site)
+            line_safe_clip(&pk.top_level_site, 200)
         ));
     }
     flags.push(match c.expiration {
@@ -56,10 +56,10 @@ fn cookie_row(c: &CookieInfo) -> String {
     };
     format!(
         "{} = {} [{}{}] {}",
-        line_safe(&c.name),
+        line_safe_clip(&c.name, 200),
         line_safe(&value_cell),
-        line_safe(&c.domain),
-        line_safe(&c.path),
+        line_safe_clip(&c.domain, 200),
+        line_safe_clip(&c.path, 200),
         flags.join(",")
     )
 }
@@ -312,6 +312,34 @@ mod tests {
         assert!(
             row.matches('Z').count() == 40,
             "exactly the 40-char preview is shown before the marker: {row}"
+        );
+    }
+
+    #[test]
+    fn cookie_row_caps_page_controlled_name_domain_and_path() {
+        // A cookie's name/domain/path are page-controlled (a page sets them via
+        // `document.cookie` / `Set-Cookie`), so a hostile page could flood the
+        // row with a megabyte name — `line_safe_clip` bounds every one of them at
+        // the same 200-char cap the DOM footer uses. The exact value stays in the
+        // JSON; the human row must never become one unbounded line.
+        let mut c = cookie(&"N".repeat(5000));
+        c.domain = "D".repeat(5000);
+        c.path = format!("/{}", "P".repeat(5000));
+        let row = cookie_row(&c);
+        assert!(
+            row.matches('N').count() <= 200,
+            "name capped at 200: {} Ns",
+            row.matches('N').count()
+        );
+        assert!(
+            row.matches('D').count() <= 200,
+            "domain capped at 200: {} Ds",
+            row.matches('D').count()
+        );
+        assert!(
+            row.matches('P').count() <= 200,
+            "path capped at 200: {} Ps",
+            row.matches('P').count()
         );
     }
 

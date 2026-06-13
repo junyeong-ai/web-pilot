@@ -3,7 +3,7 @@ use clap::Args;
 use webpilot::Action;
 use webpilot::capture::{CaptureField, CaptureOpts};
 use webpilot::protocol::{Command, ResponseData};
-use webpilot::types::{InteractiveElement, line_safe};
+use webpilot::types::{InteractiveElement, line_safe, line_safe_clip};
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
@@ -186,13 +186,13 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
     // that the click left the page or opened a tab.
     if let Some(ref url) = effect.url_changed {
         items["url_changed"] = serde_json::json!(url);
-        human_lines.push(format!("→ URL changed: {}", line_safe(url)));
+        human_lines.push(format!("→ URL changed: {}", line_safe_clip(url, 200)));
     }
     if let Some(ref tab) = effect.new_tab {
         items["new_tab"] = serde_json::to_value(tab).unwrap_or(serde_json::Value::Null);
         human_lines.push(format!(
             "→ New tab opened: {} (switched automatically)",
-            line_safe(&tab.url)
+            line_safe_clip(&tab.url, 200)
         ));
     }
 

@@ -8,7 +8,7 @@ use anyhow::Result;
 use webpilot::WebPilotError;
 use webpilot::ipc::{self, IpcError};
 use webpilot::protocol::{Command, Request, Response, ResponseData, RunMode};
-use webpilot::types::line_safe;
+use webpilot::types::{line_safe, line_safe_clip};
 
 use crate::output::CommandOutput;
 
@@ -35,14 +35,15 @@ pub fn render(
     if let Some(ref v) = extension_version {
         human.push_str(&format!("\nExtension: v{v}"));
     }
-    // `tab_title`/`tab_url` are page-controlled; line-safe them so a crafted
-    // title can't embed a newline and forge a status line (the `--json` path is
-    // already safe via JSON escaping).
+    // `tab_title`/`tab_url` are page-controlled; `line_safe_clip` them at the
+    // same 200-char cap the DOM footer uses so a crafted title can neither embed
+    // a newline to forge a status line nor flood the line with an unbounded
+    // string (the `--json` path is already safe via JSON escaping).
     if let Some(ref t) = tab_title {
-        human.push_str(&format!("\nTab: {}", line_safe(t)));
+        human.push_str(&format!("\nTab: {}", line_safe_clip(t, 200)));
     }
     if let Some(ref u) = tab_url {
-        human.push_str(&format!("\nURL: {}", line_safe(u)));
+        human.push_str(&format!("\nURL: {}", line_safe_clip(u, 200)));
     }
 
     CommandOutput::Data {
@@ -171,4 +172,43 @@ fn check_nm_manifest() -> ManifestState {
         return ManifestState::BinaryMissing(bin.to_owned());
     }
     ManifestState::Ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::CommandOutput;
+
+    #[test]
+    fn render_caps_a_page_controlled_flooded_title_and_url() {
+        // `tab_title`/`tab_url` are page-controlled (a page sets `document.title`
+        // and its own URL); a hostile page could otherwise flood `status` with one
+        // unbounded line. `line_safe_clip` bounds each at 200 — the cap the DOM
+        // footer already uses — while the full value stays in the JSON.
+        // `Z` / `q` appear nowhere in the framing ("Mode/Connected/Tab/URL",
+        // "Headless", "https://evil.test/"), so each count measures exactly the
+        // rendered value, not the labels around it.
+        let out = render(
+            true,
+            RunMode::Headless,
+            Some("https://evil.test/".to_owned() + &"q".repeat(50_000)),
+            Some("Z".repeat(50_000)),
+            None,
+            None,
+            None,
+        );
+        let CommandOutput::Data { human, .. } = out else {
+            panic!("status renders Data");
+        };
+        // No single line in the human output exceeds the cap (+ a little framing).
+        for line in human.lines() {
+            assert!(
+                line.chars().count() <= 256,
+                "no agent-facing status line floods: {} chars",
+                line.chars().count()
+            );
+        }
+        assert!(human.matches('Z').count() <= 200, "title capped at 200");
+        assert!(human.matches('q').count() <= 200, "url capped at 200");
+    }
 }

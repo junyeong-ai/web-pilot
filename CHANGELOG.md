@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.234] - 2026-06-14
+
+### Fixed
+
+An EXHAUSTIVE sanitization-completeness sweep (parallel codex + fresh-context
+review) enumerated every page-controlled agent-facing sink in both modes, to end
+the round-by-round discovery of one-more-missing-cap. The remaining gaps — all the
+same class: a page-controlled string reaching the agent's text surface with bidi/
+newline neutralization (`line_safe`) but **without the 200-char flood cap** the
+DOM footer and `output.rs` already declare universal — are now closed in one batch:
+
+- **`status` / `tab list` / `tab new` / `tab` ambiguity / `frame list` /
+  `frame switch` / `action` URL-changed + new-tab / `find --click` URL-changed +
+  new-tab / `cookie list` (name·domain·path·partition-site) now flood-cap their
+  page-controlled values at 200 chars** (`line_safe` → `line_safe_clip`). A 50 KB
+  `document.title`, frame name, redirect URL or cookie name could previously emit
+  one unbounded agent-facing line (bidi/newline were already neutralized; only the
+  length cap was missing). The full value still rides the `--json` channel
+  untouched. The raw retrieval channels (`cookie get` value, `dom get`, `fetch`
+  body, `eval` result, session export/import) stay full by design; the
+  agent-supplied `--context` name and our own internal error text are not
+  page-controlled and are unchanged.
+
+- **`bridge.js` now caps three page-controlled extraction fields it emitted raw:
+  `role` (32), `autocomplete` (32), and `form_id` (50).** Every other snapshot
+  string field was already clipped at extraction (text 300, name/placeholder/
+  option/label 80, value 100, id 50, description 120); these three flowed
+  uncapped from the page into the snapshot/JSON and the text render. `option.value`
+  (matching fidelity for `action select`) and `href` (render-capped at 50) stay
+  deliberately as-is.
+
+Regression pins added: `status::render` and `cookie_row` flood-cap unit tests;
+the bridge field caps verified live (autocomplete 5000→32, form_id 5000→50,
+role 5000→32). The browser-mode structured channels (tab/status/frame/cookie)
+inherit every cap because both modes render through the same shared
+`commands/*.rs` handlers; the SW-built error messages were re-confirmed to embed
+only agent-supplied / fixed-CDP / already-`clipUrl`'d values.
+
 ## [0.4.233] - 2026-06-14
 
 ### Fixed

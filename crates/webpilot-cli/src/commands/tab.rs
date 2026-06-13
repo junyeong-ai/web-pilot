@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, ResponseData};
 
-use webpilot::types::line_safe;
+use webpilot::types::line_safe_clip;
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
@@ -51,8 +51,8 @@ async fn list_tabs<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
                     format!(
                         "{marker} [{}] {} — {}",
                         t.id,
-                        line_safe(&t.title),
-                        line_safe(&t.url)
+                        line_safe_clip(&t.title, 200),
+                        line_safe_clip(&t.url, 200)
                     )
                 })
                 .collect();
@@ -107,7 +107,7 @@ async fn new_tab<T: Transport>(transport: &mut T, url: &str) -> Result<CommandOu
     };
     Ok(CommandOutput::Data {
         json: serde_json::json!({"success": true, "url": landed}),
-        human: format!("New tab opened: {}", line_safe(&landed)),
+        human: format!("New tab opened: {}", line_safe_clip(&landed, 200)),
     })
 }
 
@@ -151,7 +151,7 @@ async fn find_tab<T: Transport>(transport: &mut T, pattern: &str) -> Result<Comm
                 many => {
                     let urls = many
                         .iter()
-                        .map(|t| webpilot::types::line_safe(&t.url).into_owned())
+                        .map(|t| webpilot::types::line_safe_clip(&t.url, 200))
                         .collect::<Vec<_>>()
                         .join(", ");
                     Err(webpilot::WebPilotError::InvalidArgument {

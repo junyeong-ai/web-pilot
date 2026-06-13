@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use webpilot::protocol::{Command, FrameSelector, ResponseData};
 
-use webpilot::types::{line_safe, line_safe_clip};
+use webpilot::types::line_safe_clip;
 
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
@@ -87,7 +87,7 @@ async fn list_frames<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
                     // mode becomes discoverable rather than guess-only.
                     let name = match f.name.as_deref() {
                         Some(n) if !n.is_empty() => {
-                            format!(" name={}", line_safe(n))
+                            format!(" name={}", line_safe_clip(n, 200))
                         }
                         _ => String::new(),
                     };
@@ -133,14 +133,14 @@ async fn switch_frame<T: Transport>(
             // Surface the name so the agent learns the handle it can re-`switch` by
             // (and so the JSON carries the same field both modes now populate).
             let name_suffix = match name.as_deref() {
-                Some(n) if !n.is_empty() => format!(" name={}", line_safe(n)),
+                Some(n) if !n.is_empty() => format!(" name={}", line_safe_clip(n, 200)),
                 _ => String::new(),
             };
             Ok(CommandOutput::Data {
                 json: serde_json::json!({"success": true, "frame_id": frame_id, "name": name, "url": url}),
                 human: format!(
                     "Switched to frame {target} ({}){name_suffix}",
-                    line_safe(&url.unwrap_or_default())
+                    line_safe_clip(&url.unwrap_or_default(), 200)
                 ),
             })
         }
