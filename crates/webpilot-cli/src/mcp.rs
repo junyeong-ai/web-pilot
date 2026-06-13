@@ -686,6 +686,21 @@ mod tests {
         // `key_press` without modifiers → defaults, no error.
         let a = build_action("browser_press_key", &json!({ "key": "Enter" })).unwrap();
         assert!(matches!(a, Action::KeyPress { .. }));
+        // `click` with a modifiers object → the flags survive the MCP build
+        // path into the typed Action (the schema advertises them; a silent
+        // drop here would make the advertised field a lie).
+        let a = build_action(
+            "browser_click",
+            &json!({ "index": 1, "modifiers": { "shift": true } }),
+        )
+        .unwrap();
+        match a {
+            Action::Click { index, modifiers } => {
+                assert_eq!(index, 1);
+                assert!(modifiers.shift && !modifiers.ctrl);
+            }
+            other => panic!("expected Click, got {other:?}"),
+        }
     }
 
     #[test]

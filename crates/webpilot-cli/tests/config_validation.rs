@@ -60,3 +60,58 @@ fn malformed_config_gates_settings_paths_but_not_local_commands() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn explicit_config_path_that_does_not_exist_fails_loud() {
+    // The DEFAULT config path being absent is the all-default state — but a
+    // path the operator set EXPLICITLY via WEBPILOT_CONFIG and got wrong must
+    // not silently run on built-in defaults, ignoring every setting they
+    // intended to apply.
+    let dir = std::env::temp_dir().join(format!("webpilot-cfgmiss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let out = webpilot()
+        .args(["capture", "--include", "dom"])
+        .env("WEBPILOT_CONFIG", dir.join("does-not-exist.toml"))
+        .env("WEBPILOT_HOME", &dir)
+        .output()
+        .expect("spawn webpilot");
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "an explicitly-set but missing WEBPILOT_CONFIG must be a typed \
+         InvalidArgument, not a silent fall-back to defaults; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Piped stdout auto-selects JSON mode, so the typed error body lands there.
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("does not exist"),
+        "the error must name the missing path: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn zero_viewport_dimensions_are_refused_at_startup() {
+    // `--window-size=0,0` / a 0×0 emulation override degrade the session
+    // instead of failing — the validator must refuse them up front, like the
+    // other zero-breaks-downstream values.
+    let dir = std::env::temp_dir().join(format!("webpilot-cfgvp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    for var in ["WEBPILOT_VIEWPORT_WIDTH", "WEBPILOT_VIEWPORT_HEIGHT"] {
+        let out = webpilot()
+            .args(["status"])
+            .env(var, "0")
+            .env("WEBPILOT_HOME", &dir)
+            .output()
+            .expect("spawn webpilot");
+        assert_eq!(
+            out.status.code(),
+            Some(7),
+            "a zero {var} must be refused at startup; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

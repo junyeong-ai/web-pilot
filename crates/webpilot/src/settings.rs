@@ -122,6 +122,15 @@ fn validate(settings: &Settings) -> std::result::Result<(), String> {
     if settings.capture.screenshot_max_long_edge == 0 {
         return Err("capture.screenshot_max_long_edge must be greater than 0".into());
     }
+    // A zero viewport dimension reaches Chrome as `--window-size=0,0` and CDP
+    // as a 0×0 emulation override — neither rejects it cleanly, so the session
+    // degrades instead of failing. Refuse up front like the other
+    // zero-breaks-downstream values here.
+    if settings.chrome.viewport_width == 0 || settings.chrome.viewport_height == 0 {
+        return Err(
+            "chrome.viewport_width and chrome.viewport_height must be greater than 0".into(),
+        );
+    }
     // Every deadline/interval below bounds an operation that must make progress:
     // at zero it either fails instantly (an immediate timeout on navigation, a
     // CDP send, an IPC reply, a Chrome launch, a history/reload settle, the
@@ -349,7 +358,19 @@ fn read_config() -> std::result::Result<FileSettings, String> {
     match std::fs::read_to_string(&path) {
         Ok(text) => toml::from_str(&text)
             .map_err(|e| format!("invalid settings at {}: {e}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(FileSettings::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // The DEFAULT path being absent is the all-default state — but a
+            // path the operator set EXPLICITLY (`WEBPILOT_CONFIG`) and got
+            // wrong must fail loud: silently running on built-in defaults
+            // would ignore every setting they intended to apply.
+            if std::env::var_os("WEBPILOT_CONFIG").is_some() {
+                return Err(format!(
+                    "WEBPILOT_CONFIG points at {}, which does not exist",
+                    path.display()
+                ));
+            }
+            Ok(FileSettings::default())
+        }
         Err(e) => Err(format!("cannot read settings at {}: {e}", path.display())),
     }
 }

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.209] - 2026-06-13
+
+### Fixed
+
+- **An explicitly-set `WEBPILOT_CONFIG` pointing at a missing file fails
+  loud.** The default config path being absent is the all-default state, but
+  an operator-set path that doesn't exist silently ran on built-in defaults —
+  ignoring every setting they intended to apply. Now a typed InvalidArgument
+  naming the missing path; non-TOML and directory paths already failed loud.
+- **Zero viewport dimensions are refused at startup.**
+  `WEBPILOT_VIEWPORT_WIDTH=0` (or height, or the `[chrome]` keys) reached
+  Chrome as `--window-size=0,0` and CDP as a 0×0 emulation override — a
+  degraded session instead of a typed refusal. Joins the existing
+  zero-breaks-downstream validator set; pinned in `config_validation`.
+- A modifier click through the MCP `build_action` path is unit-pinned (the
+  schema advertises `modifiers`; a silent drop would make it a lie).
+
 ## [0.4.208] - 2026-06-12
 
 ### Fixed
