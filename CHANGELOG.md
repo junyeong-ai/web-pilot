@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.219] - 2026-06-13
+
+### Fixed
+
+- **`frame find` by predicate no longer false-negatives a live but slow
+  iframe.** `settle_frame_contexts` re-emits the execution contexts and waits a
+  500ms best-effort budget; a candidate whose context hadn't landed by then was
+  silently skipped, so a same-process iframe still churning (e.g. mid
+  same-document navigation) slower than that budget was missed and the command
+  returned `FrameNotFound` for a frame that actually matched. The predicate
+  loop now waits the per-frame `PROBE` (2s) on a still-missing candidate before
+  skipping — a live-but-slow frame gets judged, while a cross-origin OOPIF
+  (no context in this session at all) still times out to a clean skip. Frames
+  already settled are read immediately, so the common case is unchanged.
+
 ## [0.4.218] - 2026-06-13
 
 ### Fixed

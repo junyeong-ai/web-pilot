@@ -447,7 +447,16 @@ impl LocalTransport {
                 let mut matches: Vec<&_> = Vec::new();
                 let mut predicate_error = None;
                 for f in &candidates {
-                    let Some(cid) = self.frame_contexts.lock().await.get(&f.frame_id).cloned()
+                    // `settle` re-emitted contexts and waited BRIEFLY (a 500ms
+                    // best-effort budget) for all candidates; one still missing
+                    // is either a same-process frame churning slower than that
+                    // budget (live — its context WILL land) or a cross-origin
+                    // OOPIF with no context in this session at all. Wait the
+                    // per-frame PROBE before skipping, so a live-but-slow frame
+                    // is judged rather than silently missed (a false-negative
+                    // `FrameNotFound` for a frame that matches); an OOPIF still
+                    // times out to a clean skip, treated like a non-match.
+                    let Ok(cid) = self.await_context(&self.frame_contexts, &f.frame_id).await
                     else {
                         continue;
                     };
