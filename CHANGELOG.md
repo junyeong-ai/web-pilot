@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.208] - 2026-06-12
+
+### Fixed
+
+- **The contenteditable input-probe survives a rich editor's
+  `stopImmediatePropagation()`.** The v0.4.207 probe listened on the editing
+  host itself — an editor's own capture listener (registered earlier, common
+  in rich editors) calling `stopImmediatePropagation()` starved the probe
+  into a false "native input never fired" and brought the double dispatch
+  back. The probe now listens on document capture (which no target-phase
+  handler can cut off) scoped by `composedPath()`, so it sees exactly what
+  fired for this element. Pinned in e2e with a stopImmediatePropagation
+  editor whose own counter must read 1.
+- **`browser_click` (MCP) advertises `modifiers` in its schema.** The
+  deserializer accepted them (same `Action` path as the CLI) but the
+  inputSchema didn't say so, while `browser_press_key` already advertises the
+  identical block — schema drift, not curation: a client generating calls
+  from the schema had no way to know modifier clicks exist.
+- **A failed device-emulation re-apply on reconnect warns instead of
+  vanishing.** Cross-invocation reconnect re-applies persisted emulation; a
+  CDP rejection was `let _ =`-swallowed, leaving the session running with the
+  REAL user agent/viewport while the agent believed the spoof was active.
+  Failing the open would block even the `device reset` that recovers, so the
+  honest middle is a stderr warning naming the failure and the recovery.
+
 ## [0.4.207] - 2026-06-12
 
 ### Added

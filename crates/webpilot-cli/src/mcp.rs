@@ -517,10 +517,22 @@ fn tool_specs() -> Value {
         },
         {
             "name": "browser_click",
-            "description": "Click the element at the given snapshot index, then return the updated snapshot.",
+            "description": "Click the element at the given snapshot index, then return the updated snapshot. Modifier flags reach the page's own handlers; browser-level open-in-new-tab does not apply to a synthetic click — browser_navigate to the link's URL instead.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "index": index },
+                "properties": {
+                    "index": index,
+                    "modifiers": {
+                        "type": "object",
+                        "description": "Optional modifier keys held during the click.",
+                        "properties": {
+                            "ctrl": { "type": "boolean" },
+                            "shift": { "type": "boolean" },
+                            "alt": { "type": "boolean" },
+                            "meta": { "type": "boolean" },
+                        },
+                    },
+                },
                 "required": ["index"],
             },
         },

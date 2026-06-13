@@ -934,12 +934,18 @@
       // `input` actually fired and dispatch the fallback only when it did not:
       // unconditionally dispatching doubled the event on every successful
       // insert (one action, two `input`s — a raw oninput counter or an
-      // append-per-input editor sees a phantom second edit).
+      // append-per-input editor sees a phantom second edit). The probe listens
+      // on DOCUMENT capture, not on `el`: rich editors register their own
+      // capture listener on the editing host and stopImmediatePropagation()
+      // there would starve a same-node probe (registered later) into a false
+      // "never fired" → double dispatch. A document-capture listener runs
+      // before any target-phase handler can cut it off; composedPath keeps it
+      // scoped to this element (shadow hosts included).
       let nativeInputFired = false;
-      const probe = () => { nativeInputFired = true; };
-      el.addEventListener("input", probe, { once: true, capture: true });
+      const probe = (e) => { if (e.composedPath().includes(el)) nativeInputFired = true; };
+      document.addEventListener("input", probe, { capture: true });
       document.execCommand("insertText", false, text);
-      el.removeEventListener("input", probe, { capture: true });
+      document.removeEventListener("input", probe, { capture: true });
       if (!nativeInputFired) {
         el.dispatchEvent(new InputEvent("input", {
           bubbles: true, inputType: "insertText", data: text,

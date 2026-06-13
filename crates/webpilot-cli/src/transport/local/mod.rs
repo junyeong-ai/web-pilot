@@ -170,8 +170,18 @@ impl LocalTransport {
         // disk for when `device` is re-allowed.
         if !crate::policy::denies(webpilot::types::PolicyKey::Device)
             && let Some(dev) = read_persisted_device(browser_context_id.as_deref())
+            && let Err(e) = dev.apply(&page).await
         {
-            let _ = dev.apply(&page).await;
+            // Re-apply failing must not be SILENT: the agent set this emulation
+            // (UA/viewport — identity-shaping) and a session quietly running
+            // without it would lie about what the page sees. But it must not
+            // fail the open either — that would block every command including
+            // the `device reset` that recovers. Warn (stderr) and continue.
+            tracing::warn!(
+                "device emulation could not be re-applied: {e} — the page sees the REAL \
+                 user agent/viewport; run `webpilot device set …` again or `webpilot \
+                 device reset` to clear the persisted emulation"
+            );
         }
 
         // Restore the active frame across CLI invocations VERBATIM. CLI calls are

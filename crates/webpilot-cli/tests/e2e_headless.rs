@@ -655,7 +655,6 @@ fn headless_behavioral_flow() {
         "one contenteditable insert must fire exactly one input event: {}",
         stdout(&ce_inputs)
     );
-
     // 2a-num. A typed control silently sanitizes a value it can't parse to "".
     //     Typing "abc" into `<input type=number>` leaves it blank, so a success
     //     would claim a value that never landed — it must be a typed
@@ -682,6 +681,36 @@ fn headless_behavioral_flow() {
         Some("\"42\""),
         "the valid number must land in the field: {}",
         stdout(&num_val)
+    );
+
+    // 2a-sip. The contenteditable input-probe survives a rich editor that
+    //     stopImmediatePropagation()s on its own capture listener (registered
+    //     before ours): a same-node probe would be starved into "never fired"
+    //     and double-dispatch — the document-capture probe sees the native
+    //     event first. The editor's own counter must read 1. (Runs AFTER the
+    //     `cap`-indexed tests above: injecting ce2 shifts later snapshots'
+    //     indices, and the reload below wipes it.)
+    let _ = fx.run(&[
+        "eval",
+        "document.body.insertAdjacentHTML('beforeend', '<div id=ce2 contenteditable></div>'); \
+         window.__ce2Inputs = 0; \
+         document.getElementById('ce2').addEventListener('input', (e) => { window.__ce2Inputs++; e.stopImmediatePropagation(); }, { capture: true }); 'armed'",
+    ]);
+    let ce2_cap = fx.run(&["capture", "--include", "dom"]);
+    let ce2_index = index_of(&ce2_cap, "ce2");
+    assert_eq!(
+        code(&fx.run(&["action", "type", &ce2_index, "x"])),
+        0,
+        "type into the stopImmediatePropagation contenteditable failed"
+    );
+    let ce2_inputs = fx.run(&["eval", "window.__ce2Inputs"]);
+    let c2j: serde_json::Value = serde_json::from_str(&stdout(&ce2_inputs)).expect("eval json");
+    assert_eq!(
+        c2j["result"].as_str(),
+        Some("1"),
+        "a stopImmediatePropagation editor must still see exactly one input \
+         (no starved-probe double dispatch): {}",
+        stdout(&ce2_inputs)
     );
 
     // 2a. A same-URL reload rebuilds the document, clearing the old execution
