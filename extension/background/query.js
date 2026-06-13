@@ -2,7 +2,7 @@
 // // Mirrors transport/local/query.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, timeoutErr } from "./errors.js";
-import { PROBE_MS, activeFrameId, resolveActiveTab, sleep } from "./session.js";
+import { PROBE_MS, activeFrameId, navigationTimeoutMs, resolveActiveTab, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, sendToContent, sendToContentOnce } from "./content.js";
 
@@ -110,6 +110,10 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
 // Debugger-routed evaluation is not subject to the page's CSP, so a hardened
 // page (`script-src 'self'`) keeps full eval in any frame — headless parity.
 // Requires Runtime enabled on the session.
+// Sentinel that distinguishes "the eval deadline fired" from any real evaluate
+// result (a CDP response is always an object, never this symbol).
+const EVAL_DEADLINE_REACHED = Symbol("eval-deadline-reached");
+
 async function cdpEval(tid, code, uniqueContextId) {
   // The form probe compiles WITHOUT a context — a parse (expression vs
   // statements) is context-independent, and compileScript takes only the
@@ -121,12 +125,38 @@ async function cdpEval(tid, code, uniqueContextId) {
     persistScript: false,
   });
   const form = compiled.exceptionDetails ? code : `(()=>(${code}))()`;
-  const ev = await cdpSend(tid, "Runtime.evaluate", {
+  // Bound the awaitPromise evaluate: a page expression resolving to a
+  // never-settling promise (`new Promise(()=>{})`) would otherwise hang inside
+  // `withCdp` forever — wedging the per-tab CDP lock and, through the global
+  // command queue, every later command. Headless bounds the identical evaluate
+  // with `send_with_timeout(cdp_send)` (transport/local/mod.rs); this is the
+  // browser-mode parity. Only THIS call awaits a page promise — the other
+  // cdpSends settle promptly, so they need no bound.
+  const evalCall = cdpSend(tid, "Runtime.evaluate", {
     expression: form,
     returnByValue: true,
     awaitPromise: true,
     ...(uniqueContextId != null ? { uniqueContextId } : {}),
   });
+  // A settle AFTER the deadline (or after `withCdp` detaches, which rejects the
+  // in-flight command) is harmless — the race has resolved — but must be caught
+  // so it is not an unhandled rejection. The race below still observes the
+  // original promise; this extra handler only swallows a late outcome.
+  evalCall.catch(() => {});
+  let timer;
+  const deadline = navigationTimeoutMs();
+  const ev = await Promise.race([
+    evalCall,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(EVAL_DEADLINE_REACHED), deadline);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  if (ev === EVAL_DEADLINE_REACHED) {
+    // The page promise never settled within the window. `withCdp` returns
+    // normally here (not a throw), so its `finally` detaches and frees the lock;
+    // the abandoned `evalCall` is cancelled by that detach and swallowed above.
+    return { success: false, error: timeoutErr("eval", deadline) };
+  }
   if (ev.exceptionDetails) {
     const msg = ev.exceptionDetails.exception?.description || ev.exceptionDetails.text || "JS exception";
     return { success: false, error: otherErr(msg) };

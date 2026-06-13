@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.228] - 2026-06-14
+
+### Fixed
+
+- **Browser mode: `eval` of a never-settling page promise no longer wedges the
+  command queue.** `cdpEval` issued `Runtime.evaluate` with `awaitPromise:true`
+  and no deadline, so `eval('new Promise(()=>{})')` hung inside the per-tab CDP
+  lock forever — and, through the global command queue, every later command on
+  that tab. Headless already bounds the identical evaluate with
+  `send_with_timeout(cdp_send)`; browser mode now races it against the
+  navigation-timeout deadline, returning a typed `Timeout` (the abandoned call is
+  cancelled by `withCdp`'s detach and its late settle swallowed, so the lock is
+  freed). Restores headless↔browser parity for the one CDP call that awaits a
+  page promise.
+
 ## [0.4.227] - 2026-06-13
 
 ### Fixed
