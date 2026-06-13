@@ -1075,6 +1075,45 @@ fn headless_behavioral_flow() {
          not be missed because the landmark was a role= rather than a <nav> tag: {}",
         stdout(&cap_sf_after)
     );
+    // An `<article>`'s `<header>` is a GENERIC heading area, not THE page banner
+    // (ARIA: header/footer are landmarks only when NOT scoped to a sectioning
+    // element). Reporting @banner there would be a false page-level claim — the
+    // walk must skip the sectioning-nested header and find no landmark.
+    let art_header_landmark = sf_json["elements"]
+        .as_array()
+        .expect("elements array")
+        .iter()
+        .find(|e| e["id"] == "artheaderbtn")
+        .map(|e| e["landmark"].as_str().unwrap_or(""))
+        .expect("artheaderbtn present");
+    assert_eq!(
+        art_header_landmark,
+        "",
+        "an <article>'s <header> is not the page @banner — it must report no \
+         landmark, not a false page-level claim: {}",
+        stdout(&cap_sf_after)
+    );
+
+    // Q5: a CSS-hidden `<option>` (`display:none`, the common dynamic-filter
+    // pattern) must NOT be selectable — `action select` rejects it typed, like a
+    // disabled one, not a silent assignment a real user could never make.
+    let hidopt_cap = fx.run(&["capture", "--include", "dom"]);
+    let hidopt_idx = index_of(&hidopt_cap, "hidopt");
+    let hid_sel = fx.run(&["action", "select", &hidopt_idx, "hid"]);
+    assert_eq!(
+        code(&hid_sel),
+        7,
+        "selecting a display:none <option> must be a typed InvalidArgument (7), \
+         not a silent assignment: {}",
+        stdout(&hid_sel)
+    );
+    let vis_sel = fx.run(&["action", "select", &hidopt_idx, "vis"]);
+    assert_eq!(
+        code(&vis_sel),
+        0,
+        "a visible option must still select: {}",
+        stdout(&vis_sel)
+    );
 
     // 2e. `fetch` runs as a debugger-routed MAIN-world eval in both modes (no
     //     contextId, CSP-exempt) and returns the response body — a same-origin

@@ -487,10 +487,11 @@ impl InteractiveElement {
         match (self.tag.as_str(), self.semantics.input_type.as_deref()) {
             ("a", _) if self.semantics.href.is_some() => Some("link"),
             ("button", _) => Some("button"),
-            // A submit/button/reset input IS a button in every sense — it's in
-            // the interactive set and renders `type=submit`, but without this arm
-            // `find --role button` silently missed it.
-            ("input", Some("submit" | "button" | "reset")) => Some("button"),
+            // A submit/button/reset/image input IS a button in every sense —
+            // it's in the interactive set and renders `type=submit`, but without
+            // this arm `find --role button` silently missed it. `image` is the
+            // graphical submit button (`<input type="image">`).
+            ("input", Some("submit" | "button" | "reset" | "image")) => Some("button"),
             ("input", Some("text" | "search" | "email" | "url" | "tel")) => Some("textbox"),
             ("input", Some("checkbox")) => Some("checkbox"),
             ("input", Some("radio")) => Some("radio"),
@@ -826,7 +827,7 @@ mod tests {
     fn submit_button_reset_inputs_have_an_implicit_button_role() {
         // A submit/button/reset input IS a button — `find --role button` must
         // match it. A text input stays a textbox; an unknown type has no role.
-        for t in ["submit", "button", "reset"] {
+        for t in ["submit", "button", "reset", "image"] {
             assert_eq!(
                 input_el(t).implicit_role(),
                 Some("button"),

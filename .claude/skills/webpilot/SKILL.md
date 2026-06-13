@@ -44,7 +44,7 @@ webpilot capture --include dom                                # 4. verify (check
 - `[N]` — the index used by `action click N`, `action type N "text"`, `action scroll-to N`
 - `*` — element appeared since the previous capture (page changed)
 - `#id` — element id
-- `@ctx` — landmark (`nav` `main` `header` `footer` `aside` `banner` `form` `dialog` `search`)
+- `@ctx` — ARIA landmark role (`navigation` `main` `banner` `contentinfo` `complementary` `form` `search`); a `<nav>` and a `<div role="navigation">` both report `@navigation`
 - `autocomplete=…` — input semantic hint
 - text truncated at 300 chars
 

@@ -422,20 +422,33 @@
   // Report the canonical ARIA LANDMARK ROLE, mapping both the semantic tag and
   // an explicit `role=` to the same name — so `<nav>` and `<div role="navigation">`
   // both surface `@navigation`. A `role=` on a plain element is the common
-  // design-system pattern and was previously missed entirely (the set only held
-  // tag names), and `<nav>`-style tags reported the HTML tag (`@nav`) while a
-  // `role=` reported the ARIA name — two vocabularies for one concept. Now the
+  // design-system pattern, and a tag reporting the HTML name (`@nav`) while a
+  // `role=` reported the ARIA name was two vocabularies for one concept. Now the
   // hint is one consistent set matching the accessibility tree's own landmark
-  // names. (`region` needs an accessible-name check to be a landmark, so it is
-  // intentionally omitted — best-effort, like the sectioning-context nuance of
-  // header/footer.)
+  // names. Only the SEVEN ARIA landmark roles are reported (`dialog` is a window
+  // role, NOT a landmark, so it is excluded); `region` needs an accessible-name
+  // check to qualify, so it is intentionally omitted (best-effort).
   const LANDMARK_TAG_ROLE = {
     nav: "navigation", main: "main", header: "banner", footer: "contentinfo",
-    aside: "complementary", form: "form", search: "search", dialog: "dialog",
+    aside: "complementary", form: "form", search: "search",
   };
   const LANDMARK_ROLES = new Set([
-    "navigation", "main", "banner", "contentinfo", "complementary", "form", "search", "dialog",
+    "navigation", "main", "banner", "contentinfo", "complementary", "form", "search",
   ]);
+  // `<header>`/`<footer>` are the page banner/contentinfo landmarks ONLY when
+  // scoped to the body — nested in a sectioning element (`<article>`/`<section>`/
+  // `<aside>`/`<nav>`/`<main>`) they are generic heading/footing areas, not THE
+  // page landmark. Reporting `@banner` for an article's header would be a false
+  // page-level claim the agent acts on.
+  const SECTIONING = new Set(["article", "section", "aside", "nav", "main"]);
+  function hasSectioningAncestor(el) {
+    let p = flatTreeParent(el);
+    while (p && p !== document.body) {
+      if (SECTIONING.has(p.tagName.toLowerCase())) return true;
+      p = flatTreeParent(p);
+    }
+    return false;
+  }
   function findLandmark(el) {
     // Walk the FLAT tree (crossing open shadow boundaries to the host), not just
     // `parentElement`: a control inside a shadow root still sits within whatever
@@ -446,8 +459,15 @@
     while (p && p !== document.body) {
       const role = p.getAttribute("role");
       if (role && LANDMARK_ROLES.has(role.toLowerCase())) return role.toLowerCase();
-      const mapped = LANDMARK_TAG_ROLE[p.tagName.toLowerCase()];
-      if (mapped) return mapped;
+      const tag = p.tagName.toLowerCase();
+      const mapped = LANDMARK_TAG_ROLE[tag];
+      if (mapped) {
+        if ((tag === "header" || tag === "footer") && hasSectioningAncestor(p)) {
+          p = flatTreeParent(p);
+          continue;
+        }
+        return mapped;
+      }
       p = flatTreeParent(p);
     }
     return null;
@@ -465,7 +485,11 @@
     let mapper;
     if (tag === "select") {
       all = [...el.options];
-      mapper = (o) => ({ value: o.value, text: o.text, selected: o.selected });
+      // Clip the DISPLAY text like the ARIA branch and the element-label cap
+      // (80): a `<select>` whose option text is a runaway string would balloon
+      // the snapshot/payload unbounded. `value` is NOT clipped — `action select`
+      // matches the exact live value, so a clipped value would fail to select.
+      mapper = (o) => ({ value: o.value, text: clip(o.text, 80), selected: o.selected });
     } else {
       const role = el.getAttribute("role");
       if (role === "listbox" || role === "menu" || role === "combobox") {
@@ -1193,8 +1217,14 @@
           }
           // The option exists but a real user can't pick a disabled or hidden one;
           // assigning `.value` to it would select it anyway — reject instead of
-          // reporting a choice the page forbids.
-          if (isDisabled(match) || match.hidden) {
+          // reporting a choice the page forbids. "Hidden" covers BOTH the HTML
+          // `hidden` property AND CSS (`display:none` / `visibility:hidden`, the
+          // common way a page filters a `<select>`'s options dynamically) — the
+          // bare `.hidden` check missed the CSS case, letting a hidden option be
+          // selected silently.
+          const cs = getComputedStyle(match);
+          const cssHidden = cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse";
+          if (isDisabled(match) || match.hidden || cssHidden) {
             return err(
               "InvalidArgument",
               `<option> "${action.value}" is ${isDisabled(match) ? "disabled" : "hidden"} — a real user can't select it`,

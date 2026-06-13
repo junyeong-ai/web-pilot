@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.222] - 2026-06-13
+
+### Fixed
+
+Five follow-ups (v0.4.221 landmark/role refinements caught by re-review, plus
+two select/option findings):
+
+- **`find --role button` also matches `<input type="image">`** — the graphical
+  submit button, missing from the v0.4.221 arm.
+- **`<header>`/`<footer>` report `@banner`/`@contentinfo` only when NOT nested
+  in a sectioning element.** An `<article>`'s `<header>` is a generic heading
+  area, not THE page banner; reporting `@banner` there was a false page-level
+  claim. The walk now skips a header/footer scoped to an
+  `<article>`/`<section>`/`<aside>`/`<nav>`/`<main>`.
+- **`dialog` is no longer reported as a landmark** — it is an ARIA window role,
+  not a landmark. Only the seven ARIA landmark roles are emitted.
+- **The README and SKILL `@ctx` legends list the canonical ARIA role names**
+  (navigation/main/banner/contentinfo/complementary/form/search), matching what
+  the snapshot now emits — they previously showed stale/mixed tag names.
+- **A CSS-hidden `<option>` (`display:none`/`visibility:hidden`) can't be
+  selected.** `action select` checked only the HTML `hidden` property and the
+  `disabled` flag; an option hidden by CSS (the common dynamic-filter pattern)
+  slipped through and was assigned silently. Now rejected typed, like a
+  disabled one. Native `<option>` display text is also clipped (80 chars) like
+  the ARIA branch — a runaway option label no longer balloons the snapshot
+  (the `value` stays intact for exact matching). Pinned in e2e.
+
 ## [0.4.221] - 2026-06-13
 
 ### Fixed

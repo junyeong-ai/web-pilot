@@ -107,7 +107,7 @@ webpilot policy list                                     # inspect
 ```
 *[1] input#query "Search" type=text @search
 [2] button "Go" @search
-[3] a "Home" href="/" @nav
+[3] a "Home" href="/" @navigation
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 3 elements (from 120 nodes, 5ms) ---
@@ -118,7 +118,7 @@ webpilot policy list                                     # inspect
 | `[N]` | element index (use with `action click N`) |
 | `*` | element new since the previous capture |
 | `#id` | HTML element id |
-| `@ctx` | landmark context (nav, main, form, search) |
+| `@ctx` | ARIA landmark role (navigation, main, banner, contentinfo, complementary, form, search) |
 
 ---
 
