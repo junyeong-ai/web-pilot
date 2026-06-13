@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.224] - 2026-06-13
+
+### Fixed
+
+Three follow-ups from a parallel sweep of previously-unreviewed corners (native
+input + tab management, and lifecycle commands); the MCP adapter was swept and
+came back clean. Each fix verified live.
+
+- **`tab new` to an unreachable URL no longer strands an orphan error tab or
+  drifts the working pin.** It created the tab, moved the pin to it, and only
+  then detected the `chrome-error://` page — returning `NavigationFailed` but
+  leaving the dead tab open with the pin parked on it (so the next command, and
+  the next CLI process, acted on the error page). It is now atomic in both modes:
+  on failure the just-created tab is closed and the pin returns to where the
+  agent was — `navigate`'s no-leak contract.
+- **`action key-press Space` now delivers the spacebar's canonical DOM key
+  `" "`.** It sent the literal token `"Space"`, which Chrome rejects as a `key`
+  value, leaving `e.key` empty — so a listener keying on `e.key === " "` missed
+  the `Space` spelling (the `" "` spelling already worked). Normalized in both
+  modes; `code`/`text` were already correct.
+- **`uninstall` now removes the policy store.** The store (`policy/policies.json`)
+  is persistent security config under the durable data root, but uninstall's
+  cleanup set omitted it — so it was left behind silently (a later reinstall
+  inheriting stale deny rules the user believed were wiped) and its surviving
+  `policy/` dir made uninstall mislabel the kept root as holding "non-WebPilot
+  files." It is now a first-class uninstall artefact, reported and removed before
+  the root is reclaimed.
+
 ## [0.4.223] - 2026-06-13
 
 ### Fixed

@@ -909,6 +909,58 @@ fn headless_behavioral_flow() {
         stdout(&fk_bad)
     );
 
+    // 2b-space. `key-press Space` delivers the spacebar's CANONICAL DOM key " ",
+    //     not the literal token "Space" — Chrome rejects "Space" as a `key` value
+    //     (it arrives as an empty e.key), so a listener keying on `e.key === " "`
+    //     would miss the Space spelling. Capture the keydown's `key` and assert it
+    //     is a single space.
+    let seed_space = fx.run(&[
+        "eval",
+        "window.__sk=null; const spi=document.getElementById('q'); spi.value=''; spi.focus(); \
+         spi.addEventListener('keydown',e=>{window.__sk=e.key},{once:true}); 'ok'",
+    ]);
+    assert_eq!(code(&seed_space), 0, "space seed eval failed: {}", stdout(&seed_space));
+    assert_eq!(
+        code(&fx.run(&["action", "key-press", "Space"])),
+        0,
+        "key-press Space failed"
+    );
+    let skv = fx.run(&["eval", "window.__sk === ' '"]);
+    let skj: serde_json::Value = serde_json::from_str(&stdout(&skv)).expect("eval json");
+    assert_eq!(
+        skj["result"].as_str(),
+        Some("true"),
+        "key-press Space must deliver the canonical DOM key \" \", not the empty key Chrome \
+         gives for the \"Space\" token: {}",
+        stdout(&skv)
+    );
+
+    // 2b-tabnewleak. `tab new` to an unreachable URL is a typed NavigationFailed
+    //     (exit 8) that leaves NO trace: the orphan chrome-error tab is closed and
+    //     the pin returns to the working page — `navigate`'s no-leak contract.
+    //     (Before the fix it stranded the error tab and drifted the pin onto it.)
+    let bad_tab = fx.run(&["tab", "new", "http://127.0.0.1:59599/nope"]);
+    assert_eq!(
+        code(&bad_tab),
+        8,
+        "tab new to an unreachable URL must be NavigationFailed (8): {}",
+        stdout(&bad_tab)
+    );
+    let pin_ok = fx.run(&["eval", "location.href.startsWith('chrome-error')"]);
+    let pin_j: serde_json::Value = serde_json::from_str(&stdout(&pin_ok)).expect("eval json");
+    assert_eq!(
+        pin_j["result"].as_str(),
+        Some("false"),
+        "a failed tab new must not drift the pin onto a chrome-error tab: {}",
+        stdout(&pin_ok)
+    );
+    let tabs_after = fx.run(&["tab"]);
+    assert!(
+        !stdout(&tabs_after).contains("chrome-error"),
+        "a failed tab new must close the orphan error tab (no leak): {}",
+        stdout(&tabs_after)
+    );
+
     // 2c. `upload` sets a file on the input the index addressed — resolved by
     //     snapshot identity and handed to CDP as an object reference, never a
     //     live document-order re-query a page could redirect. Prove the file

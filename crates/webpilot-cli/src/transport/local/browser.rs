@@ -236,6 +236,11 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_tab_new(&mut self, url: &str) -> Result<ResponseData> {
+        // The tab the agent is bound to now — restored if this `tab new` fails, so
+        // a bad URL never strands an orphan tab or silently drifts the pin onto a
+        // `chrome-error://` page. This is `navigate`'s no-leak contract: a failed
+        // load leaves the agent exactly where it started.
+        let prev_target = self.target_id.clone();
         let target_id = self
             .browser
             .create_target(url, self.browser_context_id.as_deref())
@@ -246,7 +251,10 @@ impl LocalTransport {
         // created, not the page it was bound to before.
         match self.do_tab_switch(&target_id, false).await? {
             ResponseData::Action { success: true, .. } => {}
-            other => return Ok(other),
+            other => {
+                self.rollback_tab_new(&target_id, &prev_target).await;
+                return Ok(other);
+            }
         }
         // Land on a ready page and report its real, post-redirect URL/title —
         // `tab new` settles like `navigate` does, so the agent's next action
@@ -269,9 +277,14 @@ impl LocalTransport {
                     .and_then(Value::as_str)
                     .filter(|u| !u.is_empty())
                 {
+                    let url = unreachable.to_string();
+                    // Roll the failed open back: close the dead error tab and
+                    // re-pin the agent's previous tab, so a bad URL is the same
+                    // no-leak NavigationFailed `navigate` produces.
+                    self.rollback_tab_new(&target_id, &prev_target).await;
                     return Ok(ResponseData::Error {
                         error: WebPilotError::NavigationFailed {
-                            url: unreachable.to_string(),
+                            url,
                             reason: "the new tab landed on Chrome's error page (unreachable URL)"
                                 .into(),
                         },
@@ -280,6 +293,9 @@ impl LocalTransport {
             }
             Err(e) => {
                 if let Ok(r) = self.tab_gone_or(e, &target_id).await {
+                    // The new tab vanished during settle; the orphan is already
+                    // gone, but the pin must return to where the agent was.
+                    let _ = self.do_tab_switch(&prev_target, false).await;
                     return Ok(r);
                 }
                 // The probe itself failed on a live tab — fall through to the
@@ -315,6 +331,25 @@ impl LocalTransport {
             }),
             capture_error: None,
         })
+    }
+
+    /// Roll back a failed `tab new`: close the just-created tab and re-pin the
+    /// tab the agent was on before it. A failed `tab new` must leave the agent
+    /// exactly where it started — `navigate`'s no-leak contract, where a bad URL
+    /// never strands a tab or drifts the pin onto a `chrome-error://` page.
+    /// Best-effort: the orphan is closed and the previous pin restored; if the
+    /// previous tab itself vanished the re-pin can't bind, but the orphan is gone.
+    async fn rollback_tab_new(&mut self, orphan: &str, prev: &str) {
+        let _ = self
+            .browser
+            .send(
+                "Target.closeTarget",
+                Some(serde_json::json!({ "targetId": orphan })),
+            )
+            .await;
+        if prev != orphan {
+            let _ = self.do_tab_switch(prev, false).await;
+        }
     }
 
     pub(super) async fn do_tab_close(&self, tab_id: &str) -> Result<ResponseData> {

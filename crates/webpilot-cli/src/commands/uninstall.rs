@@ -64,6 +64,10 @@ async fn execute(plan: Plan) -> Result<CommandOutput> {
         ("skill", plan.skill.as_deref()),
         ("extension", plan.extension.as_deref()),
         ("nm_host", plan.nm_host.as_deref()),
+        // Removed BEFORE the root purges below, so an emptied cache/data root is
+        // reclaimed instead of being kept alive by its own `policy/` subdir and
+        // then mislabelled "non-WebPilot files remain".
+        ("policy", plan.policy.as_deref()),
     ] {
         if let Some(p) = path {
             match remove_path(p) {
@@ -135,6 +139,7 @@ struct Plan {
     skill: Option<PathBuf>,
     extension: Option<PathBuf>,
     nm_host: Option<PathBuf>,
+    policy: Option<PathBuf>,
     cache_root: Option<PathBuf>,
 }
 
@@ -145,6 +150,7 @@ impl Plan {
             && self.skill.is_none()
             && self.extension.is_none()
             && self.nm_host.is_none()
+            && self.policy.is_none()
             && self.cache_root.is_none()
     }
 
@@ -158,6 +164,7 @@ impl Plan {
             ("Skill", self.skill.as_deref()),
             ("Extension", self.extension.as_deref()),
             ("NM host", self.nm_host.as_deref()),
+            ("Policy store", self.policy.as_deref()),
             ("Cache root", self.cache_root.as_deref()),
         ] {
             if let Some(p) = path {
@@ -189,6 +196,12 @@ fn collect_plan() -> Plan {
 
     let extension = Some(webpilot::dirs::extension_dir_path()).filter(|p| p.is_dir());
     let nm_host = nm_host::nm_manifest_path().ok().filter(|p| p.is_file());
+    // The policy store is a first-class artefact, not an implementation-detail
+    // container: it is persistent SECURITY config (deny rules), so leaving it
+    // behind means a later reinstall silently inherits stale verdicts the user
+    // believes were wiped. Located via the pure path twin so inspection never
+    // creates the dir.
+    let policy = Some(webpilot::dirs::policy_dir_path()).filter(|p| p.is_dir());
     let cache_root = Some(webpilot::dirs::root_path()).filter(|p| p.is_dir());
 
     Plan {
@@ -197,6 +210,7 @@ fn collect_plan() -> Plan {
         skill,
         extension,
         nm_host,
+        policy,
         cache_root,
     }
 }

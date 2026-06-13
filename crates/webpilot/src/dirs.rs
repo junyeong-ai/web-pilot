@@ -195,8 +195,16 @@ pub fn extension_dir_path() -> PathBuf {
 /// still wins when set, so an explicit setup and the test suite stay
 /// self-contained instead of reaching into the real user data dir. Materialises.
 pub fn policy_dir() -> PathBuf {
-    let base = env_path("WEBPILOT_HOME").unwrap_or_else(data_root_path);
-    materialise(base.join(POLICY_SUBDIR), Owner::User)
+    materialise(policy_dir_path(), Owner::User)
+}
+
+/// Pure policy dir path — no filesystem side effects. The inspection twin of
+/// [`policy_dir`], for callers (e.g. `uninstall`) that must locate the store
+/// without creating it.
+pub fn policy_dir_path() -> PathBuf {
+    env_path("WEBPILOT_HOME")
+        .unwrap_or_else(data_root_path)
+        .join(POLICY_SUBDIR)
 }
 
 // --- Resolution helpers -----------------------------------------------------

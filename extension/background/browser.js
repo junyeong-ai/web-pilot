@@ -41,6 +41,10 @@ async function handleTabNew(url) {
       error: err("InvalidArgument", `invalid URL for tab new: ${url}`),
     };
   }
+  // The tab the agent is bound to now — restored if this `tab new` fails, so a
+  // bad URL never strands an orphan tab or drifts the pin onto a chrome-error
+  // page (navigate's no-leak contract, headless parity).
+  const prevTabId = activeTabId;
   // Buffer main-frame load errors from BEFORE the tab exists: a refused
   // connection fails within milliseconds, so a listener registered after
   // create() resolves could miss it. Correlate by tab id afterward.
@@ -69,6 +73,11 @@ async function handleTabNew(url) {
     // the same effect under the same policy gate, so it must agree.
     const failed = navErrors.find((d) => d.tabId === created.id);
     if (failed) {
+      // Roll the failed open back: close the dead error tab and re-pin the
+      // agent's previous tab, so a bad URL is the same no-leak NavigationFailed
+      // `navigate` produces (headless parity).
+      await chrome.tabs.remove(created.id).catch(() => {});
+      if (prevTabId != null && prevTabId !== created.id) setActiveTabId(prevTabId);
       return {
         type: "Action",
         success: false,
@@ -88,6 +97,9 @@ async function handleTabNew(url) {
     // acting on a ghost. tabs.get fails only for a gone tab, so null here is
     // tab-gone truth: typed TabNotFound (exit 4 → recover via `tab`).
     if (!settled) {
+      // The new tab vanished during settle; the orphan is already gone, but the
+      // pin must return to where the agent was (headless parity).
+      if (prevTabId != null && prevTabId !== created.id) setActiveTabId(prevTabId);
       return {
         type: "Action",
         success: false,

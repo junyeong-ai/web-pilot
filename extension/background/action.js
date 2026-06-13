@@ -324,7 +324,12 @@ async function dispatchKeyPress(tabId, action) {
         });
         pressed.push(m);
       }
-      const base = { modifiers, key: shiftLetter(action.key), code, windowsVirtualKeyCode: vk };
+      // The spacebar's canonical DOM `key` is " ", not the "Space" token a caller
+      // may spell it as — Chrome rejects "Space" as a `key` value (it lands as an
+      // empty e.key), so an `e.key === " "` listener would miss the Space
+      // spelling. Normalize to the character it produces (headless parity).
+      const keyName = action.key === "Space" ? " " : action.key;
+      const base = { modifiers, key: shiftLetter(keyName), code, windowsVirtualKeyCode: vk };
       await cdpSend(tid, "Input.dispatchKeyEvent", text != null
         ? { ...base, type: "keyDown", text }
         : { ...base, type: "keyDown" });

@@ -739,18 +739,27 @@ impl LocalTransport {
         // those are left unchanged rather than assume a keyboard layout. `code`
         // and `vk` stay keyed off the unshifted key — they are layout-position,
         // not the produced character.
+        // The spacebar's canonical DOM `key` is " " — the character it produces,
+        // not the "Space" token a caller may spell it as. Chrome rejects "Space"
+        // as a `key` value (it lands as an empty `e.key`), so a listener keying on
+        // `e.key === " "` would miss the `Space` spelling; normalize to the same
+        // character `printable_key_text` already yields. Every other named key
+        // uses its canonical DOM key as its token, so only the spacebar needs this.
+        let key = if key == "Space" { " " } else { key };
         let key = shift_letter(key, mods.shift);
         let text = text.map(|t| shift_letter(&t, mods.shift));
 
-        // The bitmask alone does not PRESS the modifier: Chromium's built-in
-        // editing commands (Ctrl+A select-all, Shift+Arrow selection extension)
-        // key off real modifier key events, so a chord is bracketed like a
-        // physical keyboard — each held modifier goes down (rawKeyDown,
-        // accumulating the mask the way real typing does) before the main key
-        // and comes up in reverse order after it. Empirically verified:
-        // mask-only ctrl+a left the selection untouched; bracketed it
-        // selects all. (Bits mirror `modifier_mask`: Alt=1 Ctrl=2 Meta=4
-        // Shift=8.)
+        // The bitmask alone does not PRESS the modifier: Chromium's renderer-level
+        // editing commands (Shift+Arrow selection extension, etc.) key off real
+        // modifier key events, so a chord is bracketed like a physical keyboard —
+        // each held modifier goes down (rawKeyDown, accumulating the mask the way
+        // real typing does) before the main key and comes up in reverse order
+        // after it. Empirically verified: mask-only Shift+ArrowLeft left the
+        // selection untouched; bracketed it extends the selection. (Browser-level
+        // accelerators — select-all/copy/paste — are handled in the browser
+        // process and are NOT reachable via injected key events; only
+        // renderer-level editing is.) (Bits mirror `modifier_mask`: Alt=1 Ctrl=2
+        // Meta=4 Shift=8.)
         let held: Vec<(&str, &str, u32, u32)> = [
             (mods.ctrl, ("Control", "ControlLeft", 17u32, 2u32)),
             (mods.alt, ("Alt", "AltLeft", 18, 1)),
