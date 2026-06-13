@@ -23,6 +23,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <a id="pop" href="/second" target="_blank" rel="noopener">open popup</a>
 <form action="/second" method="get"><input id="forminput" type="text"><button type="submit" id="formsubmit">submit form</button></form>
 <div id="cardwrap" style="cursor:pointer">clickable card<input id="hiddenchild" style="display:none"></div>
+<button id="ptrbtn" style="cursor:pointer"><span id="ptrbtnlabel">Pointer label</span></button>
 <div id="presdiv" role="presentation" onclick="document.title='pres-clicked'">presentation click target</div>
 <p id="wsp">whitespace<br>collapse<br>marker</p>
 <div id="slothost2"><button id="slottedbtn" slot="t">SB</button></div>

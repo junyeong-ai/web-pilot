@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.226] - 2026-06-13
+
+### Fixed
+
+- **`capture` no longer mints a phantom duplicate index for every presentational
+  child of a styled control.** The interactivity scan's innermost-`cursor:pointer`
+  rule only suppressed a candidate that WRAPS a collected interactive node (a
+  clickable card around its button); it missed the inverse — a presentational
+  `<span>`/icon INSIDE a `<button>`/`<a>` that inherits the ancestor's
+  `cursor:pointer`, which is near-universal (`button { cursor: pointer }` over
+  label/icon spans, default-styled links). Each such child was emitted as a
+  separate index pointing at content whose only click effect is the parent's,
+  roughly doubling the index count on most pages and handing the agent ambiguous
+  duplicate targets overlapping a control it already had. The redundancy check
+  now covers both containment directions. A genuinely standalone `cursor:pointer`
+  leaf, the clickable-card wrapper, and the hidden-child carve-out are unchanged.
+
+### Internal
+
+- Added unit coverage for the Native Messaging frame codec (LE length prefix,
+  clean-EOF vs truncated-body, oversized-length rejected before allocating,
+  zero-length and oversized-write rejection) — the browser-mode security
+  boundary's lowest-level code now has direct tests, not just E2E exercise.
+
 ## [0.4.225] - 2026-06-13
 
 ### Fixed

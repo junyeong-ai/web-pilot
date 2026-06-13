@@ -131,6 +131,20 @@ fn headless_behavioral_flow() {
         elements.iter().any(|e| e["id"] == "cardwrap"),
         "a cursor:pointer wrapper with only a hidden interactive child must stay indexed: {dom}"
     );
+    // The INVERSE containment direction: `button{cursor:pointer}` (near-universal)
+    // makes inner label/icon spans INHERIT the pointer cursor. The cursor:pointer
+    // pass must NOT emit such a child — it is contained by an already-collected
+    // interactive node (the button), so clicking it just clicks the button. The
+    // button is indexed; its presentational `#ptrbtnlabel` span must NOT be, or
+    // every styled button/link mints a phantom duplicate of itself.
+    assert!(
+        elements.iter().any(|e| e["id"] == "ptrbtn"),
+        "a cursor:pointer button must be indexed: {dom}"
+    );
+    assert!(
+        !elements.iter().any(|e| e["id"] == "ptrbtnlabel"),
+        "a presentational child that only INHERITS its interactive ancestor's cursor:pointer must NOT be indexed (no phantom duplicate): {dom}"
+    );
     assert!(
         !elements.iter().any(|e| e["id"] == "hiddenchild"),
         "a display:none element must never be indexed: {dom}"

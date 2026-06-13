@@ -210,18 +210,28 @@
       }
       if (cursor !== "pointer") continue;
       if (!isVisible(el)) continue;
-      let wrapsCollected = false;
+      let redundant = false;
       for (const c of seen) {
-        // Only a VISIBLE collected descendant makes this a mere wrapper. A hidden
-        // one (e.g. a `display:none` input) is dropped from the snapshot, so
-        // letting it mark the wrapper "not innermost" would leave a real
-        // cursor:pointer click target unindexed and unaddressable.
-        if (el.contains(c) && isVisible(c)) {
-          wrapsCollected = true;
+        // Skip a pointer candidate that is REDUNDANT with an already-collected
+        // interactive node, in EITHER containment direction:
+        //   - it WRAPS a visible collected node (a card/row whose real control
+        //     is inside it) — surfacing the wrapper hands the agent a giant
+        //     phantom overlapping the actual button. A HIDDEN collected
+        //     descendant (e.g. a `display:none` input) is dropped from the
+        //     snapshot, so it must NOT mark the wrapper "not innermost" — that
+        //     would leave a real cursor:pointer click target unaddressable.
+        //   - it is CONTAINED BY a collected interactive node (a presentational
+        //     `<span>`/icon inside a `<button>`/`<a>` that inherits the
+        //     ancestor's `cursor:pointer`). Clicking it just clicks the
+        //     ancestor, so emitting it mints a phantom duplicate of a control
+        //     the agent already has — the most common pointer-inheritance case
+        //     (`button{cursor:pointer}` over inner label/icon spans, links).
+        if ((el.contains(c) && isVisible(c)) || c.contains(el)) {
+          redundant = true;
           break;
         }
       }
-      if (wrapsCollected) continue;
+      if (redundant) continue;
       add(el);
     }
     // Indices must follow document (reading) order, not the order the three
