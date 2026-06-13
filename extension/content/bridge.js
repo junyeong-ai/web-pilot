@@ -64,11 +64,17 @@
     );
 
   // ── Selector for interactive elements ─────────────────────────────────────
+  // `[role~="button"]` (the whitespace-token operator), not `[role="button"]`:
+  // ARIA `role` is a space-separated token list and the user agent uses the
+  // first valid token, so `role="custom button"` IS a button. An exact match
+  // dropped those fallback-pattern roles from the semantic pass; `~=` collects
+  // any element whose role list CONTAINS the token, the same set `find --role`
+  // matches.
   const INTERACTIVE_SELECTOR =
     'a[href], button, input, select, textarea, ' +
-    '[role="button"], [role="link"], [role="tab"], [role="menuitem"], ' +
-    '[role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], ' +
-    '[role="searchbox"], [role="textbox"], [role="slider"], ' +
+    '[role~="button"], [role~="link"], [role~="tab"], [role~="menuitem"], ' +
+    '[role~="checkbox"], [role~="radio"], [role~="switch"], [role~="combobox"], ' +
+    '[role~="searchbox"], [role~="textbox"], [role~="slider"], ' +
     // Any editable host, not just `contenteditable="true"`: a bare
     // `contenteditable` (empty value) and `contenteditable="plaintext-only"` are
     // both editable, so the literal-"true" match dropped real comment boxes and

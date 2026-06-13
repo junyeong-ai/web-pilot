@@ -516,11 +516,16 @@ impl InteractiveElement {
             // ONLY — never the raw tag name. `--role nav` must not match `<nav>`
             // (its role is `navigation`), and `--role div` must not match every
             // `<div>`; a tag query is `find --tag`.
+            //
+            // `role` is a SPACE-SEPARATED token list (the user agent uses the first
+            // valid token; authors write `role="<custom> button"` fallbacks), so
+            // match the query against any token — `--role button` finds
+            // `role="custom button"` — not the raw string, which would miss it.
             let role_lower = role.to_lowercase();
             let explicit = self
                 .role
                 .as_ref()
-                .is_some_and(|r| r.to_lowercase() == role_lower);
+                .is_some_and(|r| r.to_lowercase().split_whitespace().any(|t| t == role_lower));
             let implicit = self.implicit_role().is_some_and(|r| r == role_lower);
             if !explicit && !implicit {
                 return false;
@@ -884,6 +889,50 @@ mod tests {
         }
         assert_eq!(input_el("text").implicit_role(), Some("textbox"));
         assert_eq!(input_el("color").implicit_role(), None);
+    }
+
+    #[test]
+    fn find_role_matches_a_token_in_a_multi_token_role() {
+        // ARIA `role` is a space-separated token list (the user agent uses the
+        // first valid token; authors write `role="<custom> button"` fallbacks), so
+        // `find --role button` must match any token — not only an exact whole
+        // string, which dropped the element entirely.
+        let el = InteractiveElement {
+            index: 1,
+            tag: "div".into(),
+            id: None,
+            role: Some("custom button".into()),
+            text: String::new(),
+            semantics: ElementSemantics::default(),
+            state: ElementState::default(),
+            spatial: ElementSpatial::default(),
+        };
+        let present = ElementFilter {
+            role: Some("button".into()),
+            ..Default::default()
+        };
+        assert!(
+            el.matches(&present),
+            "a token in a multi-token role must match"
+        );
+        // No over-match: a role NOT among the tokens still fails, and a token is
+        // never matched as a substring of another (`butto` must not match).
+        for miss in ["link", "butto", "uttonx"] {
+            let f = ElementFilter {
+                role: Some(miss.into()),
+                ..Default::default()
+            };
+            assert!(
+                !el.matches(&f),
+                "a role not among the whitespace tokens must not match: {miss}"
+            );
+        }
+        // Case-insensitive, like the single-token path.
+        let upper = ElementFilter {
+            role: Some("BUTTON".into()),
+            ..Default::default()
+        };
+        assert!(el.matches(&upper), "role match is case-insensitive");
     }
 
     #[test]

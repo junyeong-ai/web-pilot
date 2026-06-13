@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.236] - 2026-06-14
+
+### Fixed
+
+- **A multi-token ARIA `role` is now honored as the token list it is.** The
+  `role` attribute is space-separated and the user agent uses the first valid
+  token, so a fallback `role="custom button"` IS a button — but the semantic
+  selector (`[role="button"]`) and `find --role` both exact-matched the whole raw
+  string, so such an element was dropped from the semantic pass and never matched
+  by `find --role button`. The selector now uses the CSS whitespace-token operator
+  `[role~="button"]` (collecting it even with no other affordance), and
+  `find --role` matches the query against any whitespace token of the element's
+  role (case-insensitive, no substring over-match). Found by a parallel codex +
+  fresh review (codex static-flagged it; confirmed live); unit pin added. The
+  prior round's verdict was otherwise CONVERGED — the interactive-set widget-role
+  fix (v0.4.235) was independently re-verified clean (no phantom/over-collection;
+  a 250-cell clickable grid captures all 250 correctly; all snapshot invariants
+  hold).
+
 ## [0.4.235] - 2026-06-14
 
 ### Fixed
