@@ -1659,6 +1659,83 @@ fn headless_behavioral_flow() {
         stdout(&logs)
     );
 
+    // 3a-clip. A runaway `console.log` is clipped like the DOM capture: a
+    //     10000-char arg must come back capped (~4096) with a marker, never the
+    //     whole string ballooning the buffer and the read's CDP payload.
+    let _ = fx.run(&["console", "clear"]);
+    let _ = fx.run(&["eval", "console.log('Z'.repeat(10000)); 'logged'"]);
+    let clip_read = fx.run(&["console", "read"]);
+    let cr: serde_json::Value = serde_json::from_str(&stdout(&clip_read)).expect("clip read json");
+    let clipped_msg = cr["entries"]
+        .as_array()
+        .and_then(|a| {
+            a.iter()
+                .find(|e| e["message"].as_str().is_some_and(|m| m.starts_with('Z')))
+        })
+        .and_then(|e| e["message"].as_str())
+        .expect("clipped entry");
+    assert!(
+        clipped_msg.chars().count() < 5000 && clipped_msg.contains("chars]"),
+        "a 10000-char log must be clipped with a marker, not stored whole: len={}",
+        clipped_msg.chars().count()
+    );
+
+    // 3a-safe. A page that booby-traps Array.prototype.push must NOT break its
+    //     OWN console.log: the monitor hook wraps recording in try/catch and
+    //     calls the original unconditionally. `ok` is true only if console.log
+    //     returned normally despite a throwing push (pre-fix it threw).
+    let safe = fx.run(&[
+        "eval",
+        "const op = Array.prototype.push; Array.prototype.push = function(){ throw new Error('x'); }; \
+         let ok = false; try { console.log('safe-probe'); ok = true; } catch (e) {} \
+         Array.prototype.push = op; ok",
+    ]);
+    let sj: serde_json::Value = serde_json::from_str(&stdout(&safe)).expect("safe eval json");
+    assert_eq!(
+        sj["result"].as_str(),
+        Some("true"),
+        "a throwing Array.prototype.push must not break the page's own console.log: {}",
+        stdout(&safe)
+    );
+    let _ = fx.run(&["console", "clear"]);
+
+    // 3a-trunc. `truncated` reflects ACTUAL eviction, not `length >= cap`: at
+    //     exactly the cap (500) nothing has been dropped yet, so truncated is
+    //     false; one more entry evicts the oldest and flips it true.
+    let _ = fx.run(&[
+        "eval",
+        "for (let i = 0; i < 500; i++) console.log('row' + i); 'filled'",
+    ]);
+    let at_cap = fx.run(&["console", "read"]);
+    let ac: serde_json::Value = serde_json::from_str(&stdout(&at_cap)).expect("at-cap json");
+    assert_eq!(
+        ac["truncated"],
+        false,
+        "a buffer at exactly the cap with nothing evicted must not be truncated: {}",
+        stdout(&at_cap)
+    );
+    let _ = fx.run(&["eval", "console.log('overflow'); 'over'"]);
+    let over = fx.run(&["console", "read"]);
+    let ov: serde_json::Value = serde_json::from_str(&stdout(&over)).expect("over json");
+    assert_eq!(
+        ov["truncated"],
+        true,
+        "one entry past the cap evicts the oldest and must report truncated: {}",
+        stdout(&over)
+    );
+    let _ = fx.run(&["console", "clear"]);
+    // ...and clear resets the eviction flag, so a fresh small buffer is not truncated.
+    let _ = fx.run(&["eval", "console.log('after-clear'); 'x'"]);
+    let post_clear = fx.run(&["console", "read"]);
+    let pc: serde_json::Value =
+        serde_json::from_str(&stdout(&post_clear)).expect("post-clear json");
+    assert_eq!(
+        pc["truncated"],
+        false,
+        "clear must reset the eviction flag — a fresh buffer is not truncated: {}",
+        stdout(&post_clear)
+    );
+
     // 3b. The `eval` gate covers monitor re-injection: a deny that lands AFTER
     //     `console start` must stop the MAIN-world hooks from re-arming on the
     //     next document — `reinstall_monitors` re-checks the gate (browser mode

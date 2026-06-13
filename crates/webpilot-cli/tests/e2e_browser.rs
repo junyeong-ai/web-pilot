@@ -732,6 +732,46 @@ fn browser_behavioral_flow() {
         stdout(&logs)
     );
 
+    // 4b-clip. A runaway log is clipped (headless parity): a 10000-char arg comes
+    //          back capped with a marker, never stored/shipped whole.
+    let _ = fx.run(&["console", "clear"]);
+    let _ = fx.run(&["eval", "console.log('Z'.repeat(10000)); 'x'"]);
+    let clip_read = fx.run(&["console", "read"]);
+    let cr: serde_json::Value =
+        serde_json::from_str(&stdout(&clip_read)).expect("browser clip read json");
+    let clipped = cr["entries"]
+        .as_array()
+        .and_then(|a| {
+            a.iter()
+                .find(|e| e["message"].as_str().is_some_and(|m| m.starts_with('Z')))
+        })
+        .and_then(|e| e["message"].as_str())
+        .expect("clipped entry");
+    assert!(
+        clipped.chars().count() < 5000 && clipped.contains("chars]"),
+        "a 10000-char log must be clipped with a marker in browser mode too: len={}",
+        clipped.chars().count()
+    );
+
+    // 4b-safe. A throwing Array.prototype.push must not break the page's own
+    //          console.log (headless parity): the hook wraps recording in
+    //          try/catch and calls the original unconditionally.
+    let safe = fx.run(&[
+        "eval",
+        "const op = Array.prototype.push; Array.prototype.push = function(){ throw new Error('x'); }; \
+         let ok = false; try { console.log('safe-probe'); ok = true; } catch (e) {} \
+         Array.prototype.push = op; ok",
+    ]);
+    let sj: serde_json::Value =
+        serde_json::from_str(&stdout(&safe)).expect("browser safe eval json");
+    assert_eq!(
+        sj["result"].as_str(),
+        Some("true"),
+        "a throwing push must not break the page's console.log in browser mode: {}",
+        stdout(&safe)
+    );
+    let _ = fx.run(&["console", "clear"]);
+
     // 4b-net. A tampered/malformed entry in the page-reachable MAIN-world network
     //         buffer must NOT break `network read`: the optional `status`/`error`
     //         are type-checked and a bad entry is DROPPED (matching headless's

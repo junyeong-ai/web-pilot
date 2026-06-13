@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.217] - 2026-06-13
+
+### Fixed
+
+- **The console/network monitor hooks can no longer break the page's own
+  `console`/`fetch`/`XHR`.** The recording ran before the page's original call
+  with no guard, so if recording threw — a page booby-trapping `Date.now`, a
+  hostile `Array.prototype.push`, a throwing `String` coercion — the page's
+  own logging or request was silently dropped. The hooks now capture their
+  intrinsics (`Date.now`, `performance.now`) at install and wrap recording in
+  try/catch, invoking the original unconditionally. The monitor's honest
+  boundary is "may miss an entry", never "breaks the page".
+- **Captured strings are clipped.** A `console.log("x".repeat(5e7))` or a
+  giant `data:` request URL ballooned the buffer and the read's CDP/IPC
+  payload unbounded; captured messages and URLs are now clipped at 4096 chars
+  with a `…[N chars]` marker, like the DOM capture.
+- **`truncated` reflects actual eviction, not buffer fullness.** A buffer
+  sitting at exactly the cap (500) with nothing dropped yet reported
+  `truncated: true`; it now keys on an eviction flag set only on a real
+  `shift()` (reset by `clear` and a new document), so `truncated` is true iff
+  an entry was genuinely evicted. Pinned in both e2e suites (clip,
+  push-throw-survives, at-cap-not-truncated, evict-flips-true, clear-resets).
+
 ## [0.4.216] - 2026-06-13
 
 ### Fixed

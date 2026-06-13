@@ -78,15 +78,23 @@ async function injectConsoleMonitoring(tabId) {
       if (!Array.isArray(window.__webpilot_console)) window.__webpilot_console = [];
       if (window.__webpilot_console_patched) return;
       window.__webpilot_console_patched = true;
+      // Capture Date.now at install (a page that booby-traps it later can't
+      // break the recording) and clip a captured message like the DOM capture;
+      // the recording is wrapped so it can never break the page's own console
+      // call. Headless CONSOLE_INSTALL_JS parity.
+      const nowFn = Date.now;
+      const MAX = 4096;
       const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
       ["log", "error", "warn", "info", "debug"].forEach((m) => {
         console[m] = (...args) => {
-          window.__webpilot_console.push({
-            level: m,
-            message: args.map((a) => { try { return String(a); } catch { return "[object]"; } }).join(" "),
-            timestamp: Date.now(),
-          });
-          if (window.__webpilot_console.length > cap) window.__webpilot_console.shift();
+          try {
+            let msg = args.map((a) => { try { return String(a); } catch { return "[object]"; } }).join(" ");
+            if (msg.length > MAX) msg = msg.slice(0, MAX) + "…[" + msg.length + " chars]";
+            const buf = window.__webpilot_console;
+            buf.push({ level: m, message: msg, timestamp: nowFn() });
+            // `truncated` is driven by this eviction flag, not `length >= cap`.
+            if (buf.length > cap) { buf.shift(); window.__webpilot_console_dropped = true; }
+          } catch (e) {}
           orig[m].apply(console, args);
         };
       });
@@ -103,35 +111,46 @@ async function injectNetworkMonitoring(tabId) {
       if (window.__webpilot_network_active) return;
       window.__webpilot_network_active = true;
       window.__webpilot_network = [];
+      // Intrinsics captured at install (a page that booby-traps Date.now /
+      // performance.now later can't break the recording), a clip like the DOM
+      // capture (a giant data: URL must not balloon the buffer/payload), and
+      // every recording wrapped so it can never break the page's own fetch/XHR.
+      // Headless NETWORK_INSTALL_JS parity.
+      const nowFn = Date.now;
+      const perfNow = () => { try { return performance.now(); } catch (e) { return 0; } };
+      const MAX = 4096;
+      const clip = (s) => s.length > MAX ? s.slice(0, MAX) + "…[" + s.length + " chars]" : s;
       const origFetch = window.fetch;
       window.fetch = function (...args) {
-        const [resource, config] = args;
-        // `fetch` accepts a string/URL or a Request object. A Request carries its
-        // own url and method, which a `config` override can still trump. Reading
-        // `String(resource)` would log "[object Request]" and lose the method.
-        const isReq = typeof Request !== "undefined" && resource instanceof Request;
-        const url = isReq ? resource.url : String(resource);
-        const method = config?.method || (isReq ? resource.method : "GET");
-        const t0 = performance.now();
-        // Record the request in-flight immediately (no status, duration 0) so a
-        // read DURING a slow request sees it instead of an empty buffer; fill in
-        // status/error/duration on completion by mutating this same entry.
-        const entry = { type: "fetch", url, method, duration_ms: 0, timestamp: Date.now() };
-        window.__webpilot_network.push(entry);
-        if (window.__webpilot_network.length > cap) window.__webpilot_network.shift();
-        return origFetch.apply(this, args).then((response) => {
-          entry.status = response.status;
-          entry.duration_ms = Math.round(performance.now() - t0);
+        let entry = null, t0 = 0;
+        try {
+          const [resource, config] = args;
+          // `fetch` accepts a string/URL or a Request object. A Request carries its
+          // own url and method, which a `config` override can still trump. Reading
+          // `String(resource)` would log "[object Request]" and lose the method.
+          const isReq = typeof Request !== "undefined" && resource instanceof Request;
+          const url = isReq ? resource.url : String(resource);
+          const method = config?.method || (isReq ? resource.method : "GET");
+          t0 = perfNow();
+          // Record the request in-flight immediately (no status, duration 0) so a
+          // read DURING a slow request sees it instead of an empty buffer; fill in
+          // status/error/duration on completion by mutating this same entry.
+          entry = { type: "fetch", url: clip(url), method, duration_ms: 0, timestamp: nowFn() };
+          const buf = window.__webpilot_network;
+          buf.push(entry);
+          if (buf.length > cap) { buf.shift(); window.__webpilot_network_dropped = true; }
+        } catch (e) { entry = null; }
+        const p = origFetch.apply(this, args);
+        if (!entry) return p;
+        return p.then((response) => {
           // Re-stamp at completion: `--since` polling filters on timestamp, and the
           // start time the entry carried while in-flight sits before a cursor taken
           // after the request began, which would hide the resolved entry from a
           // poller. A plain read (no `since`) shows it either way.
-          entry.timestamp = Date.now();
+          try { entry.status = response.status; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
           return response;
         }).catch((err) => {
-          entry.error = err.message;
-          entry.duration_ms = Math.round(performance.now() - t0);
-          entry.timestamp = Date.now();
+          try { entry.error = err.message; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
           throw err;
         });
       };
@@ -143,30 +162,31 @@ async function injectNetworkMonitoring(tabId) {
       const origSend = xhrProto.send;
       const xhrMeta = new WeakMap();
       xhrProto.open = function (m, u, ...a) {
-        xhrMeta.set(this, { method: m, url: String(u) });
+        try { xhrMeta.set(this, { method: m, url: String(u) }); } catch (e) {}
         return origOpen.apply(this, [m, u, ...a]);
       };
       xhrProto.send = function (...a) {
-        const t0 = performance.now();
-        const meta = xhrMeta.get(this) || {};
-        // Record in-flight at send (no status, duration 0), updated on loadend —
-        // so an in-flight XHR is visible to a read, like fetch.
-        const entry = { type: "xhr", url: meta.url || "", method: meta.method || "GET", duration_ms: 0, timestamp: Date.now() };
-        window.__webpilot_network.push(entry);
-        if (window.__webpilot_network.length > cap) window.__webpilot_network.shift();
-        // status===0 covers abort, timeout AND network/CORS failure alike, so
-        // read the actual terminal event rather than labelling every one a
-        // "Network error" — a request the page itself cancelled is not one.
-        let terminalError;
-        this.addEventListener("abort", () => { terminalError = "aborted"; }, { once: true });
-        this.addEventListener("timeout", () => { terminalError = "timeout"; }, { once: true });
-        this.addEventListener("error", () => { terminalError = "Network error"; }, { once: true });
-        this.addEventListener("loadend", () => {
-          entry.status = this.status || undefined;
-          entry.error = terminalError;
-          entry.duration_ms = Math.round(performance.now() - t0);
-          entry.timestamp = Date.now();
-        }, { once: true });
+        let entry = null, t0 = 0;
+        try {
+          t0 = perfNow();
+          const meta = xhrMeta.get(this) || {};
+          // Record in-flight at send (no status, duration 0), updated on loadend —
+          // so an in-flight XHR is visible to a read, like fetch.
+          entry = { type: "xhr", url: clip(meta.url || ""), method: meta.method || "GET", duration_ms: 0, timestamp: nowFn() };
+          const buf = window.__webpilot_network;
+          buf.push(entry);
+          if (buf.length > cap) { buf.shift(); window.__webpilot_network_dropped = true; }
+          // status===0 covers abort, timeout AND network/CORS failure alike, so
+          // read the actual terminal event rather than labelling every one a
+          // "Network error" — a request the page itself cancelled is not one.
+          let terminalError;
+          this.addEventListener("abort", () => { terminalError = "aborted"; }, { once: true });
+          this.addEventListener("timeout", () => { terminalError = "timeout"; }, { once: true });
+          this.addEventListener("error", () => { terminalError = "Network error"; }, { once: true });
+          this.addEventListener("loadend", () => {
+            try { entry.status = this.status || undefined; entry.error = terminalError; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
+          }, { once: true });
+        } catch (e) { entry = null; }
         return origSend.apply(this, a);
       };
     },
@@ -370,15 +390,15 @@ async function handleConsoleRead(since) {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
       world: "MAIN",
-      args: [since || 0, ["log", "warn", "error", "info", "debug"], MONITOR_BUFFER_CAP],
+      args: [since || 0, ["log", "warn", "error", "info", "debug"]],
       // Filter by `timestamp >= since` (the incremental cursor) AND sanitize to
       // the same shape headless returns: drop any entry whose `level` is not a
       // known ConsoleLevel (the MAIN-world buffer is page-reachable and only
       // best-effort), and coerce `message` to a string — so the CLI deserializes
       // an identical `Vec<ConsoleEntry>` in both modes and a tampered entry can't
       // break the read or leak a wire shape headless would never emit. `truncated`
-      // reports a full buffer (older entries possibly evicted), like headless.
-      func: (s, levels, cap) => {
+      // is the eviction flag (older entries actually dropped), like headless.
+      func: (s, levels) => {
         // `undefined` (no hook in THIS document — the re-arm was suppressed by
         // an eval policy deny, headless parity) is distinct from empty.
         const all = window.__webpilot_console;
@@ -395,7 +415,9 @@ async function handleConsoleRead(since) {
               // malformed-reply error.
               timestamp: typeof e.timestamp === "number" ? e.timestamp : 0,
             })),
-          truncated: all.length >= cap,
+          // Driven by the eviction flag, not `length >= cap` (headless parity):
+          // a buffer at exactly the cap with nothing dropped isn't truncated.
+          truncated: window.__webpilot_console_dropped === true,
         };
       },
     });
@@ -430,6 +452,7 @@ async function handleConsoleClear() {
       func: () => {
         if (window.__webpilot_console === undefined) return false;
         window.__webpilot_console = [];
+        window.__webpilot_console_dropped = false;
         return true;
       },
     });
@@ -480,7 +503,7 @@ async function handleNetworkRead(since) {
       // too — a present-but-wrong-typed `status:"200"` (string) or out-of-`u32`
       // value would otherwise pass and fail the CLI's `Option<u32>` decode as a
       // misleading ConnectionLost, where headless's per-entry `.ok()` just drops it.
-      func: (s, cap) => {
+      func: (s) => {
         // `undefined` (no hook in THIS document) is distinct from empty —
         // headless parity, see handleConsoleRead.
         const all = window.__webpilot_network;
@@ -499,10 +522,11 @@ async function handleNetworkRead(since) {
                 (Number.isInteger(e.status) && e.status >= 0 && e.status <= 0xffffffff)) &&
               (e.error == null || typeof e.error === "string"),
           ),
-          truncated: all.length >= cap,
+          // The eviction flag, not `length >= cap` (headless parity).
+          truncated: window.__webpilot_network_dropped === true,
         };
       },
-      args: [since || 0, MONITOR_BUFFER_CAP],
+      args: [since || 0],
     });
     const out = r?.[0]?.result || { entries: [], truncated: false };
     if (out.missing) {
@@ -528,6 +552,7 @@ async function handleNetworkClear() {
       func: () => {
         if (window.__webpilot_network === undefined) return false;
         window.__webpilot_network = [];
+        window.__webpilot_network_dropped = false;
         return true;
       },
     });
