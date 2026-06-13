@@ -487,6 +487,10 @@ impl InteractiveElement {
         match (self.tag.as_str(), self.semantics.input_type.as_deref()) {
             ("a", _) if self.semantics.href.is_some() => Some("link"),
             ("button", _) => Some("button"),
+            // A submit/button/reset input IS a button in every sense — it's in
+            // the interactive set and renders `type=submit`, but without this arm
+            // `find --role button` silently missed it.
+            ("input", Some("submit" | "button" | "reset")) => Some("button"),
             ("input", Some("text" | "search" | "email" | "url" | "tel")) => Some("textbox"),
             ("input", Some("checkbox")) => Some("checkbox"),
             ("input", Some("radio")) => Some("radio"),
@@ -801,6 +805,45 @@ impl DomSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn input_el(input_type: &str) -> InteractiveElement {
+        InteractiveElement {
+            index: 1,
+            tag: "input".into(),
+            id: None,
+            role: None,
+            text: String::new(),
+            semantics: ElementSemantics {
+                input_type: Some(input_type.into()),
+                ..Default::default()
+            },
+            state: ElementState::default(),
+            spatial: ElementSpatial::default(),
+        }
+    }
+
+    #[test]
+    fn submit_button_reset_inputs_have_an_implicit_button_role() {
+        // A submit/button/reset input IS a button — `find --role button` must
+        // match it. A text input stays a textbox; an unknown type has no role.
+        for t in ["submit", "button", "reset"] {
+            assert_eq!(
+                input_el(t).implicit_role(),
+                Some("button"),
+                "input type={t} must be a button"
+            );
+            let f = ElementFilter {
+                role: Some("button".into()),
+                ..Default::default()
+            };
+            assert!(
+                input_el(t).matches(&f),
+                "find --role button must match input type={t}"
+            );
+        }
+        assert_eq!(input_el("text").implicit_role(), Some("textbox"));
+        assert_eq!(input_el("color").implicit_role(), None);
+    }
 
     #[test]
     fn console_level_parses_lowercase() {

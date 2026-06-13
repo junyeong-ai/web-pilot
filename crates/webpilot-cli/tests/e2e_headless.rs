@@ -1034,9 +1034,10 @@ fn headless_behavioral_flow() {
         .unwrap_or("");
     assert_eq!(
         sf_landmark,
-        "nav",
+        "navigation",
         "a control inside an open shadow root must inherit the landmark wrapping \
-         its host (flat-tree walk crosses the shadow boundary): {}",
+         its host (flat-tree walk crosses the shadow boundary), reported by its \
+         canonical ARIA role: {}",
         stdout(&cap_sf_after)
     );
     // The REVERSE projection: a slotted LIGHT control renders inside a SHADOW
@@ -1051,9 +1052,27 @@ fn headless_behavioral_flow() {
         .unwrap_or("");
     assert_eq!(
         slotted_landmark,
-        "aside",
-        "a slotted control must inherit its flat-tree (shadow-side) landmark, \
-         not its light ancestors': {}",
+        "complementary",
+        "a slotted control must inherit its flat-tree (shadow-side) landmark \
+         (`<aside>` → @complementary), not its light ancestors': {}",
+        stdout(&cap_sf_after)
+    );
+    // A landmark expressed as a `role=` on a plain element (the common
+    // design-system pattern, e.g. `<div role="navigation">`) must be detected
+    // just like the `<nav>` tag — both report the canonical @navigation. Before
+    // the ARIA-role landmark set, a `role=`-only landmark was missed entirely.
+    let aria_nav_landmark = sf_json["elements"]
+        .as_array()
+        .expect("elements array")
+        .iter()
+        .find(|e| e["id"] == "arianavbtn")
+        .and_then(|e| e["landmark"].as_str())
+        .unwrap_or("");
+    assert_eq!(
+        aria_nav_landmark,
+        "navigation",
+        "a control inside `<div role=\"navigation\">` must report @navigation, \
+         not be missed because the landmark was a role= rather than a <nav> tag: {}",
         stdout(&cap_sf_after)
     );
 

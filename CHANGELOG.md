@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.221] - 2026-06-13
+
+### Fixed
+
+- **`find --role button` matches submit/button/reset inputs.** An `<input
+  type="submit">` is a button in every sense — captured and rendered
+  `type=submit` — but `implicit_role()` had no arm for it, so `find --role
+  button` silently missed it. Added (`submit`/`button`/`reset` → `button`).
+- **`@landmark` detects ARIA landmark roles, not just semantic tags, and
+  reports a single canonical vocabulary.** A `<div role="navigation">` (the
+  common design-system pattern) was missed entirely — the landmark walk only
+  matched its set against tag names, where `role="navigation"` isn't a tag.
+  And a `<nav>` reported `@nav` (the HTML tag) while a `role=` reported the
+  ARIA name — two vocabularies for one concept. Now both the semantic tag and
+  an explicit `role=` map to the canonical ARIA landmark **role** (`<nav>` and
+  `<div role="navigation">` both → `@navigation`; `<footer>` → `@contentinfo`,
+  `<aside>` → `@complementary`, `<header>` → `@banner`), matching the
+  accessibility tree's own vocabulary. (`role="region"` needs an
+  accessible-name check to be a landmark, so it stays omitted — best-effort,
+  like the sectioning-context nuance of header/footer.) The dead `<banner>`
+  tag check is gone (`role="banner"` still works). Pinned in e2e (a
+  `role="navigation"` div reports `@navigation`) and unit (submit input role).
+
 ## [0.4.220] - 2026-06-13
 
 ### Fixed

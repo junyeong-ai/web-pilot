@@ -419,10 +419,24 @@
     return null;
   }
 
+  // Report the canonical ARIA LANDMARK ROLE, mapping both the semantic tag and
+  // an explicit `role=` to the same name — so `<nav>` and `<div role="navigation">`
+  // both surface `@navigation`. A `role=` on a plain element is the common
+  // design-system pattern and was previously missed entirely (the set only held
+  // tag names), and `<nav>`-style tags reported the HTML tag (`@nav`) while a
+  // `role=` reported the ARIA name — two vocabularies for one concept. Now the
+  // hint is one consistent set matching the accessibility tree's own landmark
+  // names. (`region` needs an accessible-name check to be a landmark, so it is
+  // intentionally omitted — best-effort, like the sectioning-context nuance of
+  // header/footer.)
+  const LANDMARK_TAG_ROLE = {
+    nav: "navigation", main: "main", header: "banner", footer: "contentinfo",
+    aside: "complementary", form: "form", search: "search", dialog: "dialog",
+  };
+  const LANDMARK_ROLES = new Set([
+    "navigation", "main", "banner", "contentinfo", "complementary", "form", "search", "dialog",
+  ]);
   function findLandmark(el) {
-    const landmarks = new Set([
-      "nav", "main", "footer", "header", "aside", "banner", "form", "dialog", "search",
-    ]);
     // Walk the FLAT tree (crossing open shadow boundaries to the host), not just
     // `parentElement`: a control inside a shadow root still sits within whatever
     // landmark wraps its host in the outer tree, but `parentElement` returns null
@@ -431,9 +445,9 @@
     let p = flatTreeParent(el);
     while (p && p !== document.body) {
       const role = p.getAttribute("role");
-      if (role && landmarks.has(role)) return role;
-      const tag = p.tagName.toLowerCase();
-      if (landmarks.has(tag)) return tag;
+      if (role && LANDMARK_ROLES.has(role.toLowerCase())) return role.toLowerCase();
+      const mapped = LANDMARK_TAG_ROLE[p.tagName.toLowerCase()];
+      if (mapped) return mapped;
       p = flatTreeParent(p);
     }
     return null;

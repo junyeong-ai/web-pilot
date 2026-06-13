@@ -36,7 +36,7 @@ webpilot capture --include dom                                # 4. verify (check
 ```
 *[1] input#query "Search" type=text autocomplete=search @search
 [2] button "Go" @search
-[3] a "Home" href="/" @nav
+[3] a "Home" href="/" @navigation
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 ```

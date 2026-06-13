@@ -27,6 +27,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <p id="wsp">whitespace<br>collapse<br>marker</p>
 <div id="slothost2"><button id="slottedbtn" slot="t">SB</button></div>
 <nav><div id="shadowhost"><span slot="s">SL</span></div></nav>
+<div role="navigation"><button id="arianavbtn" onclick="">in aria nav</button></div>
 <iframe src="/frame" name="innerfr"></iframe>
 <button id="dlg" onclick="window.__dlg=[confirm('c?'), prompt('p?', 'dv')]; document.title='dlg-done'">dialogs</button>
 <button id="mkif" onclick="const f=document.createElement('iframe'); f.src='/latealert'; document.body.appendChild(f)">mk iframe</button>
