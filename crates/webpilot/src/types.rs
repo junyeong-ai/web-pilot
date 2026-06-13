@@ -499,13 +499,13 @@ impl InteractiveElement {
             ("input", Some("range")) => Some("slider"),
             ("select", _) => Some("combobox"),
             ("textarea", _) => Some("textbox"),
-            ("img", _) => Some("img"),
-            ("nav", _) => Some("navigation"),
-            ("main", _) => Some("main"),
-            ("header", _) => Some("banner"),
-            ("footer", _) => Some("contentinfo"),
-            ("aside", _) => Some("complementary"),
-            ("form", _) => Some("form"),
+            // Interactive (widget) roles only. `implicit_role`'s sole caller is
+            // `find`'s `matches`, which filters the INTERACTIVE element set — a
+            // landmark container (`<nav>`/`<main>`/`<header>`/`<footer>`/`<aside>`/
+            // `<form>`) or a bare `<img>` is never in that set, so mapping them
+            // here would advertise `--role navigation`/`--role img` as findable
+            // when they can never match. Landmarks are surfaced via `@landmark`
+            // hints and navigated with `frame`, not `find --role`.
             _ => None,
         }
     }
@@ -527,35 +527,35 @@ impl InteractiveElement {
             }
         }
         if let Some(ref text) = filter.text {
-            let lower = text.to_lowercase();
-            let in_text = self.text.to_lowercase().contains(&lower);
+            let needle = norm_ws(text);
+            let in_text = norm_ws(&self.text).contains(&needle);
             let in_name = self
                 .semantics
                 .name
                 .as_ref()
-                .is_some_and(|n| n.to_lowercase().contains(&lower));
+                .is_some_and(|n| norm_ws(n).contains(&needle));
             if !in_text && !in_name {
                 return false;
             }
         }
         if let Some(ref label) = filter.label {
-            let lower = label.to_lowercase();
+            let needle = norm_ws(label);
             if !self
                 .semantics
                 .label
                 .as_ref()
-                .is_some_and(|l| l.to_lowercase().contains(&lower))
+                .is_some_and(|l| norm_ws(l).contains(&needle))
             {
                 return false;
             }
         }
         if let Some(ref ph) = filter.placeholder {
-            let lower = ph.to_lowercase();
+            let needle = norm_ws(ph);
             if !self
                 .semantics
                 .placeholder
                 .as_ref()
-                .is_some_and(|p| p.to_lowercase().contains(&lower))
+                .is_some_and(|p| norm_ws(p).contains(&needle))
             {
                 return false;
             }
@@ -567,6 +567,22 @@ impl InteractiveElement {
         }
         true
     }
+}
+
+/// Normalize a string for `find` text matching: lowercase, and collapse every
+/// run of whitespace (newlines and indentation included) to a single space,
+/// trimming the ends. Applied to BOTH sides of every `--text`/`--label`/
+/// `--placeholder` comparison so a query keyed on the RENDERED text
+/// ("First Name") matches a value whose source HTML carried newlines or
+/// indentation ("First\n        Name") — the browser renders both identically.
+/// `--text` already compared a pre-collapsed snapshot value, but `--label` and
+/// `--placeholder` matched raw values, so normalizing here makes all three
+/// consistent at one definition.
+fn norm_ws(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 // ── Human-readable serialization ─────────────────────────────────────────────
@@ -844,6 +860,42 @@ mod tests {
         }
         assert_eq!(input_el("text").implicit_role(), Some("textbox"));
         assert_eq!(input_el("color").implicit_role(), None);
+    }
+
+    #[test]
+    fn find_label_and_placeholder_match_collapsed_whitespace() {
+        // A label/placeholder whose source HTML carried newlines/indentation must
+        // match a query keyed on the RENDERED (whitespace-collapsed) text, the
+        // same way `--text` already does — the browser renders both identically.
+        // Before normalization the raw value ("First\n        Name") missed the
+        // natural query ("First Name").
+        let mut el = input_el("text");
+        el.semantics.label = Some("First\n        Name".into());
+        el.semantics.placeholder = Some("Search  the  site".into());
+        assert!(
+            el.matches(&ElementFilter {
+                label: Some("First Name".into()),
+                ..Default::default()
+            }),
+            "find --label must match the rendered, collapsed label text"
+        );
+        assert!(
+            el.matches(&ElementFilter {
+                placeholder: Some("Search the site".into()),
+                ..Default::default()
+            }),
+            "find --placeholder must match the rendered, collapsed placeholder text"
+        );
+        // Case-insensitive, like the other text filters.
+        assert!(el.matches(&ElementFilter {
+            label: Some("first name".into()),
+            ..Default::default()
+        }));
+        // A genuinely different query still fails.
+        assert!(!el.matches(&ElementFilter {
+            label: Some("Last Name".into()),
+            ..Default::default()
+        }));
     }
 
     #[test]

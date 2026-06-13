@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.225] - 2026-06-13
+
+### Fixed
+
+A sweep of `find` and the frame-scoped capture errors (the v0.4.224 fixes and the
+console/network monitor read path were re-swept and came back clean). Each
+verified live.
+
+- **`find --label` / `find --placeholder` now match the rendered text.** They
+  compared the RAW label/placeholder value, so a query keyed on what the browser
+  renders ("First Name") missed a value whose source HTML carried newlines or
+  indentation ("First\n        Name") — while `find --text` collapsed whitespace
+  and matched. All three filters now normalize whitespace (and case) at one
+  definition, so they behave consistently.
+- **The "main-frame only" errors now point at the right command.** While an
+  iframe is active, `capture --include screenshot`/`--annotate`/`pdf` and the
+  viewport actions told the agent to recover with `webpilot frame switch main` —
+  which resolves as "find a frame *named* main" and fails `FrameNotFound`. The
+  guidance now names the actual command, `webpilot frame main`, in both modes.
+- **`find --role` no longer advertises landmark/`img` roles it can never match.**
+  `implicit_role` mapped `<nav>`/`<main>`/`<header>`/`<footer>`/`<aside>`/`<form>`/
+  `<img>` to roles, but `find` filters the interactive element set, which never
+  contains those containers — a false affordance. Those arms are dropped;
+  landmarks remain surfaced via `@landmark` hints and navigated with `frame`.
+
 ## [0.4.224] - 2026-06-13
 
 ### Fixed

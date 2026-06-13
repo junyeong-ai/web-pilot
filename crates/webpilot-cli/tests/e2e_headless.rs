@@ -919,7 +919,12 @@ fn headless_behavioral_flow() {
         "window.__sk=null; const spi=document.getElementById('q'); spi.value=''; spi.focus(); \
          spi.addEventListener('keydown',e=>{window.__sk=e.key},{once:true}); 'ok'",
     ]);
-    assert_eq!(code(&seed_space), 0, "space seed eval failed: {}", stdout(&seed_space));
+    assert_eq!(
+        code(&seed_space),
+        0,
+        "space seed eval failed: {}",
+        stdout(&seed_space)
+    );
     assert_eq!(
         code(&fx.run(&["action", "key-press", "Space"])),
         0,

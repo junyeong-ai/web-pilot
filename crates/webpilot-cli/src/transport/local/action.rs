@@ -388,7 +388,7 @@ impl LocalTransport {
         if self.active_frame_id.lock().await.is_some() {
             return Err(WebPilotError::InvalidArgument {
                 detail: format!(
-                    "'{kind}' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"
+                    "'{kind}' targets the main frame only and an iframe is active. Switch back first: webpilot frame main"
                 ),
             }
             .into());

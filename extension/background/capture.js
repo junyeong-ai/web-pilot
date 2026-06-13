@@ -74,7 +74,7 @@ async function handleCapture(command) {
   // returning an unannotated screenshot with no signal — headless parity
   // (`require_main_frame`); both fail loud, identically.
   if (opts.annotate && activeFrameId !== 0) {
-    return topErr(err("InvalidArgument", "'capture --annotate' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
+    return topErr(err("InvalidArgument", "'capture --annotate' targets the main frame only and an iframe is active. Switch back first: webpilot frame main"));
   }
   // `Page.printToPDF` is inherently a top-level operation — there is no
   // frame-scoped print — so a PDF taken while an iframe is active would silently
@@ -82,7 +82,7 @@ async function handleCapture(command) {
   // DOM/header describe the iframe). Refuse it like `--annotate` (headless
   // parity), so the agent switches back to main rather than getting the wrong page.
   if (include.has("pdf") && activeFrameId !== 0) {
-    return topErr(err("InvalidArgument", "'capture --include pdf' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
+    return topErr(err("InvalidArgument", "'capture --include pdf' targets the main frame only and an iframe is active. Switch back first: webpilot frame main"));
   }
   // A screenshot-ONLY capture while an iframe is active refuses loud (success
   // with no artifact would be a lie); with frame-scoped outputs alongside it
@@ -91,7 +91,7 @@ async function handleCapture(command) {
     include.has("screenshot") && activeFrameId !== 0
     && !include.has("dom") && !include.has("text") && !include.has("accessibility")
   ) {
-    return topErr(err("InvalidArgument", "'capture --include screenshot' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main"));
+    return topErr(err("InvalidArgument", "'capture --include screenshot' targets the main frame only and an iframe is active. Switch back first: webpilot frame main"));
   }
   const result = {
     type: "Capture",
@@ -241,7 +241,7 @@ async function handleCapture(command) {
   // (headless parity). `--annotate` in a frame was refused above too.
   if (include.has("screenshot") && activeFrameId !== 0) {
     result.screenshot_error =
-      "screenshots are main-frame only and an iframe is active. Switch back first: webpilot frame switch main";
+      "screenshots are main-frame only and an iframe is active. Switch back first: webpilot frame main";
   } else if (include.has("screenshot") || opts.annotate) {
     try {
       // CDP captures the target's own surface, so a screenshot never depends

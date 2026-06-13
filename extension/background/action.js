@@ -54,7 +54,7 @@ async function handleAction(command) {
       success: false,
       error: err(
         "InvalidArgument",
-        `'${action.kind}' targets the main frame only and an iframe is active. Switch back first: webpilot frame switch main`,
+        `'${action.kind}' targets the main frame only and an iframe is active. Switch back first: webpilot frame main`,
       ),
     };
   }
