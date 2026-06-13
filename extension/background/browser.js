@@ -27,34 +27,90 @@ function urlGlobMatch(pattern, url) {
 // ── Tabs ───────────────────────────────────────────────────────────────────
 
 async function handleTabNew(url) {
-  const created = await chrome.tabs.create({ url, active: true });
-  setActiveTabId(created.id);
-  // A fresh tab has its own frame tree — drop any frame scope.
-  setActiveFrameId(0);
-  // Settle on a ready page and report its real, post-redirect URL/title — `tab
-  // new` lands like `navigate`, so the agent's next action cannot race the new
-  // tab's load and a redirect is reflected, not the requested URL echoed back.
-  // `adoptedDocumentReady` waits to leave about:blank and parse (the headless
-  // `wait_navigation_settled(before_url: "about:blank")` twin); best-effort, so
-  // a tab that never leaves about:blank returns at the deadline.
-  await adoptedDocumentReady(created.id, navigationTimeoutMs());
-  // Armed monitors follow the agent's working tab onto the new one (headless
-  // parity) — done after the page settles so the hooks inject into the real
-  // document, not the transient about:blank.
-  await rearmMonitors(created.id);
-  const settled = await chrome.tabs.get(created.id).catch(() => null);
-  return {
-    type: "Action",
-    success: true,
-    new_tab: {
-      id: String(created.id),
-      url: settled?.url || created.url || url,
-      // `??`: a settled tab whose document is untitled reports the honest ""
-      // — `||` would resurrect the transient creation-time title.
-      title: settled?.title ?? created.title ?? "",
-      active: true,
-    },
+  // A URL that doesn't parse is a typed InvalidArgument (exit 7), matching
+  // headless, where CDP `Target.createTarget` rejects it as invalid params —
+  // not the generic chrome.tabs.create throw that reads as Other (exit 1).
+  // Parse (not prefix-match): `new URL("http://")` throws, `about:blank` is
+  // valid in both modes.
+  try {
+    new URL(url);
+  } catch {
+    return {
+      type: "Action",
+      success: false,
+      error: err("InvalidArgument", `invalid URL for tab new: ${url}`),
+    };
+  }
+  // Buffer main-frame load errors from BEFORE the tab exists: a refused
+  // connection fails within milliseconds, so a listener registered after
+  // create() resolves could miss it. Correlate by tab id afterward.
+  // ERR_ABORTED is excluded — headless `navigate` treats it as pending, not
+  // failure (a page can abort-and-recover), and `tab new` must agree.
+  const navErrors = [];
+  const onErr = (d) => {
+    if (d.frameId === 0 && d.error !== "net::ERR_ABORTED") navErrors.push(d);
   };
+  chrome.webNavigation.onErrorOccurred.addListener(onErr);
+  try {
+    const created = await chrome.tabs.create({ url, active: true });
+    setActiveTabId(created.id);
+    // A fresh tab has its own frame tree — drop any frame scope.
+    setActiveFrameId(0);
+    // Settle on a ready page and report its real, post-redirect URL/title — `tab
+    // new` lands like `navigate`, so the agent's next action cannot race the new
+    // tab's load and a redirect is reflected, not the requested URL echoed back.
+    // `adoptedDocumentReady` waits to leave about:blank and parse (the headless
+    // `wait_navigation_settled(before_url: "about:blank")` twin); best-effort, so
+    // a tab that never leaves about:blank returns at the deadline.
+    await adoptedDocumentReady(created.id, navigationTimeoutMs());
+    // A load that FAILED (refused connection, DNS) leaves the new tab on
+    // Chrome's error page — reporting success there is the lie `navigate`
+    // already refuses (it returns NavigationFailed, exit 8), and `tab new` is
+    // the same effect under the same policy gate, so it must agree.
+    const failed = navErrors.find((d) => d.tabId === created.id);
+    if (failed) {
+      return {
+        type: "Action",
+        success: false,
+        error: err("NavigationFailed", `Navigation failed: ${failed.error}`, {
+          url,
+          reason: failed.error,
+        }),
+      };
+    }
+    // Armed monitors follow the agent's working tab onto the new one (headless
+    // parity) — done after the page settles so the hooks inject into the real
+    // document, not the transient about:blank.
+    await rearmMonitors(created.id);
+    const settled = await chrome.tabs.get(created.id).catch(() => null);
+    // The tab CLOSED during the settle (a self-closing page, the user) — a
+    // success carrying a new_tab that no longer exists would send the agent
+    // acting on a ghost. tabs.get fails only for a gone tab, so null here is
+    // tab-gone truth: typed TabNotFound (exit 4 → recover via `tab`).
+    if (!settled) {
+      return {
+        type: "Action",
+        success: false,
+        error: err("TabNotFound", `the new tab closed before it settled`, {
+          tab_id: String(created.id),
+        }),
+      };
+    }
+    return {
+      type: "Action",
+      success: true,
+      new_tab: {
+        id: String(created.id),
+        url: settled.url || created.url || url,
+        // `??`: a settled tab whose document is untitled reports the honest ""
+        // — `||` would resurrect the transient creation-time title.
+        title: settled.title ?? created.title ?? "",
+        active: true,
+      },
+    };
+  } finally {
+    chrome.webNavigation.onErrorOccurred.removeListener(onErr);
+  }
 }
 
 // chrome.tabs ids are non-negative integers. `parseInt` is too lenient — it

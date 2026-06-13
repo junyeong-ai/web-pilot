@@ -196,20 +196,33 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
 async function adoptedDocumentReady(tabId, timeoutMs) {
   const isReal = (u) => u && u !== "about:blank";
   await new Promise((resolve) => {
-    // Every settle path — commit, already-real, AND timeout — routes through
-    // `done()` so the listener is always removed; a bare `setTimeout(resolve)`
-    // would leak `onCommitted` on the timeout path (a popup that stays blank).
+    // Every settle path — commit, already-real, error, AND timeout — routes
+    // through `done()` so both listeners are always removed; a bare
+    // `setTimeout(resolve)` would leak them on the timeout path (a popup that
+    // stays blank).
     let timer;
     const done = () => {
       clearTimeout(timer);
       chrome.webNavigation.onCommitted.removeListener(onCommitted);
+      chrome.webNavigation.onErrorOccurred.removeListener(onError);
       resolve();
     };
     const onCommitted = (d) => {
       if (d.tabId === tabId && d.frameId === 0 && isReal(d.url)) done();
     };
+    // A main-frame load that ERRORED (refused connection, DNS) settles the
+    // wait too: the tab is on Chrome's error page, not about:blank, and
+    // sitting out the full navigation timeout waiting for a commit that net
+    // errors don't always emit is pure latency (the headless settle predicate
+    // returns immediately on the same failure). ERR_ABORTED is excluded — it
+    // is pending, not terminal (a page can abort-and-recover), exactly as
+    // headless navigation treats it.
+    const onError = (d) => {
+      if (d.tabId === tabId && d.frameId === 0 && d.error !== "net::ERR_ABORTED") done();
+    };
     timer = setTimeout(done, timeoutMs);
     chrome.webNavigation.onCommitted.addListener(onCommitted);
+    chrome.webNavigation.onErrorOccurred.addListener(onError);
     chrome.tabs.get(tabId).then((tab) => {
       if (tab && isReal(tab.url)) done();
     }).catch(() => {});

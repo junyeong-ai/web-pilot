@@ -92,6 +92,26 @@ impl LocalTransport {
         }))
     }
 
+    /// A failed tab operation may be tab-gone truth in disguise — the target
+    /// closed between `ensure_tab_exists` and the CDP call. Re-query the live
+    /// targets: absent → typed `TabNotFound` (exit 4 → recover via `tab`),
+    /// present → the original error (a genuinely failed operation). The same
+    /// split browser mode's catch arms already make.
+    async fn tab_gone_or(&self, e: anyhow::Error, tab_id: &str) -> Result<ResponseData> {
+        if let Ok(targets) = self.browser.get_targets().await
+            && !targets
+                .iter()
+                .any(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(tab_id))
+        {
+            return Ok(ResponseData::Error {
+                error: WebPilotError::TabNotFound {
+                    tab_id: tab_id.to_string(),
+                },
+            });
+        }
+        Err(e)
+    }
+
     pub(super) async fn do_tab_switch(
         &mut self,
         tab_id: &str,
@@ -101,10 +121,17 @@ impl LocalTransport {
             return Ok(not_found);
         }
 
-        self.browser
+        if let Err(e) = self
+            .browser
             .send("Target.activateTarget", Some(json!({"targetId": tab_id})))
-            .await?;
-        let new_page = connect_to_page(&self.ws_url, tab_id).await?;
+            .await
+        {
+            return self.tab_gone_or(e, tab_id).await;
+        }
+        let new_page = match connect_to_page(&self.ws_url, tab_id).await {
+            Ok(p) => p,
+            Err(e) => return self.tab_gone_or(e, tab_id).await,
+        };
         self.page = new_page;
         self.target_id = tab_id.to_string();
         *self.active_frame_id.lock().await = None;
@@ -226,6 +253,37 @@ impl LocalTransport {
         // still returns, carrying whatever URL it reached.
         let deadline = std::time::Instant::now() + webpilot::settings::timeouts().navigation;
         super::wait_navigation_settled(&self.page, None, "about:blank", deadline).await;
+        // A load that FAILED (refused connection, DNS) leaves the new tab on
+        // Chrome's error page — CDP marks it: the main frame carries
+        // `unreachableUrl`. Reporting success there is the lie `navigate`
+        // already refuses (NavigationFailed, exit 8); `tab new` is the same
+        // effect under the same policy gate, so it must agree. A tab that
+        // CLOSED during the settle (a self-closing page) is the root-cause
+        // TabNotFound instead.
+        match self.page.send("Page.getFrameTree", None).await {
+            Ok(tree) => {
+                if let Some(unreachable) = tree
+                    .pointer("/frameTree/frame/unreachableUrl")
+                    .and_then(Value::as_str)
+                    .filter(|u| !u.is_empty())
+                {
+                    return Ok(ResponseData::Error {
+                        error: WebPilotError::NavigationFailed {
+                            url: unreachable.to_string(),
+                            reason: "the new tab landed on Chrome's error page (unreachable URL)"
+                                .into(),
+                        },
+                    });
+                }
+            }
+            Err(e) => {
+                if let Ok(r) = self.tab_gone_or(e, &target_id).await {
+                    return Ok(r);
+                }
+                // The probe itself failed on a live tab — fall through to the
+                // best-effort URL/title reads below, which degrade the same way.
+            }
+        }
         // Re-arm monitors on the settled new document — the early arm in
         // `do_tab_switch` was skipped (`false`) because this load wipes it.
         self.reinstall_monitors().await;
@@ -274,9 +332,13 @@ impl LocalTransport {
         if self.target_id.as_str() == tab_id {
             super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
         }
-        self.browser
+        if let Err(e) = self
+            .browser
             .send("Target.closeTarget", Some(json!({"targetId": tab_id})))
-            .await?;
+            .await
+        {
+            return self.tab_gone_or(e, tab_id).await;
+        }
         Ok(action_success(None))
     }
 

@@ -168,7 +168,26 @@ impl LocalTransport {
                     }
                     Err(e) => screenshot_error = Some(e.to_string()),
                 },
-                Err(e) => screenshot_error = Some(e.to_string()),
+                Err(e) => {
+                    // A screenshot that failed because the TAB closed mid-command
+                    // is tab-gone truth, not a degradable capture error: the
+                    // `screenshot_error` note exists for a live page whose image
+                    // pipeline failed, and burying a vanished tab there reports
+                    // "success, no image" for a page that no longer exists.
+                    // Typed TabNotFound (exit 4 → recover via `tab`) instead.
+                    if let Ok(targets) = self.browser.get_targets().await
+                        && !targets.iter().any(|t| {
+                            t.get("targetId").and_then(|v| v.as_str())
+                                == Some(self.target_id.as_str())
+                        })
+                    {
+                        return Err(WebPilotError::TabNotFound {
+                            tab_id: self.target_id.clone(),
+                        }
+                        .into());
+                    }
+                    screenshot_error = Some(e.to_string());
+                }
             }
         }
 

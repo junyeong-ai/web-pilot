@@ -1408,6 +1408,30 @@ fn browser_behavioral_flow() {
     );
     let _ = fx.run(&["frame", "main"]);
 
+    // 6c. `tab new` honesty (headless parity): a URL that doesn't parse is a
+    //     typed InvalidArgument (7), not a generic chrome.tabs.create throw
+    //     (Other, exit 1); an unreachable URL lands on Chrome's error page and
+    //     must be NavigationFailed (8), not a success pinned to it.
+    let bad_new = fx.run(&["tab", "new", "http://"]);
+    assert_eq!(
+        code(&bad_new),
+        7,
+        "browser tab new with an unparseable URL must be InvalidArgument (7): {}",
+        stdout(&bad_new)
+    );
+    let dead_new = fx.run(&["tab", "new", "http://127.0.0.1:1/"]);
+    assert_eq!(
+        code(&dead_new),
+        8,
+        "browser tab new to a refused port must be NavigationFailed (8): {}",
+        stdout(&dead_new)
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "re-pin after the unreachable tab new failed"
+    );
+
     // 7a-frag. A SAME-DOCUMENT top navigation (a `#fragment`) leaves the document
     //          and its frame tree intact, so a frame the agent switched into stays
     //          the active scope — headless returns early for this case without

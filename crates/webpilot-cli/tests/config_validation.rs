@@ -115,3 +115,33 @@ fn zero_viewport_dimensions_are_refused_at_startup() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn empty_webpilot_config_means_unset_and_reads_the_default_path() {
+    // An EMPTY WEBPILOT_CONFIG is unset — the same rule `dirs::env_path`
+    // resolves the path with — so the DEFAULT path must be read (proven by a
+    // malformed default config failing loud with the parse error), never the
+    // "points at a path that does not exist" override error.
+    let dir = std::env::temp_dir().join(format!("webpilot-cfgempty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::fs::write(dir.join("config.toml"), "[timeouts\n").expect("write cfg");
+    let out = webpilot()
+        .args(["capture", "--include", "dom"])
+        .env("WEBPILOT_CONFIG", "")
+        .env("WEBPILOT_HOME", &dir)
+        .output()
+        .expect("spawn webpilot");
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "the malformed DEFAULT config must gate the run; stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let body = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        body.contains("invalid settings") && !body.contains("does not exist"),
+        "an empty WEBPILOT_CONFIG must resolve the DEFAULT path (parse error), \
+         not error as a missing override: {body}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

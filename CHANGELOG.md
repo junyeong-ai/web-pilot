@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.210] - 2026-06-13
+
+### Fixed
+
+- **`tab new` is honest about navigation failure.** A URL that doesn't parse
+  is now a typed `InvalidArgument` (exit 7) in browser mode too — it was a raw
+  `chrome.tabs.create` throw read as `Other` (exit 1). A URL that loads onto
+  Chrome's error page (refused connection, DNS) is `NavigationFailed` (exit 8)
+  in both modes — `tab new` reported success on the error page, while
+  `navigate` (the same effect under the same gate) already failed loud.
+  Headless reads the main frame's `unreachableUrl`; browser buffers
+  `webNavigation.onErrorOccurred` from before the tab exists. A tab that
+  CLOSES during the settle is the root-cause `TabNotFound` (exit 4) in both
+  modes.
+- **Headless `tab switch`/`tab close` reclassify a post-lookup race as
+  `TabNotFound`.** The existence check runs once, then `Target.activateTarget`
+  / `connect_to_page` / `Target.closeTarget` could still fail with a raw CDP
+  error (exit 1) if the tab closed in the gap — now re-queried against the
+  live targets and surfaced as `TabNotFound` (exit 4), matching browser mode's
+  catch arms.
+- **A screenshot whose tab vanished mid-capture is `TabNotFound`, not a
+  degraded `screenshot_error` / `Other`.** The `screenshot_error` note is for
+  a live page whose image pipeline failed; a gone tab now surfaces typed
+  (exit 4) in both modes instead of "success, no image" for a page that no
+  longer exists.
+
+### Changed
+
+- Browser `adoptedDocumentReady` settles on a main-frame load error (not just
+  a commit), so a `tab new` / popup to an unreachable URL returns immediately
+  instead of waiting out the full navigation timeout — headless already
+  settled fast on the same failure.
+
 ## [0.4.209] - 2026-06-13
 
 ### Fixed

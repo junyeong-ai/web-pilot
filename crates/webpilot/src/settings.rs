@@ -362,8 +362,11 @@ fn read_config() -> std::result::Result<FileSettings, String> {
             // The DEFAULT path being absent is the all-default state — but a
             // path the operator set EXPLICITLY (`WEBPILOT_CONFIG`) and got
             // wrong must fail loud: silently running on built-in defaults
-            // would ignore every setting they intended to apply.
-            if std::env::var_os("WEBPILOT_CONFIG").is_some() {
+            // would ignore every setting they intended to apply. An EMPTY
+            // value is unset — the same rule `dirs::env_path` resolves the
+            // path with, so the two reads can never disagree about whether an
+            // override is in effect.
+            if std::env::var_os("WEBPILOT_CONFIG").is_some_and(|v| !v.is_empty()) {
                 return Err(format!(
                     "WEBPILOT_CONFIG points at {}, which does not exist",
                     path.display()

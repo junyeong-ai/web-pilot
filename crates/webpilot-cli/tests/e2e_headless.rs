@@ -2900,6 +2900,25 @@ fn headless_behavioral_flow() {
     );
     let _ = fx.run(&["frame", "main"]);
 
+    // 8i. `tab new` to an unreachable URL lands the new tab on Chrome's error
+    //     page — reporting success there is the lie `navigate` already refuses
+    //     (NavigationFailed, exit 8), and `tab new` is the same effect under
+    //     the same policy gate, so it must agree. Port 1 on loopback refuses
+    //     instantly, so this is deterministic and fast.
+    let dead_new = fx.run(&["tab", "new", "http://127.0.0.1:1/"]);
+    assert_eq!(
+        code(&dead_new),
+        8,
+        "tab new to a refused port must be NavigationFailed (8), not a success \
+         pinned to an error page: {}",
+        stdout(&dead_new)
+    );
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &base])),
+        0,
+        "re-pin after the unreachable tab new failed"
+    );
+
     // 9. Closing the ACTIVE tab leaves a dead pin. A pin-INDEPENDENT command
     //    (`tab` list) must still work so the agent can find a survivor and
     //    recover — not fail with a spurious TabNotFound. A page ACTION, by
