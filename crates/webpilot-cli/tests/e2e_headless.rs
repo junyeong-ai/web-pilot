@@ -3072,6 +3072,32 @@ fn headless_behavioral_flow() {
         stdout(&after_back)
     );
 
+    // 8d-frag. A `#fragment` navigation must NOT hang. `await_live_bridge_context`
+    //     compares the bridge's fragment-bearing `location.href` against
+    //     `bound_target_url` (also fragment-bearing), NOT the fragment-STRIPPED
+    //     `Page.getFrameTree` url — which never matched a fragment URL, evicting
+    //     the only bridge context every poll until the navigation timeout and then
+    //     failing the capture as `FrameNotFound`. This must capture promptly with a
+    //     real DOM (the fixture page; `#section` is just a fragment).
+    let frag_cap = fx.run(&[
+        "capture",
+        "--include",
+        "dom",
+        "--url",
+        &format!("{base}/#section"),
+    ]);
+    assert_eq!(
+        code(&frag_cap),
+        0,
+        "capture of a #fragment URL must succeed, not hang/FrameNotFound: {}",
+        stdout(&frag_cap)
+    );
+    assert!(
+        stdout(&frag_cap).contains("cardwrap"),
+        "a #fragment-URL capture must return the page DOM, not an empty/failed snapshot: {}",
+        stdout(&frag_cap)
+    );
+
     // 8d-image. `<input type=image>` is a submit button: it carries an implicit
     //     ARIA `button` role (its `alt` is the accessible name), so a semantic
     //     `find --role button` reaches it — pinning the implicit-role mapping end

@@ -540,16 +540,18 @@ impl LocalTransport {
     /// document has parsed, and drop any context that does not so the resolver
     /// re-waits for the real one. Bounded by the navigation budget.
     async fn await_live_bridge_context(&self) {
-        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
+        // The URL the bridge must agree it is live ON must carry the fragment, the
+        // way `location.href` does. `Page.getFrameTree`'s `Frame.url` STRIPS the
+        // fragment (CDP carries it separately in `urlFragment`), so comparing a
+        // frame-tree url against the bridge's `location.href` never matched for a
+        // `#fragment` navigation — the only bridge context was evicted every poll
+        // until the navigation timeout, after which the capture failed as
+        // `FrameNotFound`. `bound_target_url` (Target.getTargets) carries the
+        // fragment, exactly as the rest of the transport's URL comparisons do.
+        let want = self.bound_target_url().await;
+        if want.is_empty() {
             return;
-        };
-        let Some(want) = tree
-            .pointer("/frameTree/frame/url")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-        else {
-            return;
-        };
+        }
         let deadline = std::time::Instant::now() + webpilot::settings::timeouts().navigation;
         loop {
             if std::time::Instant::now() >= deadline {

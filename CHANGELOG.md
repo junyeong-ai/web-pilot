@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.229] - 2026-06-14
+
+### Fixed
+
+A parallel codex + fresh-context sweep surfaced two real defects in deep corners
+(the v0.4.223–228 fixes were re-verified clean by codex; output/error/device/
+context/profile/record and the SW orchestration came back clean too).
+
+- **Headless: a `#fragment` URL navigation no longer hangs ~15s and fails the
+  capture with `FrameNotFound`.** `await_live_bridge_context` compared the
+  bridge's `location.href` (which INCLUDES the fragment) against
+  `Page.getFrameTree`'s `Frame.url` (which STRIPS it — CDP carries the fragment
+  separately in `urlFragment`). For any `…#fragment` navigation the two could
+  never match, so the gate evicted the only bridge context every poll until the
+  navigation timeout, then the capture failed as `FrameNotFound`. It now compares
+  against `bound_target_url` (Target.getTargets), which carries the fragment like
+  the rest of the transport's URL comparisons — fragment captures return promptly
+  with a real DOM. (Browser mode was already correct; this closes the parity gap.)
+  Fragment navigations are ubiquitous — deep links and SPA anchors — so the agent
+  loop (capture→act→capture with `--capture`) was stalling on every one.
+- **`diff --dom` no longer reports a false change for two captures of an
+  identical page.** It re-serialized snapshots canonically (whitespace/key order)
+  but kept `extraction_ms` — wall-clock extraction latency, pure run-to-run noise
+  — so the same page usually read as changed on timing jitter. The diff now strips
+  `extraction_ms` before comparing; every semantically meaningful field
+  (scroll position included) is kept.
+
 ## [0.4.228] - 2026-06-14
 
 ### Fixed

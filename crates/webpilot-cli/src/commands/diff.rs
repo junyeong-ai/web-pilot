@@ -107,10 +107,18 @@ fn diff_dom(a: &Path, b: &Path) -> Result<CommandOutput> {
     // meaningless line diff, and re-emit canonically so two snapshots that
     // differ only in whitespace or key order don't read as changed.
     let canon = |text: &str, label: &str| -> Result<String> {
-        let value: serde_json::Value =
+        let mut value: serde_json::Value =
             serde_json::from_str(text).map_err(|e| webpilot::WebPilotError::InvalidArgument {
                 detail: format!("{label} is not a valid DOM snapshot (JSON): {e}"),
             })?;
+        // `extraction_ms` is wall-clock extraction latency — run-to-run
+        // measurement noise with no bearing on "did the DOM change?". Strip it so
+        // two captures of the SAME page don't read as changed on timing jitter
+        // alone; every semantically-meaningful field (scroll_x/scroll_y, which are
+        // real page state, included) is kept.
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("extraction_ms");
+        }
         Ok(serde_json::to_string_pretty(&value).expect("re-serialize parsed json"))
     };
     let text_a = canon(&text_a, "file A")?;
@@ -294,5 +302,35 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diff_dom_ignores_extraction_ms_noise() {
+        let dir = std::env::temp_dir().join(format!("wp-diff-ms-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.json");
+        let b = dir.join("b.json");
+        // Two captures of the SAME page differ only in extraction_ms (wall-clock
+        // latency, pure measurement noise). The diff must read unchanged, not a
+        // false positive on timing jitter.
+        std::fs::write(
+            &a,
+            br#"{"elements":[{"index":1,"tag":"button"}],"extraction_ms":18,"total_nodes":5}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &b,
+            br#"{"elements":[{"index":1,"tag":"button"}],"extraction_ms":0,"total_nodes":5}"#,
+        )
+        .unwrap();
+        let out = diff_dom(&a, &b).expect("diff ok");
+        let _ = std::fs::remove_dir_all(&dir);
+        match out {
+            CommandOutput::Content { json, .. } => assert_eq!(
+                json["changed"], false,
+                "two captures differing only in extraction_ms must read as unchanged: {json}"
+            ),
+            _ => panic!("expected Content output"),
+        }
     }
 }
