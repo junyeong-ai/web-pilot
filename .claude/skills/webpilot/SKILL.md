@@ -71,6 +71,17 @@ image's pixels) and, when the capture exceeded the long-edge cap and was
 downscaled, `screenshot_scale` — map image pixels back to page pixels with
 `image px ÷ scale` before doing any coordinate math on a full-page shot.
 
+`--annotate` draws the numbered overlay by inserting a brief, isolated
+`position:fixed` container into the page DOM, screenshotting, then removing it.
+Two boundaries: (1) a page that watches its own DOM (a `MutationObserver` on
+the document root) can observe that insertion — avoid `--annotate` on a
+security-sensitive page that might react to DOM tampering; plain
+`--include screenshot` never touches the page. (2) The box positions are the
+element coordinates at capture time, so on a **live-updating** page (a
+running animation/layout shift) a box can land slightly off its element by
+the time the shot is taken — the numbering is exact on a settled page (the
+common case); `wait idle` first if the page is still moving.
+
 `Read` the file paths returned in `screenshot_path` / `pdf_path` / `accessibility_path` — they are absolute, so just open them. (They live under the per-user cache: `~/Library/Caches/webpilot/artifacts/` on macOS, `$XDG_RUNTIME_DIR`/`$XDG_CACHE_HOME`/`~/.cache/webpilot/artifacts/` on Linux, or `$WEBPILOT_HOME` when set — always trust the returned path rather than guessing.)
 
 ## Action

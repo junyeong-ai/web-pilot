@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.214] - 2026-06-13
+
+### Fixed
+
+- **A panic in an MCP tool dispatch no longer kills the session.** An
+  `unwrap`/`expect` reached mid-handler used to unwind through the stdio loop
+  and terminate `webpilot mcp`, leaving every later tool call unanswered. The
+  dispatch is now panic-isolated (`catch_unwind`): the panic becomes a
+  JSON-RPC internal error, the transport is reset (the next call reopens), and
+  the server keeps serving.
+- **MCP `tools/*` before `initialize` is rejected (-32002).** The server
+  served tool calls regardless of lifecycle order; it now requires the
+  `initialize` handshake first, per the MCP lifecycle. `initialize` and `ping`
+  remain available at any time.
+- **Action tool schemas advertise `additionalProperties: false`.**
+  `browser_click`/`type`/`press_key`/`scroll`/`select` deserialize a strict
+  `Action` (`deny_unknown_fields`), so the schema now tells a client an unknown
+  property is rejected rather than letting it discover that only at runtime
+  (the `modifiers` sub-objects too).
+
+### Docs
+
+- SKILL documents `--annotate`'s two boundaries: it inserts a brief overlay
+  into the page DOM (observable by a page's own `MutationObserver` — avoid on
+  DOM-tamper-sensitive pages), and its box coordinates are capture-time, so a
+  live-updating page can shift a box off its element (`wait idle` first).
+
 ## [0.4.213] - 2026-06-13
 
 ### Fixed

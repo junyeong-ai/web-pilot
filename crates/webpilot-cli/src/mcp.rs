@@ -58,16 +58,43 @@ where
     // not a request.
     const MAX_LINE_BYTES: u64 = 8 * 1024 * 1024;
     let mut transport: Option<T> = None;
+    // MCP lifecycle: a `tools/*` call before `initialize` is rejected (-32002),
+    // per the spec's initialize-then-operate order. Flipped true once an
+    // `initialize` request is handled.
+    let mut initialized = false;
     let mut reader = BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::stdout();
     loop {
         let reply = match read_frame(&mut reader, MAX_LINE_BYTES).await? {
             Frame::Eof => break,
             Frame::Line(line) if line.trim().is_empty() => continue,
-            Frame::Line(line) => match handle_line(&connect, &mut transport, &line).await {
-                Some(reply) => reply,
-                None => continue, // a notification — no response
-            },
+            Frame::Line(line) => {
+                // Isolate a panic in tool dispatch: an `unwrap`/`expect` reached
+                // mid-handler must not unwind through the stdio loop and kill a
+                // long-lived MCP session (every later tool call would get no
+                // response). Catch it, reset the transport (its state may be
+                // inconsistent past the unwind — the next call reopens), and
+                // reply with a JSON-RPC internal error. The id is unrecoverable
+                // past the panic, so null per spec.
+                let fut = std::panic::AssertUnwindSafe(handle_line(
+                    &connect,
+                    &mut transport,
+                    &mut initialized,
+                    &line,
+                ));
+                match futures_util::FutureExt::catch_unwind(fut).await {
+                    Ok(Some(reply)) => reply,
+                    Ok(None) => continue, // a notification — no response
+                    Err(_panic) => {
+                        transport = None;
+                        error_reply(
+                            Value::Null,
+                            -32603,
+                            "internal error: tool dispatch panicked",
+                        )
+                    }
+                }
+            }
             Frame::OverCap => error_reply(Value::Null, -32700, "request exceeds size limit"),
             Frame::InvalidUtf8 => error_reply(Value::Null, -32700, "parse error: invalid UTF-8"),
         };
@@ -138,7 +165,12 @@ async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R, max: u64) -> Result
 /// Route one JSON-RPC message. Returns `None` only for a notification — a
 /// request with NO `id` member at all. An explicit `id: null` is a request and
 /// is answered (with a null id), distinct from an absent id.
-async fn handle_line<T, F, Fut>(connect: &F, transport: &mut Option<T>, line: &str) -> Option<Value>
+async fn handle_line<T, F, Fut>(
+    connect: &F,
+    transport: &mut Option<T>,
+    initialized: &mut bool,
+    line: &str,
+) -> Option<Value>
 where
     T: Transport,
     F: Fn() -> Fut,
@@ -188,8 +220,22 @@ where
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
 
     match method {
-        "initialize" => Some(ok_reply(id, initialize_result())),
+        // `initialize` is the lifecycle entry point — always allowed, and it
+        // arms the gate for the operational methods below. `ping` is a liveness
+        // check the spec allows at any time, before initialization included.
+        "initialize" => {
+            *initialized = true;
+            Some(ok_reply(id, initialize_result()))
+        }
         "ping" => Some(ok_reply(id, json!({}))),
+        // Operational methods require initialization first (MCP lifecycle): a
+        // `tools/*` before `initialize` is -32002, not served as if the
+        // capability handshake had happened.
+        "tools/list" | "tools/call" if !*initialized => Some(error_reply(
+            id,
+            -32002,
+            "server not initialized — send `initialize` first",
+        )),
         "tools/list" => Some(ok_reply(id, json!({ "tools": tool_specs() }))),
         "tools/call" => Some(tool_call_reply(connect, transport, id, &params).await),
         other => Some(error_reply(
@@ -531,9 +577,14 @@ fn tool_specs() -> Value {
                             "alt": { "type": "boolean" },
                             "meta": { "type": "boolean" },
                         },
+                        "additionalProperties": false,
                     },
                 },
                 "required": ["index"],
+                // The handler deserializes a strict `Action` (`deny_unknown_fields`),
+                // so the schema advertises that an unknown property is rejected
+                // rather than letting a client learn it only at runtime.
+                "additionalProperties": false,
             },
         },
         {
@@ -547,6 +598,7 @@ fn tool_specs() -> Value {
                     "clear": { "type": "boolean", "description": "Replace the existing value instead of appending.", "default": false },
                 },
                 "required": ["index", "text"],
+                "additionalProperties": false,
             },
         },
         {
@@ -565,9 +617,11 @@ fn tool_specs() -> Value {
                             "alt": { "type": "boolean" },
                             "meta": { "type": "boolean" },
                         },
+                        "additionalProperties": false,
                     },
                 },
                 "required": ["key"],
+                "additionalProperties": false,
             },
         },
         {
@@ -580,6 +634,7 @@ fn tool_specs() -> Value {
                     "amount": { "type": "integer", "minimum": 1, "description": "Pixels to scroll.", "default": 600 },
                 },
                 "required": ["direction"],
+                "additionalProperties": false,
             },
         },
         {
@@ -592,6 +647,7 @@ fn tool_specs() -> Value {
                     "value": { "type": "string", "description": "The option value to select." },
                 },
                 "required": ["index", "value"],
+                "additionalProperties": false,
             },
         },
         {
@@ -660,6 +716,63 @@ mod tests {
                 tool["name"]
             );
         }
+    }
+
+    #[test]
+    fn action_tool_schemas_forbid_unknown_properties() {
+        // Every tool whose handler deserializes a strict `Action`
+        // (`deny_unknown_fields`) must advertise `additionalProperties: false`,
+        // so a client learns an unknown property is rejected from the schema,
+        // not only at runtime.
+        let specs = tool_specs();
+        let arr = specs.as_array().unwrap();
+        for name in [
+            "browser_click",
+            "browser_type",
+            "browser_press_key",
+            "browser_scroll",
+            "browser_select",
+        ] {
+            let tool = arr.iter().find(|t| t["name"] == name).unwrap();
+            assert_eq!(
+                tool["inputSchema"]["additionalProperties"],
+                json!(false),
+                "{name} schema must forbid unknown properties"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tools_calls_require_initialize_first() {
+        // MCP lifecycle: a `tools/*` before `initialize` is -32002 and opens no
+        // transport; `initialize` arms the gate; `tools/list` then passes.
+        let connect = || async { anyhow::Ok(crate::transport::IpcTransport::new()) };
+        let mut transport: Option<crate::transport::IpcTransport> = None;
+        let mut initialized = false;
+
+        let call = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"browser_snapshot"}}"#;
+        let reply = handle_line(&connect, &mut transport, &mut initialized, call)
+            .await
+            .unwrap();
+        assert_eq!(reply["error"]["code"], json!(-32002), "{reply}");
+        assert!(transport.is_none(), "no transport opens before initialize");
+        assert!(!initialized);
+
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
+        let reply = handle_line(&connect, &mut transport, &mut initialized, init)
+            .await
+            .unwrap();
+        assert!(reply["result"].is_object());
+        assert!(initialized, "initialize arms the lifecycle gate");
+
+        let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+        let reply = handle_line(&connect, &mut transport, &mut initialized, list)
+            .await
+            .unwrap();
+        assert!(
+            reply["result"]["tools"].is_array(),
+            "tools/list passes the gate once initialized: {reply}"
+        );
     }
 
     #[test]
