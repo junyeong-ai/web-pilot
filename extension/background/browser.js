@@ -295,11 +295,17 @@ async function readFrameName(tabId, frameId) {
 
 // Cap a URL for a one-line ambiguity message — a data-URI iframe `src` can be
 // megabytes, which would flood the error string (and the terminal/MCP text it
-// reaches). The full URLs are in the `frame list` JSON. Codepoint-safe (a clip
-// mid-surrogate would corrupt the JSON), matching the Rust `line_safe_clip`.
+// reaches). The full URLs are in the `frame list` JSON. Matches the Rust
+// `line_safe_clip` EXACTLY (the wording crosses the parity test): control
+// chars → spaces FIRST (so a `\n` in a URL can't forge a line), THEN clip on a
+// codepoint boundary (a mid-surrogate cut would corrupt the JSON) at 200 + `…`.
 function clipUrl(u) {
-  const chars = Array.from(u || "");
-  return chars.length > 200 ? chars.slice(0, 200).join("") + "…" : (u || "");
+  const safe = Array.from(u || "").map((c) => {
+    const cp = c.codePointAt(0);
+    // C0 (0x00..0x1F), DEL (0x7F), C1 (0x80..0x9F) -- the Rust char::is_control set.
+    return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) ? " " : c;
+  });
+  return safe.length > 200 ? safe.slice(0, 200).join("") + "\u2026" : safe.join("");
 }
 
 // A frame selector that matched more than one frame is ambiguous: switching

@@ -469,9 +469,13 @@ impl LocalTransport {
                 // would silently scope every later command to whichever
                 // matched first. Fail loud naming the matching frames.
                 if matches.len() > 1 {
+                    // Cap each URL like the named-selector ambiguity and the
+                    // browser-mode predicate path — a data-URI iframe among the
+                    // matches would otherwise flood the message; the full URLs
+                    // are in `frame list`'s JSON.
                     let urls: Vec<String> = matches
                         .iter()
-                        .map(|f| webpilot::types::line_safe(&f.url).into_owned())
+                        .map(|f| webpilot::types::line_safe_clip(&f.url, 200))
                         .collect();
                     return Err(WebPilotError::InvalidArgument {
                         detail: format!(

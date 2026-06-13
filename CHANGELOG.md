@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.213] - 2026-06-13
+
+### Fixed
+
+- **The `frame predicate` ambiguity error caps its URLs too.** v0.4.212 capped
+  the named-selector frame-ambiguity message, but the separate
+  predicate-ambiguity path (headless) still emitted uncapped `line_safe` URLs —
+  a data-URI iframe among the matches could flood it, and the wording diverged
+  from browser mode (which capped). Both now use the 200-char cap. The browser
+  `clipUrl` helper also neutralizes control characters first (matching the Rust
+  `line_safe_clip`), so a URL with an embedded control char clips identically
+  in both modes.
+
 ## [0.4.212] - 2026-06-13
 
 ### Fixed
