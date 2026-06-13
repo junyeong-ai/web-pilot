@@ -455,8 +455,16 @@ impl LocalTransport {
         msg: &Value,
         timeout: std::time::Duration,
     ) -> Result<Value> {
-        let payload = msg.to_string();
-        let js = format!("(async () => __webpilot_handle({payload}))()");
+        // Hand the message to the bridge via `JSON.parse`, NOT as an inlined
+        // object literal: `__webpilot_handle({…})` evaluates the payload as
+        // source, where `{"__proto__": v}` is a prototype SETTER that silently
+        // drops a real `__proto__` key (a `session import` storage key the page
+        // legitimately had), and inlining external data (a session file's
+        // values) as code is needlessly injection-adjacent even in the isolated
+        // world. `JSON.parse` treats every key as data, `__proto__` included.
+        // Double-encode so the JSON string is itself a valid JS string literal.
+        let payload = serde_json::to_string(&msg.to_string()).expect("string serializes");
+        let js = format!("(async () => __webpilot_handle(JSON.parse({payload})))()");
 
         let cid = self.bridge_context_id().await?;
         match self

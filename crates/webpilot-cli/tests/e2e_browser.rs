@@ -937,6 +937,53 @@ fn browser_behavioral_flow() {
         stdout(&bst)
     );
 
+    // 4e-proto. A localStorage key literally named `__proto__` round-trips
+    //     intact (headless parity): export used to drop it (plain-object
+    //     prototype setter), and the browser import carries it via JSON.parse +
+    //     structured clone — confirm the clone preserves the own `__proto__`
+    //     property all the way into the page's localStorage. Runs on the
+    //     current http page (same origin → import allowed).
+    let _ = fx.run(&[
+        "eval",
+        "localStorage.clear(); localStorage.setItem('__proto__','protoval'); 'set'",
+    ]);
+    let proto_session = fx.home.join("proto-session.json");
+    let pe = fx.run(&[
+        "session",
+        "export",
+        "--output",
+        proto_session.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code(&pe),
+        0,
+        "browser proto-key export failed: {}",
+        stdout(&pe)
+    );
+    assert!(
+        std::fs::read_to_string(&proto_session)
+            .unwrap()
+            .contains("__proto__"),
+        "browser export must carry a __proto__ localStorage key, not drop it"
+    );
+    let _ = fx.run(&["eval", "localStorage.clear(); 'c'"]);
+    let pi = fx.run(&["session", "import", proto_session.to_str().unwrap()]);
+    assert_eq!(
+        code(&pi),
+        0,
+        "browser proto-key import failed: {}",
+        stdout(&pi)
+    );
+    let pr = fx.run(&["eval", "localStorage.getItem('__proto__')==='protoval'"]);
+    let prj: serde_json::Value = serde_json::from_str(&stdout(&pr)).expect("proto eval json");
+    assert_eq!(
+        prj["result"].as_str(),
+        Some("true"),
+        "a __proto__ localStorage key must survive the browser session round-trip: {}",
+        stdout(&pr)
+    );
+    let _ = fx.run(&["eval", "localStorage.clear(); 'c'"]);
+
     // 4e-chips. A PARTITIONED cookie round-trips with its partition key
     //     (headless parity): the key is part of the cookie's IDENTITY, so an
     //     export that dropped it — or a bare `getAll({})` that never even SAW

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.216] - 2026-06-13
+
+### Fixed
+
+- **A localStorage key literally named `__proto__` survives session
+  export/import.** A page can store `localStorage.setItem("__proto__", …)`,
+  but the export accumulated keys onto a plain `{}` where
+  `obj["__proto__"] = v` hits the prototype SETTER and sets no own property —
+  so the key silently vanished from the export. The headless import then
+  inlined the payload as a JS object literal, where `{"__proto__": …}` is the
+  same setter, dropping it a second time. Export now accumulates onto an
+  `Object.create(null)` (no proto accessor), and the headless bridge call
+  hands the payload via `JSON.parse` rather than an inlined object literal —
+  which also stops external session-file data from being evaluated as source.
+  Verified end-to-end and pinned in both e2e suites (set → export → clear →
+  import → read back).
+
 ## [0.4.215] - 2026-06-13
 
 ### Fixed

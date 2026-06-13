@@ -2354,6 +2354,43 @@ fn headless_behavioral_flow() {
         0,
         "navigate for the origin-scope test failed"
     );
+    // A localStorage key literally named `__proto__` round-trips intact. Export
+    // used to drop it (a plain `{}` accumulator's `obj["__proto__"]=v` hits the
+    // prototype setter, setting no own property), and the headless import
+    // inlined the payload as an object literal — another `{"__proto__":…}`
+    // setter. Both fixed (Object.create(null) export + JSON.parse import). Runs
+    // on `base` (same origin → import allowed).
+    let _ = fx.run(&[
+        "eval",
+        "localStorage.clear(); localStorage.setItem('__proto__','protoval'); 'set'",
+    ]);
+    let proto_session = home.join("proto-session.json");
+    let pe = fx.run(&[
+        "session",
+        "export",
+        "--output",
+        proto_session.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&pe), 0, "proto-key export failed: {}", stdout(&pe));
+    assert!(
+        std::fs::read_to_string(&proto_session)
+            .unwrap()
+            .contains("__proto__"),
+        "export must carry a __proto__ localStorage key, not drop it via the prototype setter"
+    );
+    let _ = fx.run(&["eval", "localStorage.clear(); 'c'"]);
+    let pi = fx.run(&["session", "import", proto_session.to_str().unwrap()]);
+    assert_eq!(code(&pi), 0, "proto-key import failed: {}", stdout(&pi));
+    let pr = fx.run(&["eval", "localStorage.getItem('__proto__')==='protoval'"]);
+    let prj: serde_json::Value = serde_json::from_str(&stdout(&pr)).expect("proto eval json");
+    assert_eq!(
+        prj["result"].as_str(),
+        Some("true"),
+        "a __proto__ localStorage key must survive the session round-trip: {}",
+        stdout(&pr)
+    );
+    let _ = fx.run(&["eval", "localStorage.clear(); 'c'"]);
+
     let foreign_session = home.join("foreign-origin-session.json");
     std::fs::write(
         &foreign_session,

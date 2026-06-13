@@ -1503,12 +1503,18 @@
   // ── Storage ──────────────────────────────────────────────────────────────
 
   function exportStorage() {
-    const localObj = {};
+    // `Object.create(null)`, not `{}`: a page can store a key literally named
+    // `__proto__` (`localStorage.setItem("__proto__", …)`), and on a plain
+    // object `localObj["__proto__"] = v` hits the prototype SETTER — it sets no
+    // own property, so the key vanishes from the export (a silent round-trip
+    // loss). A null-prototype object has no such accessor, so every key,
+    // `__proto__` included, lands as plain data and survives serialization.
+    const localObj = Object.create(null);
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (k != null) localObj[k] = localStorage.getItem(k);
     }
-    const sessionObj = {};
+    const sessionObj = Object.create(null);
     for (let i = 0; i < sessionStorage.length; i++) {
       const k = sessionStorage.key(i);
       if (k != null) sessionObj[k] = sessionStorage.getItem(k);
