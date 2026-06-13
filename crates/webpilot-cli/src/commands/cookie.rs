@@ -44,11 +44,20 @@ fn cookie_row(c: &CookieInfo) -> String {
         Some(ts) => format!("expires={}", ts as i64),
         None => "session".into(),
     });
+    // Preview the value, marking truncation with `…` so a long value (a JWT, a
+    // session blob) is never silently clipped — a list row that looked complete
+    // but wasn't would mislead an agent comparing it to the full JSON. The exact
+    // value is `cookie get NAME`.
     let preview: String = c.value.chars().take(40).collect();
+    let value_cell = if preview.chars().count() < c.value.chars().count() {
+        format!("{preview}…")
+    } else {
+        preview
+    };
     format!(
         "{} = {} [{}{}] {}",
         line_safe(&c.name),
-        line_safe(&preview),
+        line_safe(&value_cell),
         line_safe(&c.domain),
         line_safe(&c.path),
         flags.join(",")
@@ -132,6 +141,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: CookieArgs) -> Result<Co
                         line_safe(&filtered[0].value)
                     ),
                     json: serde_json::to_value(&filtered[0])?,
+                    note: None,
                 });
             }
 
@@ -275,6 +285,33 @@ mod tests {
         assert!(
             !cookie_row(&cookie("sid")).contains("partitioned"),
             "an unpartitioned cookie carries no partition flag"
+        );
+    }
+
+    #[test]
+    fn cookie_row_marks_a_truncated_value_so_it_is_never_silently_clipped() {
+        // A short value renders whole, no marker.
+        let short = cookie("s");
+        let row = cookie_row(&short);
+        assert!(
+            row.contains("= v ") && !row.contains('…'),
+            "short value whole: {row}"
+        );
+        // A 40+ char value is previewed with a trailing `…` — an agent
+        // comparing the row to the full JSON must see it was clipped, not read
+        // a partial value as complete.
+        let mut long = cookie("s");
+        // 'Z' appears nowhere else in the row (name/domain/path/flags), so the
+        // count below measures exactly the value preview.
+        long.value = "Z".repeat(80);
+        let row = cookie_row(&long);
+        assert!(
+            row.contains('…'),
+            "a clipped value must carry the … marker: {row}"
+        );
+        assert!(
+            row.matches('Z').count() == 40,
+            "exactly the 40-char preview is shown before the marker: {row}"
         );
     }
 

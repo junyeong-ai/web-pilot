@@ -36,6 +36,14 @@ pub enum CommandOutput {
     Content {
         stdout: String,
         json: serde_json::Value,
+        /// An out-of-band note that belongs with the content but must not
+        /// pollute the piped `stdout` (which a shell may consume verbatim — a
+        /// `fetch` body, an `eval` value). It rides stderr in human mode and is
+        /// prepended in the MCP text block, so a fact the JSON carries
+        /// structurally (a `fetch` HTTP status, a `dom get` "attribute absent")
+        /// is never visible on one surface and missing on another. `None` for
+        /// content that needs no annotation.
+        note: Option<String>,
     },
     List {
         items: serde_json::Value,
@@ -113,7 +121,13 @@ impl CommandOutput {
         match self {
             CommandOutput::Ok(msg) => msg.clone(),
             CommandOutput::Data { human, .. } => human.clone(),
-            CommandOutput::Content { stdout, .. } => stdout.clone(),
+            CommandOutput::Content { stdout, note, .. } => match note {
+                // The note leads — a `fetch` status or "attribute absent" is
+                // the framing the body/value should be read under.
+                Some(n) if !stdout.is_empty() => format!("{n}\n{stdout}"),
+                Some(n) => n.clone(),
+                None => stdout.clone(),
+            },
             CommandOutput::Dom { snapshot, extra } => {
                 // The snapshot text is included even with zero interactive
                 // elements: it carries the page header (title/URL/scroll),
@@ -174,7 +188,16 @@ pub fn render(result: CommandOutput, mode: OutputMode) {
             emit_json(&value);
         }
 
-        (CommandOutput::Content { stdout, .. }, OutputMode::Human) => println!("{stdout}"),
+        (CommandOutput::Content { stdout, note, .. }, OutputMode::Human) => {
+            // The note goes to stderr so it reaches a human/agent reading the
+            // terminal without contaminating the stdout a shell may pipe (a
+            // `fetch` body, an `eval` result). The JSON path carries the same
+            // fact structurally, so it deliberately ignores the note.
+            if let Some(n) = note {
+                eprintln!("{n}");
+            }
+            println!("{stdout}");
+        }
         (CommandOutput::Content { json, .. }, OutputMode::Json) => emit_json(&json),
 
         (
@@ -230,8 +253,44 @@ pub fn render_error(err: &WebPilotError, mode: OutputMode) {
 
 #[cfg(test)]
 mod tests {
-    use super::dom_extra_lines;
+    use super::{CommandOutput, dom_extra_lines};
     use serde_json::json;
+
+    #[test]
+    fn content_note_rides_the_text_channel_with_the_body() {
+        // A `fetch` HTTP status / a `dom get` "absent" note is carried in the
+        // JSON structurally; the MCP/human text surface must show it too — not
+        // leave an agent reading only the body (or an empty line) unaware. The
+        // note LEADS the body so the body is read under its framing.
+        let with_body = CommandOutput::Content {
+            stdout: "<html>404 page</html>".into(),
+            json: json!({ "status": 404, "body": "<html>404 page</html>" }),
+            note: Some("HTTP 404".into()),
+        };
+        assert_eq!(
+            with_body.to_agent_text(),
+            "HTTP 404\n<html>404 page</html>",
+            "the note must lead the body on the text channel"
+        );
+        // An empty body (an absent attribute) shows the note alone, never a
+        // bare empty string indistinguishable from a present-empty value.
+        let absent = CommandOutput::Content {
+            stdout: String::new(),
+            json: json!({ "value": null }),
+            note: Some("(no attribute 'href' on the matched element)".into()),
+        };
+        assert_eq!(
+            absent.to_agent_text(),
+            "(no attribute 'href' on the matched element)"
+        );
+        // No note → the body alone, unchanged (eval/diff/cookie-get).
+        let plain = CommandOutput::Content {
+            stdout: "42".into(),
+            json: json!({ "result": "42" }),
+            note: None,
+        };
+        assert_eq!(plain.to_agent_text(), "42");
+    }
 
     #[test]
     fn new_tab_surfaces_on_the_text_channel_not_only_json() {

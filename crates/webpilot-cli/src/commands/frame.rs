@@ -74,8 +74,12 @@ async fn list_frames<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
                     let marker = if is_active { "*" } else { " " };
                     let main = if f.is_main { " [main]" } else { "" };
                     let id_short: String = f.frame_id.chars().take(8).collect();
-                    let url_short =
-                        line_safe(&f.url.chars().take(60).collect::<String>()).into_owned();
+                    // The FULL URL, not a 60-char clip: a frame URL is a
+                    // single-line token and its whole point here is to identify
+                    // which frame to `frame url <pattern>` — clipping iframes
+                    // that share a long common prefix made distinct frames look
+                    // identical in the terminal while the JSON kept them apart.
+                    let url_full = line_safe(&f.url).into_owned();
                     // Show the name when the frame has one: it is the argument to
                     // `frame switch <name>`, so surfacing it is how that addressing
                     // mode becomes discoverable rather than guess-only.
@@ -85,7 +89,7 @@ async fn list_frames<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
                         }
                         _ => String::new(),
                     };
-                    format!("{marker} [{id_short}] {url_short}{name}{main}")
+                    format!("{marker} [{id_short}] {url_full}{name}{main}")
                 })
                 .collect();
             let summary = match &active_frame_id {

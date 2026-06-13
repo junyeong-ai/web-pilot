@@ -28,6 +28,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: EvalArgs) -> Result<Comm
             Ok(CommandOutput::Content {
                 stdout: stdout.clone(),
                 json: serde_json::json!({"success": true, "result": stdout}),
+                note: None,
             })
         }
         ResponseData::Error { error } => Err(error.into()),

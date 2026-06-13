@@ -43,11 +43,17 @@ pub enum DomCommand {
 pub async fn run<T: Transport>(transport: &mut T, args: DomArgs) -> Result<CommandOutput> {
     // A get returns a value (possibly absent); a set returns only success.
     // They must render differently — an absent attribute is an empty result,
-    // not the "OK" of a completed write.
-    let is_get = matches!(
-        args.command,
-        DomCommand::GetHtml { .. } | DomCommand::GetText { .. } | DomCommand::GetAttr { .. }
-    );
+    // not the "OK" of a completed write. The label names WHAT was read, so an
+    // absent value (`value: null`) reads as "(no attribute 'href' …)" on the
+    // human/MCP surface instead of an empty line indistinguishable from a
+    // present-but-empty value (`disabled=""`), which the JSON `value` already
+    // tells apart (`null` vs `""`).
+    let get_label = match &args.command {
+        DomCommand::GetAttr { attr, .. } => Some(format!("attribute '{attr}'")),
+        DomCommand::GetText { .. } => Some("text".to_string()),
+        DomCommand::GetHtml { .. } => Some("html".to_string()),
+        _ => None,
+    };
     let cmd = match args.command {
         DomCommand::SetHtml { selector, value } => Command::DomSet {
             selector,
@@ -94,17 +100,22 @@ pub async fn run<T: Transport>(transport: &mut T, args: DomArgs) -> Result<Comma
                 Ok(CommandOutput::Content {
                     stdout: val.clone(),
                     json: serde_json::json!({"success": true, "value": val}),
+                    note: None,
                 })
             } else if !success {
                 Err(error
                     .map(anyhow::Error::from)
                     .unwrap_or_else(|| anyhow::anyhow!("DOM operation failed")))
-            } else if is_get {
-                // Get succeeded but the property/attribute is absent: an empty,
-                // explicitly-null result — distinct from a write's "OK".
+            } else if let Some(label) = get_label {
+                // Get succeeded but the property/attribute is absent: an
+                // explicitly-null result — distinct from a write's "OK" AND
+                // from a present-but-empty value. The note names it so the
+                // human/MCP surface doesn't collapse "absent" into the same
+                // empty line a `disabled=""` would print.
                 Ok(CommandOutput::Content {
                     stdout: String::new(),
                     json: serde_json::json!({"success": true, "value": null}),
+                    note: Some(format!("(no {label} on the matched element)")),
                 })
             } else {
                 Ok(CommandOutput::Ok("OK".into()))

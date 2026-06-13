@@ -530,6 +530,25 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["dom", "get-attr", "#shadowbtn", "data-wp"])).contains("marked"),
         "the shadow-root attribute write must read back"
     );
+    // An ABSENT attribute reads back as an explicit `value: null` (JSON) —
+    // distinct from a present-but-empty `""`, so an agent can tell "no such
+    // attribute" from "the attribute is empty". The human/MCP surface gets the
+    // `(no attribute …)` note for the same reason; here the --json path proves
+    // the structural null.
+    let absent_attr = fx.run(&["dom", "get-attr", "#shadowbtn", "data-absent"]);
+    assert_eq!(
+        code(&absent_attr),
+        0,
+        "reading an absent attribute is a success, not an error: {}",
+        stdout(&absent_attr)
+    );
+    let aaj: serde_json::Value =
+        serde_json::from_str(&stdout(&absent_attr)).expect("absent-attr json");
+    assert!(
+        aaj["value"].is_null(),
+        "an absent attribute must read as value:null, not an empty string: {}",
+        stdout(&absent_attr)
+    );
     assert_eq!(
         code(&fx.run(&["dom", "set-text", "p", "x"])),
         7,
@@ -1043,9 +1062,21 @@ fn headless_behavioral_flow() {
     //     GET against the fixture server must come back with the page markup.
     let fetched = fx.run(&["fetch", &base]);
     assert_eq!(code(&fetched), 0, "fetch failed: {}", stdout(&fetched));
+    let fj: serde_json::Value = serde_json::from_str(&stdout(&fetched)).expect("fetch json");
     assert!(
-        stdout(&fetched).contains("shadowhost") || stdout(&fetched).contains("<button"),
+        fj["body"]
+            .as_str()
+            .is_some_and(|b| b.contains("shadowhost") || b.contains("<button")),
         "fetch must return the page body: {}",
+        stdout(&fetched)
+    );
+    // The HTTP status rides every fetch result (JSON structurally; the human/MCP
+    // surface gets it via the `note`, so a 404-with-body never hides its status
+    // on one channel while the JSON keeps it). 200 here for the live fixture.
+    assert_eq!(
+        fj["status"].as_u64(),
+        Some(200),
+        "fetch JSON must carry the HTTP status: {}",
         stdout(&fetched)
     );
 
@@ -2010,10 +2041,28 @@ fn headless_behavioral_flow() {
         "390",
         "--height",
         "844",
+        "--scale",
+        "3",
         "--user-agent",
         "WP-E2E-UA/1",
     ]);
     assert_eq!(code(&dev), 0, "device set failed: {}", stdout(&dev));
+    // The result carries the COMPLETE applied state on the JSON surface —
+    // `scale` (used to be dropped from JSON) AND the user-agent presence (the
+    // human line used to drop it). Neither alone reflected what was emulated.
+    let devj: serde_json::Value = serde_json::from_str(&stdout(&dev)).expect("device set json");
+    assert_eq!(
+        devj["scale"].as_f64(),
+        Some(3.0),
+        "device set JSON must carry the applied scale: {}",
+        stdout(&dev)
+    );
+    assert_eq!(
+        devj["user_agent"].as_str(),
+        Some("WP-E2E-UA/1"),
+        "device set JSON must carry the applied user agent: {}",
+        stdout(&dev)
+    );
     let ua = fx.run(&["eval", "navigator.userAgent"]);
     assert!(
         stdout(&ua).contains("WP-E2E-UA/1"),

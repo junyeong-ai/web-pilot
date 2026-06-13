@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.211] - 2026-06-13
+
+### Fixed
+
+Output-surface consistency — five cases where a fact the JSON carried was
+missing or misleading on the human/MCP text surface (or vice versa):
+
+- **`fetch` shows its HTTP status even with a body.** A `404`/`500` with a
+  response body used to render as just the body on the human/MCP surface while
+  the JSON kept the status — an agent reading the text could mistake an error
+  page for a success. The status now rides a `note` (stderr in human mode,
+  leading the MCP text block) without polluting the piped stdout body.
+- **`dom get-*` distinguishes an absent value from a present-empty one.** An
+  absent attribute (`value: null`) and a present-empty one (`disabled=""`)
+  both printed an empty line; the absent case now carries a `(no attribute
+  'href' …)` note on the human/MCP surface, matching the `null` the JSON
+  already reported.
+- **`cookie list` marks a clipped value with `…`.** A long value (a JWT, a
+  session blob) was truncated to 40 chars with no marker, so a row looked
+  complete while the JSON held more.
+- **`frame list` shows the full frame URL.** The 60-char clip made iframes
+  sharing a long common prefix look identical in the terminal while the JSON
+  kept them distinct — defeating the URL's purpose (it is the `frame url
+  <pattern>` argument).
+- **`device set` reports the complete applied state on both surfaces.** The
+  JSON omitted `scale`, the human line omitted the user agent — neither alone
+  reflected what was emulated. Both now carry width/height/mobile/scale and
+  the UA (custom vs default).
+
+A new `CommandOutput::Content { note }` channel carries an out-of-band
+annotation to stderr + the MCP text without contaminating piped stdout.
+
 ## [0.4.210] - 2026-06-13
 
 ### Fixed

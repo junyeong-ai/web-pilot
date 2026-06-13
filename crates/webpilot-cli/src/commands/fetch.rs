@@ -53,21 +53,21 @@ pub async fn run<T: Transport>(transport: &mut T, args: FetchArgs) -> Result<Com
             error,
         } => {
             lift_error(success, error, ())?;
-            let stdout = body.clone().unwrap_or_default();
+            let body = body.unwrap_or_default();
+            // The HTTP status is part of every fetch result, but the body is
+            // what a shell pipes — so the status rides the `note` (stderr +
+            // MCP text) rather than the stdout body, where a `404` with a body
+            // used to vanish from the human/MCP surface while the JSON kept it.
+            // An absent status is "unknown", never fabricated as 0 ("HTTP 0" is
+            // the XHR network-error convention, so inventing it would mislead).
+            let note = match status {
+                Some(s) => format!("HTTP {s}"),
+                None => "HTTP status unknown".into(),
+            };
             Ok(CommandOutput::Content {
-                stdout: if stdout.is_empty() {
-                    // An absent status renders as unknown, never fabricated as
-                    // 0 — "HTTP 0" is the XHR network-error convention, so
-                    // inventing it would actively mislead. The JSON channel
-                    // carries the honest `status: null` either way.
-                    match status {
-                        Some(s) => format!("HTTP {s}"),
-                        None => "HTTP status unknown".into(),
-                    }
-                } else {
-                    stdout
-                },
+                stdout: body.clone(),
                 json: serde_json::json!({"success": success, "status": status, "body": body}),
+                note: Some(note),
             })
         }
         ResponseData::Error { error } => Err(error.into()),

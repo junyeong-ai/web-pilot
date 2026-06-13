@@ -80,9 +80,24 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
             // re-applied by every later `open`, matching the metrics that
             // already persist incidentally.
             write_persisted_device(ctx.as_deref(), &state)?;
+            // Both surfaces carry the COMPLETE applied state — `scale` and the
+            // user agent included. The JSON used to omit `scale` and the human
+            // line used to omit the UA, so neither alone reflected what was
+            // actually emulated. `ua_note` reports default vs custom (the full
+            // UA string is long and page-controlled; the agent set it, so the
+            // confirmation is what it needs, not an echo).
+            let ua_note = match &state.user_agent {
+                Some(_) => "custom",
+                None => "default",
+            };
             Ok(CommandOutput::Data {
-                json: serde_json::json!({"success": true, "width": width, "height": height, "mobile": mobile, "user_agent": state.user_agent}),
-                human: format!("Device: {width}x{height} (mobile={mobile}, scale={scale})"),
+                json: serde_json::json!({
+                    "success": true, "width": width, "height": height,
+                    "mobile": mobile, "scale": scale, "user_agent": state.user_agent,
+                }),
+                human: format!(
+                    "Device: {width}x{height} (mobile={mobile}, scale={scale}, user_agent={ua_note})"
+                ),
             })
         }
         DeviceCommand::Preset { name } => {

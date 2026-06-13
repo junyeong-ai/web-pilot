@@ -153,7 +153,11 @@ fn diff_dom(a: &Path, b: &Path) -> Result<CommandOutput> {
         "diff": diff.unified_diff().header("before", "after").to_string(),
     });
 
-    Ok(CommandOutput::Content { stdout, json })
+    Ok(CommandOutput::Content {
+        stdout,
+        json,
+        note: None,
+    })
 }
 
 fn diff_screenshot(a: &Path, b: &Path) -> Result<CommandOutput> {
