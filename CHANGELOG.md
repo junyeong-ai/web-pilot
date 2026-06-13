@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.220] - 2026-06-13
+
+### Fixed
+
+Two follow-ups to v0.4.218/219 (caught by re-review):
+
+- **The monitor clip no longer allocates on the common short-message path.**
+  v0.4.218 made the clip codepoint-safe with `Array.from`, but called it on
+  EVERY `console.log`/`fetch` regardless of length — a per-call codepoint-array
+  allocation on a hot logging path. A `s.length <= MAX` fast-path (code-unit
+  count ≥ codepoint count, so a string within the cap in units is within it in
+  codepoints) returns the string untouched with no allocation; only an
+  over-cap string pays the `Array.from`. Both modes.
+- **`frame find` by predicate resolves candidate contexts concurrently.**
+  v0.4.219 waited the per-frame `PROBE` (2s) on each still-missing candidate
+  serially — a page with many cross-origin OOPIFs (no context in this session)
+  would stall `N × 2s` (10 iframes → 20s). The waits now race under one shared
+  `PROBE` budget (`join_all`), bounding the whole resolve at ~2s; the predicate
+  itself still evaluates serially (concurrent `Runtime.evaluate`s would contend
+  on the page session). The settled common case is unchanged (measured ~0.3s).
+
 ## [0.4.219] - 2026-06-13
 
 ### Fixed

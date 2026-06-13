@@ -444,22 +444,34 @@ impl LocalTransport {
                 let candidate_ids: Vec<String> =
                     candidates.iter().map(|f| f.frame_id.clone()).collect();
                 self.settle_frame_contexts(&candidate_ids).await;
+                // Resolve every candidate's context CONCURRENTLY under one
+                // shared PROBE budget. `settle` already waited 500ms best-effort;
+                // a still-missing candidate is either a same-process frame
+                // churning slower than that budget (live — its context WILL
+                // land) or a cross-origin OOPIF with none in this session at
+                // all. Waiting per-candidate SERIALLY would pay PROBE (2s) for
+                // EACH missing one — a page with many OOPIFs would stall N×2s.
+                // Racing them together bounds the whole resolve at one PROBE: a
+                // live-but-slow frame is judged rather than silently missed (a
+                // false-negative `FrameNotFound`), an OOPIF still times out to a
+                // clean skip (treated like a non-match).
+                let resolved: Vec<_> =
+                    futures_util::future::join_all(candidates.iter().map(|f| async move {
+                        self.await_context(&self.frame_contexts, &f.frame_id)
+                            .await
+                            .ok()
+                            .map(|cid| (f, cid))
+                    }))
+                    .await
+                    .into_iter()
+                    .flatten()
+                    .collect();
                 let mut matches: Vec<&_> = Vec::new();
                 let mut predicate_error = None;
-                for f in &candidates {
-                    // `settle` re-emitted contexts and waited BRIEFLY (a 500ms
-                    // best-effort budget) for all candidates; one still missing
-                    // is either a same-process frame churning slower than that
-                    // budget (live — its context WILL land) or a cross-origin
-                    // OOPIF with no context in this session at all. Wait the
-                    // per-frame PROBE before skipping, so a live-but-slow frame
-                    // is judged rather than silently missed (a false-negative
-                    // `FrameNotFound` for a frame that matches); an OOPIF still
-                    // times out to a clean skip, treated like a non-match.
-                    let Ok(cid) = self.await_context(&self.frame_contexts, &f.frame_id).await
-                    else {
-                        continue;
-                    };
+                // Evaluate the predicate SERIALLY over the resolved contexts —
+                // concurrent `Runtime.evaluate`s would contend on the page
+                // session; only the context RESOLVE needed to race.
+                for (f, cid) in resolved {
                     match self.eval_in_context(&form, Some(&cid), true).await {
                         Ok(v) => {
                             if v.get("value").and_then(|v| v.as_bool()) == Some(true) {

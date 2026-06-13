@@ -87,7 +87,7 @@ async function injectConsoleMonitoring(tabId) {
       // CODEPOINT-safe clip via Array.from (a bare slice can split an astral
       // pair into a lone surrogate that breaks the entry's serialization) —
       // headless CONSOLE_INSTALL_JS parity, same bar as bridge.js's clip.
-      const clip = (s) => { const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
+      const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
       const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
       ["log", "error", "warn", "info", "debug"].forEach((m) => {
         console[m] = (...args) => {
@@ -127,7 +127,7 @@ async function injectNetworkMonitoring(tabId) {
       const perfNow = () => { try { return perfNowRaw.call(perfObj); } catch (e) { return 0; } };
       const MAX = 4096;
       // CODEPOINT-safe clip (a lone surrogate breaks serialization — see console).
-      const clip = (s) => { const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
+      const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
       const origFetch = window.fetch;
       window.fetch = function (...args) {
         let entry = null, t0 = 0;

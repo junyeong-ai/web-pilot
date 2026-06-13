@@ -730,7 +730,7 @@ if (!window.__webpilot_console_patched) {
     // lone surrogate, which breaks the entry's JSON serialization through CDP
     // returnByValue / native messaging. The marker keeps the clip visible.
     const MAX = 4096;
-    const clip = (s) => { const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
+    const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
     const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
     ["log", "error", "warn", "info", "debug"].forEach(m => {
         console[m] = (...args) => {
@@ -770,7 +770,7 @@ if (!window.__webpilot_network_active) {
     const MAX = 4096;
     // CODEPOINT-safe clip (a lone surrogate from a split astral pair breaks the
     // entry's JSON serialization — see the console hook).
-    const clip = (s) => { const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
+    const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
     const origFetch = window.fetch;
     window.fetch = function(...args) {
         let entry = null, t0 = 0;
