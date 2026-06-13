@@ -173,6 +173,21 @@ fn headless_behavioral_flow() {
         elements.iter().any(|e| e["id"] == "presdiv"),
         "a role=presentation element with onclick must be indexed (none/presentation = no role): {dom}"
     );
+    // A role the semantic allowlist does NOT collect must NOT veto an affordance
+    // the element ALSO carries. The marker/cursor passes used to skip any element
+    // with an explicit role, which dropped every non-allowlisted WIDGET role
+    // (`option`/`treeitem`/`gridcell`/…), a clickable structural card, and an
+    // invalid role — so a custom listbox/combobox/menu/tree returned its
+    // container but none of its items. Each of these carries a real affordance
+    // (onclick, roving tabindex) and must be indexed; the element with the
+    // STRONGER signal (a role AND a marker) must never vanish while a bare
+    // `<div onclick>` is kept.
+    for id in ["ariaopt", "ariaoptrove", "ariatreeitem", "invalidrole"] {
+        assert!(
+            elements.iter().any(|e| e["id"] == id),
+            "a non-allowlisted role with an explicit affordance must be indexed (#{id} absent): {dom}"
+        );
+    }
     // `in_viewport:false` must SURVIVE the wire (the bridge's false-strip
     // keep-list): it is the offscreen signal — `[offscreen]` in the rendered
     // DOM, and the annotation overlay skips it — not a mere property absence.

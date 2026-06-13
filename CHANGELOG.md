@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.235] - 2026-06-14
+
+### Fixed
+
+- **A custom listbox / combobox / menu / tree / grid now surfaces its items, not
+  just its container.** `collectInteractiveElements` ran a role-based veto
+  (`hasExplicitRole`) in both heuristic passes (marker/tabindex and
+  cursor:pointer): any element with an explicit `role` was skipped, on the
+  premise that the semantic pass owns it. But the semantic pass collects only the
+  eleven roles in `INTERACTIVE_SELECTOR` (button/link/tab/menuitem/checkbox/radio/
+  switch/combobox/searchbox/textbox/slider), and those are *already* deduped by
+  `seen.has(el)` — so the veto only ever fired on elements **nothing else
+  collected**: every non-allowlisted ARIA widget role (`option`, `treeitem`,
+  `gridcell`, `menuitemcheckbox`, `menuitemradio`, `spinbutton`, `row`, `cell`),
+  a structural role on a clickable card, and any invalid/misspelled role. A
+  canonical WAI-ARIA listbox or an open combobox dropdown captured the container
+  but **none of its `role="option"` items** — the element with the *stronger*
+  interactive signal (a role **and** an `onclick`/roving-`tabindex`) vanished
+  while a bare `<div onclick>` was kept. The veto is removed in both passes; the
+  affordance (`onclick`/`jsaction`, `tabindex >= 0`, innermost `cursor:pointer`)
+  is the signal and a `role` never overrides it. Dedup against the semantic pass
+  is `seen.has(el)` alone; the cursor:pointer pass keeps its own
+  containment-redundancy guard, so a role-bearing wrapper still can't phantom
+  over its real control. This generalizes the v0.4.112 `none`/`presentation`
+  carve-out to every role — affecting React-Select / Downshift / Headless UI /
+  ARIA-APG widgets, among the most common custom controls on the web. Found by a
+  parallel codex + fresh-context review; e2e regression pins added for
+  `option`/`treeitem`/invalid-role + an affordance.
+
 ## [0.4.234] - 2026-06-14
 
 ### Fixed

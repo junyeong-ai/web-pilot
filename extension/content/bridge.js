@@ -152,17 +152,24 @@
     // size gate: a real <button> is interactive regardless of size.
     const isDegenerate = (rect) => rect.width < 5 || rect.height < 5;
 
-    // The heuristic passes skip an element that already carries a DELIBERATE
-    // semantic role (the semantic pass collects the interactive ones). But ARIA
-    // `role="none"`/`"presentation"` explicitly STRIP the implicit role — such an
-    // element is semantically role-less, so a `role="none"` div WITH an `onclick`
-    // (or innermost cursor:pointer) is a real click target the agent must see, not
-    // a semantic control to defer. Treat none/presentation (and the first token of
-    // a multi-token role) as "no role".
-    const hasExplicitRole = (el) => {
-      const role = (el.getAttribute("role") || "").trim().split(/\s+/)[0].toLowerCase();
-      return role !== "" && role !== "none" && role !== "presentation";
-    };
+    // The heuristic passes do NOT veto an element for carrying an explicit
+    // `role`. `seen` already holds everything the semantic pass collected (the
+    // interactive ARIA roles in INTERACTIVE_SELECTOR), so the `seen.has(el)`
+    // guard in each pass dedupes those. A role the semantic pass did NOT collect
+    // does not negate a real affordance the element ALSO carries (`onclick` /
+    // `jsaction`, `tabindex >= 0`, or an innermost `cursor:pointer`): a
+    // non-allowlisted widget role (`option` / `treeitem` / `gridcell` /
+    // `menuitemcheckbox` / `menuitemradio` / `spinbutton` / `row` / `cell`), a
+    // structural role on a clickable card, an invalid/misspelled role, and
+    // `role="none"` / `"presentation"` are all real targets when they carry an
+    // affordance. A role-based veto here dropped exactly those — a custom
+    // listbox / combobox / menu / tree / grid surfaced its container but none of
+    // its `role="option"` / `role="treeitem"` items, the element with the
+    // STRONGER interactive signal (a role + a marker) vanishing while a bare
+    // `<div onclick>` was kept. The affordance is the signal; the role attribute
+    // never overrides it. Dedup against the semantic pass is `seen.has(el)`
+    // alone, and the cursor:pointer pass keeps its own containment-redundancy
+    // guard so a role-bearing wrapper still can't phantom over its real control.
 
     const markers = new Set(markerEls);
     for (const el of tabindexEls) {
@@ -172,7 +179,6 @@
     for (const el of markers) {
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
-      if (hasExplicitRole(el)) continue;
       if (isDegenerate(el.getBoundingClientRect())) continue;
       if (!isVisible(el)) continue;
       add(el);
@@ -198,7 +204,6 @@
       const el = everything[i];
       if (seen.has(el)) continue;
       if (STANDARD_TAGS.has(el.tagName.toLowerCase())) continue;
-      if (hasExplicitRole(el)) continue;
       const rect = el.getBoundingClientRect();
       if (rect.bottom < 0 || rect.top > innerHeight) continue;
       if (isDegenerate(rect)) continue;
