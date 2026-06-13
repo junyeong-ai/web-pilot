@@ -68,31 +68,16 @@ where
         let reply = match read_frame(&mut reader, MAX_LINE_BYTES).await? {
             Frame::Eof => break,
             Frame::Line(line) if line.trim().is_empty() => continue,
+            // The release profile builds with `panic = "abort"`, so a
+            // `catch_unwind` here would be dead weight — an unwind never
+            // happens to catch. Robustness comes instead from removing the
+            // reachable panic paths at the root (e.g. the `do_wait` timeout
+            // clamp that stops a pathological `timeout_ms` from overflowing an
+            // `Instant`), not from a guard the build strips to a no-op.
             Frame::Line(line) => {
-                // Isolate a panic in tool dispatch: an `unwrap`/`expect` reached
-                // mid-handler must not unwind through the stdio loop and kill a
-                // long-lived MCP session (every later tool call would get no
-                // response). Catch it, reset the transport (its state may be
-                // inconsistent past the unwind — the next call reopens), and
-                // reply with a JSON-RPC internal error. The id is unrecoverable
-                // past the panic, so null per spec.
-                let fut = std::panic::AssertUnwindSafe(handle_line(
-                    &connect,
-                    &mut transport,
-                    &mut initialized,
-                    &line,
-                ));
-                match futures_util::FutureExt::catch_unwind(fut).await {
-                    Ok(Some(reply)) => reply,
-                    Ok(None) => continue, // a notification — no response
-                    Err(_panic) => {
-                        transport = None;
-                        error_reply(
-                            Value::Null,
-                            -32603,
-                            "internal error: tool dispatch panicked",
-                        )
-                    }
+                match handle_line(&connect, &mut transport, &mut initialized, &line).await {
+                    Some(reply) => reply,
+                    None => continue, // a notification — no response
                 }
             }
             Frame::OverCap => error_reply(Value::Null, -32700, "request exceeds size limit"),

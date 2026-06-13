@@ -123,6 +123,13 @@ impl LocalTransport {
         condition: WaitCondition,
         timeout_ms: u64,
     ) -> Result<ResponseData> {
+        // Clamp at the in-page timer ceiling: `setTimeout`/`setInterval` in the
+        // bridge silently overflow past `i32::MAX` ms (~24.8 days) and fire
+        // immediately, and `Instant::now() + Duration::from_millis(u64::MAX)`
+        // PANICS on overflow (a client-reachable process kill via a pathological
+        // `timeout_ms`). One clamp at the entry fixes both — no realistic wait
+        // approaches 24 days, so it only ever bounds a degenerate value.
+        let timeout_ms = timeout_ms.min(i32::MAX as u64);
         if matches!(condition, WaitCondition::Navigation) {
             return match self
                 .page

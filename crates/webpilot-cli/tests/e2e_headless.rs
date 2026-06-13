@@ -2548,6 +2548,26 @@ fn headless_behavioral_flow() {
         stdout(&alive)
     );
 
+    // A pathological `--timeout` must not overflow the deadline `Instant` — on
+    // a release build (`panic = "abort"`) that overflow was a process-killing
+    // panic. do_wait clamps the timeout at the in-page timer ceiling, and since
+    // `body` exists immediately the wait satisfies at once rather than running
+    // (or panicking). u64::MAX seconds saturating_mul(1000) reaches do_wait,
+    // which clamps to i32::MAX ms.
+    let huge = fx.run(&[
+        "wait",
+        "--timeout",
+        "18446744073709551615",
+        "selector",
+        "body",
+    ]);
+    assert_eq!(
+        code(&huge),
+        0,
+        "a pathological timeout must clamp and satisfy immediately, never panic: {}",
+        stdout(&huge)
+    );
+
     // Drag whose source and target can't share the viewport (far apart) fails
     // loud (`InvalidArgument`) instead of releasing into empty space and
     // reporting success.

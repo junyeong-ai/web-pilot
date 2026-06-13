@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.215] - 2026-06-13
+
+### Fixed
+
+- **A pathological `wait` timeout no longer kills the process.** A
+  `timeout_ms` near `u64::MAX` (reachable directly via the MCP `browser_wait`
+  tool) made headless `do_wait` compute `Instant::now() +
+  Duration::from_millis(timeout_ms)`, which **panics on overflow** — and under
+  the release profile's `panic = "abort"` that aborted the whole process
+  (the MCP server died mid-session). `do_wait` now clamps the timeout at the
+  in-page timer ceiling (`i32::MAX` ms, ~24.8 days); the browser mode clamps
+  the same value (where it also stopped a silent `setTimeout` overflow that
+  fired an instant false timeout). No realistic wait approaches the ceiling.
+- **Removed the v0.4.214 MCP `catch_unwind`** — it was dead weight under
+  `panic = "abort"` (an unwind never happens to catch). Robustness comes from
+  removing the reachable panic path at the root (the clamp above), not a guard
+  the release build strips to a no-op. The MCP lifecycle gating (-32002 before
+  `initialize`) and strict action schemas from v0.4.214 are unaffected.
+
 ## [0.4.214] - 2026-06-13
 
 ### Fixed

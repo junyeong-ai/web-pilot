@@ -187,8 +187,12 @@ async function handleWait(command) {
   const cond = command.condition || { until: "idle" };
   // `?? `, not `|| `: a zero timeout is a valid "poll once, don't wait" request
   // that headless preserves, so coercing 0 to the 10s default here would make
-  // the two modes diverge.
-  const timeoutMs = command.timeout_ms ?? 10000;
+  // the two modes diverge. Clamp at the `setTimeout` ceiling (i32::MAX ms,
+  // ~24.8 days): a larger value silently overflows the in-page timer and fires
+  // immediately (a false instant timeout) — the headless `do_wait` clamps the
+  // same value (where it also prevents an Instant-overflow panic), so the two
+  // modes agree on a degenerate timeout too.
+  const timeoutMs = Math.min(command.timeout_ms ?? 10000, 0x7fffffff);
 
   if (cond.until === "navigation") {
     // The main frame finished a document navigation — the headless
