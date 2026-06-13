@@ -521,11 +521,21 @@ impl InteractiveElement {
             // valid token; authors write `role="<custom> button"` fallbacks), so
             // match the query against any token — `--role button` finds
             // `role="custom button"` — not the raw string, which would miss it.
+            // `split_ascii_whitespace`, NOT `split_whitespace`: HTML attribute token
+            // lists split on ASCII whitespace only (HTML "space characters"), the
+            // exact set the bridge's CSS `[role~="..."]` selector uses — so the
+            // collected set and the matched set agree. The Unicode `split_whitespace`
+            // would split a non-ASCII separator (NBSP) the selector treats as part of
+            // one token, diverging. Matching is case-INSENSITIVE on purpose: it is a
+            // user-facing filter, so `--role Button` finding `role="button"` is the
+            // forgiving behavior (the CSS selector stays case-sensitive per ARIA, but
+            // an off-case role still reaches the snapshot via its affordance).
             let role_lower = role.to_lowercase();
-            let explicit = self
-                .role
-                .as_ref()
-                .is_some_and(|r| r.to_lowercase().split_whitespace().any(|t| t == role_lower));
+            let explicit = self.role.as_ref().is_some_and(|r| {
+                r.to_lowercase()
+                    .split_ascii_whitespace()
+                    .any(|t| t == role_lower)
+            });
             let implicit = self.implicit_role().is_some_and(|r| r == role_lower);
             if !explicit && !implicit {
                 return false;
@@ -925,6 +935,25 @@ mod tests {
             assert!(
                 !el.matches(&f),
                 "a role not among the whitespace tokens must not match: {miss}"
+            );
+        }
+        // ASCII-whitespace tokenization, matching CSS `[role~=...]` and the HTML
+        // token-list definition: a NON-breaking space (U+00A0) is NOT a token
+        // separator, so `role="button\u{a0}link"` is ONE token and matches neither
+        // `button` nor `link`. (Rust's Unicode `split_whitespace` would wrongly
+        // split it and over-match, diverging from the selector.)
+        let nbsp = InteractiveElement {
+            role: Some("button\u{a0}link".into()),
+            ..el.clone()
+        };
+        for q in ["button", "link"] {
+            let f = ElementFilter {
+                role: Some(q.into()),
+                ..Default::default()
+            };
+            assert!(
+                !nbsp.matches(&f),
+                "a non-ASCII-whitespace separator is not a token boundary: {q}"
             );
         }
         // Case-insensitive, like the single-token path.

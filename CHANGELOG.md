@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.237] - 2026-06-14
+
+### Fixed
+
+- **`find --role` tokenizes a multi-token role on ASCII whitespace, matching the
+  CSS `[role~="…"]` selector exactly.** v0.4.236 introduced the token match using
+  Rust's `split_whitespace`, which splits on *Unicode* whitespace; HTML attribute
+  token lists (and the bridge's `[role~="…"]` selector) split only on *ASCII*
+  whitespace. The two diverged on a non-ASCII separator (e.g. a non-breaking space
+  in a role) — the selector treats it as one token, Rust split it. Switched to
+  `split_ascii_whitespace` so the collected set and the matched set agree on the
+  spec-defined token boundary. (Found by a parallel codex + fresh review whose
+  broad verdict was CONVERGED; the case-insensitivity of `find --role` and the
+  32-char `role` field cap are intentional and now documented in-code — a
+  user-facing filter is deliberately case-forgiving, and no ARIA role approaches
+  32 chars.)
+
 ## [0.4.236] - 2026-06-14
 
 ### Fixed
