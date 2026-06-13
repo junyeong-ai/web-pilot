@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.230] - 2026-06-14
+
+### Fixed
+
+- **`navigate` to a 204/download/any "stay-put" response no longer hangs ~15s
+  and reports a false `NavigationFailed`.** Chrome answers `Page.navigate` with
+  `net::ERR_ABORTED` both for a TRANSITIONAL abort (a cross-site swap that
+  supersedes the load and commits a new document) and a TERMINAL one (a 204, a
+  download, an intercepted load — which keeps the previous document). The settle
+  loop only recognized a commit (URL change / loaderId match), so a terminal
+  abort never settled and spun to the full navigation timeout, then surfaced
+  `NavigationFailed` (exit 8) — even though the previous page is live and
+  capturable. `navigate_reconnect` now bounds an `ERR_ABORTED` wait by the short
+  PROBE: a transitional abort commits within it and settles as before; a terminal
+  one returns success on the still-live previous document. Fixed in both modes
+  (the browser-mode `waitNavigationSettled` had the identical defect). Verified
+  live: a 204 navigate now returns in ~2s with the previous document intact (was
+  15.3s + exit 8); a normal navigate is unchanged (~0.05s). A 204 reached via a
+  link click was already correct — this brings the direct-navigate path to parity.
+
 ## [0.4.229] - 2026-06-14
 
 ### Fixed

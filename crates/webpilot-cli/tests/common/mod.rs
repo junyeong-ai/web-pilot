@@ -167,6 +167,15 @@ pub fn spawn_server() -> String {
                     let _ = stream.write_all(&bytes);
                     return;
                 }
+                // A 204 No Content: the browser ABORTS the navigation (ERR_ABORTED)
+                // and keeps the previous document. `navigate` must return success
+                // fast on the still-live page, not spin to the navigation timeout
+                // and report a false NavigationFailed.
+                if req.starts_with("GET /empty204") {
+                    let _ =
+                        stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+                    return;
+                }
                 let (body, extra_headers) = if req.starts_with("GET /twoframes") {
                     (TWOFRAMES, "")
                 } else if req.starts_with("GET /framed2") {

@@ -118,8 +118,17 @@ async function settledActionUrl(tabId, beforeUrl, watch, navHint) {
 
 async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
   const start = Date.now();
+  // An ERR_ABORTED is a STAY-PUT (a 204/download/intercepted load), not a
+  // failure: it aborts without committing, leaving the previous document live.
+  // Bound it by the short PROBE_MS — a TRANSITIONAL abort (a swap) commits within
+  // it and settles below; a TERMINAL one never commits, so spinning to the full
+  // navigation timeout only delays a false NavigationFailed. Headless parity:
+  // navigate_reconnect bounds ERR_ABORTED by PROBE and returns success on the
+  // live previous document.
+  const budget = () =>
+    watch.error === "net::ERR_ABORTED" ? PROBE_MS : navigationTimeoutMs();
   try {
-    while (Date.now() - start < navigationTimeoutMs()) {
+    while (Date.now() - start < budget()) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (!tab) {
         // The tab vanished mid-navigation (closed, or a page `window.close()`).
@@ -175,6 +184,12 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
   // never finished parsing, which is a Timeout (exit 5 → retry), not a failure
   // (exit 8). Headless draws the identical split: `start_error` if present, else
   // a typed Timeout.
+  if (watch.error === "net::ERR_ABORTED") {
+    // No new document committed within PROBE_MS → a TERMINAL stay-put: the
+    // previous document is live and capturable. Settle on it (success), not a
+    // false NavigationFailed (headless parity).
+    return;
+  }
   if (watch.error) {
     const e = new Error(`Navigation failed: ${url}`);
     e.code = "NavigationFailed";

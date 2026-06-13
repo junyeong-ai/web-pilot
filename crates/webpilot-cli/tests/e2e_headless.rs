@@ -3098,6 +3098,25 @@ fn headless_behavioral_flow() {
         stdout(&frag_cap)
     );
 
+    // 8d-204. A 204 (or any stay-put response: download/intercepted) ABORTS the
+    //     navigation (ERR_ABORTED) without committing a new document — the previous
+    //     page stays live. `navigate` must return success FAST (bounded by PROBE),
+    //     not spin to the navigation timeout and report a false NavigationFailed,
+    //     and the previous document must stay capturable.
+    let nav204 = fx.run(&["action", "navigate", &format!("{base}/empty204")]);
+    assert_eq!(
+        code(&nav204),
+        0,
+        "navigate to a 204 stay-put response must succeed, not NavigationFailed/hang: {}",
+        stdout(&nav204)
+    );
+    let after204 = fx.run(&["capture", "--include", "dom"]);
+    assert!(
+        stdout(&after204).contains("cardwrap"),
+        "after a 204 the previous document must stay live and capturable: {}",
+        stdout(&after204)
+    );
+
     // 8d-image. `<input type=image>` is a submit button: it carries an implicit
     //     ARIA `button` role (its `alt` is the accessible name), so a semantic
     //     `find --role button` reaches it — pinning the implicit-role mapping end

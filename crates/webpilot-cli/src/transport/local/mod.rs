@@ -670,7 +670,24 @@ impl LocalTransport {
             }
         };
 
-        let deadline = std::time::Instant::now() + webpilot::settings::timeouts().navigation;
+        // ERR_ABORTED is a STAY-PUT, not a failure: a 204/download/intercepted
+        // load aborts without committing a new document, leaving the previous page
+        // live and capturable. Bound its wait by the short PROBE — a TRANSITIONAL
+        // abort (a swap that supersedes the load) commits a new document within it
+        // and settles below; a TERMINAL one never commits, and spinning to the
+        // full navigation deadline only delays a false NavigationFailed. (A
+        // concrete net error already returned above; a send `Err` keeps the long
+        // deadline so a real socket drop isn't masked.)
+        let aborted = matches!(
+            &start_error,
+            Some(WebPilotError::NavigationFailed { reason, .. }) if reason == "net::ERR_ABORTED"
+        );
+        let deadline = std::time::Instant::now()
+            + if aborted {
+                PROBE
+            } else {
+                webpilot::settings::timeouts().navigation
+            };
         let loader = loader_id.as_deref();
         loop {
             if let Some((target_id, target_url)) = self.bound_target().await {
@@ -714,6 +731,16 @@ impl LocalTransport {
             }
 
             if std::time::Instant::now() >= deadline {
+                if aborted {
+                    // No new document committed within PROBE → a TERMINAL stay-put
+                    // (a 204/download/intercepted load): the main frame's load
+                    // stopped without committing, so the PREVIOUS document is live
+                    // and capturable. Return success on it — not a 15s spin to a
+                    // false NavigationFailed.
+                    self.clear_active_frame().await;
+                    self.reinstall_monitors().await;
+                    return Ok(());
+                }
                 return Err(start_error
                     .unwrap_or(WebPilotError::Timeout {
                         kind: "navigation".into(),
