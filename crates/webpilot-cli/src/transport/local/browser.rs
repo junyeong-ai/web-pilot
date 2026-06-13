@@ -448,7 +448,13 @@ impl LocalTransport {
                     .filter(|f| f.name.as_deref() == Some(value.as_str()))
                     .collect();
                 if hits.len() > 1 {
-                    return Ok(ambiguous_frame_switch(&hits, format!("name \"{value}\"")));
+                    // The frame name is page-controlled — sanitize/cap it like the
+                    // URL path below, so a hostile name can't spoof or flood this
+                    // agent-facing ambiguity error.
+                    return Ok(ambiguous_frame_switch(
+                        &hits,
+                        format!("name \"{}\"", webpilot::types::line_safe_clip(value, 200)),
+                    ));
                 }
                 hits.into_iter().next()
             }

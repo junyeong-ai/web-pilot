@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.233] - 2026-06-14
+
+### Fixed
+
+The final two sanitization-completeness gaps a parallel codex + fresh sweep found
+(everything else — the whole agent-facing surface, concurrency, the full loop,
+204/redirect/race interaction — re-confirmed clean):
+
+- **The frame-switch "ambiguous by name" error now sanitizes the page-controlled
+  frame name.** Both modes (headless `browser.rs` and the SW `browser.js`)
+  embedded the raw frame `name` in the error while the URL path already clipped
+  it — a hostile name could spoof or flood that agent-facing error. Now runs
+  through `line_safe_clip` / `clipUrl` like the URL path.
+- **An input/textarea `placeholder` and an element's `name` (aria-label/title)
+  are now length-capped in extraction.** Every other snapshot string field is
+  clipped at the bridge (text 300, label 80), and the Rust renderer trusts that
+  by emitting them uncapped — but these four paths (`inputText` placeholder,
+  textarea placeholder, the `name` field, the `placeholder` field) skipped the
+  clip, so a 40 KB placeholder/aria-label flooded every `capture`/`find` line.
+  Now clipped to 300 (text) / 80 (name, placeholder), matching the documented
+  caps; the full value stays in the JSON channel. (Security was already intact —
+  bidi/newline were neutralized; only the length cap was missing.)
+
 ## [0.4.232] - 2026-06-14
 
 ### Fixed

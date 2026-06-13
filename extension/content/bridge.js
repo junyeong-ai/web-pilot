@@ -642,13 +642,13 @@
         const inputText = (e) => {
           if (["submit", "button", "reset"].includes(e.type)) return clip(String(e.value || ""), 300);
           if (e.type === "image") return clip(e.getAttribute("alt") || "", 300);
-          return e.placeholder || e.getAttribute("aria-label") || "";
+          return clip(e.placeholder || e.getAttribute("aria-label") || "", 300);
         };
         const text =
           tag === "input"
             ? inputText(el)
             : tag === "textarea"
-              ? el.placeholder || el.getAttribute("aria-label") || ""
+              ? clip(el.placeholder || el.getAttribute("aria-label") || "", 300)
               : clip(innerText, 300);
 
         // Display-only identifier — the actionable handle is the snapshot
@@ -665,11 +665,11 @@
           id: elemId,
           role: el.getAttribute("role") || undefined,
           text,
-          name: el.getAttribute("aria-label") || el.getAttribute("title") || undefined,
+          name: clip(el.getAttribute("aria-label") || el.getAttribute("title") || "", 80) || undefined,
           value: (el.value != null && el.value !== "")
             ? clip(String(el.value), 100)
             : undefined,
-          placeholder: el.placeholder || undefined,
+          placeholder: el.placeholder ? clip(el.placeholder, 80) : undefined,
           // `?? undefined`, not `||`: `href=""` is a real link to the current
           // page (focusable, ARIA role `link`) — collapsing the empty string
           // would strip its implicit role and `find --role link` would miss it.

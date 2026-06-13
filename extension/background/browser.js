@@ -392,7 +392,9 @@ async function handleFrameSwitch(selector) {
     for (const f of httpFrames) {
       if ((await readFrameName(tab.id, f.frameId)) === selector.value) hits.push(f);
     }
-    const ambiguous = ambiguousFrameSwitch(hits, `name "${selector.value}"`);
+    // The frame name is page-controlled — sanitize/cap it via clipUrl (the
+    // line_safe twin) so a hostile name can't spoof or flood this error.
+    const ambiguous = ambiguousFrameSwitch(hits, `name "${clipUrl(selector.value)}"`);
     if (ambiguous) return ambiguous;
     matched = hits[0] ?? null;
   } else if (selector.by === "url") {
