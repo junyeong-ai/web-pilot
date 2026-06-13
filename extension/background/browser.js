@@ -2,7 +2,7 @@
 // // Mirrors transport/local/browser.rs.
 
 import { err, exceptionErr, noPageErr, topErr } from "./errors.js";
-import { activeFrameId, activeTabId, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
+import { activeFrameId, activeTabId, ensureRestored, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { cdpEval, frameWorldContextId } from "./query.js";
 import { adoptedDocumentReady } from "./navigation.js";
@@ -204,6 +204,14 @@ async function handleTabList() {
 // ── Status ─────────────────────────────────────────────────────────────────
 
 async function handleStatus() {
+  // Restore the persisted pin FIRST. `status` is QUEUE_EXEMPT (it must answer a
+  // health check even on a busy worker), but after an MV3 idle eviction the
+  // in-memory `activeTabId` is null until a queued command restores it — and
+  // `status` is a common FIRST command. Without this restore it would fall
+  // through to the focused tab and misreport the pin (the next real command
+  // self-corrects, but a health check must not lie). `ensureRestored` is a fast
+  // `storage.session` read, not a queue op, so QUEUE_EXEMPT still holds.
+  await ensureRestored();
   // Report the pinned tab when one is set — that is the tab commands will act
   // on. Status is read-only, so it never pins as a side effect.
   let tab = null;

@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.227] - 2026-06-13
+
+### Fixed
+
+A re-review of v0.4.226's own fix caught a regression it introduced, plus two
+smaller follow-ups (the scroll/focus/select/navigate and service-worker
+orchestration sweeps were otherwise clean).
+
+- **Regression from v0.4.226: a visible `cursor:pointer` child of an *invisible*
+  interactive wrapper was dropped.** The new both-directions redundancy guard
+  applied `isVisible(c)` to the wrap direction only, not the inner-containment
+  direction. Because the interactive set is collected with no visibility gate
+  (visibility is applied at output), a `visibility:hidden` `<a>`/`<button>` lands
+  in that set, then the unguarded `c.contains(el)` marked its `visibility:visible`
+  child redundant — and the wrapper itself was dropped at output, so the real,
+  clickable child vanished too (unaddressable). The guard now requires
+  `isVisible(c)` in BOTH directions: a candidate is redundant only with a `c`
+  that will actually appear in the snapshot. The v0.4.226 inner-span phantom fix
+  is preserved (a visible button still suppresses its inherited-pointer span).
+- **`action focus` on a disabled control now names the disabled cause.** It
+  reported the generic "not a form control and has no tabindex" for a disabled
+  `<input>`/`<button>`, which IS a form control — it just refuses focus because
+  it is disabled. Now mirrors the click/type/select disabled wording.
+- **Browser mode: `status` restores the persisted pin before reporting.** After
+  an MV3 service-worker eviction the in-memory pin is null until a command
+  restores it; `status` (a common first command) skipped the restore and could
+  report the focused tab instead of the real pinned tab. It now restores first,
+  matching headless (always bound to its target).
+
 ## [0.4.226] - 2026-06-13
 
 ### Fixed

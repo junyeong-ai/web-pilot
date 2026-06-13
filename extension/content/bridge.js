@@ -213,20 +213,26 @@
       let redundant = false;
       for (const c of seen) {
         // Skip a pointer candidate that is REDUNDANT with an already-collected
-        // interactive node, in EITHER containment direction:
-        //   - it WRAPS a visible collected node (a card/row whose real control
-        //     is inside it) — surfacing the wrapper hands the agent a giant
-        //     phantom overlapping the actual button. A HIDDEN collected
-        //     descendant (e.g. a `display:none` input) is dropped from the
-        //     snapshot, so it must NOT mark the wrapper "not innermost" — that
-        //     would leave a real cursor:pointer click target unaddressable.
-        //   - it is CONTAINED BY a collected interactive node (a presentational
-        //     `<span>`/icon inside a `<button>`/`<a>` that inherits the
-        //     ancestor's `cursor:pointer`). Clicking it just clicks the
-        //     ancestor, so emitting it mints a phantom duplicate of a control
-        //     the agent already has — the most common pointer-inheritance case
-        //     (`button{cursor:pointer}` over inner label/icon spans, links).
-        if ((el.contains(c) && isVisible(c)) || c.contains(el)) {
+        // interactive node `c`, in EITHER containment direction — but ONLY when
+        // `c` will actually appear in the snapshot (`isVisible(c)`):
+        //   - the candidate WRAPS `c` (a card/row whose real control is inside
+        //     it) — surfacing the wrapper hands the agent a giant phantom
+        //     overlapping the actual button.
+        //   - the candidate is CONTAINED BY `c` (a presentational `<span>`/icon
+        //     inside a `<button>`/`<a>` that inherits the ancestor's
+        //     `cursor:pointer`) — clicking it just clicks `c`, so emitting it
+        //     mints a phantom duplicate of a control the agent already has (the
+        //     near-universal `button{cursor:pointer}` over inner label/icon
+        //     spans, default-styled links).
+        // The `isVisible(c)` guard is load-bearing in BOTH directions: `seen` is
+        // built by the semantic pass with NO visibility gate (visibility is
+        // applied only at the final output), so a collected-but-INVISIBLE `c`
+        // (e.g. a `visibility:hidden` `<a>` wrapping a `visibility:visible`
+        // child, or a `display:none` input) is dropped from the snapshot. It
+        // must never mark a genuinely-visible candidate redundant — that would
+        // drop a real, clickable element along with the invisible `c`, leaving
+        // it unaddressable.
+        if ((el.contains(c) || c.contains(el)) && isVisible(c)) {
           redundant = true;
           break;
         }
@@ -1271,6 +1277,15 @@
           // took focus (where `document.activeElement` only names the host, so we
           // descend the shadow-active chain to find it).
           if (r.target !== document.activeElement && r.target !== deepActiveElement()) {
+            // A disabled form control legitimately refuses focus — name THAT
+            // cause, not the generic "not focusable", mirroring how click/type/
+            // select report a disabled target. A real user can't focus it either.
+            if (isDisabled(r.target)) {
+              return err(
+                "InvalidArgument",
+                `Cannot focus a disabled <${r.target.tagName.toLowerCase()}> — a real user can't focus it`,
+              );
+            }
             return err(
               "InvalidArgument",
               `<${r.target.tagName.toLowerCase()}> took no focus — it is not a form control and has no tabindex`,

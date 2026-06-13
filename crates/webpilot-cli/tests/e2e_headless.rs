@@ -145,6 +145,16 @@ fn headless_behavioral_flow() {
         !elements.iter().any(|e| e["id"] == "ptrbtnlabel"),
         "a presentational child that only INHERITS its interactive ancestor's cursor:pointer must NOT be indexed (no phantom duplicate): {dom}"
     );
+    // The redundancy guard must NOT over-fire: a VISIBLE cursor:pointer child of
+    // a collected-but-INVISIBLE semantic ancestor (a `visibility:hidden` <a href>
+    // wrapping a `visibility:visible` child) must STAY indexed. The ancestor is
+    // in `seen` (the semantic pass has no visibility gate) but dropped from the
+    // snapshot; without the `isVisible(c)` guard on the inner-containment branch
+    // it dragged the real, clickable child down with it — unaddressable.
+    assert!(
+        elements.iter().any(|e| e["id"] == "vischild"),
+        "a visible cursor:pointer child of a visibility:hidden interactive wrapper must stay indexed: {dom}"
+    );
     assert!(
         !elements.iter().any(|e| e["id"] == "hiddenchild"),
         "a display:none element must never be indexed: {dom}"
