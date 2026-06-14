@@ -268,7 +268,7 @@ webpilot context list
 webpilot context close agent-A         # or `--all`
 ```
 
-Each context is a separate CDP browser context: cookies, localStorage, history are isolated. Up to 16 concurrent. Context state lives in `~/Library/Caches/webpilot/contexts/`.
+Each context is a separate CDP browser context: cookies, localStorage, history are isolated. Up to 16 concurrent. Context state lives under the cache root's `contexts/` subdir (per-OS root as in the artifact-path note above).
 
 ## Safety policy (gate which actions are allowed)
 

@@ -1,9 +1,11 @@
 # crate: webpilot
 
-The **wire types + protocol** library shared by the CLI, host, and extension —
-mostly pure types and serialization. The only I/O is path materialization
-(`dirs.rs`: `atomic_write`, `create_dir_all`) and the Native Messaging frame
-read/write (`native_messaging.rs`); both are leaf utilities, no async runtime.
+The **wire types + protocol** library shared by the CLI, host, and extension:
+wire types + serialization, plus a handful of leaf I/O utilities (path
+materialization in `dirs.rs`, config-file read in `settings.rs`, screenshot
+encode/write in `screenshot.rs`, and the NM/IPC framing in
+`native_messaging.rs`/`ipc.rs`). No async runtime, no browser — that lives in
+`webpilot-cli`.
 
 - `action.rs` — the `Action` enum, deriving `clap::Subcommand` and `serde`
   together (the CLI surface *is* the wire shape). `ActionKind` is the action
