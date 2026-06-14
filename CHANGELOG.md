@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.244] - 2026-06-14
+
+### Changed
+
+- **`href` is now clipped (256) at extraction, like every other display field.**
+  It was the one snapshot string field bounded only at the text render (50), not
+  at extraction — so a page of giant `data:` URLs could balloon the snapshot
+  JSON. With the per-field caps now complete, a pathological huge-`href` page
+  captures successfully instead of degrading into a transport-cap `Timeout`. No
+  function is lost: actions resolve by element index, never the href string, and
+  `href=""` (a current-page link, ARIA role `link`) is still preserved distinct
+  from an absent attribute. Found in the same I/O-layer review whose broad
+  verdict — the wedge fix, the reaper, the host-write bound, and a wide
+  robustness sweep (deep iframes, CSP, tab/context churn, 200k-element DOM,
+  pathological pages, sustained sessions) — was otherwise clean.
+
 ## [0.4.243] - 2026-06-14
 
 ### Fixed

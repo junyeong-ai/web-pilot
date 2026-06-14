@@ -679,10 +679,14 @@
             ? clip(String(el.value), 100)
             : undefined,
           placeholder: el.placeholder ? clip(el.placeholder, 80) : undefined,
-          // `?? undefined`, not `||`: `href=""` is a real link to the current
-          // page (focusable, ARIA role `link`) — collapsing the empty string
-          // would strip its implicit role and `find --role link` would miss it.
-          href: el.getAttribute("href") ?? undefined,
+          // `hasAttribute`, not `?? undefined`: `href=""` is a real link to the
+          // current page (focusable, ARIA role `link`) — collapsing the empty
+          // string would strip its implicit role and `find --role link` would
+          // miss it. Clipped (256) like every other display field, so a page of
+          // giant `data:` URLs can't balloon the snapshot past the transport cap
+          // into a failed capture; the agent acts by index, never the href
+          // string, and the text render caps it tighter (50) anyway.
+          href: el.hasAttribute("href") ? clip(el.getAttribute("href"), 256) : undefined,
           input_type: tag === "input" ? (el.type || undefined) : undefined,
           disabled: isDisabled(el),
           focused: active === el,
