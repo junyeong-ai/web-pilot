@@ -1,7 +1,7 @@
-// // Content-script link: bridge injection and request/response messaging.
-// // Mirrors the invoke_bridge / isolated-world bridge half of
-// // transport/local/mod.rs — here the manifest content script is the bridge's
-// // isolated world; ensureBridge just guarantees it is injected.
+// Content-script link: bridge injection and request/response messaging.
+// Mirrors the invoke_bridge / isolated-world bridge half of
+// transport/local/mod.rs — here the manifest content script is the bridge's
+// isolated world; ensureBridge just guarantees it is injected.
 
 import { sleep } from "./session.js";
 import { err } from "./errors.js";

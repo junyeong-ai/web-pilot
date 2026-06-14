@@ -1,5 +1,5 @@
-// // Native Messaging link to the host binary: connect, keepalive Ping,
-// // queueing, and inbound dispatch. The extension-side peer of host.rs.
+// Native Messaging link to the host binary: connect, keepalive Ping,
+// queueing, and inbound dispatch. The extension-side peer of host.rs.
 
 import { applyHostConfig } from "./session.js";
 import { processCommand } from "./router.js";

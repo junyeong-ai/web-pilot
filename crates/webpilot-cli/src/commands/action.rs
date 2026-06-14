@@ -76,7 +76,7 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
                 if let Some(ref tab) = new_tab {
                     extra.insert(
                         "new_tab".into(),
-                        serde_json::to_value(tab).unwrap_or(serde_json::Value::Null),
+                        serde_json::to_value(tab).expect("TabInfo serializes"),
                     );
                 }
                 return Ok(CommandOutput::Dom { snapshot, extra });
@@ -104,7 +104,7 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
                     json["url_changed"] = serde_json::json!(url);
                 }
                 if let Some(ref tab) = new_tab {
-                    json["new_tab"] = serde_json::to_value(tab).unwrap_or(serde_json::Value::Null);
+                    json["new_tab"] = serde_json::to_value(tab).expect("TabInfo serializes");
                 }
                 if let Some(ref ce) = capture_error {
                     json["capture_error"] = serde_json::json!(ce);

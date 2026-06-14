@@ -189,7 +189,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
         human_lines.push(format!("→ URL changed: {}", line_safe_clip(url, 200)));
     }
     if let Some(ref tab) = effect.new_tab {
-        items["new_tab"] = serde_json::to_value(tab).unwrap_or(serde_json::Value::Null);
+        items["new_tab"] = serde_json::to_value(tab).expect("TabInfo serializes");
         human_lines.push(format!(
             "→ New tab opened: {} (switched automatically)",
             line_safe_clip(&tab.url, 200)

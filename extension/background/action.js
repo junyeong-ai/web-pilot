@@ -1,5 +1,5 @@
-// // Page-mutating actions: dispatch, native key/hover/drag/upload, popup and
-// // navigation detection. Mirrors transport/local/action.rs.
+// Page-mutating actions: dispatch, native key/hover/drag/upload, popup and
+// navigation detection. Mirrors transport/local/action.rs.
 
 import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";

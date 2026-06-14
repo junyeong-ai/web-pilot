@@ -1,5 +1,5 @@
-// // Navigation settle: commit watch, settled-wait, and document readiness.
-// // Mirrors the navigation half of transport/local/mod.rs.
+// Navigation settle: commit watch, settled-wait, and document readiness.
+// Mirrors the navigation half of transport/local/mod.rs.
 
 import { PROBE_MS, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { rearmMonitors } from "./state.js";

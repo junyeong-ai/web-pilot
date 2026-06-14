@@ -160,6 +160,40 @@ pub enum PolicyKey {
     ContextClose,
 }
 
+impl PolicyKey {
+    /// Every variant, in declaration order — the single source the `policy`
+    /// command builds its "valid operations" guidance from, so the help text can
+    /// never drift from the enum (an added key is missing from the guidance, an
+    /// removed one lingers). Kept honest by `policy_key_all_lists_every_variant`.
+    pub const ALL: [PolicyKey; 25] = [
+        Self::Click,
+        Self::Type,
+        Self::KeyPress,
+        Self::Navigate,
+        Self::Back,
+        Self::Forward,
+        Self::Reload,
+        Self::Scroll,
+        Self::ScrollTo,
+        Self::Hover,
+        Self::Focus,
+        Self::Select,
+        Self::Upload,
+        Self::Drag,
+        Self::Eval,
+        Self::Fetch,
+        Self::DomSet,
+        Self::TabClose,
+        Self::CookieList,
+        Self::CookieSet,
+        Self::CookieDelete,
+        Self::SessionExport,
+        Self::SessionImport,
+        Self::Device,
+        Self::ContextClose,
+    ];
+}
+
 impl From<ActionKind> for PolicyKey {
     fn from(kind: ActionKind) -> Self {
         match kind {
@@ -962,6 +996,52 @@ mod tests {
             ..Default::default()
         };
         assert!(el.matches(&upper), "role match is case-insensitive");
+    }
+
+    #[test]
+    fn policy_key_all_lists_every_variant() {
+        // Exhaustive match: a NEW `PolicyKey` variant fails to compile here until
+        // it gets an arm — the prompt to also add it to `PolicyKey::ALL` (the
+        // single source the `policy` guidance is built from), which the round-trip
+        // and count asserts below then enforce. So the guidance can never silently
+        // omit a new key or keep listing a removed one.
+        for k in PolicyKey::ALL {
+            match k {
+                PolicyKey::Click
+                | PolicyKey::Type
+                | PolicyKey::KeyPress
+                | PolicyKey::Navigate
+                | PolicyKey::Back
+                | PolicyKey::Forward
+                | PolicyKey::Reload
+                | PolicyKey::Scroll
+                | PolicyKey::ScrollTo
+                | PolicyKey::Hover
+                | PolicyKey::Focus
+                | PolicyKey::Select
+                | PolicyKey::Upload
+                | PolicyKey::Drag
+                | PolicyKey::Eval
+                | PolicyKey::Fetch
+                | PolicyKey::DomSet
+                | PolicyKey::TabClose
+                | PolicyKey::CookieList
+                | PolicyKey::CookieSet
+                | PolicyKey::CookieDelete
+                | PolicyKey::SessionExport
+                | PolicyKey::SessionImport
+                | PolicyKey::Device
+                | PolicyKey::ContextClose => {}
+            }
+        }
+        // Every entry round-trips through Display/FromStr, with no duplicates.
+        let mut seen = std::collections::HashSet::new();
+        for k in PolicyKey::ALL {
+            let s = k.to_string();
+            assert_eq!(s.parse::<PolicyKey>().unwrap(), k, "{s} round-trips");
+            assert!(seen.insert(k), "no duplicate in ALL: {s}");
+        }
+        assert_eq!(seen.len(), PolicyKey::ALL.len());
     }
 
     #[test]

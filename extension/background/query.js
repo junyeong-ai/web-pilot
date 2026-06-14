@@ -1,5 +1,5 @@
-// // Page queries: eval (debugger-routed, CSP-immune), wait, dom get/set, fetch.
-// // Mirrors transport/local/query.rs.
+// Page queries: eval (debugger-routed, CSP-immune), wait, dom get/set, fetch.
+// Mirrors transport/local/query.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, timeoutErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, navigationTimeoutMs, resolveActiveTab, sleep } from "./session.js";

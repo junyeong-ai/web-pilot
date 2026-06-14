@@ -1,5 +1,5 @@
-// // Error envelopes — the wire shape of `WebPilotError` (code + message + data).
-// // Mirrors crates/webpilot/src/error.rs.
+// Error envelopes — the wire shape of `WebPilotError` (code + message + data).
+// Mirrors crates/webpilot/src/error.rs.
 
 function err(code, message, data) {
   return { code, message, ...(data || {}) };

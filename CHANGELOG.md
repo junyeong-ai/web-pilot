@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.239] - 2026-06-14
+
+A design-hygiene and internal-consistency pass from the same architecture review —
+each item makes the codebase match its own stated discipline, no behavior bent to
+keep it.
+
+### Fixed
+
+- **A liveness `Ping` is no longer turned into `TabNotFound` by a vanished pin.**
+  `command_needs_active_page` fell through a `_ => true` wildcard for `Ping`, so
+  after the pinned tab closed, the health probe failed with `TabNotFound` instead
+  of answering `Pong`. The classifier is now an **exhaustive** match (no wildcard)
+  — `Ping` is page-free, and a new command must classify itself rather than
+  silently inherit "needs the page", the same discipline as `policy_key()` /
+  `Cmd::execution()`.
+- **`policy set`'s unknown-operation guidance is built from `PolicyKey::ALL`**, so
+  it can never drift from the enum. The hand-written list had silently omitted
+  `device` and `context_close`; the message now lists every valid key, kept honest
+  by a `policy_key_all_lists_every_variant` test (a new variant fails to compile
+  until added).
+
+### Changed
+
+- **Serialization of a static-shape `TabInfo` now `expect`s instead of falling
+  back to `Value::Null`** (`action`/`find` new-tab JSON), per the project rule that
+  an impossible `to_value` failure must be loud, not silently represented as null.
+- **JS hygiene:** normalized the `// //` double-prefixed module banners (27 lines
+  across 11 background modules) to single `//`, and removed a stale duplicate
+  comment in `state.js` — the codebase's "delete cleanly" rule, applied to itself.
+
 ## [0.4.238] - 2026-06-14
 
 ### Fixed

@@ -1,5 +1,5 @@
-// // Debugger transport: per-tab attach serialisation and command send.
-// // Mirrors crates/webpilot-cli/src/cdp.rs.
+// Debugger transport: per-tab attach serialisation and command send.
+// Mirrors crates/webpilot-cli/src/cdp.rs.
 
 const CDP_VERSION = "1.3";
 

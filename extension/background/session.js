@@ -1,6 +1,6 @@
-// // Worker session state: the active tab/frame pins, armed-monitor flags, and
-// // host-pushed config — persisted across MV3 suspensions and restored before
-// // any command runs. Mirrors the persisted-pin state in transport/local/mod.rs.
+// Worker session state: the active tab/frame pins, armed-monitor flags, and
+// host-pushed config — persisted across MV3 suspensions and restored before
+// any command runs. Mirrors the persisted-pin state in transport/local/mod.rs.
 
 let activeFrameId = 0;
 let activeTabId = null;

@@ -1262,11 +1262,17 @@ async fn resolve_target(
 /// to needing the page — the safe choice (fail loud) until classified otherwise.
 fn command_needs_active_page(command: &Command) -> bool {
     match command {
+        // Tab management and status resolve via the target list / browser
+        // session, not the pinned page, so a vanished pin must not block them (it
+        // would block the very recovery). `Ping` is a pure liveness probe — it
+        // must ALWAYS answer `Pong`, never be turned into a `TabNotFound` by a
+        // vanished pin.
         Command::TabList
         | Command::TabNew { .. }
         | Command::TabSwitch { .. }
         | Command::TabClose { .. }
-        | Command::Status => false,
+        | Command::Status
+        | Command::Ping => false,
         // The cookie jar is browser-global: list/set/delete take their scope
         // from the URL argument, not from the active page (the Network calls
         // ride whatever target session is attached — same jar either way).
@@ -1286,7 +1292,26 @@ fn command_needs_active_page(command: &Command) -> bool {
         Command::SessionImport { data } => serde_json::from_str::<Value>(data)
             .map(|v| state::storage_to_import(&v))
             .unwrap_or(false),
-        _ => true,
+        // Everything else reads or mutates the pinned page — listed exhaustively
+        // (no `_ => true` wildcard) so a NEW command must classify itself here
+        // rather than silently inherit "needs the page", the same exhaustive-match
+        // discipline as `policy_key()` and `Cmd::execution()`.
+        Command::Capture { .. }
+        | Command::Action { .. }
+        | Command::Eval { .. }
+        | Command::Wait { .. }
+        | Command::DomSet { .. }
+        | Command::DomGet { .. }
+        | Command::Fetch { .. }
+        | Command::FrameList
+        | Command::FrameSwitch { .. }
+        | Command::ConsoleStart
+        | Command::ConsoleRead { .. }
+        | Command::ConsoleClear
+        | Command::NetworkStart
+        | Command::NetworkRead { .. }
+        | Command::NetworkClear
+        | Command::SessionExport => true,
     }
 }
 

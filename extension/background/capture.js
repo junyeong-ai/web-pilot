@@ -1,5 +1,5 @@
-// // Page capture: DOM snapshot, screenshots, PDF, accessibility tree.
-// // Mirrors transport/local/capture.rs.
+// Page capture: DOM snapshot, screenshots, PDF, accessibility tree.
+// Mirrors transport/local/capture.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
 import { activeFrameId, annotationPaintMs, resolveActiveTab, sleep } from "./session.js";

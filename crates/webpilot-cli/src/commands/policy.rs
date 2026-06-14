@@ -58,14 +58,19 @@ fn parse_verdict(verdict: &str) -> Result<PolicyVerdict> {
 pub fn run(args: PolicyArgs) -> Result<CommandOutput> {
     match args.command {
         PolicyCommand::Set { operation, verdict } => {
-            let operation: PolicyKey =
-                operation
-                    .parse()
-                    .map_err(|_| WebPilotError::InvalidArgument {
-                        detail: format!(
-                            "unknown operation '{operation}' (any action kind, or: eval, fetch, dom_set, tab_close, cookie_list, cookie_set, cookie_delete, session_export, session_import)"
-                        ),
-                    })?;
+            let operation: PolicyKey = operation.parse().map_err(|_| {
+                // Build the valid-operation list from `PolicyKey::ALL` so it can
+                // never drift from the enum (a hand-written list silently omitted
+                // `device` and `context_close`).
+                let valid = PolicyKey::ALL
+                    .iter()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                WebPilotError::InvalidArgument {
+                    detail: format!("unknown operation '{operation}' — valid: {valid}"),
+                }
+            })?;
             policy::set(operation, parse_verdict(&verdict)?)?;
             Ok(CommandOutput::Ok("OK".into()))
         }

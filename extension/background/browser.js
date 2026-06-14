@@ -1,5 +1,5 @@
-// // Browser-level commands: tabs, frames, status.
-// // Mirrors transport/local/browser.rs.
+// Browser-level commands: tabs, frames, status.
+// Mirrors transport/local/browser.rs.
 
 import { err, exceptionErr, noPageErr, topErr } from "./errors.js";
 import { activeFrameId, activeTabId, ensureRestored, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";

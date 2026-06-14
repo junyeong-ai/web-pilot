@@ -1,5 +1,5 @@
-// // Command router: one exhaustive dispatch over the wire `Command` tags —
-// // the JS twin of LocalTransport::send, guarded by tests/browser_parity.rs.
+// Command router: one exhaustive dispatch over the wire `Command` tags —
+// the JS twin of LocalTransport::send, guarded by tests/browser_parity.rs.
 
 import { err, exceptionErr, otherErr, topErr } from "./errors.js";
 import { ensureRestored } from "./session.js";

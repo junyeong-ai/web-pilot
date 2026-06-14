@@ -1,5 +1,5 @@
-// // State-keeping commands: console/network monitors, cookies, session
-// // export/import. Mirrors transport/local/state.rs.
+// State-keeping commands: console/network monitors, cookies, session
+// export/import. Mirrors transport/local/state.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
 import { activeFrameId, monitoringState, resolveActiveTab, saveMonitoringState } from "./session.js";
@@ -119,8 +119,6 @@ async function injectNetworkMonitoring(tabId) {
       // capture (a giant data: URL must not balloon the buffer/payload), and
       // every recording wrapped so it can never break the page's own fetch/XHR.
       // Headless NETWORK_INSTALL_JS parity.
-      // Intrinsics captured by binding the receiver (a page swapping Date.now /
-      // performance.now after install can't skew the recording).
       const nowFn = Date.now;
       const perfObj = performance;
       const perfNowRaw = perfObj.now;
