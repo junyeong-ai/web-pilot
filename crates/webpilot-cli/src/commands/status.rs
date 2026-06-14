@@ -198,9 +198,10 @@ fn is_launchable(path: &std::path::Path) -> bool {
 /// Inspect one candidate manifest path. `None` = no manifest there (don't count
 /// it); `Some(state)` classifies a manifest that does exist.
 ///
-/// Validates every field Chrome requires to launch the host (`name`, `type`,
-/// a launchable `path`, and the authorised extension id) in one place, so no
-/// single missing or wrong field can read as a healthy registration.
+/// Validates every field Chrome requires to launch the host (`name`, a present
+/// `description`, `type`, an absolute launchable `path`, and the authorised
+/// extension id) in one place, so no single missing or wrong field can read as a
+/// healthy registration.
 fn evaluate_manifest(path: &std::path::Path) -> Option<ManifestState> {
     let content = std::fs::read_to_string(path).ok()?;
     let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content) else {
@@ -382,11 +383,15 @@ mod tests {
             );
         }
 
-        // Complete shape, but `path` is not a launchable binary (missing, or a
-        // directory — the false-OK a bare `exists()` would pass).
+        // Complete shape, but `path` is not a launchable binary: missing, a
+        // directory, or a non-executable regular file (each a false-OK a bare
+        // `exists()` would pass).
+        let nonexec = dir.join("notexec");
+        std::fs::write(&nonexec, b"not a program").unwrap(); // 0o644 — no exec bit
         for (file, p) in [
             ("binmissing.json", "/no/such/bin"),
             ("dirpath.json", dir.to_str().unwrap()),
+            ("nonexec.json", nonexec.to_str().unwrap()),
         ] {
             assert!(
                 matches!(
@@ -397,16 +402,20 @@ mod tests {
             );
         }
 
-        // Complete and launchable, but authorises a DIFFERENT id (a wrong
-        // `--extension-id` override) — the case a healthy-looking manifest hides.
-        assert!(matches!(
-            eval(
-                "mismatch.json",
-                mf(name, desc, ty, &bin, "abcdefghijklmnopabcdefghijklmnop")
-            ),
-            Some(ManifestState::IdMismatch)
-        ));
-
+        // Complete and launchable, but authorises a DIFFERENT id, or omits
+        // `allowed_origins` entirely — both mean the loaded extension can't connect.
+        for (file, origin) in [
+            ("mismatch.json", "abcdefghijklmnopabcdefghijklmnop"),
+            ("noorigins.json", ""),
+        ] {
+            assert!(
+                matches!(
+                    eval(file, mf(name, desc, ty, &bin, origin)),
+                    Some(ManifestState::IdMismatch)
+                ),
+                "{file} must be IdMismatch"
+            );
+        }
         // The exact shape `setup` writes → healthy.
         assert!(matches!(
             eval("ok.json", mf(name, desc, ty, &bin, id)),

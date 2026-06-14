@@ -64,7 +64,7 @@ pub enum WebPilotError {
     ConnectionLost { detail: String },
 
     #[error(
-        "Extension v{extension} does not match this binary's bundled v{expected}. Reinstall: webpilot setup extension, then reload it at chrome://extensions"
+        "Extension v{extension} does not match this binary's bundled v{expected}. Reinstall: webpilot setup extension, then reload it at your browser's extensions page"
     )]
     VersionMismatch { extension: String, expected: String },
 
