@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Browser mode now works with any installed Chrome-family browser**, not only
+  branded Google Chrome. `setup` registers the Native Messaging host with every
+  Chrome-family browser present (Chrome, Chromium, Brave, Edge, channels), writes
+  nothing and says so when none is installed, and `uninstall` removes every
+  registration and reclaims the directories it created. Previously a
+  Chromium/Brave/Edge user got a success message for a registration their browser
+  would never read.
+- **`status` validates the full host manifest** (`name`, `type`, `path`, and the
+  authorised extension id) before reporting it healthy, so a manifest missing any
+  required field — or a wrong `--extension-id` override — is reported as the
+  problem it is instead of a false "OK".
+
+### Changed
+
+- Dropped the Chrome-only `--open` auto-launch from `setup`: the Chrome family has
+  no shared extensions URL, so setup prints browser-neutral load-unpacked steps
+  rather than guessing which browser to open.
+
 ## [0.6.1] - 2026-06-14
 
 ### Changed
