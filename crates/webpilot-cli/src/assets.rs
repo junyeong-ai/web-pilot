@@ -14,7 +14,9 @@
 //! (it can reappear in the source tree between builds); everything else under
 //! the trees is written verbatim.
 
+use base64::Engine as _;
 use include_dir::{Dir, include_dir};
+use sha2::{Digest, Sha256};
 use std::io;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -41,6 +43,41 @@ pub fn expected_extension_version() -> &'static str {
             .as_str()
             .expect("manifest.json carries a string version")
             .to_owned()
+    })
+}
+
+/// The Chrome extension id this binary's extension resolves to, derived from
+/// the embedded manifest's pinned public `key`.
+///
+/// Because the manifest carries a fixed `key`, Chrome assigns a **stable** id
+/// regardless of the unpacked-load path or machine — and that id is exactly
+/// what Chrome computes: SHA-256 of the DER-decoded key, first 16 bytes, each
+/// nibble mapped `0..=15` → `'a'..='p'`. Deriving it here from the same embedded
+/// key means `setup nm-host` can authorise the right `chrome-extension://` origin
+/// on its own, so the user never has to copy the id out of `chrome://extensions`.
+pub fn expected_extension_id() -> &'static str {
+    static ID: OnceLock<String> = OnceLock::new();
+    ID.get_or_init(|| {
+        let manifest = EXTENSION
+            .get_file("manifest.json")
+            .expect("embedded extension always carries manifest.json")
+            .contents_utf8()
+            .expect("manifest.json is valid UTF-8");
+        let parsed: serde_json::Value =
+            serde_json::from_str(manifest).expect("embedded manifest.json is valid JSON");
+        let key_b64 = parsed["key"]
+            .as_str()
+            .expect("embedded manifest.json pins a public `key` (stable extension id)");
+        let der = base64::engine::general_purpose::STANDARD
+            .decode(key_b64)
+            .expect("manifest `key` is valid base64 DER");
+        let digest = Sha256::digest(der);
+        let mut id = String::with_capacity(32);
+        for byte in &digest[..16] {
+            id.push((b'a' + (byte >> 4)) as char);
+            id.push((b'a' + (byte & 0x0f)) as char);
+        }
+        id
     })
 }
 
@@ -165,6 +202,19 @@ mod tests {
         assert!(EXTENSION.get_file("manifest.json").is_some());
         assert!(EXTENSION.get_file("content/bridge.js").is_some());
         assert!(EXTENSION.get_file("background/service-worker.js").is_some());
+    }
+
+    #[test]
+    fn extension_id_is_derived_from_the_pinned_manifest_key() {
+        let id = expected_extension_id();
+        // The Chrome unpacked-extension id alphabet: 32 chars in [a-p].
+        assert_eq!(id.len(), 32);
+        assert!(id.bytes().all(|b| (b'a'..=b'p').contains(&b)));
+        // Pinned constant: the manifest `key` is fixed, so the id never moves.
+        // If this assertion fails, the `key` changed — which shifts every prior
+        // install's id and every NM host's allowed_origins, so it must be a
+        // deliberate, coordinated change, not an accident.
+        assert_eq!(id, "jfghnlpbmpkplmemfemnkfckelipodfk");
     }
 
     #[test]

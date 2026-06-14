@@ -266,8 +266,9 @@ webpilot device reset                                  # clear emulation
 
 ```bash
 # Set up browser mode
+webpilot setup nm-host                         # register the NM host (extension id auto-detected — nothing to copy)
 webpilot setup extension                       # extract the extension + Chrome guide (opens chrome://extensions)
-webpilot setup nm-host --extension-id <ID>     # register the Native Messaging host
+# just "Load unpacked" the printed path — no ID to copy
 
 # Use it
 webpilot --browser capture --include dom
@@ -435,10 +436,10 @@ Errors print with guidance text, and in JSON mode come out as `{"code": "...", "
 ## Lifecycle
 
 ```bash
-webpilot setup                 # interactive setup: skill + extension (then guides the nm-host step)
+webpilot setup                 # interactive setup: skill + extension + NM host (id auto-detected; one manual "Load unpacked")
 webpilot setup skill           # (re)install just the skill
 webpilot setup extension       # extract the extension + Chrome guide (opens chrome://extensions)
-webpilot setup nm-host --extension-id <ID>
+webpilot setup nm-host         # register the NM host (extension id auto-detected; --extension-id overrides for a different build)
 
 webpilot self update           # self-update to the latest release (atomic, sha256-verified)
 webpilot self update --version X.Y.Z   # pin a version

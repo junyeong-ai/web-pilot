@@ -36,7 +36,13 @@ pub fn run(args: ExtensionArgs, yes: bool, open: bool) -> Result<CommandOutput> 
         });
     }
 
-    let outcome = install(ChromeOpen::from_flags(yes, open))?;
+    let mut outcome = install(ChromeOpen::from_flags(yes, open))?;
+    // Standalone `setup extension`: point the user at the one remaining step.
+    // The id is derived, so `setup nm-host` needs no argument. (The orchestrated
+    // `setup` runs nm-host itself, so it composes its own message instead.)
+    outcome.human.push_str(
+        "\n\n  Then enable browser mode (extension id auto-detected):\n    webpilot setup nm-host",
+    );
     Ok(CommandOutput::Data {
         json: outcome.json,
         human: outcome.human,
@@ -64,9 +70,7 @@ pub(crate) fn install(chrome: ChromeOpen) -> Result<StepOutcome> {
     human.push_str("    1. Open chrome://extensions\n");
     human.push_str("    2. Enable Developer mode (top-right toggle)\n");
     human.push_str("    3. Click \"Load unpacked\" and select:\n");
-    human.push_str(&format!("       {}\n", dest.display()));
-    human.push_str("    4. Copy the 32-character Extension ID\n");
-    human.push_str("    5. Run: webpilot setup nm-host --extension-id <ID>");
+    human.push_str(&format!("       {}", dest.display()));
 
     Ok(StepOutcome {
         json: serde_json::json!({

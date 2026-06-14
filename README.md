@@ -266,8 +266,9 @@ webpilot device reset                                  # 에뮬레이션 해제
 
 ```bash
 # 브라우저 모드 준비
+webpilot setup nm-host                         # NM 호스트 등록 (확장 ID 자동 탐지 — 복사 불필요)
 webpilot setup extension                       # 확장 추출 + Chrome 안내 (chrome://extensions 열림)
-webpilot setup nm-host --extension-id <ID>     # Native Messaging 호스트 등록
+# 안내대로 "압축해제된 확장 로드"만 하면 끝 (ID 복사 단계 없음)
 
 # 사용
 webpilot --browser capture --include dom
@@ -435,10 +436,10 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 ## 라이프사이클
 
 ```bash
-webpilot setup                 # 대화형 setup: 스킬 + 확장 설치 (NM 호스트 등록은 다음 단계로 안내)
+webpilot setup                 # 대화형 setup: 스킬 + 확장 + NM 호스트 (확장 ID 자동 탐지; 수동은 "압축해제된 확장 로드" 한 번)
 webpilot setup skill           # 스킬만 (재)설치
 webpilot setup extension       # 확장 추출 + Chrome 안내 (chrome://extensions 열림)
-webpilot setup nm-host --extension-id <ID>
+webpilot setup nm-host         # NM 호스트 등록 (확장 ID 자동 탐지; --extension-id 는 다른 빌드용 override)
 
 webpilot self update           # 최신 릴리스로 자가 업데이트 (atomic, sha256 검증)
 webpilot self update --version X.Y.Z   # 버전 고정

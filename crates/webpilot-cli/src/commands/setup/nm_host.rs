@@ -1,29 +1,50 @@
 //! `webpilot setup nm-host` — register the Native Messaging host manifest.
 //!
-//! After loading the unpacked extension, Chrome assigns it a 32-character
-//! Extension ID. The NM host manifest binds that ID to the absolute path of
-//! the `webpilot` binary, so Chrome can spawn the binary as an NM host on
-//! demand.
+//! The manifest binds the extension's id to the absolute path of the `webpilot`
+//! binary, so Chrome can spawn it as an NM host on demand. The id does **not**
+//! have to be read off `chrome://extensions`: the embedded manifest pins a
+//! public `key`, so the extension's id is a stable constant this binary derives
+//! itself (`assets::expected_extension_id`). `--extension-id` is therefore
+//! optional — pass it only to authorise a *different* build.
 
 use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
+use super::StepOutcome;
+use crate::assets;
 use crate::output::CommandOutput;
 
 #[derive(Args)]
 pub struct NmHostArgs {
-    /// Chrome extension ID copied from chrome://extensions.
+    /// Extension id to authorise. Defaults to this binary's own extension id,
+    /// derived from the embedded manifest key (stable across machines). Pass it
+    /// only to authorise a different build.
     #[arg(long)]
-    pub extension_id: String,
+    pub extension_id: Option<String>,
 }
 
 pub fn run(args: NmHostArgs) -> Result<CommandOutput> {
-    let ext_id = args.extension_id.trim().to_owned();
+    let outcome = install(args.extension_id)?;
+    Ok(CommandOutput::Data {
+        json: outcome.json,
+        human: outcome.human,
+    })
+}
+
+/// Write the NM host manifest authorising `extension_id`, or this binary's own
+/// derived id when `None`. Shared by `setup nm-host` and the orchestrated
+/// `setup` walkthrough.
+pub(crate) fn install(extension_id: Option<String>) -> Result<StepOutcome> {
+    let (ext_id, auto) = match extension_id {
+        Some(id) => (id.trim().to_owned(), false),
+        None => (assets::expected_extension_id().to_owned(), true),
+    };
     if !is_valid_extension_id(&ext_id) {
         // A malformed extension ID is user input — a typed InvalidArgument (exit 7),
         // not a generic Other (exit 1): exit codes name the error class, never
-        // inferred from a message.
+        // inferred from a message. (The derived id is always valid; this guards
+        // an explicit override.)
         return Err(webpilot::WebPilotError::InvalidArgument {
             detail: format!(
                 "invalid extension ID: {ext_id} — expected 32 characters in [a-p], \
@@ -58,22 +79,28 @@ pub fn run(args: NmHostArgs) -> Result<CommandOutput> {
     webpilot::dirs::atomic_write(&manifest_path, json.as_bytes())?;
 
     let human = format!(
-        "✓ NM host registered\n  \
+        "✓ NM host registered{}\n  \
          Manifest: {}\n  \
          Binary:   {}\n  \
          Extension: {ext_id}\n\
          \n  \
-         Reload the extension in Chrome, then verify with:\n  \
+         Once the unpacked extension is loaded in Chrome, verify with:\n  \
         \x20\x20webpilot --browser status",
+        if auto {
+            " (extension id auto-detected)"
+        } else {
+            ""
+        },
         manifest_path.display(),
         binary_path.display(),
     );
 
-    Ok(CommandOutput::Data {
+    Ok(StepOutcome {
         json: serde_json::json!({
             "manifest_path": manifest_path.display().to_string(),
             "binary_path": binary_path.display().to_string(),
             "extension_id": ext_id,
+            "auto_detected": auto,
         }),
         human,
     })

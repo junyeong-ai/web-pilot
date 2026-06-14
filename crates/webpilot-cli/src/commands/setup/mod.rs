@@ -54,12 +54,16 @@ pub async fn run(args: SetupArgs) -> Result<CommandOutput> {
     }
 }
 
-/// Orchestrated walkthrough: skill + extension + extension-loading guidance.
+/// Orchestrated walkthrough: skill install, extension extraction, and NM host
+/// registration — the full `--browser` setup minus the one step only the user
+/// can perform (loading the unpacked extension in Chrome).
 ///
-/// `nm-host` registration is *not* invoked here because it requires the
-/// 32-character extension ID, which the user can only obtain after loading
-/// the unpacked extension into Chrome. The walkthrough ends by printing the
-/// exact command the user should run once they have the ID.
+/// `nm-host` *is* registered here. The extension's id is a stable constant this
+/// binary derives from its embedded manifest key (`assets::expected_extension_id`),
+/// so the host can be authorised before the extension is ever loaded — and a
+/// manifest that exists before the service worker's startup `connectNative` is
+/// exactly what browser mode wants. The old reason to defer it (the id being
+/// unknown until Chrome assigned one) no longer holds.
 ///
 /// `open=true` (or interactive `y` to the prompt) launches `chrome://extensions`
 /// after extraction. `--yes` alone takes the CI-safe default of *not* opening
@@ -67,17 +71,15 @@ pub async fn run(args: SetupArgs) -> Result<CommandOutput> {
 fn orchestrate(yes: bool, open: bool) -> Result<CommandOutput> {
     let skill = skill::install(yes)?;
     let extension = extension::install(ChromeOpen::from_flags(yes, open))?;
+    let nm_host = nm_host::install(None)?;
 
-    // The extension step already prints the full chrome-loading guide,
-    // including the `nm-host` command line. The orchestrator's job is just
-    // to chain the two steps — duplicating the next-step instruction here
-    // would put the same text on screen twice.
-    let human = format!("WebPilot setup\n\n{skill}\n\n{extension}");
+    let human = format!("WebPilot setup\n\n{skill}\n\n{extension}\n\n{nm_host}");
 
     Ok(CommandOutput::Data {
         json: serde_json::json!({
             "skill": skill.json,
             "extension": extension.json,
+            "nm_host": nm_host.json,
         }),
         human,
     })

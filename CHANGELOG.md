@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Browser-mode setup no longer asks for the extension ID.** The extension's
+  id is a stable constant (its manifest pins a public `key`), so the binary now
+  derives it from the embedded manifest — exactly the value Chrome assigns at
+  load. `setup nm-host` registers the Native Messaging host with no argument
+  (`--extension-id` remains, only to authorise a different build), and bare
+  `webpilot setup` registers the host automatically, leaving just the one step
+  only the user can do: `Load unpacked` in `chrome://extensions`.
+
 ## [0.5.0] - 2026-06-14
 
 An extended hardening series over 0.4.0, driven by continuous parallel

@@ -311,12 +311,17 @@ webpilot profile --duration 5                       # → .cpuprofile (Chrome De
 ## Browser mode (`--browser`) — user's authenticated Chrome
 
 ```bash
+webpilot setup nm-host                              # registers the NM host (extension id auto-detected)
 webpilot setup extension                            # extracts the extension (path printed by the command)
-# load that path in chrome://extensions, copy the 32-char ID
-webpilot setup nm-host --extension-id <32-char-id>  # registers the Native Messaging host
+# load that path in chrome://extensions (Developer mode → Load unpacked) — no ID to copy
 webpilot --browser status
 webpilot --browser capture --include dom            # uses logged-in tab
 ```
+
+The extension id is a fixed constant (the manifest pins a public `key`), so
+`setup nm-host` derives it itself — `--extension-id` is only for authorising a
+different build. `webpilot setup` (no subcommand) does all of the above except
+the one manual `Load unpacked`.
 
 `--browser` rejects `device`, `profile`, `record`, `context`, `quit`, and `--context NAME` with `InvalidArgument` (exit 7) — these all assume the headless lifecycle, which is not yours to manage in browser mode.
 

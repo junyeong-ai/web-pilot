@@ -26,6 +26,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 fast_image_resize = "6"
 base64 = "0.22"
 
+# SHA-256 — derives the Chrome extension id from the manifest's pinned public
+# key (the same algorithm Chrome uses), so `setup` can authorise the NM host
+# without the user copying the id out of chrome://extensions.
+sha2 = "0.10"
+
 # CLI
 clap = { version = "4", features = ["derive"] }
 
