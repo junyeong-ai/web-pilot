@@ -56,7 +56,7 @@ pub async fn run(args: SetupArgs) -> Result<CommandOutput> {
 
 /// Orchestrated walkthrough: skill install, extension extraction, and NM host
 /// registration — the full `--browser` setup minus the one step only the user
-/// can perform (loading the unpacked extension in Chrome).
+/// can perform (loading the unpacked extension in their browser).
 ///
 /// `nm-host` *is* registered here. The extension's id is a stable constant this
 /// binary derives from its embedded manifest key (`assets::expected_extension_id`),

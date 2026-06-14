@@ -10,6 +10,7 @@ use webpilot::ipc::{self, IpcError};
 use webpilot::protocol::{Command, Request, Response, ResponseData, RunMode};
 use webpilot::types::{line_safe, line_safe_clip};
 
+use crate::commands::setup::nm_host;
 use crate::output::CommandOutput;
 
 /// Render a typed `Status` response into the unified `CommandOutput` shape.
@@ -116,19 +117,25 @@ fn diagnose(error: &IpcError) -> CommandOutput {
                 ManifestState::BinaryMissing(p) => format!(
                     "  NM manifest binary not found: {p}\n  Re-register with: webpilot setup nm-host"
                 ),
+                ManifestState::IdMismatch => format!(
+                    "  NM manifest authorises a different extension id than this build \
+                     (expected {}).\n  Re-register with: webpilot setup nm-host",
+                    crate::assets::expected_extension_id()
+                ),
                 ManifestState::Ok => {
-                    "  NM manifest OK. Ensure the extension is loaded and active in Chrome.".into()
+                    "  NM manifest OK. Ensure the extension is loaded and active in your browser."
+                        .into()
                 }
             };
             (format!("Host not running (socket: {path})"), hint)
         }
         IpcError::Timeout => (
             "Timed out waiting for host response.".into(),
-            "  The NM host may be stuck. Reload the extension in Chrome.".into(),
+            "  The NM host may be stuck. Reload the extension in your browser.".into(),
         ),
         IpcError::ConnectionClosed => (
             "Host closed the connection.".into(),
-            "  The NM host may have crashed. Reload the extension in Chrome.".into(),
+            "  The NM host may have crashed. Reload the extension in your browser.".into(),
         ),
         IpcError::Io(e) => (
             format!("Socket error: {e}"),
@@ -150,28 +157,69 @@ enum ManifestState {
     NotFound,
     InvalidJson,
     BinaryMissing(String),
+    /// A manifest exists and is well-formed, but authorises a different extension
+    /// id than this build's — a wrong `--extension-id` override that `status`
+    /// would otherwise report as a healthy registration.
+    IdMismatch,
     Ok,
 }
 
-fn check_nm_manifest() -> ManifestState {
-    // No home directory means no per-user Chrome NM dir to inspect — report
-    // not-found rather than probing a fallback path that cannot be Chrome's.
-    let Ok(path) = crate::commands::setup::nm_host::nm_manifest_path() else {
-        return ManifestState::NotFound;
-    };
-
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return ManifestState::NotFound;
-    };
+/// Inspect one candidate manifest path. `None` = no manifest there (don't count
+/// it); `Some(state)` classifies a manifest that does exist.
+fn evaluate_manifest(path: &std::path::Path) -> Option<ManifestState> {
+    let content = std::fs::read_to_string(path).ok()?;
     let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return ManifestState::InvalidJson;
+        return Some(ManifestState::InvalidJson);
     };
     if let Some(bin) = manifest.get("path").and_then(|v| v.as_str())
         && !std::path::Path::new(bin).exists()
     {
-        return ManifestState::BinaryMissing(bin.to_owned());
+        return Some(ManifestState::BinaryMissing(bin.to_owned()));
     }
-    ManifestState::Ok
+    // The manifest must authorise this binary's own extension id, or the loaded
+    // WebPilot extension can never connect to it.
+    let expected = format!(
+        "chrome-extension://{}/",
+        crate::assets::expected_extension_id()
+    );
+    let authorizes_expected = manifest
+        .get("allowed_origins")
+        .and_then(|v| v.as_array())
+        .is_some_and(|origins| {
+            origins
+                .iter()
+                .filter_map(|o| o.as_str())
+                .any(|o| o == expected)
+        });
+    if !authorizes_expected {
+        return Some(ManifestState::IdMismatch);
+    }
+    Some(ManifestState::Ok)
+}
+
+/// Classify the host registration across every Chrome-family NM directory.
+/// One healthy manifest is enough — that's the browser the extension was loaded
+/// into; otherwise the most actionable problem among the manifests that exist.
+fn check_nm_manifest() -> ManifestState {
+    let Ok(paths) = nm_host::nm_manifest_paths() else {
+        return ManifestState::NotFound;
+    };
+    let states: Vec<ManifestState> = paths.iter().filter_map(|p| evaluate_manifest(p)).collect();
+    if states.is_empty() {
+        return ManifestState::NotFound;
+    }
+    if states.iter().any(|s| matches!(s, ManifestState::Ok)) {
+        return ManifestState::Ok;
+    }
+    states
+        .into_iter()
+        .max_by_key(|s| match s {
+            ManifestState::BinaryMissing(_) => 3,
+            ManifestState::IdMismatch => 2,
+            ManifestState::InvalidJson => 1,
+            ManifestState::NotFound | ManifestState::Ok => 0,
+        })
+        .unwrap_or(ManifestState::NotFound)
 }
 
 #[cfg(test)]
@@ -210,5 +258,62 @@ mod tests {
         }
         assert!(human.matches('Z').count() <= 200, "title capped at 200");
         assert!(human.matches('q').count() <= 200, "url capped at 200");
+    }
+
+    #[test]
+    fn evaluate_manifest_classifies_every_state() {
+        let dir = std::env::temp_dir().join(format!("wp-status-nm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = crate::assets::expected_extension_id();
+        let realbin = std::env::current_exe().unwrap();
+        let write = |name: &str, body: String| {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            p
+        };
+
+        // No file at the path → not counted.
+        assert!(evaluate_manifest(&dir.join("absent.json")).is_none());
+        // Corrupt JSON.
+        assert!(matches!(
+            evaluate_manifest(&write("bad.json", "{ not json".into())),
+            Some(ManifestState::InvalidJson)
+        ));
+        // Points at a binary that doesn't exist.
+        assert!(matches!(
+            evaluate_manifest(&write(
+                "binmissing.json",
+                format!(
+                    r#"{{"path":"/no/such/bin","allowed_origins":["chrome-extension://{id}/"]}}"#
+                )
+            )),
+            Some(ManifestState::BinaryMissing(_))
+        ));
+        // Well-formed, binary present, but authorises a DIFFERENT id (a wrong
+        // `--extension-id` override) — the case a healthy-looking manifest hides.
+        assert!(matches!(
+            evaluate_manifest(&write(
+                "mismatch.json",
+                format!(
+                    r#"{{"path":"{}","allowed_origins":["chrome-extension://abcdefghijklmnopabcdefghijklmnop/"]}}"#,
+                    realbin.display()
+                )
+            )),
+            Some(ManifestState::IdMismatch)
+        ));
+        // Healthy: binary present and authorises this build's own id.
+        assert!(matches!(
+            evaluate_manifest(&write(
+                "ok.json",
+                format!(
+                    r#"{{"path":"{}","allowed_origins":["chrome-extension://{id}/"]}}"#,
+                    realbin.display()
+                )
+            )),
+            Some(ManifestState::Ok)
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

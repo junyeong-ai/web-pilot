@@ -63,7 +63,6 @@ async fn execute(plan: Plan) -> Result<CommandOutput> {
     for (label, path) in [
         ("skill", plan.skill.as_deref()),
         ("extension", plan.extension.as_deref()),
-        ("nm_host", plan.nm_host.as_deref()),
         // Removed BEFORE the root purges below, so an emptied cache/data root is
         // reclaimed instead of being kept alive by its own `policy/` subdir and
         // then mislabelled "non-WebPilot files remain".
@@ -75,6 +74,24 @@ async fn execute(plan: Plan) -> Result<CommandOutput> {
                 Err(e) => warnings.push(format!("{label} at {} ({e})", p.display())),
             }
         }
+    }
+
+    // NM host manifests across every Chrome-family browser setup registered.
+    // Remove each, then reclaim the `NativeMessagingHosts` dir WebPilot created
+    // when it is now empty — never the browser profile dir above it, which is the
+    // browser's, not ours.
+    let mut nm_removed = false;
+    for path in &plan.nm_hosts {
+        match std::fs::remove_file(path) {
+            Ok(()) => nm_removed = true,
+            Err(e) => warnings.push(format!("nm_host at {} ({e})", path.display())),
+        }
+        if let Some(dir) = path.parent() {
+            purge_if_empty(dir);
+        }
+    }
+    if nm_removed {
+        removed.push("nm_host");
     }
 
     // The cache root is wherever WEBPILOT_HOME (or the platform default)
@@ -138,7 +155,7 @@ struct Plan {
     binary: Option<PathBuf>,
     skill: Option<PathBuf>,
     extension: Option<PathBuf>,
-    nm_host: Option<PathBuf>,
+    nm_hosts: Vec<PathBuf>,
     policy: Option<PathBuf>,
     cache_root: Option<PathBuf>,
 }
@@ -149,7 +166,7 @@ impl Plan {
             && self.binary.is_none()
             && self.skill.is_none()
             && self.extension.is_none()
-            && self.nm_host.is_none()
+            && self.nm_hosts.is_empty()
             && self.policy.is_none()
             && self.cache_root.is_none()
     }
@@ -163,7 +180,15 @@ impl Plan {
             ("Binary", self.binary.as_deref()),
             ("Skill", self.skill.as_deref()),
             ("Extension", self.extension.as_deref()),
-            ("NM host", self.nm_host.as_deref()),
+        ] {
+            if let Some(p) = path {
+                out.push(format!("● {label}: {}", p.display()));
+            }
+        }
+        for p in &self.nm_hosts {
+            out.push(format!("● NM host: {}", p.display()));
+        }
+        for (label, path) in [
             ("Policy store", self.policy.as_deref()),
             ("Cache root", self.cache_root.as_deref()),
         ] {
@@ -195,7 +220,11 @@ fn collect_plan() -> Plan {
         .filter(|p| p.is_dir());
 
     let extension = Some(webpilot::dirs::extension_dir_path()).filter(|p| p.is_dir());
-    let nm_host = nm_host::nm_manifest_path().ok().filter(|p| p.is_file());
+    let nm_hosts = nm_host::nm_manifest_paths()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.is_file())
+        .collect();
     // The policy store is a first-class artefact, not an implementation-detail
     // container: it is persistent SECURITY config (deny rules), so leaving it
     // behind means a later reinstall silently inherits stale verdicts the user
@@ -209,7 +238,7 @@ fn collect_plan() -> Plan {
         binary,
         skill,
         extension,
-        nm_host,
+        nm_hosts,
         policy,
         cache_root,
     }

@@ -164,7 +164,13 @@ fn strip_root<'a>(p: &'a Path, root: &Path) -> &'a Path {
 }
 
 fn is_excluded(p: &Path) -> bool {
-    p.file_name().and_then(|n| n.to_str()) == Some(".DS_Store")
+    // `.DS_Store`: macOS cruft that can reappear in the source tree between
+    // builds. `icon.svg`: the source the PNG icons were drawn from — the manifest
+    // references only the PNGs, so the SVG has no place in the loaded extension.
+    matches!(
+        p.file_name().and_then(|n| n.to_str()),
+        Some(".DS_Store" | "icon.svg")
+    )
 }
 
 #[cfg(unix)]

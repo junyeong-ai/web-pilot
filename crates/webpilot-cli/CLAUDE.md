@@ -77,7 +77,9 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   tools inject the wire `kind` to reuse `Action`'s deserialization and defaults.
   `Execution::Mcp` puts it in the compiler-checked topology.
 - `assets.rs` — compile-time embedded skill + extension (`include_dir!`);
-  `expected_extension_version()`.
+  `expected_extension_version()` (stale-install gate) and
+  `expected_extension_id()` (the id derived from the manifest's pinned `key`, so
+  `setup` registers the NM host without a copied id).
 
 Timeouts are read directly via `webpilot::settings::timeouts().<field>` (one
 pattern across both crates, no separate facade).

@@ -66,8 +66,8 @@ pub(crate) fn install(chrome: ChromeOpen) -> Result<StepOutcome> {
         "✓ Extension extracted to {}\n",
         home_relative(&dest)
     ));
-    human.push_str("  Load it in Chrome:\n");
-    human.push_str("    1. Open chrome://extensions\n");
+    human.push_str("  Load it in your browser:\n");
+    human.push_str("    1. Open your browser's extensions page (e.g. chrome://extensions)\n");
     human.push_str("    2. Enable Developer mode (top-right toggle)\n");
     human.push_str("    3. Click \"Load unpacked\" and select:\n");
     human.push_str(&format!("       {}", dest.display()));

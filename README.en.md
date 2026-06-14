@@ -448,7 +448,7 @@ webpilot quit                  # stop the headless Chrome session
 webpilot uninstall             # quit Chrome + remove everything the binary created
 ```
 
-The skill and extension are embedded in the binary at compile time, so **version drift cannot happen** and there's no post-install download. After setup, Claude Code activates the skill via `/webpilot` or plain natural language.
+The skill and extension are embedded in the binary at compile time, so the **bundled assets always match the binary** — no post-install download. If an extension already loaded in your browser is stale after an update, the host catches it at connect time with `VersionMismatch` and prompts a reload. After setup, Claude Code activates the skill via `/webpilot` or plain natural language.
 
 ---
 
