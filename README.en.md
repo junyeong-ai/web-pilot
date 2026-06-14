@@ -267,7 +267,7 @@ webpilot device reset                                  # clear emulation
 ```bash
 # Set up browser mode — one `setup` does skill + extension + NM host (extension id auto-detected)
 webpilot setup
-# Load the printed path via chrome://extensions → Developer mode → "Load unpacked" (the one manual step)
+# Load the printed path via your browser's extensions page (e.g. chrome://extensions) → Developer mode → "Load unpacked" (the one manual step)
 
 # Use it
 webpilot --browser status                      # confirm connected
@@ -396,6 +396,8 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `cookie <list\|get\|set\|delete>` | Cookie management |
 | `session <export\|import>` | Export/import session (cookies + localStorage) |
 | `device <set\|preset\|reset>` | Device viewport / UA emulation (headless) |
+| `record [--frames N \| --duration N] [--dom]` | Record sequential frames for AI analysis (headless) |
+| `profile --duration <secs>` | CPU performance profiling (headless) |
 | `diff --dom\|--screenshot` | Compare snapshots |
 | `policy <default\|set\|list\|clear>` | Effect-keyed operation gate |
 | `context <list\|close>` | Multi-agent isolation contexts |

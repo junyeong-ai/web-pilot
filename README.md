@@ -267,7 +267,7 @@ webpilot device reset                                  # 에뮬레이션 해제
 ```bash
 # 브라우저 모드 준비 — setup 한 번이 스킬·확장·NM 호스트까지 (확장 ID 자동 탐지)
 webpilot setup
-# 안내된 경로를 chrome://extensions → 개발자 모드 → "압축해제된 확장 로드" (유일한 수동 단계)
+# 안내된 경로를 브라우저 확장 페이지(예: chrome://extensions) → 개발자 모드 → "압축해제된 확장 로드" (유일한 수동 단계)
 
 # 사용
 webpilot --browser status                      # connected 확인
@@ -396,6 +396,8 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `cookie <list\|get\|set\|delete>` | 쿠키 관리 |
 | `session <export\|import>` | 세션(쿠키+localStorage) 내보내기/가져오기 |
 | `device <set\|preset\|reset>` | 기기 뷰포트·UA 에뮬레이션 (헤드리스) |
+| `record [--frames N \| --duration N] [--dom]` | 연속 프레임 기록 (AI 분석용, 헤드리스) |
+| `profile --duration <초>` | CPU 성능 프로파일링 (헤드리스) |
 | `diff --dom\|--screenshot` | 스냅샷 비교 |
 | `policy <default\|set\|list\|clear>` | 효과 기준 동작 게이트 |
 | `context <list\|close>` | 멀티 에이전트 격리 컨텍스트 |
