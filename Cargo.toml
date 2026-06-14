@@ -29,7 +29,7 @@ base64 = "0.22"
 # SHA-256 — derives the Chrome extension id from the manifest's pinned public
 # key (the same algorithm Chrome uses), so `setup` can authorise the NM host
 # without the user copying the id out of chrome://extensions.
-sha2 = "0.10"
+sha2 = "0.11"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -41,7 +41,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Error
 anyhow = "1"
 thiserror = "2"
-similar = "2"
+similar = "3"
 
 # WebSocket (CDP)
 tokio-tungstenite = "0.29"
