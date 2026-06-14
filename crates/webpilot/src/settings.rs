@@ -131,30 +131,42 @@ fn validate(settings: &Settings) -> std::result::Result<(), String> {
             "chrome.viewport_width and chrome.viewport_height must be greater than 0".into(),
         );
     }
-    // Every deadline/interval below bounds an operation that must make progress:
-    // at zero it either fails instantly (an immediate timeout on navigation, a
+    // Every deadline/interval below bounds an operation that must make progress.
+    // At ZERO it either fails instantly (an immediate timeout on navigation, a
     // CDP send, an IPC reply, a Chrome launch, a history/reload settle, the
-    // version handshake) or busy-spins (a zero poll/heartbeat interval). The
+    // version handshake) or busy-spins (a zero poll/heartbeat interval); the
     // browser extension guards the same values over the Config handshake, so a
-    // zero here would also silently diverge the two modes. Reject every one up
-    // front rather than degrade to a broken session. (`annotation_paint` is a
-    // deliberate pre-screenshot paint delay, not a deadline — zero just means
-    // "no delay", a valid choice — so it is intentionally absent.)
+    // zero here would also silently diverge the two modes. At the TOP, past
+    // `i32::MAX` ms (~24.8 days — the same bound the agent-facing `wait` timeout
+    // already clamps to), the `Instant + Duration` deadline (or the `sleep`)
+    // every value feeds can overflow and PANIC mid-operation on some platforms.
+    // Reject BOTH ends up front rather than degrade to a broken session —
+    // loudly, never a silent clamp: this layer refuses a wrong config, it does
+    // not quietly run a degraded one. (`annotation_paint` is a pre-screenshot
+    // paint delay, not a deadline, so zero — "no delay" — is valid for it; it is
+    // still bounded ABOVE, since an astronomical sleep overflows the same math.)
+    const MAX_TIMEOUT_MS: u128 = i32::MAX as u128;
     let t = &settings.timeouts;
-    let positive: [(&str, std::time::Duration); 9] = [
-        ("timeouts.navigation_ms", t.navigation),
-        ("timeouts.cdp_send_ms", t.cdp_send),
-        ("timeouts.reload_wait_ms", t.reload_wait),
-        ("timeouts.back_forward_ms", t.back_forward),
-        ("timeouts.poll_interval_ms", t.poll_interval),
-        ("timeouts.ipc_response_ms", t.ipc_response),
-        ("timeouts.chrome_launch_ms", t.chrome_launch),
-        ("timeouts.heartbeat_ms", t.heartbeat),
-        ("timeouts.version_handshake_ms", t.version_handshake),
+    let checks: [(&str, std::time::Duration, bool); 10] = [
+        ("timeouts.navigation_ms", t.navigation, false),
+        ("timeouts.cdp_send_ms", t.cdp_send, false),
+        ("timeouts.reload_wait_ms", t.reload_wait, false),
+        ("timeouts.back_forward_ms", t.back_forward, false),
+        ("timeouts.poll_interval_ms", t.poll_interval, false),
+        ("timeouts.ipc_response_ms", t.ipc_response, false),
+        ("timeouts.chrome_launch_ms", t.chrome_launch, false),
+        ("timeouts.heartbeat_ms", t.heartbeat, false),
+        ("timeouts.version_handshake_ms", t.version_handshake, false),
+        ("timeouts.annotation_paint_ms", t.annotation_paint, true),
     ];
-    for (name, duration) in positive {
-        if duration.is_zero() {
+    for (name, duration, zero_ok) in checks {
+        if !zero_ok && duration.is_zero() {
             return Err(format!("{name} must be greater than 0"));
+        }
+        if duration.as_millis() > MAX_TIMEOUT_MS {
+            return Err(format!(
+                "{name} must not exceed {MAX_TIMEOUT_MS} ms (~24.8 days); a larger value overflows the deadline arithmetic"
+            ));
         }
     }
     Ok(())
@@ -433,5 +445,69 @@ mod tests {
         // silently dropping that key. `deny_unknown_fields` is what enforces it.
         let text = "[timeouts]\nnavigaton_ms = 1\n";
         assert!(toml::from_str::<FileSettings>(text).is_err());
+    }
+
+    fn valid_settings() -> Settings {
+        use std::time::Duration;
+        Settings {
+            timeouts: Timeouts {
+                cdp_send: Duration::from_millis(30_000),
+                navigation: Duration::from_millis(15_000),
+                reload_wait: Duration::from_millis(10_000),
+                back_forward: Duration::from_millis(5_000),
+                poll_interval: Duration::from_millis(300),
+                annotation_paint: Duration::from_millis(200),
+                ipc_response: Duration::from_millis(60_000),
+                chrome_launch: Duration::from_millis(15_000),
+                heartbeat: Duration::from_millis(10_000),
+                version_handshake: Duration::from_millis(2_000),
+            },
+            chrome: Chrome {
+                binary: None,
+                viewport_width: 1280,
+                viewport_height: 720,
+                no_sandbox: false,
+            },
+            context: Context {
+                ttl: Duration::from_secs(3_600),
+            },
+            cdp: Cdp { event_buffer: 256 },
+            capture: Capture {
+                screenshot_max_long_edge: 1568,
+                max_record_frames: 3_600,
+            },
+        }
+    }
+
+    #[test]
+    fn validate_rejects_zero_and_oversize_deadlines() {
+        use std::time::Duration;
+        // The default-shaped settings pass.
+        assert!(validate(&valid_settings()).is_ok());
+
+        // A zero DEADLINE is rejected (would fail-instant or busy-spin).
+        let mut zero_nav = valid_settings();
+        zero_nav.timeouts.navigation = Duration::ZERO;
+        assert!(validate(&zero_nav).is_err());
+
+        // `annotation_paint` is the one duration where zero ("no delay") is valid.
+        let mut zero_paint = valid_settings();
+        zero_paint.timeouts.annotation_paint = Duration::ZERO;
+        assert!(validate(&zero_paint).is_ok());
+
+        // Past `i32::MAX` ms every duration is rejected — INCLUDING
+        // `annotation_paint` — so no `Instant + Duration`/`sleep` can overflow.
+        let oversize = Duration::from_millis(i32::MAX as u64 + 1);
+        let mut huge_cdp = valid_settings();
+        huge_cdp.timeouts.cdp_send = oversize;
+        assert!(validate(&huge_cdp).is_err());
+        let mut huge_paint = valid_settings();
+        huge_paint.timeouts.annotation_paint = oversize;
+        assert!(validate(&huge_paint).is_err());
+
+        // Exactly at the bound is accepted (it is the inclusive maximum).
+        let mut at_bound = valid_settings();
+        at_bound.timeouts.cdp_send = Duration::from_millis(i32::MAX as u64);
+        assert!(validate(&at_bound).is_ok());
     }
 }

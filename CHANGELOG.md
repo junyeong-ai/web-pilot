@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.19] - 2026-06-15
+
+### Fixed
+
+- **A misconfigured `config.toml`/`WEBPILOT_*` timeout is now rejected at startup
+  instead of panicking mid-operation.** `settings::validate` already refused a
+  ZERO deadline/interval (it would fail-instant or busy-spin); it now also
+  refuses one larger than `i32::MAX` ms (~24.8 days) — the same bound the
+  agent-facing `wait` timeout already clamps to. Past it, the `Instant + Duration`
+  deadline (or `sleep`) that every timeout feeds can overflow and panic on some
+  platforms, deep inside an operation, far from the bad value. The whole-config
+  load (`settings::init`, run by both the CLI and the NM host) now reports the
+  offending key up front — loudly, never a silent clamp, consistent with how this
+  layer already handles a zero. `annotation_paint` (where zero legitimately means
+  "no delay") is bounded above too, since an astronomical paint sleep overflows
+  the same arithmetic.
+
 ## [0.6.18] - 2026-06-15
 
 ### Fixed
