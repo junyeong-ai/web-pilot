@@ -45,7 +45,9 @@ implementation.
 matches, so the compiler forces every one**: a `protocol::Command` variant +
 `commands/mod.rs` (`pub mod` + enum variant) + a `commands/<x>.rs` handler +
 `cli.rs::Cmd::execution()` classification + a `cli.rs::dispatch_via_transport`
-arm + a `LocalTransport::send` arm and its `do_*` body (headless). The browser
+arm + a `LocalTransport::send` arm and its `do_*` body + a
+`command_needs_active_page` arm (also exhaustive — classify whether the command
+acts on the pinned page) (headless). The browser
 side adds a case in `extension/background/router.js` and its handler in the
 domain module that mirrors the Rust file (`action`/`capture`/`query`/`state`/
 `browser`.js ↔ the same-named `.rs`) — JS, so not compiler-checked, but
@@ -77,7 +79,8 @@ against the previous snapshot, suppressed on the first capture in a new document
 `pushState`/hash change keeps the baseline, so elements it adds are flagged).
 `@landmark` is semantic context.
 `--- N iframe(s) not shown ---` is the count of HTTP iframes outside the active
-frame (`DomSnapshot.subframes`); enter one with `frame switch`.
+frame (`DomSnapshot.subframes`); enter one with `frame url <pattern>` (or
+`frame switch <name>` for a named frame).
 `--- shadow DOM clipped (host budget exceeded) — some controls may be omitted ---`
 appears when a shadow-component-heavy page exhausts the traversal budget
 (`DomSnapshot.shadow_truncated`), so the index may be incomplete.
@@ -88,8 +91,8 @@ appears when a shadow-component-heavy page exhausts the traversal budget
 |---|---|
 | Action | `{"kind": "click", "index": 7}` — one definition (clap + serde, snake_case) |
 | ActionKind | snake_case wire tag, matching `Action.kind` exactly |
-| PolicyKey | Policy-enforcement key, keyed by **effect**: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`, `device`, `context_close`}. `navigate` gates every URL-load effect — the `navigate` action + `capture --url` + `tab new URL`. `eval` gates all MAIN-world JS injection — `eval` + the `frame find` predicate + `console start`/`network start` (monitor-hook injection) + `dom set-html` (assigning `innerHTML` runs an inline event handler — `<img src=x onerror=…>` — immediately, the same single-call JS sink as `eval`, so denying `eval` must also deny it). `dom_set` gates only the non-executing DOM writes: `dom set-text` (literal `textContent`) and `dom set-attr` (one attribute; an `on*`/`javascript:` value it sets runs only on a later, separately-gated click/navigate). `cookie_list` is gated even though read-only because it reads cookie values (session tokens). `device` (headless-only) gates emulation: it has no wire `Command`, so it isn't enforced through `send` — `commands/device.rs` calls `policy::enforce_key(PolicyKey::Device)` directly at its CDP sink, so `default deny` forbids UA/viewport spoofing too. `context_close` (also headless-only) gates `context close [--all]` — disposing a context destroys it and every tab in it (strictly more than the gated `tab_close`), so `default deny` forbids it; enforced via `enforce_key` at the command, `context list` (a read) is not gated. `Command::policy_key()` maps command → key (non-secret reads → `None`); the match is exhaustive so a new command must declare its gate. Enforcement (`policy::parse_and_enforce`) runs **at the privileged sink that reaches the browser** — `LocalTransport::send` (headless) and the **NM Host** (browser), never the CLI-side `IpcTransport`. The host parses the wire value into a typed `Command` before enforcing — a parse failure is rejected as `InvalidArgument`, blocking a "Rust rejects / JS coerces" bypass. Store is a single `policy/policies.json` under the **durable data root** (not the evictable cache — OS cache eviction must never silently reset deny rules to allow) shared by both modes; `webpilot policy` is a local file command (no browser round-trip). |
-| Wait | `{"until": "selector", "value": ".loading"}` — one of `selector`/`text`/`navigation`/`idle` |
+| PolicyKey | Effect-keyed gate: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`, `device`, `context_close`}. Keyed by **effect, not command** — `navigate` gates every URL-load (`navigate` action, `capture --url`, `tab new URL`); `eval` gates every MAIN-world JS sink (`eval`, `frame find`, `console`/`network start`, `dom set-html`). `Command::policy_key()` maps command→key via an **exhaustive match** (reads → `None`), so a new command can't compile without declaring its gate. Enforced at the browser-reaching sink — `LocalTransport::send` (headless) / NM host (browser), never the CLI `IpcTransport`; the host re-parses the wire value to a typed `Command` before enforcing (blocks a Rust-rejects/JS-coerces bypass). Store `policy/policies.json` under the durable data root (survives cache eviction). Per-effect gating rationale lives in the `PolicyKey` variant doc-comments + the `policy_key()` arms. |
+| Wait | `Wait { condition, timeout_ms }`; `condition` is the `until`-tagged `WaitCondition` — `{"until": "selector", "value": ".loading"}`, one of `selector`/`text`/`navigation`/`idle` |
 | Capture | `{"include": ["dom","screenshot"], "opts": {...}}` |
 | Status | `{connected, mode: "headless"\|"browser", chrome_version, extension_version}` — per-mode semantics |
 | Errors | `{"code": "ElementNotFound", "message": "...", "requested": 5, "available": 3}` |
@@ -114,6 +117,7 @@ hand-written match tables.
 |---|---|---|
 | 0 | success | — |
 | 1 | `Other`, `Session` | unknown / session |
+| 2 | _(clap arg parse)_ | CLI usage error — unknown flag / non-numeric index / missing arg |
 | 3 | `ConnectionLost`, `BridgeUnavailable`, `VersionMismatch` | infra |
 | 4 | `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `TabNotFound`, `ContextNotFound`, `CookieNotFound`, `FrameNotFound` | not-found |
 | 5 | `Timeout` | timeout |
@@ -150,10 +154,12 @@ message parsing or substring matching. External crate errors are wrapped into
 
 ```
 $WEBPILOT_HOME              explicit override
-$XDG_RUNTIME_DIR/webpilot   Linux/BSD (tmpfs, mode 0700)
 ~/Library/Caches/webpilot   macOS
-~/.cache/webpilot           Linux fallback
+$XDG_RUNTIME_DIR/webpilot   Linux/BSD (tmpfs, mode 0700) — preferred
+$XDG_CACHE_HOME/webpilot    Linux fallback, then ~/.cache/webpilot
+/tmp/webpilot-<user>        last resort
 ```
+(full resolution order in `dirs.rs`)
 
 Subdirectories: `runtime/` (sockets, PIDs, locks), `contexts/` (multi-agent),
 `artifacts/` (screenshots, PDFs, sessions), `chrome-profile/`. The **policy store**

@@ -1,6 +1,6 @@
 # WebPilot
 
-[![Rust](https://img.shields.io/badge/rust-1.96.0-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/built_with-Rust-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 
 **Browser-control CLI for AI agents.** Zero setup — Chrome launches automatically.
 
@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 # Use immediately (headless — Chrome auto-launches)
 webpilot capture --include dom --url "https://example.com"
 
-# Build from source (run inside a checkout; requires Rust 1.96)
+# Build from source (run inside a checkout; rust-toolchain.toml pins the toolchain — rustup installs it)
 WEBPILOT_BUILD=source bash scripts/install.sh
 
 # When you need SSO (drive your own Chrome)
@@ -44,7 +44,7 @@ interactively.
 | Env var | Default | Meaning |
 |---|---|---|
 | `WEBPILOT_BUILD` | `prebuilt` | `prebuilt` (release download) or `source` (`cargo build`) |
-| `WEBPILOT_VERSION` | latest | pin a tag (prebuilt, e.g. `v0.3.0`) |
+| `WEBPILOT_VERSION` | latest | pin a release tag (prebuilt) |
 | `WEBPILOT_INSTALL_DIR` | `$HOME/.local/bin` | install path |
 | `WEBPILOT_REPO` | `junyeong-ai/web-pilot` | override when using a fork |
 | `WEBPILOT_NO_SETUP=1` | — | skip the automatic `webpilot setup` after install |
@@ -143,23 +143,6 @@ MCP (webpilot mcp):
 
 ---
 
-## Comparison
-
-| Feature | WebPilot | agent-browser | browser-use |
-|------|:--------:|:-------------:|:-----------:|
-| SSO sessions (`--browser`) | **built in** | ✗ | ✗ |
-| Network monitoring | **built in** | ✗ | CDP |
-| Console capture | **built in** | ✗ | CDP |
-| Semantic search (`find`) | **built in** | ✗ | XPath |
-| Direct DOM read/write | **built in** | ✗ | ✗ |
-| Annotated screenshots | **built in** | built in | PIL |
-| Session export/import | **built in** | auth state | ✗ |
-| Multi-agent isolation | **`--context`** | ✗ | ✗ |
-| MCP server | **built in** | ✗ | ✗ |
-| Runtime dependencies | **none (single binary)** | Node | Python |
-
----
-
 ## Lifecycle
 
 ```bash
@@ -169,7 +152,7 @@ webpilot setup extension       # extract the extension + Chrome guide (opens chr
 webpilot setup nm-host --extension-id <ID>
 
 webpilot self update           # self-update to the latest release (atomic, sha256-verified)
-webpilot self update --version 0.3.0   # pin a version
+webpilot self update --version X.Y.Z   # pin a version
 
 webpilot uninstall             # quit Chrome + remove everything the binary created
 

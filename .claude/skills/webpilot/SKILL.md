@@ -285,7 +285,7 @@ for exactly what the task needs. Deny `eval` first when locking down — with
 `eval` allowed, page JS can reproduce navigate/fetch/cookie effects, so
 narrower denies are advisory.
 
-`--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus the non-action operations that run code, mutate state, or move credentials: `eval`, `fetch`, `dom_set` (gate `dom set`), `tab_close`, `cookie_list` (gate `cookie list` **and** `cookie get` — both return live cookie values), `cookie_set` / `cookie_delete`, `session_export` / `session_import`, `device` (emulation: viewport + UA spoofing), and `context_close` (`context close` destroys a context and all its tabs).
+`--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus the non-action operations that run code, mutate state, or move credentials: `eval`, `fetch`, `dom_set` (gates `dom set-text` / `set-attr`; `dom set-html` runs an inline-handler JS sink so it is gated by `eval`, not `dom_set`), `tab_close`, `cookie_list` (gate `cookie list` **and** `cookie get` — both return live cookie values), `cookie_set` / `cookie_delete`, `session_export` / `session_import`, `device` (emulation: viewport + UA spoofing), and `context_close` (`context close` destroys a context and all its tabs).
 
 Keys gate by **effect**, not command name:
 - `navigate` blocks every URL load — the `navigate` action, `capture --url`, and `tab new URL` — so denying it actually prevents the agent from reaching new pages.
@@ -335,7 +335,7 @@ webpilot mcp                                   # serve the same engine as a stdi
                                                # (honors --browser / --context; for MCP host config, not interactive use)
 webpilot setup skill                           # refresh this skill from the binary's embedded copy
 webpilot self update                           # atomic self-update to the latest release (sha256-verified)
-webpilot self update --version 0.3.1           # pin a version (required for downgrades)
+webpilot self update --version X.Y.Z           # pin a version (required for downgrades)
 webpilot uninstall --yes                       # quit Chrome + remove binary, skill, extension, NM host, cache
 ```
 

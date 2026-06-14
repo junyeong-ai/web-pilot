@@ -1,7 +1,9 @@
 # crate: webpilot
 
-The **wire types + protocol** library shared by the CLI, host, and extension.
-No I/O — pure types and serialization.
+The **wire types + protocol** library shared by the CLI, host, and extension —
+mostly pure types and serialization. The only I/O is path materialization
+(`dirs.rs`: `atomic_write`, `create_dir_all`) and the Native Messaging frame
+read/write (`native_messaging.rs`); both are leaf utilities, no async runtime.
 
 - `action.rs` — the `Action` enum, deriving `clap::Subcommand` and `serde`
   together (the CLI surface *is* the wire shape). `ActionKind` is the action
@@ -26,7 +28,7 @@ No I/O — pure types and serialization.
 - `wait.rs` — `WaitCondition` (selector / text / navigation / idle), tagged by
   `until`.
 - `settings.rs` — single settings layer (defaults < `config.toml` < env). The
-  one source for every tunable env read; `Settings::{timeouts,chrome,context,cdp}`.
+  one source for every tunable env read; `Settings::{timeouts,chrome,context,cdp,capture}`.
 - `dirs.rs` — per-user runtime / contexts / artifacts directories (mode 0700);
   pure vs materializing accessors; `config_file_path()`. Paths are env/platform
   only (not settings-driven).
