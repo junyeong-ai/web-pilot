@@ -159,6 +159,7 @@ impl LocalTransport {
         // so toggle the domain to force re-emission for every existing context.
         install_bridge_world(&page).await?;
         let _ = page.send("Runtime.disable", None).await;
+        let _ = page.send("Runtime.discardConsoleEntries", None).await;
         let _ = page.send("Runtime.enable", None).await;
 
         // Re-apply device emulation across CLI invocations: a UA override does
@@ -323,6 +324,7 @@ impl LocalTransport {
             }
         }
         let _ = self.page.send("Runtime.disable", None).await;
+        let _ = self.page.send("Runtime.discardConsoleEntries", None).await;
         let _ = self.page.send("Runtime.enable", None).await;
         for _ in 0..20 {
             let all_present = {
@@ -525,6 +527,7 @@ impl LocalTransport {
         install_bridge_world(&self.page).await?;
         self.main_frame_id = fetch_main_frame_id(&self.page).await?;
         let _ = self.page.send("Runtime.disable", None).await;
+        let _ = self.page.send("Runtime.discardConsoleEntries", None).await;
         let _ = self.page.send("Runtime.enable", None).await;
         self.await_live_bridge_context().await;
         Ok(())
@@ -1425,6 +1428,14 @@ pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<Cdp
     // Accept-with-default mirrors the browser-mode dialog override, so a page
     // branching on confirm()/prompt() behaves identically in both modes.
     cdp.spawn_dialog_responder();
+    // Clear Chrome's native console buffer BEFORE enabling Runtime: `Runtime.enable`
+    // REPLAYS the buffer, and Chrome keeps every console argument UNCLIPPED and
+    // unbounded — but WebPilot reads console only through its own MAIN-world hook
+    // (`window.__webpilot_console`), never this buffer, so the replay is pure
+    // overhead. Discarding first means a page's runaway `console.log` can neither
+    // re-transfer on every reconnect (a latency cliff) nor grow Chrome's memory
+    // without bound across a long session.
+    let _ = cdp.send("Runtime.discardConsoleEntries", None).await;
     cdp.send("Runtime.enable", None).await?;
     Ok(cdp)
 }

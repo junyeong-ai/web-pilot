@@ -75,20 +75,22 @@ pub struct CdpClient {
 
 impl CdpClient {
     pub async fn connect(ws_url: &str) -> Result<Self> {
-        // Lift tungstenite's default 16 MiB frame/message cap: a CDP message is
-        // TRUSTED localhost traffic from the Chrome WE launched, and the cap only
-        // converts a page's own large output into a session-killer. Chrome keeps
-        // an UNCLIPPED console argument in its native buffer, and `Runtime.enable`
-        // (issued on every (re)connect, before any command can run) replays it as
-        // one frame; a single `console.log` over 16 MiB would then error every
-        // fresh connection, permanently wedging the engine with `ConnectionLost`
-        // until `quit`. The data WebPilot actually keeps is bounded downstream
-        // (DOM/option caps, the 4096-char monitor clip, the 10 MB fetch ceiling);
-        // the frame itself is parsed transiently, so no cap is the right trade for
-        // a trusted channel.
+        // Raise tungstenite's default 16 MiB frame/message cap to a high finite
+        // bound: a CDP message is TRUSTED localhost traffic from the Chrome WE
+        // launched, and the 16 MiB default converts a page's own large output into
+        // a session-killer (a single `console.log` over 16 MiB, replayed by
+        // `Runtime.enable` on every reconnect, permanently wedged the engine with
+        // `ConnectionLost`; a large `eval` return or DOM capture tripped it too).
+        // The data WebPilot keeps is bounded downstream (DOM/option caps, the
+        // 4096-char monitor clip, the 10 MB fetch ceiling) and the console-buffer
+        // replay is cleared via `Runtime.discardConsoleEntries` before each enable,
+        // so realistic traffic never approaches this; the finite cap stays only as
+        // a last-resort guard against a pathological multi-GB frame OOM-ing the
+        // CLI (which `None` would allow).
+        const MAX_CDP_FRAME: usize = 256 << 20;
         let config = WebSocketConfig::default()
-            .max_frame_size(None)
-            .max_message_size(None);
+            .max_frame_size(Some(MAX_CDP_FRAME))
+            .max_message_size(Some(MAX_CDP_FRAME));
         let (ws, _) = connect_async_with_config(ws_url, Some(config), false)
             .await
             .context("Failed to connect to Chrome CDP")?;

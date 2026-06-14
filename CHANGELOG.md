@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.243] - 2026-06-14
+
+### Fixed
+
+- **Chrome's native console buffer is now discarded before every `Runtime.enable`,
+  and the CDP frame cap is a finite 256 MiB.** v0.4.242 fixed the >16 MiB
+  console-arg wedge by removing the WebSocket frame cap entirely (`None`), but a
+  follow-up review found two residual issues with that: (1) `None` lets a
+  pathological multi-GB frame OOM the CLI, and (2) Chrome keeps the unclipped
+  console buffer and **replays it on every reconnect/reprime**, so a page that
+  logs a lot pays a growing latency cliff and unbounded Chrome memory across a
+  long session. WebPilot reads console only through its own MAIN-world hook
+  (`window.__webpilot_console`), never Chrome's native buffer, so the buffer is
+  pure overhead — it is now cleared with `Runtime.discardConsoleEntries` before
+  each of the four `Runtime.enable` points (connect + the three reprime toggles).
+  The frame cap is restored to a high finite bound (256 MiB) purely as a
+  last-resort OOM guard; realistic traffic never approaches it, and a console arg
+  even larger than the cap no longer wedges (the buffer is discarded before the
+  replay that would trip it). Verified live: an 18 MB, then a 300 MB,
+  `console.log` leave the session fully healthy.
+
 ## [0.4.242] - 2026-06-14
 
 An infrastructure / lifecycle robustness pass over the layer prior rounds
