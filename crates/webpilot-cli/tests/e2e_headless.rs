@@ -3680,5 +3680,26 @@ fn headless_behavioral_flow() {
         "the recovered session must capture the navigated page"
     );
 
+    // 2a-domset-tt. `dom set-html` on a Trusted-Types page (`require-trusted-types-
+    //     for 'script'`) makes `innerHTML = <string>` THROW — surface it as a typed
+    //     InvalidArgument (exit 7) carrying the page's reason, never an untyped
+    //     Other with the bridge's raw V8 stack (in browser mode this throw also
+    //     closed the message port and stalled the command for the full send
+    //     timeout). Runs LAST — it navigates away from the fixture page.
+    let tt_url = "data:text/html,<meta http-equiv=\"Content-Security-Policy\" content=\"require-trusted-types-for 'script'\"><div id=ttx>orig</div>";
+    let _ = fx.run(&["capture", "--include", "dom", "--url", tt_url]);
+    let tt_set = fx.run(&["dom", "set-html", "#ttx", "<b>x</b>"]);
+    assert_eq!(
+        code(&tt_set),
+        7,
+        "set-html on a Trusted-Types page must be a typed InvalidArgument (7), not Other: {}",
+        stdout(&tt_set)
+    );
+    assert!(
+        !stdout(&tt_set).contains("<anonymous>"),
+        "the set-html Trusted-Types error must not leak the bridge's V8 stack: {}",
+        stdout(&tt_set)
+    );
+
     drop(fx);
 }

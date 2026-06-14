@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.16] - 2026-06-14
+
+### Fixed
+
+- **Browser mode: a navigation to a page whose renderer is wedged before
+  DOMContentLoaded** — a parser-blocking `<script>while(true){}</script>` — no
+  longer hangs the command forever. `waitNavigationSettled` and `documentReady`
+  read `document.readyState` via `chrome.scripting.executeScript` with no
+  per-probe timeout, so a wedged renderer queued the injected probe indefinitely
+  and the navigation deadline — re-checked only between probes — never fired.
+  Both probes are now bounded by the same `PROBE` timeout headless uses, so a
+  stuck renderer times out the probe and the navigation reports a typed Timeout.
+- **`dom set-html` on a Trusted-Types page** (`require-trusted-types-for
+  'script'`, deployed by GitHub/Google and others) now reports a typed
+  `InvalidArgument` with the page's reason, instead of leaking the bridge's raw
+  V8 exception as an untyped `Other` (headless) or — in browser mode — letting
+  the uncaught throw close the message port and stall the command for the full
+  send timeout. The `innerHTML` assignment is now guarded exactly as `set-attr`
+  already was; locked by an e2e test on a Trusted-Types page.
+
+### Removed
+
+- The unreachable `navigation` case in the bridge's wait handler (both modes
+  settle a navigation wait outside the bridge — headless via `Page.loadEventFired`,
+  the SW via `webNavigation.onCompleted`), along with the comment that
+  misdescribed it.
+
 ## [0.6.15] - 2026-06-14
 
 ### Fixed

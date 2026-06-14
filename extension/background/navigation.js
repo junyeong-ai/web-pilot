@@ -116,6 +116,28 @@ async function settledActionUrl(tabId, beforeUrl, watch, navHint) {
   return settled?.url || beforeUrl;
 }
 
+// Read the main frame's readyState, bounded by PROBE_MS. A renderer wedged by a
+// parser-blocking script (`<script>while(true){}</script>` running before
+// DOMContentLoaded) queues the injected probe function forever, so an unbounded
+// `executeScript` would hang the await — and since the settle loop only re-checks
+// its deadline BETWEEN probes, the navigation deadline would never fire and the
+// command would never settle. Headless bounds the identical `document.readyState`
+// read with its PROBE timeout (mod.rs). Returns the readyState string, or null on
+// a probe timeout / failure / renderer swap (the caller retries on the next poll).
+async function probeReadyState(target) {
+  let timer;
+  const probe = chrome.scripting
+    .executeScript({ target, func: () => document.readyState })
+    .then((r) => r?.[0]?.result ?? null)
+    .catch(() => null);
+  return Promise.race([
+    probe,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), PROBE_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
   const start = Date.now();
   // An ERR_ABORTED is a STAY-PUT (a 204/download/intercepted load), not a
@@ -173,12 +195,10 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
           ? frame?.documentId === watch.documentId
           : Boolean(frame?.url && frame.url !== beforeUrl);
         if (documentMatches) {
-          // Probe readiness; a probe failing mid renderer swap just retries on
-          // the next poll, exactly like the headless time-boxed PROBE.
-          const ready = await chrome.scripting
-            .executeScript({ target: { tabId, frameIds: [0] }, func: () => document.readyState })
-            .then((r) => r?.[0]?.result)
-            .catch(() => null);
+          // Probe readiness (PROBE-bounded so a wedged renderer can't hang the
+          // settle); a probe failing mid renderer swap just retries on the next
+          // poll, exactly like the headless time-boxed PROBE.
+          const ready = await probeReadyState({ tabId, frameIds: [0] });
           if (ready === "interactive" || ready === "complete") return;
         }
       }
@@ -292,10 +312,12 @@ async function documentReady(tabId, timeoutMs) {
   };
   chrome.webNavigation.onDOMContentLoaded.addListener(onReady);
   try {
-    const [probe] = await chrome.scripting
-      .executeScript({ target: { tabId }, func: () => document.readyState })
-      .catch(() => []);
-    if (probe?.result && probe.result !== "loading") return;
+    // PROBE-bounded: an unbounded probe on a renderer wedged before
+    // DOMContentLoaded would hang here, BEFORE `await settled`, so the timer
+    // above could never fire. On a probe timeout, fall through to the
+    // event/timer wait, which is itself bounded by `timeoutMs`.
+    const ready = await probeReadyState({ tabId });
+    if (ready && ready !== "loading") return;
     await settled;
   } finally {
     clearTimeout(timer);

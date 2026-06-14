@@ -1482,10 +1482,10 @@
         }, 100);
         break;
       }
-      case "navigation":
-        // Caller (Rust) listens for Page.loadEventFired; bridge merely waits.
-        finish({ success: true });
-        break;
+      // No `navigation` case: both modes settle a navigation wait OUTSIDE the
+      // bridge (headless `do_wait` via `Page.loadEventFired`; the SW's
+      // `handleWait` via `webNavigation.onCompleted`) and never send it here, so
+      // the bridge serves only selector / text / idle.
       case "idle":
       default:
         observer = new MutationObserver(() => {
@@ -1806,7 +1806,21 @@
       case "setHtml": {
         const r = uniqueSelectorOrErr(msg.selector);
         if (r.error) return r.error;
-        r.el.innerHTML = msg.value;
+        // A page enforcing Trusted Types (`require-trusted-types-for 'script'`,
+        // deployed by GitHub/Google and others) makes `innerHTML = <string>` throw
+        // a TypeError. Surface it as a typed InvalidArgument (exit 7) — the same
+        // guard `setAttr` has below — instead of letting it propagate as an
+        // untyped `Other` with a raw V8 stack (headless), or an uncaught throw
+        // that closes the message port and stalls the command for the full send
+        // timeout (browser).
+        try {
+          r.el.innerHTML = msg.value;
+        } catch (e) {
+          return err(
+            "InvalidArgument",
+            `set-html rejected by the page (Trusted Types or CSP): ${clip(String((e && e.message) || e), 200)}`,
+          );
+        }
         return { success: true };
       }
       case "setText": {
