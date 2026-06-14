@@ -6,7 +6,9 @@ use webpilot::types::line_safe;
 
 use crate::output::CommandOutput;
 use crate::transport::LocalTransport;
-use crate::transport::local_context::{ContextEntry, context_file_path, is_context_file};
+use crate::transport::local_context::{
+    ContextEntry, context_file_path, is_context_file, try_lock_live,
+};
 
 #[derive(Args)]
 pub struct ContextArgs {
@@ -108,40 +110,67 @@ async fn close_contexts(
     crate::policy::enforce_key(webpilot::types::PolicyKey::ContextClose)?;
 
     let browser = local.browser();
+    // The context THIS transport is bound to, if any. Closing your own context is
+    // always allowed — your transport holds its shared liveness lock, so the probe
+    // below would see it as "in use" and falsely refuse, yet you are deliberately
+    // closing it. Only a CROSS close (a context another live process holds) is
+    // refused, so one agent can't evict another's running session.
+    let own = local.browser_context_id.as_deref();
 
     if all {
-        let mut count = 0;
-        let mut kept = 0;
+        let mut closed = 0;
+        let mut in_use = 0; // a live transport elsewhere holds it — left running
+        let mut failed = 0; // disposal errored (CDP) — record kept for a retry
         if let Ok(entries) = std::fs::read_dir(dirs::contexts_dir()) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let fname = entry.file_name().to_string_lossy().to_string();
                 if !is_context_file(&fname) {
                     continue;
                 }
-                if let Ok(data) = std::fs::read_to_string(entry.path())
-                    && let Ok(ctx) = serde_json::from_str::<ContextEntry>(&data)
-                {
-                    // Best-effort across the whole set: one context that fails
-                    // to dispose must not abort the sweep, but its metadata is
-                    // kept (a live context with no record would be orphaned).
-                    if dispose_if_live(browser, &ctx.browser_context_id)
-                        .await
-                        .is_err()
-                    {
-                        kept += 1;
-                        continue;
+                let Ok(data) = std::fs::read_to_string(entry.path()) else {
+                    continue;
+                };
+                let Ok(ctx) = serde_json::from_str::<ContextEntry>(&data) else {
+                    continue;
+                };
+                // `--all` is a cleanup, not an eviction: skip a context another
+                // live process holds (the GC's invariant) rather than wipe a
+                // running agent. Hold the exclusive liveness lock through disposal
+                // so a resolve can't bind it mid-dispose; our OWN context can't be
+                // probed (we hold its shared lock), so dispose it directly.
+                let _held = if own == Some(ctx.browser_context_id.as_str()) {
+                    None
+                } else {
+                    match try_lock_live(&ctx.name) {
+                        Some(h) => Some(h),
+                        None => {
+                            in_use += 1;
+                            continue;
+                        }
                     }
-                    crate::transport::local::clear_context_state(&ctx.browser_context_id);
+                };
+                // Best-effort across the set: one context that fails to dispose
+                // must not abort the sweep, but its record is kept (a live context
+                // with no record would be orphaned in Chrome).
+                if dispose_if_live(browser, &ctx.browser_context_id)
+                    .await
+                    .is_err()
+                {
+                    failed += 1;
+                    continue;
                 }
+                crate::transport::local::clear_context_state(&ctx.browser_context_id);
                 let _ = std::fs::remove_file(entry.path());
-                count += 1;
+                closed += 1;
             }
         }
-        let msg = if kept > 0 {
-            format!("Closed {count} context(s); {kept} kept (failed to dispose — retry)")
-        } else {
-            format!("Closed {count} context(s)")
-        };
+        let mut msg = format!("Closed {closed} context(s)");
+        if in_use > 0 {
+            msg.push_str(&format!("; {in_use} kept (in use)"));
+        }
+        if failed > 0 {
+            msg.push_str(&format!("; {failed} kept (failed to dispose — retry)"));
+        }
         return Ok(CommandOutput::Ok(msg));
     }
 
@@ -153,6 +182,18 @@ async fn close_contexts(
     let data = std::fs::read_to_string(&file_path)
         .map_err(|_| WebPilotError::ContextNotFound { name: name.clone() })?;
     if let Ok(ctx) = serde_json::from_str::<ContextEntry>(&data) {
+        // A named close targets ONE context: if another live process holds it,
+        // fail loud rather than evict that agent — the caller stops it first.
+        // Closing your own context is always allowed. The exclusive liveness lock
+        // is held through disposal (TOCTOU-safe), exactly as the GC sweep does.
+        let _held = if own == Some(ctx.browser_context_id.as_str()) {
+            None
+        } else {
+            match try_lock_live(&name) {
+                Some(h) => Some(h),
+                None => return Err(WebPilotError::ContextInUse { name }.into()),
+            }
+        };
         dispose_if_live(browser, &ctx.browser_context_id).await?;
         crate::transport::local::clear_context_state(&ctx.browser_context_id);
     }

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] - 2026-06-14
+
+### Fixed
+
+- Explicit `context close` (headless multi-agent) now respects the same liveness
+  lock the context GC does, so it can no longer evict a context another live
+  process is actively using. A single `context close NAME` of a context held by
+  another live session fails loud with a typed `ContextInUse` error (exit 1);
+  `context close --all` skips such contexts and reports them as "kept (in use)"
+  rather than wiping a running agent. Closing the context the caller is itself
+  bound to is always allowed — the caller's own shared lock is not a foreign
+  holder, so a self-close never blocks. Previously only the `ContextClose` policy
+  gate, not the liveness invariant, stood between an explicit close and a running
+  agent's session; the exclusive liveness lock is now held through disposal, the
+  same TOCTOU-safe pattern the GC uses.
+
 ## [0.6.5] - 2026-06-14
 
 ### Fixed

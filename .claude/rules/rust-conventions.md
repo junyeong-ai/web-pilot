@@ -48,7 +48,7 @@ Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`
 
 ## Context isolation
 - `LocalTransport::open(Some("agent-1"))` resolves a named CDP browser context, creating one if absent. Per-user state under `dirs::contexts_dir()`.
-- `context close NAME` (the `close_contexts` handler) disposes a single named context — or every one with `--all`; `quit_session()` terminates Chrome itself (all contexts at once).
+- `context close NAME` (the `close_contexts` handler) disposes a single named context — or every one with `--all`; `quit_session()` terminates Chrome itself (all contexts at once). It respects the same liveness lock the GC does: a context another live process holds is never evicted — a single named close fails loud (`ContextInUse`), `--all` skips it and reports it kept. Closing the context the caller is itself bound to is always allowed (its own shared lock is not a foreign holder), so it never self-blocks.
 - `ensure_session()` uses `libc::flock` to serialize concurrent Chrome launches.
 
 ## Paths

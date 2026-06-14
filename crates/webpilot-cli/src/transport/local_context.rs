@@ -97,7 +97,12 @@ fn lock_context_live(name: &str) -> Result<std::fs::File> {
 /// then probes each context **without waiting**, so the store→name order it
 /// takes here (the reverse of resolve's name→store) cannot deadlock — a
 /// non-blocking probe never waits on a held lock, it just skips it.
-fn try_lock_live(name: &str) -> Option<std::fs::File> {
+///
+/// The returned guard must be **held through disposal**: keeping the exclusive
+/// lock blocks a concurrent resolve from binding the context mid-dispose, closing
+/// the probe→dispose TOCTOU. The GC sweep and explicit `context close` both rely
+/// on this — the only two paths that may dispose a context.
+pub(crate) fn try_lock_live(name: &str) -> Option<std::fs::File> {
     // `Err` (a real open/lock failure) and `Ok(None)` (held) both mean "don't
     // touch it" for a best-effort GC probe, so flatten them together.
     crate::lockfile::flock_exclusive(&context_live_path(name), true)

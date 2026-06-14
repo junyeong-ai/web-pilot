@@ -116,7 +116,7 @@ hand-written match tables.
 | code | variant | exit |
 |---|---|---|
 | 0 | success | — |
-| 1 | `Other`, `Session` | unknown / session |
+| 1 | `Other`, `Session`, `ContextInUse` | unknown / session / context held by another live process |
 | 2 | _(clap arg parse)_ | CLI usage error — unknown flag / non-numeric index / missing arg |
 | 3 | `ConnectionLost`, `BridgeUnavailable`, `VersionMismatch` | infra |
 | 4 | `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `TabNotFound`, `ContextNotFound`, `CookieNotFound`, `FrameNotFound` | not-found |

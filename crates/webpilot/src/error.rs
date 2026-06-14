@@ -77,6 +77,11 @@ pub enum WebPilotError {
     #[error("Context not found: {name}. List: webpilot context list")]
     ContextNotFound { name: String },
 
+    #[error(
+        "Context '{name}' is in use by another live process and was not closed. Stop that session first, then retry."
+    )]
+    ContextInUse { name: String },
+
     #[error("Cookie not found: {name}. List: webpilot cookie list URL")]
     CookieNotFound { name: String },
 
@@ -104,7 +109,7 @@ impl WebPilotError {
             E::ConnectionLost { .. } | E::BridgeUnavailable | E::VersionMismatch { .. } => 3,
             E::InvalidArgument { .. } => 7,
             E::NavigationFailed { .. } | E::NoPage => 8,
-            E::Session { .. } | E::Other { .. } => 1,
+            E::Session { .. } | E::Other { .. } | E::ContextInUse { .. } => 1,
         }
     }
 
@@ -126,6 +131,7 @@ impl WebPilotError {
             E::PolicyDenied { .. } => "PolicyDenied",
             E::TabNotFound { .. } => "TabNotFound",
             E::ContextNotFound { .. } => "ContextNotFound",
+            E::ContextInUse { .. } => "ContextInUse",
             E::CookieNotFound { .. } => "CookieNotFound",
             E::Session { .. } => "Session",
             E::Other { .. } => "Other",
@@ -183,6 +189,9 @@ impl WebPilotError {
             "ContextNotFound" => Self::ContextNotFound {
                 name: str_field("name").unwrap_or(w.message),
             },
+            "ContextInUse" => Self::ContextInUse {
+                name: str_field("name").unwrap_or(w.message),
+            },
             "CookieNotFound" => Self::CookieNotFound {
                 name: str_field("name").unwrap_or(w.message),
             },
@@ -229,6 +238,7 @@ impl WebPilotError {
             E::PolicyDenied { operation } => put("operation", operation.clone().into()),
             E::TabNotFound { tab_id } => put("tab_id", tab_id.clone().into()),
             E::ContextNotFound { name } => put("name", name.clone().into()),
+            E::ContextInUse { name } => put("name", name.clone().into()),
             E::CookieNotFound { name } => put("name", name.clone().into()),
             // The detail-carrying variants whose Display PREFIXES `detail`
             // ("Invalid argument: …", "Chrome connection lost: …", "Session
@@ -394,6 +404,20 @@ mod tests {
         let recovered: WebPilotError = serde_json::from_value(json).unwrap();
         assert_eq!(recovered, original);
         assert_eq!(recovered.exit_code(), 3);
+    }
+
+    #[test]
+    fn context_in_use_round_trips_with_exit_1() {
+        let original = WebPilotError::ContextInUse {
+            name: "agent-2".into(),
+        };
+        let json = serde_json::to_value(original.to_wire()).unwrap();
+        assert_eq!(json["code"], "ContextInUse");
+        assert_eq!(json["name"], "agent-2");
+
+        let recovered: WebPilotError = serde_json::from_value(json).unwrap();
+        assert_eq!(recovered, original);
+        assert_eq!(recovered.exit_code(), 1);
     }
 
     #[test]
