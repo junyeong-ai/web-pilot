@@ -1,7 +1,7 @@
 // Navigation settle: commit watch, settled-wait, and document readiness.
 // Mirrors the navigation half of transport/local/mod.rs.
 
-import { PROBE_MS, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
+import { PROBE_MS, navigationTimeoutMs, resolveActiveTabForNavigation, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { rearmMonitors } from "./state.js";
 
 // ── Navigation settle ───────────────────────────────────────────────────────
@@ -356,7 +356,7 @@ async function waitActiveFrameSettled(tabId, frameId, beforeDocId) {
 // `NoPage`. Resets the frame scope and re-arms monitors at settle, mirroring the
 // headless `navigate_reconnect`. Returns the settled tab id.
 async function navigateBoundTab(url) {
-  const existing = await resolveActiveTab();
+  const existing = await resolveActiveTabForNavigation();
   let tabId;
   let beforeUrl = "";
   let beforeDocId = null;

@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.17] - 2026-06-15
+
+### Fixed
+
+- **Headless: `action back` after the first navigation falsely succeeded**,
+  hopping to a blank page instead of reporting a typed `NavigationFailed`.
+  Headless opens every target blank (`Target.createTarget("about:blank")`) and
+  drives the load through `Page.navigate`, which APPENDS — so the first load
+  landed session history `[about:blank, url]`, and a `back` traversed to the
+  synthetic `about:blank` the agent never requested. Browser mode
+  (`chrome.tabs.create({url})`) has no such entry, so its `back` after the first
+  load is a typed `NavigationFailed`. The first real load on a freshly-created
+  target now prunes the synthetic entry (`Page.resetNavigationHistory`, which
+  keeps the current document), bringing headless `back`/`forward` history to
+  parity with browser mode. Affected every headless session — `capture --url`
+  and `tab new <url>` alike.
+- **Headless: `cookie set` / `session import` of a Secure cookie partitioned
+  under a first-party non-`https` top-level site** (e.g. CHIPS-partitioned under
+  `http://localhost`) was refused by Chrome. The cookie was set via an
+  `https://…` URL (secure-implied), but Chrome validates a first-party partition
+  schemefully, so the set URL's scheme must match the partition's
+  `top_level_site` scheme. Headless now derives the scheme from the partition
+  key (falling back to secure-implied), mirroring browser-mode `state.js`.
+- **Browser mode: `navigate` from a tab pinned to a non-`http` page**
+  (`about:blank` / `chrome://`) orphaned the pin and opened a SECOND tab, while
+  headless navigates its bound target in place. `navigate` needs no injectable
+  bridge — it is REPLACING the URL — so it now reuses the pinned tab whatever its
+  scheme (a new navigate-specific resolver), matching headless and the command's
+  own documented contract. A first navigate with no pin still defers to the
+  focused-http-or-create path, so the user's non-http focused tab is never
+  hijacked.
+- **Headless `action reload --capture`** now settles at the same point as
+  `navigate` and browser-mode reload — committed then parsed (`readyState` past
+  `loading`, the DOMContentLoaded point a capture acts on) — instead of
+  `Page.loadEventFired`. The old full-load wait blocked on trailing subresources
+  that add no interactive elements and lagged browser mode; the commit gate
+  keeps a same-URL reload from reading the previous document's `readyState`.
+- **Headless `capture --annotate`** no longer emits a degenerate `0×0`
+  annotation box; it applies the same `w > 0 && h > 0` keep-filter browser mode
+  already uses, so the two modes annotate the identical element set.
+
 ## [0.6.16] - 2026-06-14
 
 ### Fixed

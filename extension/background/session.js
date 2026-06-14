@@ -122,21 +122,29 @@ const PROBE_MS = 2000;
 // browser session (storage.session) on purpose — tab ids are meaningless
 // across a browser restart, so a fresh session re-pins on first use exactly
 // like a first run.
+// The pinned tab, or the typed TabNotFound a vanished pin raises. `null` means no
+// tab is pinned yet — the caller picks the unpinned fallback (a bridge command
+// has no page; a navigate creates one). No http filtering here: the two resolvers
+// below apply it (or not) per their needs.
+async function pinnedTabOrThrow() {
+  if (activeTabId == null) return null;
+  const tab = await chrome.tabs.get(activeTabId).catch(() => null);
+  if (tab) return tab;
+  const e = new Error(`Tab not found: ${activeTabId}. List: webpilot tab`);
+  e.code = "TabNotFound";
+  e.data = { tab_id: String(activeTabId) };
+  throw e;
+}
+
 async function resolveActiveTab() {
-  if (activeTabId != null) {
-    const tab = await chrome.tabs.get(activeTabId).catch(() => null);
-    if (tab) {
-      // The pinned tab must be an injectable http(s) page. A pin left on a
-      // chrome:// / about: page has no bridge, so a command there is NoPage
-      // (navigate first) — not a confusing BridgeUnavailable from a failed
-      // inject. Matches the focused fallback below, which already returns null
-      // for a non-http tab, so every caller already handles this.
-      return tab.url?.startsWith("http") ? tab : null;
-    }
-    const e = new Error(`Tab not found: ${activeTabId}. List: webpilot tab`);
-    e.code = "TabNotFound";
-    e.data = { tab_id: String(activeTabId) };
-    throw e;
+  const pinned = await pinnedTabOrThrow();
+  if (pinned) {
+    // The pinned tab must be an injectable http(s) page. A pin left on a
+    // chrome:// / about: page has no bridge, so a command there is NoPage
+    // (navigate first) — not a confusing BridgeUnavailable from a failed
+    // inject. Matches the focused fallback below, which already returns null
+    // for a non-http tab, so every caller already handles this.
+    return pinned.url?.startsWith("http") ? pinned : null;
   }
   const [focused] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!focused?.url?.startsWith("http")) return null;
@@ -144,4 +152,18 @@ async function resolveActiveTab() {
   return focused;
 }
 
-export { PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };
+// `navigate` is the one command that REPLACES the tab's URL, so it needs no
+// injectable bridge and must reuse the pinned tab even when that tab is non-http
+// (a pin left on about:blank / chrome://), where `resolveActiveTab` returns null
+// to steer bridge commands to a NoPage. Headless navigates its bound target in
+// place regardless of the old URL; without this, browser mode would orphan the
+// non-http pin and open a SECOND tab — a tab-state divergence. With no pin yet it
+// defers to `resolveActiveTab`'s focused-http-or-create path: a first navigate has
+// no agent tab to reuse (exactly as headless creates its bound target at session
+// open), and that path deliberately does NOT hijack the user's focused non-http
+// tab (e.g. their new-tab page).
+async function resolveActiveTabForNavigation() {
+  return (await pinnedTabOrThrow()) ?? resolveActiveTab();
+}
+
+export { PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, resolveActiveTab, resolveActiveTabForNavigation, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };

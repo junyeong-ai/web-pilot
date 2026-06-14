@@ -715,6 +715,15 @@ impl LocalTransport {
                         self.clear_active_frame().await;
                         self.rebind_page_world().await?;
                         self.reinstall_monitors().await;
+                        // A target created blank and now landing its FIRST real load:
+                        // drop the synthetic `about:blank` entry `Page.navigate`
+                        // appended below it, so a later `back` matches browser mode
+                        // (a typed `NavigationFailed`, not a hop to a blank page the
+                        // agent never requested). Gated on the from-blank start so a
+                        // normal cross-page navigate pays no history probe.
+                        if before_url == "about:blank" {
+                            self.prune_initial_blank_history().await;
+                        }
                         return Ok(());
                     }
                 } else if navigation_settled(&self.page, loader, &before_url).await {
@@ -759,6 +768,36 @@ impl LocalTransport {
                     .into());
             }
             tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
+        }
+    }
+
+    /// Drop the synthetic `about:blank` entry that sits below a freshly-created
+    /// target's first real navigation. Headless opens every target blank
+    /// (`Target.createTarget("about:blank")`) and drives the load through
+    /// `Page.navigate`, which APPENDS — so the first load lands session history
+    /// `[about:blank, url]`, and a `back` would traverse to a blank page the agent
+    /// never asked for. Browser mode (`chrome.tabs.create({url})`) has no such
+    /// entry, so its `back` after the first load is a typed `NavigationFailed`;
+    /// this makes headless match. Prunes ONLY the exact fresh-target shape — the
+    /// current entry at index 1 of exactly two, entry 0 being `about:blank` — so it
+    /// fires on that first load and never on history the agent actually built (once
+    /// it has run, the blank is gone before a second entry accumulates, so a
+    /// multi-step session stays clean without re-checking). `resetNavigationHistory`
+    /// clears the back/forward list while keeping the current document loaded.
+    /// Best-effort: a failed probe or reset just leaves the pre-existing entry.
+    async fn prune_initial_blank_history(&self) {
+        let Ok(hist) = self.page.send("Page.getNavigationHistory", None).await else {
+            return;
+        };
+        let at_first_real = hist.get("currentIndex").and_then(Value::as_i64) == Some(1)
+            && hist
+                .get("entries")
+                .and_then(Value::as_array)
+                .is_some_and(|e| {
+                    e.len() == 2 && e[0].get("url").and_then(Value::as_str) == Some("about:blank")
+                });
+        if at_first_real {
+            let _ = self.page.send("Page.resetNavigationHistory", None).await;
         }
     }
 

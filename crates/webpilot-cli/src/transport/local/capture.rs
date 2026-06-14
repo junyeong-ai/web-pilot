@@ -120,6 +120,14 @@ impl LocalTransport {
                     .filter(|e| e.spatial.in_viewport == Some(true) && e.spatial.bounds.is_some())
                     .filter_map(|e| {
                         let b = e.spatial.bounds.as_ref()?;
+                        // Skip a zero-size box: a 0×0 annotation is a degenerate
+                        // dot, never a useful target marker. Mirrors browser mode's
+                        // `w > 0 && h > 0` keep-filter (capture.js) so the two modes
+                        // annotate the identical element set (`w`/`h` are u32, so a
+                        // zero dimension is `== 0`).
+                        if b.w == 0 || b.h == 0 {
+                            return None;
+                        }
                         Some(json!({
                             "index": e.index, "x": b.x, "y": b.y, "w": b.w, "h": b.h,
                         }))

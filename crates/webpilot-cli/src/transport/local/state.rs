@@ -601,8 +601,26 @@ fn cookie_info_to_cdp(c: &CookieInfo) -> Value {
     });
     if c.host_only {
         // Host-only: set by URL with no `domain`, so Chrome scopes the cookie to
-        // exactly its host and a round-trip can't widen it to subdomains.
-        let scheme = if c.secure { "https" } else { "http" };
+        // exactly its host and a round-trip can't widen it to subdomains. A Secure
+        // cookie partitioned under a FIRST-PARTY top-level site
+        // (`has_cross_site_ancestor == false`) must take the PARTITION's scheme,
+        // not the secure-implied `https`: Chrome validates CHIPS schemefully, so a
+        // `https://…` set URL against an `http://…` partition (e.g.
+        // `http://localhost`) is refused as "not first party". A cross-site
+        // partition keeps the secure-implied scheme (its URL and top-level site
+        // are different sites by construction). Mirrors browser-mode `state.js`.
+        let scheme = c
+            .partition_key
+            .as_ref()
+            .filter(|pk| !pk.has_cross_site_ancestor)
+            .and_then(|pk| pk.top_level_site.split_once("://"))
+            .map(|(s, _)| s)
+            .filter(|s| {
+                !s.is_empty()
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'-'))
+            })
+            .unwrap_or(if c.secure { "https" } else { "http" });
         let host = c.domain.trim_start_matches('.');
         params["url"] = format!("{scheme}://{host}{}", c.path).into();
     } else {

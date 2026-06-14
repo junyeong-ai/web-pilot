@@ -161,21 +161,37 @@ impl LocalTransport {
                 // Subscribe BEFORE issuing the reload, so the completion event
                 // can't fire in the gap before a fresh subscription and be lost —
                 // the same race the click and history paths avoid by pre-subscribing.
-                // A reload keeps the URL, so `Page.loadEventFired` (not a URL move)
-                // is the reliable completion signal; the wait is best-effort, so a
-                // page that never fires it still settles on whatever it reached.
+                // Settle at the SAME point as navigate and browser-mode reload:
+                // committed (the reload's main-frame `Page.frameNavigated`) then
+                // parsed (`readyState` past `loading` — the DOMContentLoaded point a
+                // capture acts on). `Page.loadEventFired` over-waited for trailing
+                // subresources, so headless reload+capture lagged browser mode (which
+                // settles at the parsed document) and blocked on slow images that add
+                // no interactive elements. The commit gate matters because a reload
+                // keeps the URL: probing `readyState` without first seeing the new
+                // document commit could read the OLD document's `complete`. Best-effort
+                // and deadline-bounded: a page that never commits/parses still settles
+                // on whatever it reached at the deadline.
                 let mut events = self.page.subscribe_events();
+                let deadline =
+                    tokio::time::Instant::now() + webpilot::settings::timeouts().reload_wait;
                 self.page.send("Page.reload", None).await?;
-                let _ = self
+                let committed = self
                     .page
                     .wait_on_receiver(
                         &mut events,
-                        webpilot::settings::timeouts().reload_wait,
-                        |ev| {
-                            ev.get("method").and_then(Value::as_str) == Some("Page.loadEventFired")
-                        },
+                        deadline.saturating_duration_since(tokio::time::Instant::now()),
+                        |ev| main_frame_navigated(ev).is_some(),
                     )
                     .await;
+                if committed {
+                    while !self.document_parsed(deadline).await {
+                        if tokio::time::Instant::now() >= deadline {
+                            break;
+                        }
+                        tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
+                    }
+                }
                 self.settle_new_document().await;
                 return Ok(self.settled_action_result(capture, None).await);
             }
