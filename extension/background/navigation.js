@@ -351,6 +351,14 @@ async function navigateBoundTab(url) {
     watch = watchMainFrameCommit(tabId);
     await chrome.tabs.update(tabId, { url, active: true });
   } else {
+    // No tab pinned yet — create one already pointed at `url`. Here the commit
+    // watch is registered AFTER the create (the create IS the navigation), so a
+    // very fast load's `onCommitted` can land before the watch attaches. That is
+    // safe, not the existing-tab branch's watch-before-navigate race: `beforeUrl`
+    // is "", so the settle's URL-change fallback fires on ANY real URL the new tab
+    // reaches, and a fresh tab has no prior frame scope for the documentId check
+    // to mis-decide. The watch is a fast-path optimization here, not the only
+    // settle signal.
     const t = await chrome.tabs.create({ url, active: true });
     tabId = t.id;
     setActiveTabId(tabId);

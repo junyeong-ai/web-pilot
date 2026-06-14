@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] - 2026-06-14
+
+### Changed
+
+- `action reload` (headless) subscribes to the load-completion event BEFORE
+  issuing `Page.reload`, mirroring the click and history-navigation paths, so a
+  fast reload whose `loadEventFired` would otherwise race a late subscription
+  can't burn the full reload timeout before settling. It now drains a
+  pre-subscribed receiver — the same deterministic pattern those paths use —
+  instead of opening a fresh subscription and swallowing its result.
+
+### Documentation
+
+- Corrected the `do_wait` timeout-clamp rationale: `Instant + Duration::from_millis(u64::MAX)`
+  does not overflow (verified — only `from_secs(u64::MAX)` does). The clamp's
+  real, platform-independent reason is the in-page `setTimeout` i32 ceiling
+  (~24.8 days); it also keeps the Rust deadline far inside `Instant`'s range.
+- Documented why browser-mode `navigateBoundTab`'s fresh-tab branch is safe
+  registering its commit watch after the create — the URL-change settle fallback
+  (with an empty `beforeUrl`) covers any missed commit — so it reads as
+  intentional rather than diverging from the existing-tab branch's ordering.
+
 ## [0.6.6] - 2026-06-14
 
 ### Fixed

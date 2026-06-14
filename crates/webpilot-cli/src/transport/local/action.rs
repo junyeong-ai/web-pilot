@@ -158,14 +158,24 @@ impl LocalTransport {
                 return Ok(self.settled_action_result(capture, None).await);
             }
             Action::Reload => {
+                // Subscribe BEFORE issuing the reload, so the completion event
+                // can't fire in the gap before a fresh subscription and be lost —
+                // the same race the click and history paths avoid by pre-subscribing.
+                // A reload keeps the URL, so `Page.loadEventFired` (not a URL move)
+                // is the reliable completion signal; the wait is best-effort, so a
+                // page that never fires it still settles on whatever it reached.
+                let mut events = self.page.subscribe_events();
                 self.page.send("Page.reload", None).await?;
-                self.page
-                    .wait_for_event(
-                        "Page.loadEventFired",
+                let _ = self
+                    .page
+                    .wait_on_receiver(
+                        &mut events,
                         webpilot::settings::timeouts().reload_wait,
+                        |ev| {
+                            ev.get("method").and_then(Value::as_str) == Some("Page.loadEventFired")
+                        },
                     )
-                    .await
-                    .ok();
+                    .await;
                 self.settle_new_document().await;
                 return Ok(self.settled_action_result(capture, None).await);
             }
