@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2026-06-14
+
+### Fixed
+
+- **Uploads to a hidden file input now work** — the standard pattern of a styled
+  trigger over a `display:none` / `opacity:0` `<input type=file>`. A file input
+  is uploadable over CDP regardless of paint, and clicking the visible trigger
+  only opens an OS file dialog no automation can drive, so the input is now
+  always captured (indexable for `action upload`) and resolves for the upload
+  sink without the visibility gate the visible-action paths keep. Previously the
+  hidden input was filtered out of every snapshot, leaving the common upload UX
+  unreachable.
+- **Exported session files are owner-only (0600).** Every WebPilot state file is
+  now written 0600, so `session export --output` moving a session — auth cookies
+  plus localStorage — to a user-chosen, possibly shared directory no longer
+  leaves the secrets world/group-readable. The 0700 directory still gates
+  traversal; this is the protection the file keeps when it travels out.
+- A `session export` on a page where storage is inaccessible (a `data:` URL, a
+  sandboxed frame, storage disabled) now fails with a clean, actionable message
+  instead of leaking the bridge's raw V8 exception and its internal stack.
+
 ## [0.6.7] - 2026-06-14
 
 ### Changed

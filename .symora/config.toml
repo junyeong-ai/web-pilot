@@ -1,0 +1,49 @@
+[project]
+name = "web-pilot"
+languages = [
+    "javascript",
+    "bash",
+    "markdown",
+    "rust",
+    "toml",
+]
+ignored_paths = [
+    "node_modules",
+    ".git",
+    "target",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".symora",
+]
+
+[project.entry_files]
+
+[lsp]
+timeout_secs = 60
+auto_restart = true
+refs_limit = 500
+impl_limit = 100
+symbol_limit = 100
+calls_limit = 100
+type_hierarchy_limit = 100
+tests_limit = 10
+diagnostics_wait_ms = 1500
+
+[search]
+limit = 100
+max_file_size_mb = 5
+
+[daemon]
+max_concurrent = 100
+idle_timeout_mins = 30
+
+[output]
+max_response_chars = 20000
+
+[test]
+file_patterns = []
+dir_patterns = []
+markers = []

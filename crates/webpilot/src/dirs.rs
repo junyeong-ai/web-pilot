@@ -301,10 +301,21 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let tmp = dir.join(format!(".{file_name}.{}.{nonce}.tmp", std::process::id()));
 
     let write = || -> std::io::Result<()> {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        // Owner-only (0600). A WebPilot state file can carry secrets — a session
+        // export holds auth cookies/tokens, the policy store is a security config —
+        // so the FILE itself must be owner-only, not merely the 0700 directory
+        // holding it. Otherwise `session export --output` (which moves the file out
+        // to a user-chosen, possibly shared directory) would leave the secrets
+        // readable by other local users. The 0700 dir still gates traversal; this
+        // is the defense-in-depth the file keeps when it travels.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
         f.write_all(contents)?;
         f.sync_all()?;
         drop(f);
@@ -396,5 +407,25 @@ mod tests {
     fn runtime_dir_lives_under_root() {
         assert_eq!(runtime_dir_path().parent().unwrap(), root_path());
         assert_eq!(runtime_dir_path().file_name().unwrap(), RUNTIME_SUBDIR);
+    }
+
+    /// A state file can carry secrets (a session export, the policy store), so
+    /// `atomic_write` must produce an owner-only (0600) file — defense-in-depth
+    /// that survives the file being moved out of its 0700 dir (e.g. by
+    /// `session export --output`), where the dir no longer protects it.
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("wp-aw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret.json");
+        atomic_write(&path, b"auth-token").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            mode, 0o600,
+            "a WebPilot state file must be owner-only (0600), got {mode:o}"
+        );
     }
 }

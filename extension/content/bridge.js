@@ -404,7 +404,7 @@
   // element that persists across an SPA route — exactly the kind of heuristic
   // false positive this design exists to avoid. The agent re-captures after an
   // action it knows changed the page (the documented capture→act→capture loop).
-  function resolveIndex(index) {
+  function resolveIndex(index, { requireVisible = true } = {}) {
     if (index == null) {
       return { error: err("InvalidArgument", "Missing index") };
     }
@@ -414,7 +414,13 @@
       return { error: elementNotFound(index, snap.length) };
     }
     const el = snap[index - 1];
-    if (!el.isConnected || !isVisible(el)) {
+    // `requireVisible` is relaxed ONLY for the upload sink: a file input is
+    // uploadable over CDP while unpainted (the common upload UX hides it — see
+    // `extractDom`), so it resolves on identity + liveness alone. Every
+    // visible-action path keeps the gate — a click/type/drag on a now-hidden
+    // element is a `StaleSnapshot`, never a blind act on something the agent
+    // can't see.
+    if (!el.isConnected || (requireVisible && !isVisible(el))) {
       return { error: staleSnapshot(index) };
     }
     return { el };
@@ -634,7 +640,15 @@
       const active = deepActiveElement();
 
       for (const el of all) {
-        if (!isVisible(el)) continue;
+        // A file input is the one control actionable while UNPAINTED: the common
+        // upload UX hides the `<input type=file>` (display:none / opacity:0)
+        // behind a styled trigger, and `action upload` sets its file over CDP
+        // regardless of paint — clicking the visible trigger only opens an OS
+        // file dialog no automation can drive. So a file input is always captured
+        // (and `resolveIndex` resolves it for the upload sink without the
+        // visibility gate); every other element must be visible to be actionable.
+        const isFileInput = el.tagName === "INPUT" && el.type === "file";
+        if (!isFileInput && !isVisible(el)) continue;
         const rect = el.getBoundingClientRect();
 
         const tag = el.tagName.toLowerCase();
@@ -1585,25 +1599,37 @@
   // ── Storage ──────────────────────────────────────────────────────────────
 
   function exportStorage() {
-    // `Object.create(null)`, not `{}`: a page can store a key literally named
-    // `__proto__` (`localStorage.setItem("__proto__", …)`), and on a plain
-    // object `localObj["__proto__"] = v` hits the prototype SETTER — it sets no
-    // own property, so the key vanishes from the export (a silent round-trip
-    // loss). A null-prototype object has no such accessor, so every key,
-    // `__proto__` included, lands as plain data and survives serialization.
-    const localObj = Object.create(null);
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k != null) localObj[k] = localStorage.getItem(k);
+    // Accessing `localStorage`/`sessionStorage` THROWS a SecurityError where
+    // storage is disabled — a `data:` URL, a sandboxed frame, or a page with
+    // storage blocked by settings. Catch it and return a clean typed error so the
+    // export fails loud with an actionable reason, never the raw V8 exception
+    // (which would leak this script's internal stack to the agent).
+    try {
+      // `Object.create(null)`, not `{}`: a page can store a key literally named
+      // `__proto__` (`localStorage.setItem("__proto__", …)`), and on a plain
+      // object `localObj["__proto__"] = v` hits the prototype SETTER — it sets no
+      // own property, so the key vanishes from the export (a silent round-trip
+      // loss). A null-prototype object has no such accessor, so every key,
+      // `__proto__` included, lands as plain data and survives serialization.
+      const localObj = Object.create(null);
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k != null) localObj[k] = localStorage.getItem(k);
+      }
+      const sessionObj = Object.create(null);
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (k != null) sessionObj[k] = sessionStorage.getItem(k);
+      }
+      // Storage is origin-scoped state, so the export records WHOSE it is — the
+      // import refuses to write it into a page on a different origin.
+      return { origin: location.origin, localStorage: localObj, sessionStorage: sessionObj };
+    } catch (e) {
+      return err(
+        "Other",
+        "Storage is not accessible on this page (a data: URL, a sandboxed frame, or storage disabled) — cannot export a session here",
+      );
     }
-    const sessionObj = Object.create(null);
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const k = sessionStorage.key(i);
-      if (k != null) sessionObj[k] = sessionStorage.getItem(k);
-    }
-    // Storage is origin-scoped state, so the export records WHOSE it is — the
-    // import refuses to write it into a page on a different origin.
-    return { origin: location.origin, localStorage: localObj, sessionStorage: sessionObj };
   }
 
   function importStorage(msg) {
@@ -1744,7 +1770,10 @@
         // neither observe nor redirect the target between resolve and the
         // file-set sink; the direct reference also reaches a file input inside
         // an open shadow root, which a document-root selector cannot.
-        const r = resolveIndex(msg.index);
+        // `requireVisible: false` — the standard upload UX hides the input, and
+        // it sets over CDP regardless of paint; the `type === "file"` guard below
+        // still rejects anything that isn't an actual file input.
+        const r = resolveIndex(msg.index, { requireVisible: false });
         if (r.error) return r.error;
         const el = r.el;
         if (!(el instanceof HTMLInputElement) || el.type !== "file") {

@@ -1056,6 +1056,27 @@ fn headless_behavioral_flow() {
         "upload onto a non-file element must be InvalidArgument: {}",
         stdout(&bad)
     );
+    // A file input is captured even when UNPAINTED (display:none here) — the
+    // standard upload UX hides the input behind a styled trigger, and `upload`
+    // sets the file over CDP regardless of paint, so the agent must be able to
+    // address it by index. (#hiddenfile is `display:none`, so a visible-action
+    // gate would otherwise drop it and make the input unreachable.)
+    let hidden_file_index = index_of(&cap_up, "hiddenfile");
+    let uph = fx.run(&["action", "upload", &hidden_file_index, src]);
+    assert_eq!(
+        code(&uph),
+        0,
+        "upload to a display:none file input must succeed (the common hidden-input pattern): {}",
+        stdout(&uph)
+    );
+    let hfc = fx.run(&["eval", "document.getElementById('hiddenfile').files.length"]);
+    let hfcj: serde_json::Value = serde_json::from_str(&stdout(&hfc)).expect("eval json");
+    assert_eq!(
+        hfcj["result"].as_str(),
+        Some("1"),
+        "upload must place exactly one file on the hidden #hiddenfile: {}",
+        stdout(&hfc)
+    );
     // A missing upload file is resolved (and rejected) in the CLI before the
     // wire, so it's a typed InvalidArgument — not a raw CDP error from Chrome.
     let missing = fx.run(&["action", "upload", &file_index, "/no/such/upload/file.txt"]);

@@ -17,6 +17,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <input id="q" type="text" placeholder="Search">
 <input id="maxed" type="text" maxlength="3">
 <input id="file" type="file">
+<input id="hiddenfile" type="file" style="display:none">
 <button id="slownav" onclick="location.href='/slow'">slow nav</button>
 <a id="nav" href="/second">go second</a>
 <a id="selfref" href="">selfref</a>
