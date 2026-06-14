@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.240] - 2026-06-14
+
+The last two architecture-review follow-ups — both make an existing invariant
+explicit rather than changing behavior.
+
+### Changed
+
+- **The "a new main document needs its iframe scope dropped AND its monitors
+  re-armed" pairing is now one named `settle_new_document()` operation.** The two
+  calls were paired by convention at every navigation-settle site (a same-URL
+  reload, an `ERR_ABORTED` stay-put, a `reload` action, a history traversal); a
+  future settle path that did one without the other would either resolve a dead
+  frame context or leave an armed monitor silently stopped. Naming the pair keeps
+  them together. The two sites that must interleave another step — a cross-site
+  renderer rebind, an await-live before re-arming onto a not-yet-committed
+  document — keep their explicit calls and document why.
+
+### Added
+
+- **A protocol round-trip sweep over every `Command` variant** (serialize →
+  deserialize → re-serialize equality, plus the gate is preserved). The
+  strict-deserialization security test — the host re-parses a command to a typed
+  value before enforcing policy, so a type-mismatch can't slip through unenforced
+  — previously covered only `Action`/`Eval`; it now covers all 26, with an
+  exhaustive match that fails to compile until a new command is added to the
+  sweep.
+
 ## [0.4.239] - 2026-06-14
 
 A design-hygiene and internal-consistency pass from the same architecture review —

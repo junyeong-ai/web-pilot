@@ -724,8 +724,7 @@ impl LocalTransport {
                     // Same-URL navigation: necessarily same-site, so the existing
                     // session stays valid (no renderer swap). The loader match
                     // distinguishes the reloaded document from the previous one.
-                    self.clear_active_frame().await;
-                    self.reinstall_monitors().await;
+                    self.settle_new_document().await;
                     return Ok(());
                 }
             }
@@ -752,8 +751,7 @@ impl LocalTransport {
                             std::time::Instant::now() + webpilot::settings::timeouts().navigation;
                         continue;
                     }
-                    self.clear_active_frame().await;
-                    self.reinstall_monitors().await;
+                    self.settle_new_document().await;
                     return Ok(());
                 }
                 return Err(start_error
@@ -772,6 +770,23 @@ impl LocalTransport {
     async fn clear_active_frame(&self) {
         *self.active_frame_id.lock().await = None;
         clear_persisted_active_frame(self.persisted_context_key());
+    }
+
+    /// Settle onto a freshly-built MAIN document: drop the active iframe scope
+    /// (the page left it on a main-frame navigation) AND re-arm the
+    /// console/network monitors onto the new document. The two always go together
+    /// for a new main document — doing one without the other would either resolve
+    /// a dead frame context or leave an armed monitor silently stopped — so they
+    /// live in one named operation a settle path calls rather than re-pairing by
+    /// hand. (`reinstall_monitors` is idempotent for a same-document settle: its
+    /// install scripts guard on their `window` flags, so a history/bfcache
+    /// traversal that did not build a new document re-arms to a no-op.) A settle
+    /// that must INTERLEAVE another step — a cross-site renderer rebind, or an
+    /// await-live before re-arming onto a not-yet-committed document — keeps its
+    /// explicit `clear_active_frame`/`reinstall_monitors` calls and says why.
+    async fn settle_new_document(&self) {
+        self.clear_active_frame().await;
+        self.reinstall_monitors().await;
     }
 
     /// Whether the switched-into frame is still in the tree. `true` when no frame

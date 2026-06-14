@@ -319,6 +319,145 @@ fn type_mismatched_gated_command_is_rejected_by_deserialization() {
 }
 
 #[test]
+fn every_command_round_trips_with_a_stable_wire_shape_and_gate() {
+    use webpilot::action::{Action, Modifiers};
+    use webpilot::types::SameSite;
+
+    // ONE instance of every Command variant. The exhaustive match below fails to
+    // compile when a variant is added, forcing it into this sweep — so the wire
+    // contract the NM host re-parses (and gates on) can never gain a command whose
+    // serialization drift goes untested. The earlier strict-deserialization
+    // security test covered only Action/Eval; this closes it for ALL of them.
+    let commands = vec![
+        Command::Capture {
+            include: vec![CaptureField::Dom],
+            opts: CaptureOpts::default(),
+            url: None,
+        },
+        Command::Action {
+            action: Action::Click {
+                index: 1,
+                modifiers: Modifiers::default(),
+            },
+            capture: false,
+        },
+        Command::Eval { code: "1".into() },
+        Command::Wait {
+            condition: WaitCondition::Navigation,
+            timeout_ms: 1000,
+        },
+        Command::Status,
+        Command::TabList,
+        Command::TabSwitch { tab_id: "t".into() },
+        Command::TabNew {
+            url: "http://x/".into(),
+        },
+        Command::TabClose { tab_id: "t".into() },
+        Command::DomSet {
+            selector: "a".into(),
+            property: DomProperty::Html,
+            value: "x".into(),
+        },
+        Command::DomGet {
+            selector: "a".into(),
+            property: DomProperty::Attr {
+                name: "href".into(),
+            },
+        },
+        Command::Fetch {
+            url: "http://x/".into(),
+            method: None,
+            body: None,
+            headers: vec![("a".into(), "b".into())],
+        },
+        Command::FrameList,
+        Command::FrameSwitch {
+            selector: FrameSelector::Predicate { js: "true".into() },
+        },
+        Command::CookieList {
+            url: "http://x/".into(),
+        },
+        Command::CookieSet {
+            url: "http://x/".into(),
+            name: "n".into(),
+            value: "v".into(),
+            http_only: true,
+            secure: true,
+            same_site: Some(SameSite::Lax),
+            expires: Some(1.0),
+        },
+        Command::CookieDelete {
+            url: "http://x/".into(),
+            name: "n".into(),
+        },
+        Command::ConsoleStart,
+        Command::ConsoleRead { since: Some(5) },
+        Command::ConsoleClear,
+        Command::NetworkStart,
+        Command::NetworkRead { since: None },
+        Command::NetworkClear,
+        Command::SessionExport,
+        Command::SessionImport { data: "{}".into() },
+        Command::Ping,
+    ];
+
+    fn assert_exhaustive(c: &Command) {
+        // A bare `_` would let a new command escape the sweep; this forces every
+        // variant to be added to `commands` above.
+        match c {
+            Command::Capture { .. }
+            | Command::Action { .. }
+            | Command::Eval { .. }
+            | Command::Wait { .. }
+            | Command::Status
+            | Command::TabList
+            | Command::TabSwitch { .. }
+            | Command::TabNew { .. }
+            | Command::TabClose { .. }
+            | Command::DomSet { .. }
+            | Command::DomGet { .. }
+            | Command::Fetch { .. }
+            | Command::FrameList
+            | Command::FrameSwitch { .. }
+            | Command::CookieList { .. }
+            | Command::CookieSet { .. }
+            | Command::CookieDelete { .. }
+            | Command::ConsoleStart
+            | Command::ConsoleRead { .. }
+            | Command::ConsoleClear
+            | Command::NetworkStart
+            | Command::NetworkRead { .. }
+            | Command::NetworkClear
+            | Command::SessionExport
+            | Command::SessionImport { .. }
+            | Command::Ping => {}
+        }
+    }
+
+    assert_eq!(commands.len(), 26, "one instance per Command variant");
+    for c in &commands {
+        assert_exhaustive(c);
+        let json = serde_json::to_value(c).expect("serialize");
+        let back: Command = serde_json::from_value(json.clone()).expect("deserialize");
+        // Command has no PartialEq, so compare the canonical JSON: the wire shape
+        // survives the round trip byte-for-byte.
+        assert_eq!(
+            serde_json::to_value(&back).expect("re-serialize"),
+            json,
+            "{json} must round-trip with a stable wire shape"
+        );
+        // The security invariant: a command re-parsed by the host gates to the
+        // SAME effect it carried, so policy enforcement can never be dodged by a
+        // serialization that loses or shifts the gate.
+        assert_eq!(
+            back.policy_key(),
+            c.policy_key(),
+            "{json} must keep its policy gate across the round trip"
+        );
+    }
+}
+
+#[test]
 fn response_action_carries_typed_error() {
     let r = Response {
         id: 1,

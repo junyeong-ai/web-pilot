@@ -166,8 +166,7 @@ impl LocalTransport {
                     )
                     .await
                     .ok();
-                self.clear_active_frame().await;
-                self.reinstall_monitors().await;
+                self.settle_new_document().await;
                 return Ok(self.settled_action_result(capture, None).await);
             }
             Action::Drag {
@@ -937,11 +936,9 @@ impl LocalTransport {
         // (browser mode waits the same readyState bar). The immediate readyState
         // check makes a same-document/bfcache traversal return without delay.
         self.await_document_ready(&mut events).await;
-        self.clear_active_frame().await;
-        // A history traversal that built a new document wiped the monitor
-        // hooks; for a same-document traversal the re-install is an idempotent
-        // no-op (the install scripts guard on their `window` flags).
-        self.reinstall_monitors().await;
+        // A history traversal that built a new document wiped the monitor hooks;
+        // a same-document/bfcache traversal re-arms to an idempotent no-op.
+        self.settle_new_document().await;
         Ok(())
     }
 
