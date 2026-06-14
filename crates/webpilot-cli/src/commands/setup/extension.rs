@@ -1,22 +1,21 @@
 //! `webpilot setup extension` — materialise the embedded Chrome extension.
 //!
-//! Chrome cannot be programmatically asked to load an unpacked extension, so
+//! A browser cannot be programmatically asked to load an unpacked extension, so
 //! the binary's job is twofold:
 //! 1. Extract the embedded extension tree to a stable, durable path
 //!    (`webpilot::dirs::extension_dir()`).
-//! 2. Walk the user through `chrome://extensions → Load unpacked`.
+//! 2. Walk the user through `Load unpacked` on their browser's extensions page.
 //!
-//! The path is durable on purpose: Chrome stores an absolute path to the
+//! The path is durable on purpose: the browser stores an absolute path to the
 //! unpacked directory, so we cannot place the files under the cache root.
 
 use anyhow::{Context, Result};
 use clap::Args;
-use std::process::Command;
 
 use crate::assets;
 use crate::output::CommandOutput;
 
-use super::{ChromeOpen, StepOutcome, home_relative};
+use super::{StepOutcome, home_relative};
 
 #[derive(Args)]
 pub struct ExtensionArgs {
@@ -25,7 +24,7 @@ pub struct ExtensionArgs {
     pub path: bool,
 }
 
-pub fn run(args: ExtensionArgs, yes: bool, open: bool) -> Result<CommandOutput> {
+pub fn run(args: ExtensionArgs) -> Result<CommandOutput> {
     if args.path {
         // `--path` is a query, not an action: report the destination without
         // creating it.
@@ -36,7 +35,7 @@ pub fn run(args: ExtensionArgs, yes: bool, open: bool) -> Result<CommandOutput> 
         });
     }
 
-    let mut outcome = install(ChromeOpen::from_flags(yes, open))?;
+    let mut outcome = install()?;
     // Standalone `setup extension`: point the user at the one remaining step.
     // The id is derived, so `setup nm-host` needs no argument. (The orchestrated
     // `setup` runs nm-host itself, so it composes its own message instead.)
@@ -49,17 +48,15 @@ pub fn run(args: ExtensionArgs, yes: bool, open: bool) -> Result<CommandOutput> 
     })
 }
 
-/// Extract the extension tree and apply the chosen Chrome-open policy.
+/// Extract the extension tree and print the load-unpacked walkthrough.
 ///
 /// The extension is always overwritten — its content is purely a function of
 /// the binary version, so a prompt would never have a useful answer.
-pub(crate) fn install(chrome: ChromeOpen) -> Result<StepOutcome> {
+pub(crate) fn install() -> Result<StepOutcome> {
     let dest = webpilot::dirs::extension_dir();
 
     assets::write_dir(&assets::EXTENSION, &dest)
         .with_context(|| format!("write extension to {}", dest.display()))?;
-
-    let opened = chrome.should_open() && open_chrome_extensions().is_ok();
 
     let mut human = String::new();
     human.push_str(&format!(
@@ -73,25 +70,7 @@ pub(crate) fn install(chrome: ChromeOpen) -> Result<StepOutcome> {
     human.push_str(&format!("       {}", dest.display()));
 
     Ok(StepOutcome {
-        json: serde_json::json!({
-            "path": dest.display().to_string(),
-            "opened_chrome_extensions": opened,
-        }),
+        json: serde_json::json!({ "path": dest.display().to_string() }),
         human,
     })
-}
-
-fn open_chrome_extensions() -> Result<()> {
-    let url = "chrome://extensions";
-    let (cmd, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
-        ("open", &["-a", "Google Chrome", url])
-    } else {
-        ("xdg-open", &[url])
-    };
-    let status = Command::new(cmd).args(args).status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        anyhow::bail!("opener exited with {status}")
-    }
 }

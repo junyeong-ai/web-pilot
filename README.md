@@ -438,7 +438,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 ```bash
 webpilot setup                 # 대화형 setup: 스킬 + 확장 + NM 호스트 (확장 ID 자동 탐지; 수동은 "압축해제된 확장 로드" 한 번)
 webpilot setup skill           # 스킬만 (재)설치
-webpilot setup extension       # 확장 추출 + Chrome 안내 (chrome://extensions 열림)
+webpilot setup extension       # 확장 추출 + 로드 안내(압축해제된 확장 로드) 출력
 webpilot setup nm-host         # NM 호스트 등록 (확장 ID 자동 탐지; --extension-id 는 다른 빌드용 override)
 
 webpilot self update           # 최신 릴리스로 자가 업데이트 (atomic, sha256 검증)

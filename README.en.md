@@ -438,7 +438,7 @@ Errors print with guidance text, and in JSON mode come out as `{"code": "...", "
 ```bash
 webpilot setup                 # interactive setup: skill + extension + NM host (id auto-detected; one manual "Load unpacked")
 webpilot setup skill           # (re)install just the skill
-webpilot setup extension       # extract the extension + Chrome guide (opens chrome://extensions)
+webpilot setup extension       # extract the extension + print the load-unpacked steps
 webpilot setup nm-host         # register the NM host (extension id auto-detected; --extension-id overrides for a different build)
 
 webpilot self update           # self-update to the latest release (atomic, sha256-verified)

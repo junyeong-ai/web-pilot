@@ -23,14 +23,9 @@ pub struct SetupArgs {
     #[command(subcommand)]
     pub command: Option<SetupCommand>,
 
-    /// Skip prompts and take CI-safe defaults (does NOT launch Chrome).
+    /// Skip prompts and take CI-safe defaults.
     #[arg(long, short = 'y', global = true)]
     pub yes: bool,
-
-    /// After extracting the extension, launch chrome://extensions.
-    /// Honoured by `setup` and `setup extension`.
-    #[arg(long, global = true)]
-    pub open: bool,
 }
 
 #[derive(Subcommand)]
@@ -45,12 +40,12 @@ pub enum SetupCommand {
 }
 
 pub async fn run(args: SetupArgs) -> Result<CommandOutput> {
-    let SetupArgs { command, yes, open } = args;
+    let SetupArgs { command, yes } = args;
     match command {
         Some(SetupCommand::Skill(a)) => skill::run(a, yes),
-        Some(SetupCommand::Extension(a)) => extension::run(a, yes, open),
+        Some(SetupCommand::Extension(a)) => extension::run(a),
         Some(SetupCommand::NmHost(a)) => nm_host::run(a),
-        None => orchestrate(yes, open),
+        None => orchestrate(yes),
     }
 }
 
@@ -64,13 +59,9 @@ pub async fn run(args: SetupArgs) -> Result<CommandOutput> {
 /// manifest that exists before the service worker's startup `connectNative` is
 /// exactly what browser mode wants. The old reason to defer it (the id being
 /// unknown until Chrome assigned one) no longer holds.
-///
-/// `open=true` (or interactive `y` to the prompt) launches `chrome://extensions`
-/// after extraction. `--yes` alone takes the CI-safe default of *not* opening
-/// Chrome.
-fn orchestrate(yes: bool, open: bool) -> Result<CommandOutput> {
+fn orchestrate(yes: bool) -> Result<CommandOutput> {
     let skill = skill::install(yes)?;
-    let extension = extension::install(ChromeOpen::from_flags(yes, open))?;
+    let extension = extension::install()?;
     let nm_host = nm_host::install(None)?;
 
     let human = format!("WebPilot setup\n\n{skill}\n\n{extension}\n\n{nm_host}");
@@ -90,42 +81,6 @@ fn orchestrate(yes: bool, open: bool) -> Result<CommandOutput> {
 pub(crate) struct StepOutcome {
     pub human: String,
     pub json: serde_json::Value,
-}
-
-/// Whether to launch `chrome://extensions` after the extension is extracted.
-#[derive(Copy, Clone, Debug)]
-pub(crate) enum ChromeOpen {
-    /// Always open (user passed `--open`).
-    Always,
-    /// Don't prompt and don't open (CI: user passed `--yes` without `--open`).
-    Never,
-    /// Prompt the user; default to opening.
-    Ask,
-}
-
-impl ChromeOpen {
-    pub(crate) fn from_flags(yes: bool, open: bool) -> Self {
-        match (yes, open) {
-            (_, true) => ChromeOpen::Always,
-            (true, false) => ChromeOpen::Never,
-            (false, false) => ChromeOpen::Ask,
-        }
-    }
-
-    /// Whether to launch Chrome.
-    ///
-    /// `Ask` only prompts when stdin is a real terminal — automation contexts
-    /// (`echo y | webpilot setup`, hooks, scripts) take the same path as
-    /// `Never`, because silently popping a GUI from a pipe is a surprise.
-    pub(crate) fn should_open(self) -> bool {
-        use std::io::IsTerminal;
-        match self {
-            ChromeOpen::Always => true,
-            ChromeOpen::Never => false,
-            ChromeOpen::Ask if !std::io::stdin().is_terminal() => false,
-            ChromeOpen::Ask => confirm("Open chrome://extensions?", true, false),
-        }
-    }
 }
 
 impl std::fmt::Display for StepOutcome {
@@ -154,10 +109,7 @@ fn home_relative_with(p: &std::path::Path, home: Option<&std::ffi::OsStr>) -> St
 /// TTY-aware yes/no confirmation.
 ///
 /// - `yes = true` (the user passed `--yes`/`-y`): returns `true`
-///   unconditionally, mirroring `apt -y` / `dnf -y`. Side-effecting GUI
-///   actions like launching Chrome do *not* use this helper — they go
-///   through the explicit [`ChromeOpen`] policy instead, so `--yes` cannot
-///   accidentally trigger one.
+///   unconditionally, mirroring `apt -y` / `dnf -y`.
 /// - `yes = false` and stdin is not a terminal: returns `default` (we
 ///   cannot prompt, so we apply the documented default).
 /// - Otherwise: prompts the user.
@@ -214,30 +166,6 @@ mod tests {
     fn home_relative_treats_missing_home_as_unset() {
         let got = home_relative_with(Path::new("/users/me/foo"), None);
         assert_eq!(got, "/users/me/foo");
-    }
-
-    #[test]
-    fn chrome_open_explicit_open_wins_over_yes() {
-        assert!(matches!(
-            ChromeOpen::from_flags(true, true),
-            ChromeOpen::Always
-        ));
-    }
-
-    #[test]
-    fn chrome_open_yes_alone_is_never() {
-        assert!(matches!(
-            ChromeOpen::from_flags(true, false),
-            ChromeOpen::Never
-        ));
-    }
-
-    #[test]
-    fn chrome_open_no_flags_asks() {
-        assert!(matches!(
-            ChromeOpen::from_flags(false, false),
-            ChromeOpen::Ask
-        ));
     }
 
     #[test]

@@ -110,9 +110,8 @@ fn diagnose(error: &IpcError) -> CommandOutput {
                 ManifestState::NotFound => {
                     "  NM manifest not found.\n  Run: webpilot setup nm-host".into()
                 }
-                ManifestState::InvalidJson => {
-                    "  NM manifest is corrupted (invalid JSON).\n  Run: webpilot setup nm-host"
-                        .into()
+                ManifestState::Malformed => {
+                    "  NM manifest is malformed.\n  Re-register with: webpilot setup nm-host".into()
                 }
                 ManifestState::BinaryMissing(p) => format!(
                     "  NM manifest binary not found: {p}\n  Re-register with: webpilot setup nm-host"
@@ -155,7 +154,9 @@ fn diagnose(error: &IpcError) -> CommandOutput {
 
 enum ManifestState {
     NotFound,
-    InvalidJson,
+    /// Unparseable JSON, or valid JSON missing the host `path` — either way the
+    /// manifest cannot launch the host.
+    Malformed,
     BinaryMissing(String),
     /// A manifest exists and is well-formed, but authorises a different extension
     /// id than this build's — a wrong `--extension-id` override that `status`
@@ -169,15 +170,17 @@ enum ManifestState {
 fn evaluate_manifest(path: &std::path::Path) -> Option<ManifestState> {
     let content = std::fs::read_to_string(path).ok()?;
     let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return Some(ManifestState::InvalidJson);
+        return Some(ManifestState::Malformed);
     };
-    if let Some(bin) = manifest.get("path").and_then(|v| v.as_str())
-        && !std::path::Path::new(bin).exists()
-    {
+    // A usable host manifest must name the binary to launch...
+    let Some(bin) = manifest.get("path").and_then(|v| v.as_str()) else {
+        return Some(ManifestState::Malformed);
+    };
+    if !std::path::Path::new(bin).exists() {
         return Some(ManifestState::BinaryMissing(bin.to_owned()));
     }
-    // The manifest must authorise this binary's own extension id, or the loaded
-    // WebPilot extension can never connect to it.
+    // ...and authorise this build's own extension id, or the loaded WebPilot
+    // extension can never connect to it.
     let expected = format!(
         "chrome-extension://{}/",
         crate::assets::expected_extension_id()
@@ -216,7 +219,7 @@ fn check_nm_manifest() -> ManifestState {
         .max_by_key(|s| match s {
             ManifestState::BinaryMissing(_) => 3,
             ManifestState::IdMismatch => 2,
-            ManifestState::InvalidJson => 1,
+            ManifestState::Malformed => 1,
             ManifestState::NotFound | ManifestState::Ok => 0,
         })
         .unwrap_or(ManifestState::NotFound)
@@ -275,10 +278,19 @@ mod tests {
 
         // No file at the path → not counted.
         assert!(evaluate_manifest(&dir.join("absent.json")).is_none());
-        // Corrupt JSON.
+        // Unparseable JSON.
         assert!(matches!(
             evaluate_manifest(&write("bad.json", "{ not json".into())),
-            Some(ManifestState::InvalidJson)
+            Some(ManifestState::Malformed)
+        ));
+        // Valid JSON but no host `path` — cannot launch the host, so NOT Ok even
+        // though it authorises the right id (the false-OK this classifier closes).
+        assert!(matches!(
+            evaluate_manifest(&write(
+                "nopath.json",
+                format!(r#"{{"allowed_origins":["chrome-extension://{id}/"]}}"#)
+            )),
+            Some(ManifestState::Malformed)
         ));
         // Points at a binary that doesn't exist.
         assert!(matches!(

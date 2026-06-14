@@ -10,9 +10,10 @@
 //! - `EXTENSION` — the Chrome extension's `extension/` tree (manifest.json,
 //!   bridge.js, service worker, popup, sidepanel, icons).
 //!
-//! macOS `.DS_Store` cruft is skipped at materialisation time by `is_excluded`
-//! (it can reappear in the source tree between builds); everything else under
-//! the trees is written verbatim.
+//! `is_excluded` skips two things at materialisation time: macOS `.DS_Store`
+//! cruft (it can reappear in the source tree between builds) and the extension's
+//! `icon.svg` source (the manifest references only the PNGs). Everything else
+//! under the trees is written verbatim.
 
 use base64::Engine as _;
 use include_dir::{Dir, include_dir};
