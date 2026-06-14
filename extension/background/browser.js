@@ -428,6 +428,27 @@ async function handleFrameSwitch(selector) {
   }
 
   if (matched) {
+    // A cross-origin OOPIF has no execution context in this tab's CDP session, so
+    // it never resolves — committing the switch would return success, then fail
+    // every later eval/capture with FrameNotFound (after a per-command probe). For
+    // Url/Name, confirm the MAIN context resolves AT THE SWITCH and fail loud if
+    // not (the predicate path already resolved its match's context, so it is
+    // exempt). Headless does the same via its in-memory frame-context map.
+    if (selector.by !== "predicate") {
+      const resolvable = await withCdp(tab.id, async (tid) => {
+        await cdpEnableRuntime(tid);
+        return (await frameWorldContextId(tid, tab.id, matched.frameId, "MAIN")) != null;
+      }).catch(() => false);
+      if (!resolvable) {
+        const sel = JSON.stringify(selector);
+        return {
+          type: "FrameSwitched",
+          success: false,
+          frame_id: activeFrameIdWire(),
+          error: err("FrameNotFound", `No matching frame: ${sel}`, { selector: sel }),
+        };
+      }
+    }
     setActiveFrameId(matched.frameId);
     return {
       type: "FrameSwitched",

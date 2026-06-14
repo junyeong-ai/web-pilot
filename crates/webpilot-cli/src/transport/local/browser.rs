@@ -552,6 +552,29 @@ impl LocalTransport {
                     self.settle_frame_contexts(std::slice::from_ref(&frame.frame_id))
                         .await;
                 }
+                // A cross-origin OOPIF has no execution context in this tab's CDP
+                // session, so it never resolves: committing the switch would return
+                // success, then fail every later eval/capture with FrameNotFound
+                // (after a per-command probe). Fail loud AT THE SWITCH instead — the
+                // documented OOPIF boundary the predicate path already enforces by
+                // dropping unresolved candidates; Url/Name now agree.
+                if !self
+                    .frame_contexts
+                    .lock()
+                    .await
+                    .contains_key(&frame.frame_id)
+                {
+                    return Ok(ResponseData::FrameSwitched {
+                        success: false,
+                        frame_id: None,
+                        name: None,
+                        url: None,
+                        error: Some(WebPilotError::FrameNotFound {
+                            selector: serde_json::to_string(&selector)
+                                .expect("FrameSelector serializes losslessly"),
+                        }),
+                    });
+                }
                 *self.active_frame_id.lock().await = Some(frame.frame_id.clone());
                 super::write_persisted_active_frame(self.persisted_context_key(), &frame.frame_id)?;
                 Ok(ResponseData::FrameSwitched {

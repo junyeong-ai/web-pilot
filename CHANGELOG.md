@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.14] - 2026-06-14
+
+### Fixed
+
+- `frame switch url <pattern>` / `frame switch name <name>` now fail loud with
+  `FrameNotFound` at the switch when the matched frame is a cross-origin OOPIF
+  with no execution context in the tab's CDP session — instead of returning
+  success and then failing every subsequent `eval`/`capture` with `FrameNotFound`
+  (after a per-command probe). The predicate selector already validated the
+  context per-candidate; the URL and name selectors now agree, in both headless
+  and browser modes, matching the documented "a cross-origin OOPIF is a typed
+  FrameNotFound" boundary.
+
 ## [0.6.13] - 2026-06-14
 
 ### Fixed
