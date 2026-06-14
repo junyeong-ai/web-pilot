@@ -1,7 +1,7 @@
 // Page queries: eval (debugger-routed, CSP-immune), wait, dom get/set, fetch.
 // Mirrors transport/local/query.rs.
 
-import { err, exceptionErr, noPageErr, otherErr, timeoutErr } from "./errors.js";
+import { err, exceptionErr, lineSafeClip, noPageErr, otherErr, timeoutErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, navigationTimeoutMs, resolveActiveTab, sleep } from "./session.js";
 import { cdpSend, cdpEnableRuntime, cdpReemitContexts, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, sendToContent, sendToContentOnce } from "./content.js";
@@ -385,31 +385,39 @@ async function handleDomGet(command) {
 const FETCH_MAX_BODY_BYTES = 10 * 1024 * 1024;
 function fetchExpression(command) {
   return `(async () => {
-    const r = await fetch(${JSON.stringify(command.url)}, {
-      method: ${JSON.stringify(command.method ?? "GET")},
-      // The caller's headers as [name, value] pairs — fetch takes them verbatim;
-      // no implied content type. credentials:include keeps the session contract.
-      headers: ${JSON.stringify(command.headers ?? [])},
-      credentials: "include",
-      ${command.body != null ? `body: ${JSON.stringify(command.body)},` : ""}
-    });
-    const MAX = ${FETCH_MAX_BODY_BYTES};
-    const reader = r.body && r.body.getReader();
-    if (!reader) return { status: r.status, body: "" };
-    const parts = []; let total = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.length;
-      if (total > MAX) { try { await reader.cancel(); } catch (e) {} return { status: r.status, oversize: MAX }; }
-      parts.push(value);
+    try {
+      const r = await fetch(${JSON.stringify(command.url)}, {
+        method: ${JSON.stringify(command.method ?? "GET")},
+        // The caller's headers as [name, value] pairs — fetch takes them verbatim;
+        // no implied content type. credentials:include keeps the session contract.
+        headers: ${JSON.stringify(command.headers ?? [])},
+        credentials: "include",
+        ${command.body != null ? `body: ${JSON.stringify(command.body)},` : ""}
+      });
+      const MAX = ${FETCH_MAX_BODY_BYTES};
+      const reader = r.body && r.body.getReader();
+      if (!reader) return { status: r.status, body: "" };
+      const parts = []; let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > MAX) { try { await reader.cancel(); } catch (e) {} return { status: r.status, oversize: MAX }; }
+        parts.push(value);
+      }
+      const merged = new Uint8Array(total); let off = 0;
+      for (const p of parts) { merged.set(p, off); off += p.length; }
+      let body;
+      try { body = new TextDecoder("utf-8", { fatal: true }).decode(merged); }
+      catch (e) { return { status: r.status, binary: total }; }
+      return { status: r.status, body };
+    } catch (e) {
+      // The fetch never completed: refused/unresolved host, a blocked request,
+      // or a CORS denial. The browser collapses all of these to one opaque
+      // message — return THAT (not the V8 stack) as a typed discriminator the
+      // handler renders cleanly, exactly as oversize/binary are handled.
+      return { neterror: String((e && e.message) || e) };
     }
-    const merged = new Uint8Array(total); let off = 0;
-    for (const p of parts) { merged.set(p, off); off += p.length; }
-    let body;
-    try { body = new TextDecoder("utf-8", { fatal: true }).decode(merged); }
-    catch (e) { return { status: r.status, binary: total }; }
-    return { status: r.status, body };
   })()`;
 }
 
@@ -422,10 +430,11 @@ async function handleFetch(command) {
       const ev = await cdpSend(tid, "Runtime.evaluate", {
         expression: code, awaitPromise: true, returnByValue: true,
       });
-      // A rejected fetch (DNS, connection refused, CORS) surfaces as an eval
-      // exception, not a value — raise it instead of returning `undefined` and
-      // reporting the misleading "no result". Headless does the same: its
-      // `page.evaluate(...)?` propagates the exception.
+      // The IIFE catches a rejected fetch itself and returns `{ neterror }`, so
+      // a surfacing eval exception here is an UNEXPECTED engine-level failure
+      // (not the request failing) — raise it rather than returning `undefined`
+      // and reporting the misleading "no result". Headless's `evaluate(...)?`
+      // propagates the same way.
       if (ev.exceptionDetails) {
         throw new Error(
           ev.exceptionDetails.exception?.description ||
@@ -435,6 +444,13 @@ async function handleFetch(command) {
       }
       return ev.result?.value;
     });
+    // A network-level failure (refused/unresolved host, blocked request, CORS
+    // denial) caught inside the IIFE. Surface the browser's opaque reason
+    // sanitized — never the raw V8 message-with-stack — and keep it the same
+    // `Other` class as the oversize/binary guards, so all three render alike.
+    if (r.neterror != null) {
+      return { type: "FetchResult", success: false, error: err("Other", `fetch could not complete (network failure, blocked request, or CORS denial): ${lineSafeClip(r.neterror)}`) };
+    }
     if (r.oversize) {
       return { type: "FetchResult", success: false, error: err("Other", `response body exceeds the ${r.oversize}-byte fetch limit`) };
     }

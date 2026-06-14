@@ -1,7 +1,7 @@
 // Browser-level commands: tabs, frames, status.
 // Mirrors transport/local/browser.rs.
 
-import { err, exceptionErr, noPageErr, topErr } from "./errors.js";
+import { err, exceptionErr, lineSafeClip, noPageErr, topErr } from "./errors.js";
 import { activeFrameId, activeTabId, ensureRestored, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
 import { cdpEnableRuntime, withCdp } from "./cdp.js";
 import { cdpEval, frameWorldContextId } from "./query.js";
@@ -313,31 +313,6 @@ async function readFrameName(tabId, frameId) {
     .catch(() => null);
 }
 
-// Cap a URL for a one-line ambiguity message — a data-URI iframe `src` can be
-// megabytes, which would flood the error string (and the terminal/MCP text it
-// reaches). The full URLs are in the `frame list` JSON. Matches the Rust
-// `line_safe_clip` EXACTLY (the wording crosses the parity test): control
-// chars → spaces FIRST (so a `\n` in a URL can't forge a line), THEN clip on a
-// codepoint boundary (a mid-surrogate cut would corrupt the JSON) at 200 + `…`.
-function clipUrl(u) {
-  const safe = Array.from(u || "").map((c) => {
-    const cp = c.codePointAt(0);
-    // The Rust `line_safe` spoof set: C0 (0x00..0x1F), DEL+C1 (0x7F..0x9F), AND
-    // the bidi controls / zero-width formatters \u2014 a U+202E RIGHT-TO-LEFT OVERRIDE
-    // in an iframe URL would otherwise spoof the agent-facing ambiguity error.
-    const spoof =
-      cp <= 0x1f ||
-      (cp >= 0x7f && cp <= 0x9f) ||
-      (cp >= 0x200b && cp <= 0x200f) ||
-      (cp >= 0x202a && cp <= 0x202e) ||
-      (cp >= 0x2066 && cp <= 0x2069) ||
-      cp === 0x061c ||
-      cp === 0xfeff;
-    return spoof ? " " : c;
-  });
-  return safe.length > 200 ? safe.slice(0, 200).join("") + "\u2026" : safe.join("");
-}
-
 // A frame selector that matched more than one frame is ambiguous: switching
 // into whichever came first would silently scope every later command to a
 // frame the agent may not have meant. Fail loud with the match list (headless
@@ -345,7 +320,7 @@ function clipUrl(u) {
 // kind holds, predicates included.
 function ambiguousFrameSwitch(hits, what) {
   if (hits.length <= 1) return null;
-  const urls = hits.map((f) => clipUrl(f.url)).join(", ");
+  const urls = hits.map((f) => lineSafeClip(f.url)).join(", ");
   return {
     type: "FrameSwitched",
     success: false,
@@ -392,9 +367,9 @@ async function handleFrameSwitch(selector) {
     for (const f of httpFrames) {
       if ((await readFrameName(tab.id, f.frameId)) === selector.value) hits.push(f);
     }
-    // The frame name is page-controlled — sanitize/cap it via clipUrl (the
+    // The frame name is page-controlled — sanitize/cap it via lineSafeClip (the
     // line_safe twin) so a hostile name can't spoof or flood this error.
-    const ambiguous = ambiguousFrameSwitch(hits, `name "${clipUrl(selector.value)}"`);
+    const ambiguous = ambiguousFrameSwitch(hits, `name "${lineSafeClip(selector.value)}"`);
     if (ambiguous) return ambiguous;
     matched = hits[0] ?? null;
   } else if (selector.by === "url") {
@@ -438,7 +413,7 @@ async function handleFrameSwitch(selector) {
     // command to whichever matched first. Fail loud naming the frames
     // (headless parity).
     if (probe.frames.length > 1) {
-      const urls = probe.frames.map((f) => clipUrl(f.url)).join(", ");
+      const urls = probe.frames.map((f) => lineSafeClip(f.url)).join(", ");
       return {
         type: "FrameSwitched",
         success: false,

@@ -322,24 +322,33 @@ impl LocalTransport {
         // browser-mode `fetchExpression`.
         let js = format!(
             r#"(async () => {{
-                const r = await fetch({url}, {{method: {method}, credentials: "include", headers: {headers}, {body_part}}});
-                const MAX = {max};
-                const reader = r.body && r.body.getReader();
-                if (!reader) return {{ status: r.status, body: "" }};
-                const parts = []; let total = 0;
-                for (;;) {{
-                    const {{ done, value }} = await reader.read();
-                    if (done) break;
-                    total += value.length;
-                    if (total > MAX) {{ try {{ await reader.cancel(); }} catch (e) {{}} return {{ status: r.status, oversize: MAX }}; }}
-                    parts.push(value);
+                try {{
+                    const r = await fetch({url}, {{method: {method}, credentials: "include", headers: {headers}, {body_part}}});
+                    const MAX = {max};
+                    const reader = r.body && r.body.getReader();
+                    if (!reader) return {{ status: r.status, body: "" }};
+                    const parts = []; let total = 0;
+                    for (;;) {{
+                        const {{ done, value }} = await reader.read();
+                        if (done) break;
+                        total += value.length;
+                        if (total > MAX) {{ try {{ await reader.cancel(); }} catch (e) {{}} return {{ status: r.status, oversize: MAX }}; }}
+                        parts.push(value);
+                    }}
+                    const merged = new Uint8Array(total); let off = 0;
+                    for (const p of parts) {{ merged.set(p, off); off += p.length; }}
+                    let body;
+                    try {{ body = new TextDecoder("utf-8", {{ fatal: true }}).decode(merged); }}
+                    catch (e) {{ return {{ status: r.status, binary: total }}; }}
+                    return {{ status: r.status, body }};
+                }} catch (e) {{
+                    // The fetch never completed: refused/unresolved host, a blocked
+                    // request, or a CORS denial. The browser collapses all of these
+                    // to one opaque message — return THAT (not the V8 stack) as a
+                    // typed discriminator the Rust side renders cleanly, exactly as
+                    // `oversize`/`binary` are handled.
+                    return {{ neterror: String((e && e.message) || e) }};
                 }}
-                const merged = new Uint8Array(total); let off = 0;
-                for (const p of parts) {{ merged.set(p, off); off += p.length; }}
-                let body;
-                try {{ body = new TextDecoder("utf-8", {{ fatal: true }}).decode(merged); }}
-                catch (e) {{ return {{ status: r.status, binary: total }}; }}
-                return {{ status: r.status, body }};
             }})()"#,
             url = serde_json::to_string(url)?,
             method = serde_json::to_string(method.unwrap_or("GET"))?,
@@ -349,6 +358,20 @@ impl LocalTransport {
             max = FETCH_MAX_BODY_BYTES,
         );
         let result = self.page.evaluate(&js).await?;
+        // A network-level failure (refused/unresolved host, blocked request, CORS
+        // denial) caught inside the IIFE. Surface the browser's opaque reason
+        // sanitized — never the raw V8 message-with-stack the bare rejection would
+        // leak — and keep it the same `Other` class as the oversize/binary guards,
+        // so all three fetch failures render consistently.
+        if let Some(reason) = result.get("neterror").and_then(|v| v.as_str()) {
+            return Err(WebPilotError::Other {
+                detail: format!(
+                    "fetch could not complete (network failure, blocked request, or CORS denial): {}",
+                    webpilot::types::line_safe_clip(reason, 200)
+                ),
+            }
+            .into());
+        }
         if let Some(max) = result.get("oversize").and_then(|v| v.as_u64()) {
             return Err(WebPilotError::Other {
                 detail: format!("response body exceeds the {max}-byte fetch limit"),

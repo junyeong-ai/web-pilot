@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-06-14
+
+### Fixed
+
+- A `fetch` whose request never completes — a refused/unresolved host, a blocked
+  request, or a CORS denial — now reports a clean, typed message instead of
+  leaking the browser's raw `TypeError: Failed to fetch` together with its
+  internal V8 stack trace. The rejection is caught at the page boundary and
+  rendered the same `Other`-class way the oversize and binary-body guards already
+  are, in both headless and browser modes.
+
+### Changed
+
+- The one-line message sanitizer (control / bidi / zero-width neutralization plus
+  a codepoint-safe 200-char cap — the `line_safe_clip` twin) moved from a
+  browser-module-local copy to the shared errors module as `lineSafeClip`, so the
+  fetch-failure, frame-ambiguity, and frame-name error paths share one
+  implementation instead of drifting copies.
+
 ## [0.6.4] - 2026-06-14
 
 ### Fixed
