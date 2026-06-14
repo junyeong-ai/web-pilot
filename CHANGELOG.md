@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.10] - 2026-06-14
+
+### Fixed
+
+- A rejected `action type` no longer destroys the field's prior value. Appending
+  text the control can't accept — "abc" into an `<input type=number>` that
+  already holds "5" — wrote the combined value before the rejection check, and a
+  typed control sanitizes the unparseable result to empty, blanking the field
+  while reporting the type as rejected. The prior value is now restored before
+  failing typed, so a rejected append is a clean no-op, matching the maxlength
+  guard that already rejects before any mutation.
+
 ## [0.6.9] - 2026-06-14
 
 ### Fixed

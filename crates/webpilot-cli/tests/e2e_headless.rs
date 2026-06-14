@@ -753,6 +753,26 @@ fn headless_behavioral_flow() {
         "the valid number must land in the field: {}",
         stdout(&num_val)
     );
+    // 2a-num-restore. A REJECTED append must be a clean no-op. Appending "xyz" to
+    //     the field's "42" sets "42xyz", which the number control sanitizes to ""
+    //     — but the agent never asked to discard the valid "42". The rejection
+    //     restores it, so a failed type never destroys existing state (the
+    //     maxlength guard rejects BEFORE mutating; this path must match).
+    let num_restore = fx.run(&["action", "type", &num_index, "xyz"]);
+    assert_eq!(
+        code(&num_restore),
+        7,
+        "appending an invalid value into a number field must be rejected (7): {}",
+        stdout(&num_restore)
+    );
+    let num_after = fx.run(&["eval", "document.getElementById('num').value"]);
+    let naj: serde_json::Value = serde_json::from_str(&stdout(&num_after)).expect("eval json");
+    assert_eq!(
+        naj["result"].as_str(),
+        Some("\"42\""),
+        "a rejected append must restore the prior value, never blank the field: {}",
+        stdout(&num_after)
+    );
 
     // 2a-sip. The contenteditable input-probe survives a rich editor that
     //     stopImmediatePropagation()s on its own capture listener (registered

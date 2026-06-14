@@ -1057,16 +1057,24 @@
       );
     }
 
-    try {
-      const proto = el instanceof HTMLTextAreaElement
-        ? HTMLTextAreaElement
-        : HTMLInputElement;
-      const setter = Object.getOwnPropertyDescriptor(proto.prototype, "value")?.set;
-      if (setter) setter.call(el, newVal);
-      else el.value = newVal;
-    } catch {
-      el.value = newVal;
-    }
+    // The native value setter (frameworks like React/Vue track it), with
+    // `el.value` as the fallback. Wrapped so the SAME path can restore the prior
+    // value if the write is rejected below — a rejected type must leave the field
+    // exactly as it was.
+    const proto = el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement
+      : HTMLInputElement;
+    const valueSetter = Object.getOwnPropertyDescriptor(proto.prototype, "value")?.set;
+    const setNativeValue = (v) => {
+      try {
+        if (valueSetter) valueSetter.call(el, v);
+        else el.value = v;
+      } catch {
+        el.value = v;
+      }
+    };
+    const priorValue = el.value;
+    setNativeValue(newVal);
 
     // A typed control (number/date/time/…) silently sanitizes a value it can't
     // parse to the empty string — "abc" into `<input type=number>` leaves the
@@ -1077,6 +1085,11 @@
     // normalises a valid value — "3.0" → "3" — keeps a non-empty value and is
     // left alone.)
     if (newVal !== "" && el.value === "") {
+      // The setter just blanked the field. In APPEND mode (the default) that
+      // would DESTROY a valid existing value (`5` + "abc" → ""), so restore the
+      // original before failing typed — a rejected type is a clean no-op, like
+      // the maxlength check above that runs before any mutation.
+      setNativeValue(priorValue);
       return err(
         "InvalidArgument",
         `The field rejected "${text}" — its input type does not accept that value`,
