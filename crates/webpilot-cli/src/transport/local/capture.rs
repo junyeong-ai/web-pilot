@@ -59,6 +59,11 @@ impl LocalTransport {
         let mut text_content: Option<String> = None;
         let mut text_truncated = false;
         let mut pdf_path: Option<String> = None;
+        // Captured in memory and committed to disk only at the very end, after
+        // every fallible CDP step — so a capture that fails partway never leaves
+        // an orphaned artifact file behind.
+        let mut screenshot_b64: Option<String> = None;
+        let mut pdf_bytes: Option<Vec<u8>> = None;
 
         if want_dom {
             let dom = self
@@ -154,20 +159,9 @@ impl LocalTransport {
                     .await;
             }
             match shot {
-                Ok(b64) => match save_screenshot(&b64) {
-                    Ok(info) => {
-                        screenshot_path = Some(info.path.to_string_lossy().into_owned());
-                        screenshot_width = Some(info.width);
-                        screenshot_height = Some(info.height);
-                        // Surface the downscale only when one happened — pixel
-                        // coordinates on the saved image map to page pixels via
-                        // `coord / scale`, and a silent resize breaks that math.
-                        if info.scale != 1.0 {
-                            screenshot_scale = Some(info.scale);
-                        }
-                    }
-                    Err(e) => screenshot_error = Some(e.to_string()),
-                },
+                // Hold the encoded image; it is written to disk only at the end,
+                // after every fallible CDP step, so a later failure can't orphan it.
+                Ok(b64) => screenshot_b64 = Some(b64),
                 Err(e) => {
                     // A screenshot that failed because the TAB closed mid-command
                     // is tab-gone truth, not a degradable capture error: the
@@ -202,10 +196,13 @@ impl LocalTransport {
                 .get("data")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("PDF generation failed: no data returned"))?;
-            let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)?;
-            let path = dirs::artifact_path("capture", "pdf");
-            std::fs::write(&path, &bytes)?;
-            pdf_path = Some(path.to_string_lossy().into_owned());
+            // Decode now (a hard error on malformed data), but defer the disk
+            // write to the end so a later AX/metadata CDP failure can't orphan a
+            // half-finished capture's PDF.
+            pdf_bytes = Some(base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                data,
+            )?);
         }
 
         let mut ax_tree_json: Option<String> = None;
@@ -292,6 +289,35 @@ impl LocalTransport {
             // `count_http_subframes` — correct from the main frame AND a switched
             // one.
             s.subframes = self.count_http_subframes().await;
+        }
+
+        // Every fallible CDP step is done — only now commit artifacts to disk, so
+        // a capture that failed partway (a PDF/AX/metadata error after the image
+        // was taken) never leaves an orphaned file, the same "nothing outlives a
+        // failed capture" rule the annotation overlay follows. PDF first (a hard
+        // error): writing it before the screenshot means a PDF write failure can't
+        // orphan a just-saved image, while the screenshot save still degrades to
+        // `screenshot_error` rather than failing the whole capture.
+        if let Some(bytes) = pdf_bytes {
+            let path = dirs::artifact_path("capture", "pdf");
+            std::fs::write(&path, &bytes)?;
+            pdf_path = Some(path.to_string_lossy().into_owned());
+        }
+        if let Some(b64) = screenshot_b64 {
+            match save_screenshot(&b64) {
+                Ok(info) => {
+                    screenshot_path = Some(info.path.to_string_lossy().into_owned());
+                    screenshot_width = Some(info.width);
+                    screenshot_height = Some(info.height);
+                    // Surface the downscale only when one happened — pixel
+                    // coordinates on the saved image map to page pixels via
+                    // `coord / scale`, and a silent resize breaks that math.
+                    if info.scale != 1.0 {
+                        screenshot_scale = Some(info.scale);
+                    }
+                }
+                Err(e) => screenshot_error = Some(e.to_string()),
+            }
         }
 
         Ok(ResponseData::Capture {

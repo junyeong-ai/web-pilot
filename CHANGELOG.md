@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.11] - 2026-06-14
+
+### Fixed
+
+- A capture that fails partway no longer leaves an orphaned artifact file. The
+  screenshot and PDF were written to disk mid-capture, so a later fallible CDP
+  step — PDF generation, accessibility-tree retrieval, or the post-capture
+  URL/title read failing on a vanished frame — would hard-fail the command while
+  the already-written files leaked into the artifacts directory. The image and
+  PDF are now held in memory and committed to disk only after every fallible CDP
+  step succeeds, the same "nothing outlives a failed capture" rule the annotation
+  overlay already follows. The PDF is written before the screenshot, so a write
+  failure can't orphan a just-saved image; the screenshot save still degrades to
+  `screenshot_error` rather than failing the capture.
+
 ## [0.6.10] - 2026-06-14
 
 ### Fixed
