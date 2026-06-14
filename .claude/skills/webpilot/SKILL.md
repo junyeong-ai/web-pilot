@@ -312,7 +312,7 @@ webpilot profile --duration 5                       # → .cpuprofile (Chrome De
 
 ```bash
 webpilot setup                                      # skill + extension + NM host (extension id auto-detected)
-# load the printed extension path in chrome://extensions (Developer mode → Load unpacked) — the one manual step
+# load the printed extension path via your browser's extensions page (e.g. chrome://extensions) → Developer mode → Load unpacked — the one manual step
 webpilot --browser status
 webpilot --browser capture --include dom            # uses logged-in tab
 ```
@@ -358,7 +358,7 @@ webpilot uninstall --yes                       # quit Chrome + remove binary, sk
 | 7 | invalid argument (semantically wrong but well-formed) |
 | 8 | navigation failed / no page |
 
-Errors carry typed data: `ElementNotFound { requested, available }`, `StaleSnapshot { index }`, `SelectorNotFound { selector }`, `Timeout { kind, elapsed_ms }`, `NavigationFailed { url, reason }`, `PolicyDenied { operation }`, `VersionMismatch { extension, expected }`. Treat the `code` field as authoritative; the `message` is a human-readable rendering. `VersionMismatch` (browser mode) means the installed extension is stale — re-run `webpilot setup extension` and reload it at `chrome://extensions`.
+Errors carry typed data: `ElementNotFound { requested, available }`, `StaleSnapshot { index }`, `SelectorNotFound { selector }`, `Timeout { kind, elapsed_ms }`, `NavigationFailed { url, reason }`, `PolicyDenied { operation }`, `VersionMismatch { extension, expected }`. Treat the `code` field as authoritative; the `message` is a human-readable rendering. `VersionMismatch` (browser mode) means the installed extension is stale — re-run `webpilot setup extension` and reload it at your browser's extensions page (e.g. `chrome://extensions`).
 
 ## Decision guide
 

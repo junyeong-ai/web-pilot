@@ -155,8 +155,8 @@ fn diagnose(error: &IpcError) -> CommandOutput {
 enum ManifestState {
     NotFound,
     /// Unparseable JSON, or valid JSON whose required host fields are missing or
-    /// wrong — a bad `name`/`type`, or a missing or non-absolute `path`. Either
-    /// way Chrome can never launch the host.
+    /// wrong — a bad `name`/`type`, a missing `description`, or a missing or
+    /// non-absolute `path`. Either way Chrome can never launch the host.
     Malformed,
     BinaryMissing(String),
     /// A manifest exists and is well-formed, but authorises a different extension
@@ -208,9 +208,13 @@ fn evaluate_manifest(path: &std::path::Path) -> Option<ManifestState> {
     };
     let field = |key: &str| manifest.get(key).and_then(|v| v.as_str());
 
-    // The host name Chrome looks the manifest up by, and the only transport it
-    // accepts: a wrong/missing either means Chrome never launches the host.
-    if field("name") != Some(nm_host::NM_HOST_NAME) || field("type") != Some(nm_host::NM_HOST_TYPE)
+    // Chrome refuses to launch the host unless `name` matches the lookup key,
+    // `type` is the accepted transport, and a `description` field is present —
+    // the last is required even though it is informational (verified against
+    // Chrome for Testing: a description-less manifest never launches).
+    if field("name") != Some(nm_host::NM_HOST_NAME)
+        || field("type") != Some(nm_host::NM_HOST_TYPE)
+        || field("description").is_none()
     {
         return Some(ManifestState::Malformed);
     }
@@ -317,109 +321,95 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let id = crate::assets::expected_extension_id();
         let name = nm_host::NM_HOST_NAME;
+        let ty = nm_host::NM_HOST_TYPE;
+        let desc = "WebPilot";
         let bin = std::env::current_exe().unwrap();
-        let bin = bin.display();
-        let write = |file: &str, body: String| {
-            let p = dir.join(file);
-            std::fs::write(&p, body).unwrap();
-            p
-        };
-        let eval = |file: &str, body: String| evaluate_manifest(&write(file, body));
+        let bin = bin.display().to_string();
 
-        // No file at the path → not counted.
+        // Build a manifest body from explicit fields; an empty `&str` OMITS that
+        // field, so each case can drop or corrupt exactly one.
+        let mf = |name: &str, desc: &str, ty: &str, path: &str, origin: &str| -> String {
+            let mut p: Vec<String> = Vec::new();
+            if !name.is_empty() {
+                p.push(format!(r#""name":"{name}""#));
+            }
+            if !desc.is_empty() {
+                p.push(format!(r#""description":"{desc}""#));
+            }
+            if !ty.is_empty() {
+                p.push(format!(r#""type":"{ty}""#));
+            }
+            if !path.is_empty() {
+                p.push(format!(r#""path":"{path}""#));
+            }
+            if !origin.is_empty() {
+                p.push(format!(
+                    r#""allowed_origins":["chrome-extension://{origin}/"]"#
+                ));
+            }
+            format!("{{{}}}", p.join(","))
+        };
+        let eval = |file: &str, body: String| {
+            let path = dir.join(file);
+            std::fs::write(&path, body).unwrap();
+            evaluate_manifest(&path)
+        };
+
+        // No file at the path → not counted; unparseable JSON → Malformed.
         assert!(evaluate_manifest(&dir.join("absent.json")).is_none());
-        // Unparseable JSON.
         assert!(matches!(
             eval("bad.json", "{ not json".into()),
             Some(ManifestState::Malformed)
         ));
-        // Every required host field is load-bearing: a manifest missing any one of
-        // `name` / `type` / `path` — or carrying the wrong `name` / `type` — cannot
-        // launch the host, so it is Malformed even when it authorises the right id.
-        // (This is the false-OK class the classifier closes, validated once.)
+
+        // Every field Chrome requires to LAUNCH the host is load-bearing — drop or
+        // corrupt any one (name, description, type, or a missing/relative path) and
+        // the manifest is Malformed even when it authorises the right id. The whole
+        // shape is validated once, matched to exactly what `setup` writes.
         for (file, body) in [
-            (
-                "noname.json",
-                format!(
-                    r#"{{"type":"stdio","path":"{bin}","allowed_origins":["chrome-extension://{id}/"]}}"#
-                ),
-            ),
-            (
-                "badname.json",
-                format!(
-                    r#"{{"name":"com.evil","type":"stdio","path":"{bin}","allowed_origins":["chrome-extension://{id}/"]}}"#
-                ),
-            ),
-            (
-                "notype.json",
-                format!(
-                    r#"{{"name":"{name}","path":"{bin}","allowed_origins":["chrome-extension://{id}/"]}}"#
-                ),
-            ),
-            (
-                "badtype.json",
-                format!(
-                    r#"{{"name":"{name}","type":"pipe","path":"{bin}","allowed_origins":["chrome-extension://{id}/"]}}"#
-                ),
-            ),
-            (
-                "nopath.json",
-                format!(
-                    r#"{{"name":"{name}","type":"stdio","allowed_origins":["chrome-extension://{id}/"]}}"#
-                ),
-            ),
-            (
-                // Relative path — Chrome requires an absolute host path on
-                // macOS/Linux, so a launchable-from-cwd relative path is malformed.
-                "relpath.json",
-                format!(
-                    r#"{{"name":"{name}","type":"stdio","path":"relative/webpilot","allowed_origins":["chrome-extension://{id}/"]}}"#
-                ),
-            ),
+            ("noname.json", mf("", desc, ty, &bin, id)),
+            ("badname.json", mf("com.evil", desc, ty, &bin, id)),
+            ("nodesc.json", mf(name, "", ty, &bin, id)),
+            ("notype.json", mf(name, desc, "", &bin, id)),
+            ("badtype.json", mf(name, desc, "pipe", &bin, id)),
+            ("nopath.json", mf(name, desc, ty, "", id)),
+            // Chrome requires an absolute host path on macOS/Linux.
+            ("relpath.json", mf(name, desc, ty, "relative/webpilot", id)),
         ] {
             assert!(
                 matches!(eval(file, body), Some(ManifestState::Malformed)),
                 "{file} must be Malformed"
             );
         }
-        // Complete shape, but `path` is not a launchable binary: it doesn't exist,
-        // or names a directory (the false-OK a bare `exists()` check would pass).
+
+        // Complete shape, but `path` is not a launchable binary (missing, or a
+        // directory — the false-OK a bare `exists()` would pass).
         for (file, p) in [
-            ("binmissing.json", "/no/such/bin".to_owned()),
-            ("dirpath.json", dir.display().to_string()),
+            ("binmissing.json", "/no/such/bin"),
+            ("dirpath.json", dir.to_str().unwrap()),
         ] {
             assert!(
                 matches!(
-                    eval(
-                        file,
-                        format!(
-                            r#"{{"name":"{name}","type":"stdio","path":"{p}","allowed_origins":["chrome-extension://{id}/"]}}"#
-                        )
-                    ),
+                    eval(file, mf(name, desc, ty, p, id)),
                     Some(ManifestState::BinaryMissing(_))
                 ),
                 "{file} (path={p}) must be BinaryMissing"
             );
         }
+
         // Complete and launchable, but authorises a DIFFERENT id (a wrong
         // `--extension-id` override) — the case a healthy-looking manifest hides.
         assert!(matches!(
             eval(
                 "mismatch.json",
-                format!(
-                    r#"{{"name":"{name}","type":"stdio","path":"{bin}","allowed_origins":["chrome-extension://abcdefghijklmnopabcdefghijklmnop/"]}}"#
-                )
+                mf(name, desc, ty, &bin, "abcdefghijklmnopabcdefghijklmnop")
             ),
             Some(ManifestState::IdMismatch)
         ));
+
         // The exact shape `setup` writes → healthy.
         assert!(matches!(
-            eval(
-                "ok.json",
-                format!(
-                    r#"{{"name":"{name}","type":"stdio","path":"{bin}","allowed_origins":["chrome-extension://{id}/"]}}"#
-                )
-            ),
+            eval("ok.json", mf(name, desc, ty, &bin, id)),
             Some(ManifestState::Ok)
         ));
 

@@ -9,10 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `status` reports a Native Messaging manifest with a non-absolute `path` as
-  malformed — Chrome requires an absolute host path on macOS/Linux, so a relative
-  path that happens to be launchable from the working directory would never
-  actually launch.
+- `status` validates the manifest against every field Chrome requires to launch
+  the host — a present `description` and an absolute, launchable `path` included
+  (both verified required against Chrome for Testing) — so a manifest missing
+  either is reported as malformed instead of a false "OK".
 
 ### Documentation
 
@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load-unpacked step is browser-neutral.
 - Skill: the `--capture` success path returns the destination snapshot directly
   (there is no `success` field); `device reset` returns to the default headless
-  viewport (rendered ~1280×577, distinct from the 1280×720 launch window).
+  viewport (the rendered viewport is shorter than the 1280×720 launch window).
 
 ## [0.6.2] - 2026-06-14
 
