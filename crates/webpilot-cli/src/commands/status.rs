@@ -165,12 +165,33 @@ enum ManifestState {
     Ok,
 }
 
+/// Whether `path` names a launchable host binary: an existing regular file that
+/// is executable. A bare `exists()` would pass a directory or a non-executable
+/// file that Chrome's host loader can never run.
+fn is_launchable(path: &std::path::Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 /// Inspect one candidate manifest path. `None` = no manifest there (don't count
 /// it); `Some(state)` classifies a manifest that does exist.
 ///
-/// Validates the manifest against *exactly* the shape `setup` writes — every
-/// field Chrome requires to launch the host — in one place, so no single missing
-/// or wrong field can read as a healthy registration.
+/// Validates every field Chrome requires to launch the host (`name`, `type`,
+/// a launchable `path`, and the authorised extension id) in one place, so no
+/// single missing or wrong field can read as a healthy registration.
 fn evaluate_manifest(path: &std::path::Path) -> Option<ManifestState> {
     let content = std::fs::read_to_string(path).ok()?;
     let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content) else {
@@ -180,14 +201,15 @@ fn evaluate_manifest(path: &std::path::Path) -> Option<ManifestState> {
 
     // The host name Chrome looks the manifest up by, and the only transport it
     // accepts: a wrong/missing either means Chrome never launches the host.
-    if field("name") != Some(nm_host::NM_HOST_NAME) || field("type") != Some("stdio") {
+    if field("name") != Some(nm_host::NM_HOST_NAME) || field("type") != Some(nm_host::NM_HOST_TYPE)
+    {
         return Some(ManifestState::Malformed);
     }
-    // The binary to launch must be named and present.
+    // The binary to launch must be named and actually launchable.
     let Some(bin) = field("path") else {
         return Some(ManifestState::Malformed);
     };
-    if !std::path::Path::new(bin).exists() {
+    if !is_launchable(std::path::Path::new(bin)) {
         return Some(ManifestState::BinaryMissing(bin.to_owned()));
     }
     // And it must authorise this build's own extension id, or the loaded WebPilot
@@ -338,16 +360,25 @@ mod tests {
                 "{file} must be Malformed"
             );
         }
-        // Complete shape, but the named binary doesn't exist.
-        assert!(matches!(
-            eval(
-                "binmissing.json",
-                format!(
-                    r#"{{"name":"{name}","type":"stdio","path":"/no/such/bin","allowed_origins":["chrome-extension://{id}/"]}}"#
-                )
-            ),
-            Some(ManifestState::BinaryMissing(_))
-        ));
+        // Complete shape, but `path` is not a launchable binary: it doesn't exist,
+        // or names a directory (the false-OK a bare `exists()` check would pass).
+        for (file, p) in [
+            ("binmissing.json", "/no/such/bin".to_owned()),
+            ("dirpath.json", dir.display().to_string()),
+        ] {
+            assert!(
+                matches!(
+                    eval(
+                        file,
+                        format!(
+                            r#"{{"name":"{name}","type":"stdio","path":"{p}","allowed_origins":["chrome-extension://{id}/"]}}"#
+                        )
+                    ),
+                    Some(ManifestState::BinaryMissing(_))
+                ),
+                "{file} (path={p}) must be BinaryMissing"
+            );
+        }
         // Complete and launchable, but authorises a DIFFERENT id (a wrong
         // `--extension-id` override) — the case a healthy-looking manifest hides.
         assert!(matches!(

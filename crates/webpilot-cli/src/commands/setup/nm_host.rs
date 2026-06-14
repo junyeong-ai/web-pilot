@@ -84,7 +84,7 @@ pub(crate) fn install(extension_id: Option<String>) -> Result<StepOutcome> {
         "name": NM_HOST_NAME,
         "description": "WebPilot — Browser control tool for AI agents",
         "path": binary_path.display().to_string(),
-        "type": "stdio",
+        "type": NM_HOST_TYPE,
         "allowed_origins": [format!("chrome-extension://{ext_id}/")],
     });
 
@@ -204,8 +204,13 @@ fn nm_target_dirs() -> Result<Vec<PathBuf>> {
 }
 
 /// The Native Messaging host name — the manifest's `name`, the file stem Chrome
-/// looks up, and what the extension connects to. One source for all three.
+/// looks up, and what the extension connects to. One source for all three (and
+/// `tests/browser_parity.rs` pins the extension's `connectNative` literal to it).
 pub const NM_HOST_NAME: &str = "com.webpilot.host";
+
+/// The Native Messaging transport. Fixed by Chrome's NM spec; one source so the
+/// manifest writer and the `status` validator can never disagree on it.
+pub const NM_HOST_TYPE: &str = "stdio";
 
 /// Every candidate host-manifest path on this platform — the set `setup` may
 /// write, `status` inspects, and `uninstall` removes. One source for all three.

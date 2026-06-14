@@ -16,6 +16,8 @@ use std::collections::BTreeSet;
 const PROTOCOL: &str = include_str!("../../webpilot/src/protocol.rs");
 const ACTION: &str = include_str!("../../webpilot/src/action.rs");
 const BRIDGE: &str = include_str!("../../../extension/content/bridge.js");
+const NM_HOST_RS: &str = include_str!("../src/commands/setup/nm_host.rs");
+const HOST_JS: &str = include_str!("../../../extension/background/host.js");
 
 /// Concatenated source of every background module. The worker is an ES-module
 /// graph, so the router (and any future split) can live in any file under
@@ -241,5 +243,33 @@ fn every_action_kind_has_a_bridge_case() {
         dead.is_empty(),
         "bridge.js executeAction has cases that are not Action kinds (dead arms \
          or typos — the Rust side can never send them): {dead:?}",
+    );
+}
+
+/// The string literal assigned right after `anchor` (`… = "value"`), used to read
+/// a `const` out of source on both sides of the language boundary.
+fn quoted_after(source: &str, anchor: &str) -> Option<String> {
+    let rest = &source[source.find(anchor)? + anchor.len()..];
+    let open = rest.find('"')?;
+    let tail = &rest[open + 1..];
+    let close = tail.find('"')?;
+    Some(tail[..close].to_string())
+}
+
+/// The Native Messaging host name lives in two languages: the Rust `NM_HOST_NAME`
+/// const (which setup/status/uninstall all key on) and the extension's
+/// `connectNative` literal in `background/host.js`. They are the two ends of the
+/// same socket — a drift means the extension calls a host the manifest never
+/// registered, and browser mode silently never connects. The compiler sees
+/// neither across the language boundary, so pin them here.
+#[test]
+fn native_host_name_matches_between_rust_and_extension() {
+    let rust =
+        quoted_after(NM_HOST_RS, "NM_HOST_NAME: &str =").expect("NM_HOST_NAME const in nm_host.rs");
+    let js = quoted_after(HOST_JS, "NM_HOST =").expect("NM_HOST const in host.js");
+    assert_eq!(
+        rust, js,
+        "extension/background/host.js connectNative name ({js:?}) must equal Rust \
+         NM_HOST_NAME ({rust:?}) — a drift breaks browser mode at runtime",
     );
 }
