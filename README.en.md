@@ -265,12 +265,12 @@ webpilot device reset                                  # clear emulation
 | Prerequisites | None | Extension + NM host registration (below) |
 
 ```bash
-# Set up browser mode
-webpilot setup nm-host                         # register the NM host (extension id auto-detected — nothing to copy)
-webpilot setup extension                       # extract the extension + Chrome guide (opens chrome://extensions)
-# just "Load unpacked" the printed path — no ID to copy
+# Set up browser mode — one `setup` does skill + extension + NM host (extension id auto-detected)
+webpilot setup
+# Load the printed path via chrome://extensions → Developer mode → "Load unpacked" (the one manual step)
 
 # Use it
+webpilot --browser status                      # confirm connected
 webpilot --browser capture --include dom
 
 # Multi-agent isolation (headless)

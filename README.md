@@ -265,12 +265,12 @@ webpilot device reset                                  # 에뮬레이션 해제
 | 사전 준비 | 없음 | 확장 + NM 호스트 등록(아래) |
 
 ```bash
-# 브라우저 모드 준비
-webpilot setup nm-host                         # NM 호스트 등록 (확장 ID 자동 탐지 — 복사 불필요)
-webpilot setup extension                       # 확장 추출 + Chrome 안내 (chrome://extensions 열림)
-# 안내대로 "압축해제된 확장 로드"만 하면 끝 (ID 복사 단계 없음)
+# 브라우저 모드 준비 — setup 한 번이 스킬·확장·NM 호스트까지 (확장 ID 자동 탐지)
+webpilot setup
+# 안내된 경로를 chrome://extensions → 개발자 모드 → "압축해제된 확장 로드" (유일한 수동 단계)
 
 # 사용
+webpilot --browser status                      # connected 확인
 webpilot --browser capture --include dom
 
 # 멀티 에이전트 격리 (헤드리스)

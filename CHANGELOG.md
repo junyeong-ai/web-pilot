@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-06-14
 
 ### Changed
 
@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`--extension-id` remains, only to authorise a different build), and bare
   `webpilot setup` registers the host automatically, leaving just the one step
   only the user can do: `Load unpacked` in `chrome://extensions`.
+
+### Documentation
+
+- Rewrote the README as a bilingual pair — `README.md` (Korean) and
+  `README.en.md` (English) — built around a real-capture "Acme Tasks"
+  walkthrough with Mermaid diagrams, every command and example output verified
+  against the live CLI. The skill and the `CLAUDE.md` set were fact-checked in
+  the same pass (DOM/exit-code/policy/setup surfaces).
 
 ## [0.5.0] - 2026-06-14
 

@@ -176,10 +176,12 @@ fn spawn_chrome(chrome: &Path, home: &Path, user_data_dir: &Path, extension_dir:
 ///
 /// Two launches by design. The manifest must exist BEFORE the service worker's
 /// startup `connectNative` — a manifest written later relies on the SW's retry
-/// timers, which MV3 may have suspended by then. But the manifest needs the
-/// extension ID, which Chrome derives from the (stable) extension path — so a
-/// throwaway first launch reads the ID from the DevTools target list, and the
-/// real launch then connects on startup, deterministically.
+/// timers, which MV3 may have suspended by then. The manifest needs the
+/// extension id; the manifest's pinned `key` makes that a stable constant, but
+/// this harness reads it from Chrome's own DevTools target list on a throwaway
+/// first launch — an independent cross-check that the id Chrome assigns matches
+/// what the binary derives (`assets::expected_extension_id`) — then the real
+/// launch connects on startup, deterministically.
 fn launch(home: &Path, user_data_dir: &Path, extension_dir: &Path) -> Child {
     let chrome = chrome_binary();
 
