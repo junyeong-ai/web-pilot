@@ -62,7 +62,7 @@ webpilot capture --include dom screenshot text               # multiple in one c
 webpilot capture --include screenshot --annotate             # numbered overlay on shot
 webpilot capture --include dom --bounds                      # adds bounds: {x,y,w,h}
 webpilot capture --include dom --occlusion                   # marks occluded:true elements
-webpilot capture --include screenshot --full-page            # entire scrollable area (no --annotate: overlays are viewport-only)
+webpilot capture --include screenshot --full-page            # entire scrollable area (cannot combine with --annotate — exit 7)
 webpilot capture --include dom --url URL                     # navigate first, then capture
 ```
 
@@ -210,7 +210,7 @@ webpilot cookie get  "https://example.com" SESSION
 webpilot cookie set  "https://example.com" name value --secure --httponly
 webpilot cookie delete "https://example.com" name
 
-webpilot session export                            # → ~/Library/Caches/webpilot/artifacts/session_*.json
+webpilot session export                            # writes artifacts/session_*.json (trust the returned path — see note above)
 webpilot session export --output /tmp/s.json
 webpilot session import /tmp/s.json                # cookies + localStorage
 ```
