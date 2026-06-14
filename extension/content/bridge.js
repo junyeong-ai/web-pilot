@@ -70,9 +70,25 @@
   // dropped those fallback-pattern roles from the semantic pass; `~=` collects
   // any element whose role list CONTAINS the token, the same set `find --role`
   // matches.
+  //
+  // The role set is the COMPLETE list of standalone, individually-actionable
+  // ARIA widget roles — not an arbitrary subset. A declared widget role IS the
+  // author's statement "this is an interactive control", so it is collected on
+  // the role ALONE (visibility the only gate), exactly like the native tags
+  // above; it must NOT also require an onclick/tabindex/cursor:pointer, or a
+  // keyboard-driven widget — an `aria-activedescendant` listbox, a menu whose
+  // activation is a delegated CONTAINER listener — surfaces its container but
+  // none of its items, leaving the agent unable to pick one. Composite container
+  // roles (listbox/menu/menubar/tree/grid/tablist/radiogroup/toolbar) are
+  // deliberately ABSENT: they group the items, they are not themselves the click
+  // target — the marker/cursor passes still catch a container that wires its own
+  // affordance. `separator`/`scrollbar` are interactive only when focusable, so
+  // they ride the tabindex pass rather than unconditional collection.
   const INTERACTIVE_SELECTOR =
     'a[href], button, input, select, textarea, ' +
     '[role~="button"], [role~="link"], [role~="tab"], [role~="menuitem"], ' +
+    '[role~="menuitemcheckbox"], [role~="menuitemradio"], [role~="option"], ' +
+    '[role~="treeitem"], [role~="gridcell"], [role~="spinbutton"], ' +
     '[role~="checkbox"], [role~="radio"], [role~="switch"], [role~="combobox"], ' +
     '[role~="searchbox"], [role~="textbox"], [role~="slider"], ' +
     // Any editable host, not just `contenteditable="true"`: a bare
@@ -500,45 +516,27 @@
     return null;
   }
 
-  // The option list is capped so a giant `<select>` (countries, timezones) costs
-  // bounded tokens — but `truncated` flags the cut so the agent never reads the
-  // shown slice as the whole list (the same honesty as `shadow_truncated` and the
-  // console/network caps). Returns `{ list, truncated }`, or `undefined` for a
-  // non-option element. One walk per element: the truncation flag comes from the
-  // same collected set the list is sliced from, never a second query.
+  // A NATIVE `<select>` summary only. Its `<option>`s are not separate elements,
+  // so the agent needs them surfaced here to drive `action select <value>`. A
+  // custom ARIA listbox/menu/combobox exposes its `role="option"` /
+  // `role="menuitem"` / `role="treeitem"` items as FIRST-CLASS interactive
+  // elements (the semantic pass collects them), addressed by `action click
+  // <index>` — so they need no parallel summary, and building one here would just
+  // duplicate them. The list is capped so a giant `<select>` (countries,
+  // timezones) costs bounded tokens, with `truncated` flagging the cut so the
+  // agent never reads the shown slice as the whole list (the same honesty as
+  // `shadow_truncated` and the console/network caps).
   const OPTION_CAP = 50;
   function extractOptions(el, tag) {
-    let all;
-    let mapper;
-    if (tag === "select") {
-      all = [...el.options];
-      // Clip the DISPLAY text like the ARIA branch and the element-label cap
-      // (80): a `<select>` whose option text is a runaway string would balloon
-      // the snapshot/payload unbounded. `value` is NOT clipped — `action select`
-      // matches the exact live value, so a clipped value would fail to select.
-      mapper = (o) => ({ value: o.value, text: clip(o.text, 80), selected: o.selected });
-    } else {
-      const role = el.getAttribute("role");
-      if (role === "listbox" || role === "menu" || role === "combobox") {
-        const opts = el.querySelectorAll('[role="option"], [role="menuitem"]');
-        if (opts.length > 0) {
-          all = [...opts];
-          mapper = (o) => ({
-            // `?? clip(...)`, not `|| clip(...)`: an option with an explicit
-            // `data-value=""` (a "none"/placeholder choice) has the empty string
-            // as its real value — `||` would discard it for the visible text and
-            // mis-report what `action select` must send. `getAttribute` returns
-            // null only when the attribute is absent, which correctly falls back.
-            value: o.getAttribute("data-value") ?? clip(o.textContent.trim(), 80),
-            text: clip(o.textContent.trim(), 80),
-            selected: o.getAttribute("aria-selected") === "true",
-          });
-        }
-      }
-    }
-    if (!all) return undefined;
+    if (tag !== "select") return undefined;
+    const all = [...el.options];
+    // `value` is NOT clipped — `action select` matches the exact live value, so a
+    // clipped value would fail to select; the DISPLAY text is clipped (80) like
+    // the element-label cap so a runaway option string can't balloon the payload.
     return {
-      list: all.slice(0, OPTION_CAP).map(mapper),
+      list: all
+        .slice(0, OPTION_CAP)
+        .map((o) => ({ value: o.value, text: clip(o.text, 80), selected: o.selected })),
       truncated: all.length > OPTION_CAP,
     };
   }

@@ -188,6 +188,19 @@ fn headless_behavioral_flow() {
             "a non-allowlisted role with an explicit affordance must be indexed (#{id} absent): {dom}"
         );
     }
+    // A standalone ARIA widget role is collected on the role ALONE — no
+    // onclick/tabindex/cursor:pointer needed. `#kbopt` (a `role=option` in an
+    // `aria-activedescendant` listbox) and `#kbspin` (a `role=spinbutton`) carry
+    // NO affordance, the keyboard-driven widget pattern; the semantic pass must
+    // still index them, or the agent sees the listbox container but cannot pick
+    // an item. (Their `[role~="…"]` collection is the complete widget taxonomy,
+    // not the old 11-role subset.)
+    for id in ["kbopt", "kbspin"] {
+        assert!(
+            elements.iter().any(|e| e["id"] == id),
+            "a standalone ARIA widget role with NO affordance must be indexed by the semantic pass (#{id} absent): {dom}"
+        );
+    }
     // `in_viewport:false` must SURVIVE the wire (the bridge's false-strip
     // keep-list): it is the offscreen signal — `[offscreen]` in the rendered
     // DOM, and the annotation overlay skips it — not a mere property absence.

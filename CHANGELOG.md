@@ -5,7 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.237] - 2026-06-14
+## [0.4.238] - 2026-06-14
+
+### Fixed
+
+- **The interactive set now collects the COMPLETE ARIA widget-role taxonomy, not
+  an arbitrary 11-role subset — so a keyboard-driven custom widget surfaces its
+  items, not just its container.** A parallel architecture review (codex + fresh,
+  independently corroborated) identified the root cause behind the v0.4.235
+  widget-role fix: removing the `hasExplicitRole` veto let a non-allowlisted role
+  be captured *only if it independently carried* an `onclick`/`tabindex`/
+  `cursor:pointer`, but the *semantic selector* was never widened. So a custom
+  listbox/menu/tree/grid using the `aria-activedescendant` pattern or a delegated
+  container click listener (very common — the items themselves carry no marker)
+  surfaced its container but **none of its `role="option"`/`treeitem`/`gridcell`/
+  `menuitemcheckbox`/`menuitemradio`/`spinbutton` items** — an unrecoverable blind
+  spot (no `*`, no count discrepancy; the items simply weren't there). The agent
+  could see a dropdown was open but could not pick anything. `INTERACTIVE_SELECTOR`
+  now includes the full set of standalone, individually-actionable ARIA widget
+  roles via `[role~="…"]`; a declared widget role is collected on the role alone
+  (visibility the only gate), exactly like the native tags. Composite *container*
+  roles (listbox/menu/tree/grid/tablist/…) stay deliberately absent (they group
+  items, they are not the target); `separator`/`scrollbar` ride the tabindex pass
+  (interactive only when focusable). This is the principled root fix the
+  veto-removal pointed at — collection no longer depends on an affordance the
+  ARIA item pattern does not require.
+
+### Changed
+
+- **`extractOptions` is now a native-`<select>` summary only.** Its ARIA branch —
+  which walked a `role="listbox"`/`menu`/`combobox` container's `role="option"`/
+  `menuitem` children into the `options` field — was a workaround for those items
+  not being collected as elements. Now that they are first-class interactive
+  elements (addressed by `action click <index>`, the documented custom-dropdown
+  interaction — `action select` is and always was native-`<select>`-only), the
+  summary merely duplicated them, so it is removed. The `options` field now has
+  one clear meaning: a native `<select>`'s choices for `action select <value>`.
+
+
 
 ### Fixed
 

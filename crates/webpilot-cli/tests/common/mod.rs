@@ -29,6 +29,8 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <ul role="listbox"><li id="ariaopt" role="option" onclick="" style="cursor:pointer">aria option click</li><li id="ariaoptrove" role="option" tabindex="0">aria option roving</li></ul>
 <div role="tree"><div id="ariatreeitem" role="treeitem" tabindex="0">tree item</div></div>
 <div id="invalidrole" role="zzgarbage" tabindex="0">invalid role focusable</div>
+<div role="listbox" aria-activedescendant="kbopt" aria-label="kb"><div id="kbopt" role="option">kb only option</div></div>
+<div id="kbspin" role="spinbutton" aria-valuenow="1" aria-label="kbqty">kb spinbutton</div>
 <p id="wsp">whitespace<br>collapse<br>marker</p>
 <div id="slothost2"><button id="slottedbtn" slot="t">SB</button></div>
 <nav><div id="shadowhost"><span slot="s">SL</span></div></nav>
