@@ -3,7 +3,7 @@
 
 import { err, exceptionErr, noPageErr, otherErr, timeoutErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, navigationTimeoutMs, resolveActiveTab, sleep } from "./session.js";
-import { cdpSend, withCdp } from "./cdp.js";
+import { cdpSend, cdpEnableRuntime, cdpReemitContexts, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, sendToContent, sendToContentOnce } from "./content.js";
 
 // ── Eval ───────────────────────────────────────────────────────────────────
@@ -37,8 +37,7 @@ async function resolveFrameWorld(tid, tabId, frameId, world) {
   const key = `__wp_probe_${nonce}`;
   try {
     // Toggle the domain so existing contexts re-announce into our listener.
-    await cdpSend(tid, "Runtime.disable", {});
-    await cdpSend(tid, "Runtime.enable", {});
+    await cdpReemitContexts(tid);
     try {
       await chrome.scripting.executeScript({
         target: { tabId, frameIds: [frameId] },
@@ -185,7 +184,7 @@ async function handleEval(command) {
 
   try {
     const r = await withCdp(tab.id, async (tid) => {
-      await cdpSend(tid, "Runtime.enable", {});
+      await cdpEnableRuntime(tid);
       let uniqueContextId;
       if (activeFrameId !== 0) {
         uniqueContextId = await frameWorldContextId(tid, tab.id, activeFrameId, "MAIN");

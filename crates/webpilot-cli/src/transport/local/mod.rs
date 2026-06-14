@@ -156,11 +156,9 @@ impl LocalTransport {
         // browser content script, with no per-call injection. `connect_to_page`
         // already enabled Runtime, but its initial `executionContextCreated`
         // events (and the bridge world's) predate the listener's subscription,
-        // so toggle the domain to force re-emission for every existing context.
+        // so re-emit them for every existing context.
         install_bridge_world(&page).await?;
-        let _ = page.send("Runtime.disable", None).await;
-        let _ = page.send("Runtime.discardConsoleEntries", None).await;
-        let _ = page.send("Runtime.enable", None).await;
+        reemit_execution_contexts(&page).await;
 
         // Re-apply device emulation across CLI invocations: a UA override does
         // not survive the prior process's CDP disconnect, so without this the
@@ -323,9 +321,7 @@ impl LocalTransport {
                 map.remove(fid);
             }
         }
-        let _ = self.page.send("Runtime.disable", None).await;
-        let _ = self.page.send("Runtime.discardConsoleEntries", None).await;
-        let _ = self.page.send("Runtime.enable", None).await;
+        reemit_execution_contexts(&self.page).await;
         for _ in 0..20 {
             let all_present = {
                 let map = self.frame_contexts.lock().await;
@@ -526,9 +522,7 @@ impl LocalTransport {
         );
         install_bridge_world(&self.page).await?;
         self.main_frame_id = fetch_main_frame_id(&self.page).await?;
-        let _ = self.page.send("Runtime.disable", None).await;
-        let _ = self.page.send("Runtime.discardConsoleEntries", None).await;
-        let _ = self.page.send("Runtime.enable", None).await;
+        reemit_execution_contexts(&self.page).await;
         self.await_live_bridge_context().await;
         Ok(())
     }
@@ -1438,6 +1432,24 @@ pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<Cdp
     let _ = cdp.send("Runtime.discardConsoleEntries", None).await;
     cdp.send("Runtime.enable", None).await?;
     Ok(cdp)
+}
+
+/// Toggle the Runtime domain off then on so Chrome re-announces
+/// `executionContextCreated` for every existing context — the only way to
+/// recover the per-frame context ids after a navigation or a bridge-world
+/// reinstall, since `Runtime.disable`/`enable` emits no `executionContextsCleared`.
+/// The native console buffer is discarded between: `Runtime.enable` REPLAYS it,
+/// and Chrome keeps every console argument UNCLIPPED and unbounded, but WebPilot
+/// reads console only through its MAIN-world hook (`window.__webpilot_console`),
+/// never this buffer — so the replay is pure overhead (a per-reprime latency
+/// cliff + unbounded Chrome memory). This is the SINGLE place the
+/// discard-before-enable invariant lives for the re-emit sites, so a new one
+/// can't reopen the console-replay wedge by forgetting it. (Browser mode's twin
+/// is `cdpReemitContexts` in cdp.js.)
+async fn reemit_execution_contexts(page: &CdpClient) {
+    let _ = page.send("Runtime.disable", None).await;
+    let _ = page.send("Runtime.discardConsoleEntries", None).await;
+    let _ = page.send("Runtime.enable", None).await;
 }
 
 /// Whether a CDP target belongs to the given browser context. An isolated

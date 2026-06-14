@@ -3,7 +3,7 @@
 
 import { err, exceptionErr, noPageErr, topErr } from "./errors.js";
 import { activeFrameId, activeTabId, ensureRestored, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
-import { cdpSend, withCdp } from "./cdp.js";
+import { cdpEnableRuntime, withCdp } from "./cdp.js";
 import { cdpEval, frameWorldContextId } from "./query.js";
 import { adoptedDocumentReady } from "./navigation.js";
 import { rearmMonitors } from "./state.js";
@@ -411,7 +411,7 @@ async function handleFrameSwitch(selector) {
     // through the router; a predicate that THREW is remembered and surfaced
     // below, never disguised as FrameNotFound.
     const probe = await withCdp(tab.id, async (tid) => {
-      await cdpSend(tid, "Runtime.enable", {});
+      await cdpEnableRuntime(tid);
       let error = null;
       const frames = [];
       for (const f of httpFrames) {

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.245] - 2026-06-14
+
+### Changed
+
+- **The "discard the console buffer before `Runtime.enable`" invariant now lives
+  in one helper per mode, and is enforced in BOTH modes.** A design re-audit
+  (parallel codex + fresh) found the v0.4.243 console-buffer fix was applied at
+  four headless call sites by hand — three of them the identical
+  `disable`/`discardConsoleEntries`/`enable` re-emit triple — so a future fifth
+  re-emit site could silently drop the discard and reopen the replay overhead;
+  and **browser mode never had the discard at all** (its three `Runtime.enable`
+  sites replayed Chrome's unbounded console buffer). The three headless triples
+  collapse into one `reemit_execution_contexts` helper, and browser mode gains
+  `cdpEnableRuntime` / `cdpReemitContexts` wrappers (cdp.js) used at every
+  `Runtime.enable` site — so the discard-before-enable invariant is now a single
+  named operation in each mode, impossible to forget, and headless/browser parity
+  is restored. The rest of the re-audit found the codebase clean and root-cause
+  (the rapid v0.4.234→244 fixes are named, reused operations, not piecemeal
+  patches) — this was the one actionable debt.
+
 ## [0.4.244] - 2026-06-14
 
 ### Changed
