@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.12] - 2026-06-14
+
+### Changed
+
+- The browser-mode popup's "Not connected" hint points at `webpilot setup` plus
+  reloading the extension, with `webpilot --browser status` to diagnose — it now
+  covers the registered-but-disconnected and version-mismatch causes too, not
+  only the never-registered case the previous `setup nm-host`-only hint
+  addressed.
+
 ## [0.6.11] - 2026-06-14
 
 ### Fixed
