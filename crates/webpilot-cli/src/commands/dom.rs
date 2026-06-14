@@ -96,16 +96,19 @@ pub async fn run<T: Transport>(transport: &mut T, args: DomArgs) -> Result<Comma
             value,
             error,
         } => {
-            if let Some(val) = value {
+            // Failure is checked FIRST: a response carrying `success: false` must
+            // never map to a success output, even if it also carried a value —
+            // failure-mapped-to-success is the one shape this surface must refuse.
+            if !success {
+                Err(error
+                    .map(anyhow::Error::from)
+                    .unwrap_or_else(|| anyhow::anyhow!("DOM operation failed")))
+            } else if let Some(val) = value {
                 Ok(CommandOutput::Content {
                     stdout: val.clone(),
                     json: serde_json::json!({"success": true, "value": val}),
                     note: None,
                 })
-            } else if !success {
-                Err(error
-                    .map(anyhow::Error::from)
-                    .unwrap_or_else(|| anyhow::anyhow!("DOM operation failed")))
             } else if let Some(label) = get_label {
                 // Get succeeded but the property/attribute is absent: an
                 // explicitly-null result — distinct from a write's "OK" AND

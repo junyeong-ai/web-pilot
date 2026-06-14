@@ -78,7 +78,7 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
             // An implicit downgrade is refused: a rolled-back or yanked
             // "latest" below the running version must be a deliberate pin,
             // never a silent replacement with older code.
-            if version_components(&latest) < version_components(&current) {
+            if version_key(&latest) < version_key(&current) {
                 return Err(webpilot::WebPilotError::InvalidArgument {
                     detail: format!(
                         "latest release v{latest} is older than the running v{current}; \
@@ -281,13 +281,26 @@ fn normalize_version(s: &str) -> String {
     s.trim().trim_start_matches('v').to_owned()
 }
 
-/// Dotted-numeric components for ordering release versions ("0.3.10" above
-/// "0.3.9", where a string compare would not).
-fn version_components(v: &str) -> Vec<u64> {
-    v.split(|c: char| !c.is_ascii_digit())
-        .filter(|s| !s.is_empty())
+/// SemVer-precedence key for ordering release versions: the dotted-numeric core
+/// ("0.3.10" sorts above "0.3.9", where a string compare would not), then a FINAL
+/// release above the same core's pre-release ("1.2.3" above "1.2.3-rc.1"). A
+/// pre-release suffix LOWERS precedence — a plain "strip every non-digit" compare
+/// would instead read the `1` in `-rc.1` as a fourth numeric component and rank
+/// the pre-release ABOVE the final, refusing the real upgrade off it as a
+/// "downgrade". Build metadata (`+…`) is ignored in precedence, per the spec.
+fn version_key(v: &str) -> (Vec<u64>, bool) {
+    let no_build = v.split('+').next().unwrap_or(v);
+    let (core_str, is_final) = match no_build.split_once('-') {
+        Some((core, _pre)) => (core, false),
+        None => (no_build, true),
+    };
+    let core = core_str
+        .split('.')
         .map(|s| s.parse().unwrap_or(0))
-        .collect()
+        .collect();
+    // `false` (pre-release) sorts below `true` (final), so a final release
+    // outranks the same-core pre-release.
+    (core, is_final)
 }
 
 fn download(url: &str, dest: &Path) -> Result<()> {
@@ -436,6 +449,21 @@ mod tests {
         assert_eq!(normalize_version("v0.2.0"), "0.2.0");
         assert_eq!(normalize_version("0.2.0"), "0.2.0");
         assert_eq!(normalize_version("  v1.0.0  "), "1.0.0");
+    }
+
+    #[test]
+    fn version_key_orders_by_semver_precedence() {
+        // Dotted-numeric core, not string order.
+        assert!(version_key("0.3.10") > version_key("0.3.9"));
+        assert!(version_key("1.0.0") > version_key("0.9.9"));
+        // A pre-release sorts BELOW the same-core final.
+        assert!(version_key("1.2.3-rc.1") < version_key("1.2.3"));
+        // Build metadata is ignored in precedence.
+        assert_eq!(version_key("1.2.3+build"), version_key("1.2.3"));
+        // The exact guard `self update` runs: the final release is NOT "older
+        // than" a running pre-release of the same core, so the upgrade off the
+        // pre-release is allowed, never refused as a downgrade (the bug this fixes).
+        assert!(version_key("1.2.3") >= version_key("1.2.3-rc.1"));
     }
 
     #[test]

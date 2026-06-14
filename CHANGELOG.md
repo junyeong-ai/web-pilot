@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.9] - 2026-06-14
+
+### Fixed
+
+- `self update` no longer refuses to upgrade off a pre-release build to the
+  matching final release as a false "downgrade". The version comparator is now
+  SemVer-precedence-aware: a pre-release suffix (`-rc.1`) lowers precedence
+  instead of being read as an extra numeric component that ranked the
+  pre-release above the final, so `1.2.3-rc.1 → 1.2.3` is correctly an upgrade.
+- `record --url … --frames N --duration M` (a contradictory request) is rejected
+  BEFORE navigating, so an invalid recording invocation no longer first mutates
+  browser state by loading `--url`. The frame-count validation and cap moved
+  ahead of the navigation.
+- `dom get`/`set` checks the failure flag before the value, so a response that
+  carried a value alongside `success: false` can never be rendered as a success —
+  upholding the surface's never-map-failure-to-success contract.
+
 ## [0.6.8] - 2026-06-14
 
 ### Fixed

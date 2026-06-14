@@ -50,10 +50,6 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
         .into());
     }
 
-    if let Some(url) = args.url {
-        crate::transport::navigate_to(local, url).await?;
-    }
-
     let frame_count = match (args.frames, args.duration) {
         // The two are documented as alternatives — each names the same quantity
         // (a frame count) a different way, so supplying both is a contradictory
@@ -89,6 +85,13 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
             ),
         }
         .into());
+    }
+
+    // Navigate only after the request is known-valid: the `--frames`/`--duration`
+    // contradiction and the frame-count cap are pure checks, so a rejected
+    // recording must not first mutate browser state by loading `--url`.
+    if let Some(url) = args.url {
+        crate::transport::navigate_to(local, url).await?;
     }
 
     let dir = dirs::artifacts_dir();
