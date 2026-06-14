@@ -165,20 +165,28 @@ enum ManifestState {
     Ok,
 }
 
-/// Whether `path` names a launchable host binary: an existing regular file that
-/// is executable. A bare `exists()` would pass a directory or a non-executable
-/// file that Chrome's host loader can never run.
+/// Whether `path` names a launchable host binary: an existing regular file this
+/// user can execute. A bare `exists()` would pass a directory or a file the host
+/// loader can never run.
 fn is_launchable(path: &std::path::Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
+    // `metadata` (not `symlink_metadata`) follows symlinks, like the loader — so a
+    // symlink to the binary is fine, but a directory or broken symlink is not.
+    if !std::fs::metadata(path)
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+    {
         return false;
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
+        // `access(X_OK)` answers the exact question — can THIS user execute it —
+        // against the real uid/gid. A raw mode-bit test would only approximate it
+        // (a file executable solely by another user/group would falsely pass).
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        unsafe { libc::access(c_path.as_ptr(), libc::X_OK) == 0 }
     }
     #[cfg(not(unix))]
     {

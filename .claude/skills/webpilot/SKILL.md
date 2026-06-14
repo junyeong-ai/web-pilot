@@ -341,7 +341,7 @@ webpilot mcp                                   # serve the same engine as a stdi
 webpilot setup skill                           # refresh this skill from the binary's embedded copy
 webpilot self update                           # atomic self-update to the latest release (sha256-verified)
 webpilot self update --version X.Y.Z           # pin a version (required for downgrades)
-webpilot uninstall --yes                       # quit Chrome + remove binary, skill, extension, NM host, cache
+webpilot uninstall --yes                       # quit Chrome + remove binary, skill, extension, NM host, policy store, cache
 ```
 
 ## Exit codes
