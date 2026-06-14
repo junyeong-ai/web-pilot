@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.21] - 2026-06-15
+
+### Fixed
+
+- **Browser mode: the CLI now bounds the size of a host response it reads.** The
+  client read the host's reply with an unbounded `read_line`, so the timeout
+  capped the wait but not the bytes — a peer that streams a giant body without a
+  newline could grow CLI memory toward OOM. It now caps the read (mirroring the
+  host's existing inbound request cap), with a ceiling above the largest a real
+  response can be (the 100 MiB an extension can hand the host). The 0600 socket
+  makes this robustness/hygiene rather than a trust boundary, but the two
+  directions are now symmetric.
+- **A snapshot's `page_url` / `page_title` are now clipped at the source**, like
+  every per-element field already is. `location.href` (a multi-MB `data:`/`blob:`
+  URL) and `document.title` (page-settable to any length) otherwise crossed the
+  wire untruncated — the same balloon-the-snapshot-past-the-transport-cap failure
+  the per-element `href` clip prevents, but for the whole capture. Clipped to 2048
+  (URL) and 200 (title); real pages are unaffected and the rendered output is
+  unchanged.
+
 ## [0.6.20] - 2026-06-15
 
 ### Fixed

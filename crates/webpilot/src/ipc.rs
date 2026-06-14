@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 #[derive(Debug, Error)]
@@ -42,11 +42,27 @@ async fn send_to(path: &Path, request: &serde_json::Value) -> Result<serde_json:
         writer.write_all(&payload).await?;
         writer.shutdown().await?;
 
-        let mut reader = BufReader::new(reader);
+        // Bound the response read in SIZE as well as the time bound above. An
+        // unbounded `read_line` lets a peer that never sends a newline — or
+        // streams a giant late-newline body — grow client memory toward OOM; the
+        // timeout caps the wait, not the bytes. Mirror the host's inbound request
+        // cap (`host.rs`), which already does this for the other direction. The
+        // ceiling sits above the 100 MiB an extension can hand the host
+        // (`native_messaging::MAX_READ_SIZE`) — the largest a real response can be
+        // — so no legitimate reply is rejected. The socket is 0600 (same user), so
+        // this is robustness/hygiene, not a trust boundary.
+        const MAX_RESPONSE_BYTES: u64 = 128 * 1024 * 1024;
+        let mut reader = BufReader::new(reader).take(MAX_RESPONSE_BYTES + 1);
         let mut line = String::new();
         let n = reader.read_line(&mut line).await?;
         if n == 0 {
             return Err(IpcError::ConnectionClosed);
+        }
+        if line.len() as u64 > MAX_RESPONSE_BYTES {
+            return Err(IpcError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("host response exceeds the {MAX_RESPONSE_BYTES}-byte limit"),
+            )));
         }
 
         let response = serde_json::from_str(line.trim())?;

@@ -793,8 +793,15 @@
       return {
         elements,
         total_nodes: totalNodes,
-        page_url: location.href,
-        page_title: document.title,
+        // Clip the two snapshot-level page strings at the SOURCE, like every
+        // per-element field: `location.href` can be a multi-MB `data:`/`blob:`
+        // URL and `document.title` is page-settable to any length, and otherwise
+        // the full value crosses CDP / native messaging raw — the exact balloon
+        // the per-element `href` clip guards against, but for the whole snapshot.
+        // 2048 keeps real URLs intact while bounding a pathological one; 200
+        // matches the render cap, so nothing visible changes.
+        page_url: clip(location.href, 2048),
+        page_title: clip(document.title, 200),
         scroll: {
           scroll_x: scrollX,
           scroll_y: sy,
