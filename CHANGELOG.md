@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.23] - 2026-06-15
+
+### Fixed
+
+Two more siblings of the 0.6.22 event-ring-lag bug — a settle path that trusts a
+CDP event's absence misfires when a busy page's event burst evicts that event
+from the broadcast ring. Both now confirm against an authoritative observable:
+
+- **Headless: a navigating `action click` no longer reports `url_changed: null`
+  (no navigation)** when the click's `Page.frameStartedLoading`/commit event was
+  dropped under lag. The click-settle drain treated a `Lagged` as an ordinary
+  empty drain and returned the PRE-click URL, so the agent saw "nothing
+  happened" for a click that did navigate. On a lagged drain it now reads the
+  live target URL (the same authoritative fallback the live commit-wait already
+  used), so `url_changed` reflects where the click actually landed.
+- **Headless: a click-opened popup is now adopted even when its
+  `Target.targetCreated` event was dropped** under lag. The adoption drain
+  returned `None` (popup not followed, pin left on the opener) on a `Lagged`; it
+  now falls back to enumerating live targets (`Target.getTargets`) for the
+  opener's child page, adopting it — or, if the enumeration is ambiguous (more
+  than one match), declining rather than pinning the wrong tab.
+
 ## [0.6.22] - 2026-06-15
 
 ### Fixed

@@ -159,6 +159,7 @@ impl LocalTransport {
     ) -> Option<TabInfo> {
         use tokio::sync::broadcast::error::TryRecvError;
         let opener = self.target_id.clone();
+        let mut lagged = false;
         let info = loop {
             match events.try_recv() {
                 Ok(ev) => {
@@ -174,7 +175,22 @@ impl LocalTransport {
                         break info.clone();
                     }
                 }
-                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Lagged(_)) => {
+                    lagged = true;
+                    continue;
+                }
+                Err(_) if lagged => {
+                    let targets = self.browser.get_targets().await.ok()?;
+                    let mut matches = targets.into_iter().filter(|info| {
+                        info.get("type").and_then(Value::as_str) == Some("page")
+                            && info.get("openerId").and_then(Value::as_str) == Some(opener.as_str())
+                    });
+                    let only = matches.next()?;
+                    if matches.next().is_some() {
+                        return None;
+                    }
+                    break only;
+                }
                 Err(_) => return None,
             }
         };

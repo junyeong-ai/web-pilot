@@ -536,6 +536,7 @@ impl LocalTransport {
             Stopped(String),
         }
         let mut seq: Vec<Ev> = Vec::new();
+        let mut lagged = false;
         loop {
             match events.try_recv() {
                 Ok(ev) => {
@@ -553,7 +554,10 @@ impl LocalTransport {
                         }
                     }
                 }
-                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Lagged(_)) => {
+                    lagged = true;
+                    continue;
+                }
                 Err(_) => break,
             }
         }
@@ -570,6 +574,9 @@ impl LocalTransport {
         // from a later timer carries no hint and stays the agent's `wait`.)
         // The common no-navigation case returns before any extra round-trip.
         if seq.is_empty() && !nav_hint {
+            if lagged {
+                return self.bound_target_url().await;
+            }
             return immediate;
         }
         // Both the buffered replay and the live wait below only settle on the
@@ -608,6 +615,9 @@ impl LocalTransport {
                 return u;
             }
             if !main_loading {
+                if lagged {
+                    return self.bound_target_url().await;
+                }
                 return immediate;
             }
         }
