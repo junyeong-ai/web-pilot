@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.3] - 2026-06-14
 
 ### Fixed
 
@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the host — a present `description` and an absolute, launchable `path` included
   (both verified required against Chrome for Testing) — so a manifest missing
   either is reported as malformed instead of a false "OK".
+
+### Changed
+
+- Browser-mode reload and version-mismatch messages are browser-neutral — they
+  point at "your browser's extensions page (e.g. chrome://extensions)" rather
+  than Chrome only, matching the multi-browser registration.
 
 ### Documentation
 
