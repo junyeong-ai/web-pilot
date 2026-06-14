@@ -422,7 +422,7 @@ See `webpilot <command> --help` for the full options of each.
 | `1` | General / session error |
 | `2` | CLI usage error (unknown flag, non-numeric index, …) |
 | `3` | Infrastructure (`ConnectionLost` · `BridgeUnavailable` · `VersionMismatch`) |
-| `4` | Not found (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `FrameNotFound` …) |
+| `4` | Not found (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
 | `5` | `Timeout` |
 | `6` | `PolicyDenied` (blocked by policy) |
 | `7` | `InvalidArgument` (user input error) |
@@ -435,7 +435,7 @@ Errors print with guidance text, and in JSON mode come out as `{"code": "...", "
 ## Lifecycle
 
 ```bash
-webpilot setup                 # interactive setup: skill + extension + NM host
+webpilot setup                 # interactive setup: skill + extension (then guides the nm-host step)
 webpilot setup skill           # (re)install just the skill
 webpilot setup extension       # extract the extension + Chrome guide (opens chrome://extensions)
 webpilot setup nm-host --extension-id <ID>

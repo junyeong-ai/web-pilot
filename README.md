@@ -422,7 +422,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `1` | 일반 / 세션 오류 |
 | `2` | CLI 사용법 오류 (알 수 없는 플래그, 숫자가 아닌 인덱스 등) |
 | `3` | 인프라 (`ConnectionLost` · `BridgeUnavailable` · `VersionMismatch`) |
-| `4` | 찾지 못함 (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `FrameNotFound` …) |
+| `4` | 찾지 못함 (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
 | `5` | `Timeout` |
 | `6` | `PolicyDenied` (정책 차단) |
 | `7` | `InvalidArgument` (사용자 입력 오류) |
@@ -435,7 +435,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 ## 라이프사이클
 
 ```bash
-webpilot setup                 # 대화형 setup: 스킬 + 확장 + NM 호스트
+webpilot setup                 # 대화형 setup: 스킬 + 확장 설치 (NM 호스트 등록은 다음 단계로 안내)
 webpilot setup skill           # 스킬만 (재)설치
 webpilot setup extension       # 확장 추출 + Chrome 안내 (chrome://extensions 열림)
 webpilot setup nm-host --extension-id <ID>
