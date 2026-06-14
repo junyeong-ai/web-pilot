@@ -142,6 +142,29 @@ fn is_process_alive(pid: i32) -> bool {
     send_signal(pid, 0).unwrap_or(false)
 }
 
+/// Reap the launched Chrome once it exits, so a long-lived launcher (the MCP
+/// server) never accretes zombie processes across relaunches. A TARGETED,
+/// non-blocking `waitpid(WNOHANG)` on Chrome's PID only — never `-1` — so it
+/// cannot race the std::process `ps`/`which` subprocess waits in this file (the
+/// reason the tokio `process` feature, whose global SIGCHLD reaper would, is not
+/// pulled in). The interval is coarse: the goal is to prevent accumulation, not
+/// instant reaping. Ends when Chrome is reaped (`waitpid` returns the PID) or is
+/// no longer this process's child (`-1`/ECHILD — already reaped, or this process
+/// exited and init adopted it). A short-lived CLI drops the task on exit before
+/// it matters; only a long-lived parent runs it to completion.
+async fn reap_when_dead(pid: libc::pid_t) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let mut status: libc::c_int = 0;
+        // SAFETY: `waitpid` with `WNOHANG` is non-blocking and only inspects a
+        // child of this process; `status` is a valid out-pointer.
+        let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if r != 0 {
+            break;
+        }
+    }
+}
+
 /// Whether `pid` is alive AND is the Chrome WE launched — its command line
 /// carries our `--user-data-dir`. Every signal aimed at a PID-file pid is
 /// gated on this: after Chrome exits, the OS can recycle its pid to an
@@ -280,8 +303,19 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
 
     let pid = child.id();
 
-    // Detach: Chrome runs independently, managed via PID file + signals.
+    // Chrome is a DETACHED singleton, managed across processes by PID file +
+    // signals; it must outlive a short-lived CLI so the next invocation
+    // re-attaches. `std::process::Child` drop neither kills nor waits, so we drop
+    // the handle (the next line) — but a LONG-LIVED launcher (the MCP server)
+    // stays Chrome's parent, and a parent that never `wait`s a dead child leaves a
+    // zombie; a crashed-and-relaunched Chrome would accrete them. A non-blocking
+    // `waitpid(WNOHANG)` reaper task reaps it when it dies, WITHOUT the tokio
+    // `process` feature (whose global SIGCHLD handler would race the std::process
+    // `ps`/`which` calls elsewhere in this file) and without holding a thread. A
+    // short-lived CLI exits before it matters (Chrome reparents to init, reaped
+    // there); a long-lived parent reaps each Chrome as it dies.
     std::mem::forget(child);
+    tokio::spawn(reap_when_dead(pid as libc::pid_t));
 
     // Poll DevToolsActivePort (Puppeteer/Playwright standard).
     let deadline = tokio::time::Instant::now() + webpilot::settings::timeouts().chrome_launch;

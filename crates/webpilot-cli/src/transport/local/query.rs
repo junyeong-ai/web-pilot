@@ -73,7 +73,11 @@ impl LocalTransport {
         match val {
             Ok(v) => Ok(ResponseData::Eval {
                 success: true,
-                result: Some(serde_json::to_string(&v).unwrap_or_else(|_| "null".into())),
+                // `v` is a `serde_json::Value`, which always serializes — a silent
+                // `"null"` fallback would mask an impossible failure, so `expect`
+                // it loud (the project rule: never `unwrap_or_default` a
+                // serialization).
+                result: Some(serde_json::to_string(&v).expect("a JSON value serializes")),
                 error: None,
             }),
             Err(e) => {

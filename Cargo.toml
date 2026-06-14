@@ -3,12 +3,14 @@ resolver = "2"
 members = ["crates/webpilot", "crates/webpilot-cli"]
 
 [workspace.package]
-version = "0.4.241"
+version = "0.4.242"
 edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-# Async runtime — feature-trimmed (no `process` or `signal` here; stdlib is enough).
+# Async runtime — feature-trimmed (no `process`/`signal`: a global SIGCHLD reaper
+# would race the std::process `ps`/`which` subprocess calls in session.rs; Chrome
+# is reaped via an explicit non-blocking `waitpid` task instead).
 # `io-std` powers the MCP server's async stdin/stdout JSON-RPC loop.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "time", "fs"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

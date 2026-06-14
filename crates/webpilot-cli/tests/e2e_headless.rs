@@ -996,7 +996,17 @@ fn headless_behavioral_flow() {
     //     (exit 8) that leaves NO trace: the orphan chrome-error tab is closed and
     //     the pin returns to the working page — `navigate`'s no-leak contract.
     //     (Before the fix it stranded the error tab and drifted the pin onto it.)
-    let bad_tab = fx.run(&["tab", "new", "http://127.0.0.1:59599/nope"]);
+    //     Bind port 0 (the OS hands back a free one) then drop the listener, so the
+    //     port is GUARANTEED nothing-listening — robust against the flake a fixed
+    //     ephemeral port causes when a concurrent process has it transiently bound
+    //     (the nav would then succeed and this assertion fail spuriously).
+    let dead_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("bind a free port")
+        .local_addr()
+        .expect("local addr")
+        .port();
+    let bad_url = format!("http://127.0.0.1:{dead_port}/nope");
+    let bad_tab = fx.run(&["tab", "new", &bad_url]);
     assert_eq!(
         code(&bad_tab),
         8,

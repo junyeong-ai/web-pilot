@@ -493,11 +493,25 @@ async fn handle_one_cli_request(
         response["id"] = id;
     }
 
-    let mut payload = serde_json::to_vec(&response)?;
-    payload.push(b'\n');
-    writer.write_all(&payload).await?;
+    write_response(&mut writer, &response).await
+}
 
-    Ok(())
+/// Frame and write a JSON-RPC response, BOUNDED by the same timeout the request
+/// wait uses: a peer that stopped reading (a CLI killed mid-read) must not park
+/// this task on the socket forever, holding its channel sender and accreting
+/// per-connection tasks while Chrome is still alive. On expiry the write fails,
+/// the connection closes, and the task ends.
+async fn write_response<W: AsyncWriteExt + Unpin>(
+    writer: &mut W,
+    response: &serde_json::Value,
+) -> anyhow::Result<()> {
+    let mut payload = serde_json::to_vec(response)?;
+    payload.push(b'\n');
+    let timeout = webpilot::settings::timeouts().ipc_response;
+    match tokio::time::timeout(timeout, writer.write_all(&payload)).await {
+        Ok(r) => Ok(r?),
+        Err(_) => anyhow::bail!("response write timed out after {}s", timeout.as_secs()),
+    }
 }
 
 fn current_gate(gate: &VersionGate) -> GateState {
@@ -533,10 +547,7 @@ async fn reply_error<W: AsyncWriteExt + Unpin>(
     if let Some(id) = cli_id {
         response["id"] = id;
     }
-    let mut payload = serde_json::to_vec(&response)?;
-    payload.push(b'\n');
-    writer.write_all(&payload).await?;
-    Ok(())
+    write_response(writer, &response).await
 }
 
 #[cfg(test)]

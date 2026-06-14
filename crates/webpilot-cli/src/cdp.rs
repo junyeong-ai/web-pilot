@@ -15,7 +15,8 @@ use tokio::net::TcpStream;
 use tokio::sync::{Mutex, broadcast, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_config};
 use webpilot::WebPilotError;
 
 /// CDP reported that the execution context a request targeted no longer exists
@@ -74,7 +75,21 @@ pub struct CdpClient {
 
 impl CdpClient {
     pub async fn connect(ws_url: &str) -> Result<Self> {
-        let (ws, _) = connect_async(ws_url)
+        // Lift tungstenite's default 16 MiB frame/message cap: a CDP message is
+        // TRUSTED localhost traffic from the Chrome WE launched, and the cap only
+        // converts a page's own large output into a session-killer. Chrome keeps
+        // an UNCLIPPED console argument in its native buffer, and `Runtime.enable`
+        // (issued on every (re)connect, before any command can run) replays it as
+        // one frame; a single `console.log` over 16 MiB would then error every
+        // fresh connection, permanently wedging the engine with `ConnectionLost`
+        // until `quit`. The data WebPilot actually keeps is bounded downstream
+        // (DOM/option caps, the 4096-char monitor clip, the 10 MB fetch ceiling);
+        // the frame itself is parsed transiently, so no cap is the right trade for
+        // a trusted channel.
+        let config = WebSocketConfig::default()
+            .max_frame_size(None)
+            .max_message_size(None);
+        let (ws, _) = connect_async_with_config(ws_url, Some(config), false)
             .await
             .context("Failed to connect to Chrome CDP")?;
 

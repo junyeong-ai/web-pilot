@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.242] - 2026-06-14
+
+An infrastructure / lifecycle robustness pass over the layer prior rounds
+under-covered (CDP transport, process lifecycle, the NM host), from a parallel
+codex + fresh review. Everything else in that layer was re-verified robust —
+monitor buffers cap-and-evict at 500, big-DOM/screenshot memory is bounded, the
+flock launch spawns exactly one Chrome, crash recovery is clean and typed, the
+MCP server survives a fuzzed stdin, and config validation fails loud.
+
+### Fixed
+
+- **A page console argument over 16 MiB no longer permanently bricks the headless
+  engine.** The CDP WebSocket used tungstenite's default 16 MiB frame cap, but a
+  CDP message is trusted localhost traffic from the Chrome WebPilot launched.
+  Chrome keeps an UNCLIPPED console argument in its native buffer (WebPilot's 4096
+  -char clip only bounds its own copy), and `Runtime.enable` — issued on every
+  (re)connect before any command can run — replays it as one frame; a single
+  `console.log` over 16 MiB then errored every fresh connection, wedging the
+  engine with `ConnectionLost` until `quit`. The cap is lifted
+  (`connect_async_with_config`, `max_frame_size`/`max_message_size` = `None`); the
+  data WebPilot keeps is still bounded downstream (DOM/option caps, the 4096-char
+  monitor clip, the 10 MB fetch ceiling). The same cap also turned a large `eval`
+  return or a 200k-element DOM capture into a (recoverable) `ConnectionLost`; both
+  now succeed.
+- **A long-lived launcher (the MCP server) reaps the Chrome it spawned.** A
+  `std::mem::forget` on the `Child` never `wait`s it, so a crashed-and-relaunched
+  Chrome would accrete zombies under a parent that outlives it. A targeted,
+  non-blocking `waitpid(WNOHANG)` task reaps it on exit — on Chrome's PID only, so
+  it can't race the `std::process` `ps`/`which` waits elsewhere (the reason the
+  tokio `process` feature, with its global SIGCHLD reaper, is deliberately not
+  used). A short-lived CLI exits before it matters; Chrome reparents to init.
+- **The NM host bounds its response write.** A peer that stopped reading (a CLI
+  killed mid-read) could park the per-connection task on the socket forever,
+  holding its channel sender; the write now shares the request timeout via a
+  single `write_response` helper and closes the connection on expiry.
+- **`eval`'s result serialization `expect`s instead of falling back to `"null"`**
+  — a `serde_json::Value` always serializes, so the silent fallback masked an
+  impossible failure (the same rule the v0.4.239 pass applied, at the one site it
+  missed).
+
+### Changed
+
+- The `tab new` unreachable-URL e2e binds port 0 and drops the listener for a
+  guaranteed-closed port, instead of a hardcoded ephemeral port a concurrent
+  process could transiently bind (which flaked the assertion).
+
 ## [0.4.241] - 2026-06-14
 
 ### Changed
