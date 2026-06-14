@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `status` reports a Native Messaging manifest with a non-absolute `path` as
+  malformed — Chrome requires an absolute host path on macOS/Linux, so a relative
+  path that happens to be launchable from the working directory would never
+  actually launch.
+
+### Documentation
+
+- README command-reference table now lists `record` and `profile`; the
+  load-unpacked step is browser-neutral.
+- Skill: the `--capture` success path returns the destination snapshot directly
+  (there is no `success` field); `device reset` returns to the default headless
+  viewport (rendered ~1280×577, distinct from the 1280×720 launch window).
+
 ## [0.6.2] - 2026-06-14
 
 ### Fixed

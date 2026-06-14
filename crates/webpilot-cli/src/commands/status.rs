@@ -154,8 +154,9 @@ fn diagnose(error: &IpcError) -> CommandOutput {
 
 enum ManifestState {
     NotFound,
-    /// Unparseable JSON, or valid JSON whose required host fields (`name` /
-    /// `type` / `path`) are missing or wrong — either way it cannot launch.
+    /// Unparseable JSON, or valid JSON whose required host fields are missing or
+    /// wrong — a bad `name`/`type`, or a missing or non-absolute `path`. Either
+    /// way Chrome can never launch the host.
     Malformed,
     BinaryMissing(String),
     /// A manifest exists and is well-formed, but authorises a different extension
@@ -213,11 +214,16 @@ fn evaluate_manifest(path: &std::path::Path) -> Option<ManifestState> {
     {
         return Some(ManifestState::Malformed);
     }
-    // The binary to launch must be named and actually launchable.
+    // The binary to launch must be named, absolute (Chrome requires an absolute
+    // host path on macOS/Linux — a relative one never launches), and launchable.
     let Some(bin) = field("path") else {
         return Some(ManifestState::Malformed);
     };
-    if !is_launchable(std::path::Path::new(bin)) {
+    let bin_path = std::path::Path::new(bin);
+    if !bin_path.is_absolute() {
+        return Some(ManifestState::Malformed);
+    }
+    if !is_launchable(bin_path) {
         return Some(ManifestState::BinaryMissing(bin.to_owned()));
     }
     // And it must authorise this build's own extension id, or the loaded WebPilot
@@ -360,6 +366,14 @@ mod tests {
                 "nopath.json",
                 format!(
                     r#"{{"name":"{name}","type":"stdio","allowed_origins":["chrome-extension://{id}/"]}}"#
+                ),
+            ),
+            (
+                // Relative path — Chrome requires an absolute host path on
+                // macOS/Linux, so a launchable-from-cwd relative path is malformed.
+                "relpath.json",
+                format!(
+                    r#"{{"name":"{name}","type":"stdio","path":"relative/webpilot","allowed_origins":["chrome-extension://{id}/"]}}"#
                 ),
             ),
         ] {

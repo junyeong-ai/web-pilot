@@ -121,7 +121,7 @@ webpilot action upload N "/abs/path/file.pdf"      # works in both modes
 webpilot action click N --capture                  # auto-capture DOM after success
 ```
 
-Action responses include `url_changed` if navigation happened and `new_tab` if a `target="_blank"` opened (it is auto-switched to; `--capture` then snapshots the tab you're now on). If the `--capture` snapshot itself fails, the response carries `capture_error` while `success` stays true — the action's side effect already ran, so **do not retry the action**; just run `capture --include dom`.
+Action responses include `url_changed` if navigation happened and `new_tab` if a `target="_blank"` opened (it is auto-switched to; `--capture` then snapshots the tab you're now on). A successful `--capture` returns the destination DOM snapshot directly; if the snapshot itself fails, the response carries a `capture_error` field instead — the action's side effect already ran, so **do not retry the action**; just run `capture --include dom`.
 
 Javascript dialogs are **auto-answered** so they never block automation:
 `alert` is dismissed, `confirm` answers **true**, `prompt` returns its
@@ -256,7 +256,7 @@ webpilot device preset iphone-15        # iphone-15-pro pixel-8 ipad-pro galaxy-
 webpilot device set --width 800 --height 600 --scale 1.0
 webpilot device set --width 800 --height 600 --mobile         # add --mobile flag (no value)
 webpilot device set ... --user-agent "MyUA"
-webpilot device reset                                          # back to the launch viewport (1280×720 default)
+webpilot device reset                                          # clear emulation — back to the default headless viewport
 ```
 
 ## Multi-agent contexts (headless only)
