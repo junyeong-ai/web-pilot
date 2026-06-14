@@ -1341,14 +1341,18 @@
           return { success: true };
         }
 
-        case "back": history.back(); return { success: true };
-        case "forward": history.forward(); return { success: true };
-        case "reload": location.reload(); return { success: true };
-
-        // navigate / upload / drag / hover / key_press are dispatched via CDP
-        // (headless: Rust; browser: the service worker) for native input
-        // fidelity, never through the bridge. If one arrives here it is a
-        // routing mismatch.
+        // back / forward / reload / navigate / upload / drag / hover / key_press
+        // are dispatched via CDP (headless: Rust; browser: the service worker) —
+        // history and navigation for SETTLE fidelity (the driver waits for the
+        // new document to commit and parse), the rest for native INPUT fidelity —
+        // never through the bridge. If one arrives here it is a routing mismatch:
+        // fail loudly rather than half-perform it. A bridge `history.back()` /
+        // `location.reload()` would return success the instant it fired, skipping
+        // the driver's navigation settle — a silent unsettled action, the very
+        // thing the uniform "routing mismatch is an error" guard prevents.
+        case "back":
+        case "forward":
+        case "reload":
         case "navigate":
         case "upload":
         case "drag":

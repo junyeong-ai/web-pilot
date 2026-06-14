@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.22] - 2026-06-15
+
+### Fixed
+
+- **Headless `action back` / `forward` no longer falsely reports
+  `NavigationFailed` for a same-URL or same-document history hop** when its
+  navigation event was dropped. A busy page's event burst can overflow the CDP
+  event ring and evict the very `Page.frameNavigated` /
+  `Page.navigatedWithinDocument` the settle awaits; the wait then can't tell that
+  from a genuine no-op, and the URL-moved fallback misses a hop whose URL is
+  unchanged (a `pushState` entry, a same-URL back). The traversal is now
+  confirmed against the navigation history's **current index** — the definitive
+  position signal, which moves iff a real back/forward landed (whatever the hop's
+  document or URL) and survives a dropped event. A genuine no-op (no index move)
+  still surfaces the typed `NavigationFailed`.
+
+### Changed
+
+- **The content bridge's `back` / `forward` / `reload` cases now return the same
+  "dispatched via CDP, not bridge" routing-mismatch error** as the other
+  CDP-dispatched action kinds (`navigate` / `upload` / `drag` / `hover` /
+  `key_press`), instead of silently performing the action. These cases are
+  unreachable (both drivers handle history and reload before the bridge
+  fall-through), but a bridge `history.back()` / `location.reload()` would have
+  returned success the instant it fired, skipping the driver's navigation
+  settle — so the uniform "a routing mismatch is a loud error, never a silent
+  unsettled half-action" invariant now holds for every CDP-dispatched kind.
+
 ## [0.6.21] - 2026-06-15
 
 ### Fixed

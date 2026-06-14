@@ -914,6 +914,12 @@ impl LocalTransport {
             HistoryNav::Forward => "history.forward()",
         };
         let before = self.bound_target_url().await;
+        // The history position BEFORE the traversal — compared to the position
+        // after the wait to tell a real hop (the index moved) from a genuine
+        // no-op, even when the navigation event was dropped under event-ring lag
+        // or the URL never changed (a same-URL / same-document entry). See the
+        // settle fallback below.
+        let before_index = self.nav_history_index().await;
         // Subscribe BEFORE issuing the traversal so the outcome events are
         // buffered for both the traversal check and `await_document_ready` — no
         // event can fire between the evaluate and a later subscribe and be lost,
@@ -948,13 +954,23 @@ impl LocalTransport {
                 },
             )
             .await;
-        // A burst that overflowed the event buffer could have dropped the very
-        // navigation event mid-wait; before declaring no history entry, confirm
-        // the negative against the observable outcome — the main frame's URL
-        // moved — so a dropped event never fabricates a false `NavigationFailed`.
+        // The awaited event can be lost two ways before the deadline: a busy
+        // page's event burst can overflow the broadcast ring and DROP it
+        // (`wait_on_receiver` can't tell that from genuine absence), or a
+        // same-URL/same-document hop simply never moves the URL. Before declaring
+        // "no history entry", confirm the negative against the navigation
+        // history's CURRENT INDEX — the definitive position signal, which moves
+        // iff a real traversal landed (whatever the hop's document or URL) and
+        // survives a dropped event. Only if the index is unreadable in either
+        // sample do we fall back to the weaker "the URL moved" heuristic.
         if !traversed {
-            let after = self.bound_target_url().await;
-            traversed = !after.is_empty() && after != before;
+            traversed = match (before_index, self.nav_history_index().await) {
+                (Some(b), Some(a)) => a != b,
+                _ => {
+                    let after = self.bound_target_url().await;
+                    !after.is_empty() && after != before
+                }
+            };
         }
         if !traversed {
             return Err(WebPilotError::NavigationFailed {
@@ -972,6 +988,23 @@ impl LocalTransport {
         // a same-document/bfcache traversal re-arms to an idempotent no-op.
         self.settle_new_document().await;
         Ok(())
+    }
+
+    /// The current entry's index in the page's navigation history, or `None` if
+    /// it can't be read. The definitive position signal for a history traversal:
+    /// it moves iff a real back/forward landed, regardless of the document's URL
+    /// — so it catches a same-URL / same-document hop (a `pushState` entry whose
+    /// URL is unchanged) that a URL compare misses, and it survives the
+    /// navigation event being evicted from the broadcast ring under a busy page's
+    /// event burst. Best-effort: an unreadable history is `None`, and the caller
+    /// falls back to the weaker URL-moved check.
+    async fn nav_history_index(&self) -> Option<i64> {
+        self.page
+            .send("Page.getNavigationHistory", None)
+            .await
+            .ok()?
+            .get("currentIndex")
+            .and_then(Value::as_i64)
     }
 
     async fn do_drag(&self, source: u32, target: u32, steps: u32) -> Result<()> {
