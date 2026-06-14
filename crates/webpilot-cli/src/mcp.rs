@@ -539,12 +539,12 @@ fn tool_specs() -> Value {
         {
             "name": "browser_snapshot",
             "description": "Re-capture the current page's interactive-element snapshot (the [N]-indexed list used to address elements).",
-            "inputSchema": { "type": "object", "properties": {} },
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
         },
         {
             "name": "browser_screenshot",
             "description": "Capture a screenshot of the current page; returns the image and its saved path.",
-            "inputSchema": { "type": "object", "properties": {} },
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
         },
         {
             "name": "browser_click",
@@ -719,6 +719,30 @@ mod tests {
             "browser_select",
         ] {
             let tool = arr.iter().find(|t| t["name"] == name).unwrap();
+            assert_eq!(
+                tool["inputSchema"]["additionalProperties"],
+                json!(false),
+                "{name} schema must forbid unknown properties"
+            );
+        }
+    }
+
+    #[test]
+    fn no_input_tool_schemas_forbid_unknown_properties() {
+        // A tool that takes NO arguments must also advertise `additionalProperties:
+        // false`. Its handler ignores `arguments` entirely, so the schema is the
+        // only contract: without this, a client that guesses at an unsupported
+        // option (a `full_page` on `browser_screenshot`) has it silently dropped
+        // and gets a different result than it asked for, with no error.
+        let specs = tool_specs();
+        let arr = specs.as_array().unwrap();
+        for name in ["browser_snapshot", "browser_screenshot"] {
+            let tool = arr.iter().find(|t| t["name"] == name).unwrap();
+            assert_eq!(
+                tool["inputSchema"]["properties"],
+                json!({}),
+                "{name} takes no arguments"
+            );
             assert_eq!(
                 tool["inputSchema"]["additionalProperties"],
                 json!(false),

@@ -156,7 +156,16 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
             )
             .await?;
             // Drop the persisted emulation so a later `open` doesn't re-apply it.
-            clear_persisted_device(ctx.as_deref());
+            // The live overrides are already cleared above; if the persisted file
+            // can't be removed, say so loudly — leaving it would silently re-apply
+            // the device on the next session, contradicting the reset.
+            clear_persisted_device(ctx.as_deref()).map_err(|e| {
+                webpilot::WebPilotError::Other {
+                    detail: format!(
+                        "live emulation cleared, but removing the persisted device failed (it would re-apply on the next session): {e}"
+                    ),
+                }
+            })?;
             Ok(CommandOutput::Ok("Device emulation cleared".into()))
         }
     }

@@ -1157,39 +1157,68 @@ impl DeviceState {
     /// all set unconditionally, so a `device set` fully defines the device and
     /// never leaves a prior override's stale remnant behind.
     pub(crate) async fn apply(&self, page: &CdpClient) -> Result<()> {
-        page.send(
-            "Emulation.setDeviceMetricsOverride",
-            Some(json!({
-                "width": self.width,
-                "height": self.height,
-                "deviceScaleFactor": self.scale,
-                "mobile": self.mobile,
-            })),
-        )
-        .await?;
-        // Touch is a separate override from the metrics `mobile` flag: without it
-        // a mobile preset still reports `navigator.maxTouchPoints === 0`, so a
-        // page's touch detection serves the desktop layout. Match touch to the
-        // device — enabled (multi-touch) for mobile, off for desktop.
-        page.send(
-            "Emulation.setTouchEmulationEnabled",
-            Some(json!({
-                "enabled": self.mobile,
-                "maxTouchPoints": 5,
-            })),
-        )
-        .await?;
-        // Always set the UA override, like the metrics and touch above: a
-        // `device set` defines the WHOLE device, so an absent `--user-agent` means
-        // the default UA and must CLEAR any prior override (`""` clears it, the
-        // same value `device reset` sends) — not silently leave a stale one. Going
-        // from a UA-bearing preset back to one without it would otherwise keep the
-        // old UA active, contradicting the new device.
-        page.send(
-            "Emulation.setUserAgentOverride",
-            Some(json!({"userAgent": self.user_agent.as_deref().unwrap_or("")})),
-        )
-        .await?;
+        let applied: Result<()> = async {
+            page.send(
+                "Emulation.setDeviceMetricsOverride",
+                Some(json!({
+                    "width": self.width,
+                    "height": self.height,
+                    "deviceScaleFactor": self.scale,
+                    "mobile": self.mobile,
+                })),
+            )
+            .await?;
+            // Touch is a separate override from the metrics `mobile` flag: without
+            // it a mobile preset still reports `navigator.maxTouchPoints === 0`, so
+            // a page's touch detection serves the desktop layout. Match touch to
+            // the device — enabled (multi-touch) for mobile, off for desktop.
+            page.send(
+                "Emulation.setTouchEmulationEnabled",
+                Some(json!({
+                    "enabled": self.mobile,
+                    "maxTouchPoints": 5,
+                })),
+            )
+            .await?;
+            // Always set the UA override, like the metrics and touch above: a
+            // `device set` defines the WHOLE device, so an absent `--user-agent`
+            // means the default UA and must CLEAR any prior override (`""` clears
+            // it, the same value `device reset` sends) — not silently leave a stale
+            // one. Going from a UA-bearing preset back to one without it would
+            // otherwise keep the old UA active, contradicting the new device.
+            page.send(
+                "Emulation.setUserAgentOverride",
+                Some(json!({"userAgent": self.user_agent.as_deref().unwrap_or("")})),
+            )
+            .await?;
+            Ok(())
+        }
+        .await;
+        // The three overrides are not a CDP transaction: if the 2nd or 3rd send
+        // fails, the earlier one is already LIVE in Chrome, yet the caller errors
+        // and persists nothing — so a later `open` would believe no device is set
+        // while Chrome keeps emulating a half-applied one. Make `apply`
+        // all-or-nothing: on any failure, roll every override back to default
+        // before surfacing the error. The rollback is best-effort (a clear fails
+        // only when the session is already dead — itself the default state).
+        if let Err(e) = applied {
+            let _ = page
+                .send("Emulation.clearDeviceMetricsOverride", None)
+                .await;
+            let _ = page
+                .send(
+                    "Emulation.setTouchEmulationEnabled",
+                    Some(json!({"enabled": false})),
+                )
+                .await;
+            let _ = page
+                .send(
+                    "Emulation.setUserAgentOverride",
+                    Some(json!({"userAgent": ""})),
+                )
+                .await;
+            return Err(e);
+        }
         Ok(())
     }
 }
@@ -1212,8 +1241,16 @@ pub(crate) fn write_persisted_device(
     dirs::atomic_write(&device_state_file(browser_context_id), s.as_bytes())
 }
 
-pub(crate) fn clear_persisted_device(browser_context_id: Option<&str>) {
-    let _ = std::fs::remove_file(device_state_file(browser_context_id));
+pub(crate) fn clear_persisted_device(browser_context_id: Option<&str>) -> std::io::Result<()> {
+    // A removed file and an already-absent one both mean "no device persisted" —
+    // success. Any OTHER error (a permission/IO fault) must surface, or
+    // `device reset` would report success while a later `open` re-reads and
+    // re-applies the very device the user believed they had cleared.
+    match std::fs::remove_file(device_state_file(browser_context_id)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 // ── Armed-monitor persistence ─────────────────────────────────────────────
@@ -1661,7 +1698,11 @@ pub(crate) fn clear_context_state(browser_context_id: &str) {
     clear_persisted_active_frame(Some(browser_context_id));
     clear_persisted_active_tab(Some(browser_context_id));
     clear_persisted_monitors(Some(browser_context_id));
-    clear_persisted_device(Some(browser_context_id));
+    // Best-effort here: the whole context is being disposed, so a left-behind
+    // device file is reclaimed with the rest of its runtime dir. `device reset`
+    // (the other caller) DOES surface this error, because there the file's
+    // survival would silently re-apply the device on the next session.
+    let _ = clear_persisted_device(Some(browser_context_id));
 }
 
 #[cfg(test)]

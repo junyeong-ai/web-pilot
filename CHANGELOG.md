@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.20] - 2026-06-15
+
+### Fixed
+
+- **Browser mode: the NM host now forwards a freshly-built command envelope**
+  instead of the caller's raw JSON mutated in place. It re-serialized
+  `command` (stripping unmodeled fields INSIDE it) but preserved arbitrary
+  top-level SIBLING fields — so a non-CLI socket writer could attach
+  `result: { type: "Config" }`, which the service worker applies and then
+  early-returns on, dropping the gated command (the CLI hangs out its full
+  response timeout) while adopting attacker-chosen config. The host now emits
+  only the three protocol-defined fields (`id` / `command` / `monitor_policy`),
+  discarding every other caller field by construction — completing the
+  "forward only what policy validated" intent the command re-serialization began.
+- **Headless `device set` / `device preset` is now all-or-nothing.** The three
+  CDP overrides (metrics → touch → user agent) are not a transaction: a failure
+  on the 2nd or 3rd left the earlier one live in Chrome while the caller errored
+  and persisted nothing — so a later session believed no device was set while
+  Chrome kept emulating a half-applied one. On any failure `apply` now rolls
+  every override back to default before surfacing the error.
+- **Headless `device reset` now reports a failure to remove the persisted device
+  file** instead of swallowing it. A silent failure left the file in place, so
+  the next `open` re-applied the device the user had just reset. (An
+  already-absent file is still success.)
+- **MCP `browser_screenshot` / `browser_snapshot` now reject unknown arguments.**
+  Their schemas advertised no input but omitted `additionalProperties: false`, so
+  a client guessing at an unsupported option (e.g. `full_page` on a screenshot)
+  had it silently dropped and got a different result than it asked for. The
+  schema now forbids unknown properties, matching the action tools.
+- **Headless `record --dom` no longer leaves an orphaned screenshot** when a
+  frame's DOM capture fails. Each frame now captures both the screenshot and the
+  DOM before writing either file, so a DOM failure aborts the frame cleanly
+  rather than leaving a `.png` with no matching `.dom.json`.
+
 ## [0.6.19] - 2026-06-15
 
 ### Fixed

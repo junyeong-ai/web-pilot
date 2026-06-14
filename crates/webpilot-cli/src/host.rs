@@ -368,7 +368,7 @@ async fn handle_one_cli_request(
         )
         .await;
     }
-    let mut request: serde_json::Value = serde_json::from_str(line.trim())?;
+    let request: serde_json::Value = serde_json::from_str(line.trim())?;
 
     let cli_id = request.get("id").cloned();
 
@@ -421,29 +421,34 @@ async fn handle_one_cli_request(
         Ok(command) => command,
         Err(e) => return reply_error(&mut writer, cli_id, e).await,
     };
-    // Forward the re-serialized parsed command, not the raw wire value. For
-    // legitimate CLI traffic this is identical (a `Command` round-trips), but it
-    // strips any unmodeled field a direct socket writer might have appended to
-    // steer the extension past what policy validated.
-    request["command"] = serde_json::to_value(&command).expect("Command serializes (static shape)");
-
-    // The service worker re-arms MAIN-world console/network hooks after every
-    // navigation, but never reads the policy store (the host is the sole sink).
-    // Carry the current `eval`-gate verdicts so its re-arm honours a deny that
-    // landed after the monitor was started — headless `reinstall_monitors`
-    // re-checks the very same gate before re-injecting, so this keeps the enforce
-    // boundary identical in both modes rather than leaving browser mode to re-arm
-    // a denied monitor across a navigation.
-    request["monitor_policy"] = serde_json::json!({
-        "console": crate::policy::enforce(&webpilot::protocol::Command::ConsoleStart).is_ok(),
-        "network": crate::policy::enforce(&webpilot::protocol::Command::NetworkStart).is_ok(),
-    });
-
-    // The CLI's own id only correlates this one socket's request/response, so we
-    // restore it on the way back; over the multiplexed NM channel we use a
-    // host-unique id that can't clash with another concurrent CLI process.
+    // Forward a FRESHLY BUILT envelope — never the caller's JSON mutated in
+    // place. Re-serializing `command` strips unmodeled fields INSIDE it, but a
+    // direct socket writer could also append a top-level SIBLING the extension
+    // acts on — notably `result: { type: "Config" }`, which the service worker
+    // applies and then EARLY-RETURNS on (`host.js`), dropping this command (the
+    // CLI then hangs out its whole response timeout) while adopting an
+    // attacker-chosen config. Emitting only the three protocol-defined fields
+    // discards every such field by construction, completing the "forward only
+    // what policy validated" intent the command re-serialization began.
     let host_id = ids.fetch_add(1, Ordering::Relaxed);
-    request["id"] = host_id.into();
+    let request = serde_json::json!({
+        // A host-unique id (not the CLI's, which only correlates one socket) so it
+        // can't clash with another concurrent CLI process over the multiplexed NM
+        // channel; `cli_id` is restored on the response's way back.
+        "id": host_id,
+        // The re-serialized parsed command — the validated, permitted shape, with
+        // any field the strict `Command` types don't model already stripped.
+        "command": serde_json::to_value(&command).expect("Command serializes (static shape)"),
+        // The service worker re-arms MAIN-world console/network hooks after every
+        // navigation but never reads the policy store (the host is the sole sink);
+        // carry the current `eval`-gate verdicts so its re-arm honours a deny that
+        // landed after the monitor started — keeping the enforce boundary identical
+        // to headless `reinstall_monitors`, which re-checks the very same gate.
+        "monitor_policy": {
+            "console": crate::policy::enforce(&webpilot::protocol::Command::ConsoleStart).is_ok(),
+            "network": crate::policy::enforce(&webpilot::protocol::Command::NetworkStart).is_ok(),
+        },
+    });
 
     // Reject a command too large for the Native Messaging frame BEFORE
     // enqueueing it: the writer would otherwise drop the oversized message and

@@ -122,13 +122,14 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
     for i in 0..frame_count {
         interval.tick().await;
 
+        // Capture EVERYTHING this frame needs BEFORE writing any file, so a DOM
+        // capture that fails (a `--dom` hard error) can't leave an orphaned
+        // screenshot with no matching `.dom.json`. The frame is committed
+        // all-or-nothing.
         let b64 = local.page().screenshot().await?;
         let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)?;
-        let path = dir.join(format!("frame_{ts}_{i:03}.png"));
-        std::fs::write(&path, &bytes)?;
-        frames.push(path.to_string_lossy().into_owned());
 
-        if args.dom {
+        let dom_json = if args.dom {
             use webpilot::capture::{CaptureField, CaptureOpts};
             use webpilot::protocol::{Command, ResponseData};
             let r = local
@@ -145,11 +146,7 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
                 ResponseData::Capture {
                     dom: Some(snapshot),
                     ..
-                } => {
-                    let dom_path = dir.join(format!("frame_{ts}_{i:03}.dom.json"));
-                    std::fs::write(&dom_path, serde_json::to_string(&snapshot)?)?;
-                    dom_files.push(dom_path.to_string_lossy().into_owned());
-                }
+                } => Some(serde_json::to_string(&snapshot)?),
                 _ => {
                     return Err(webpilot::WebPilotError::Other {
                         detail: format!("record: frame {i} produced no DOM snapshot"),
@@ -157,6 +154,18 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
                     .into());
                 }
             }
+        } else {
+            None
+        };
+
+        // Both captures succeeded — commit the frame's files together.
+        let path = dir.join(format!("frame_{ts}_{i:03}.png"));
+        std::fs::write(&path, &bytes)?;
+        frames.push(path.to_string_lossy().into_owned());
+        if let Some(dom) = dom_json {
+            let dom_path = dir.join(format!("frame_{ts}_{i:03}.dom.json"));
+            std::fs::write(&dom_path, dom)?;
+            dom_files.push(dom_path.to_string_lossy().into_owned());
         }
 
         eprint!("\rFrame {}/{}", i + 1, frame_count);
