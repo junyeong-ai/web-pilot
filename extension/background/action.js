@@ -44,11 +44,13 @@ async function handleAction(command) {
     await installDialogOverride(tab.id, { allFrames: true });
   }
 
-  // Viewport-coordinate / main-document actions cannot target an iframe: their
-  // CDP path uses page-level coordinates or a main-document node lookup. Reject
-  // inside a switched frame, matching the headless `require_main_frame` guard,
-  // so behaviour is identical across modes.
-  if (activeFrameId !== 0 && (action.kind === "hover" || action.kind === "drag" || action.kind === "upload")) {
+  // Viewport-coordinate actions (`hover`, `drag`) cannot target an iframe: their
+  // CDP path uses page-level coordinates, so inside a switched frame they would
+  // act on the wrong position. Reject them, matching the headless
+  // `require_main_frame` guard. (`upload` is NOT gated — it resolves in the active
+  // frame's content-script world and sets the file on a frame-independent CDP
+  // objectId, so it works inside a switched iframe; headless agrees.)
+  if (activeFrameId !== 0 && (action.kind === "hover" || action.kind === "drag")) {
     return {
       type: "Action",
       success: false,

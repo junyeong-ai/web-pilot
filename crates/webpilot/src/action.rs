@@ -39,6 +39,10 @@ pub enum Action {
 
     /// Press a key (with optional modifiers).
     KeyPress {
+        // A key name can legitimately be a single `-` (the minus key) or another
+        // hyphen-led token — accept it as the value, not a flag, exactly as
+        // `type`/`select` accept hyphen-led text.
+        #[arg(allow_hyphen_values = true)]
         key: String,
         #[command(flatten)]
         #[serde(default)]

@@ -1490,6 +1490,28 @@ fn headless_behavioral_flow() {
         "click inside the iframe must resolve via the subframe bridge: {}",
         stdout(&frame_click)
     );
+    // 2h-upload. Upload is NOT a viewport-coordinate action: it resolves the index
+    //     in the ACTIVE frame's bridge world and sets the file on a frame-
+    //     independent CDP objectId, so it works on a file input INSIDE a switched
+    //     iframe and is deliberately not gated by require_main_frame. Prove it
+    //     lands on the iframe's own #framefile (`src` from the main-frame upload
+    //     test above is still in scope).
+    let frame_file_idx = index_of(&frame_cap, "framefile");
+    let frame_upload = fx.run(&["action", "upload", &frame_file_idx, src]);
+    assert_eq!(
+        code(&frame_upload),
+        0,
+        "upload to a file input inside a switched iframe must succeed (not gated): {}",
+        stdout(&frame_upload)
+    );
+    let ff_count = fx.run(&["eval", "document.getElementById('framefile').files.length"]);
+    let ffc: serde_json::Value = serde_json::from_str(&stdout(&ff_count)).expect("eval json");
+    assert_eq!(
+        ffc["result"].as_str(),
+        Some("1"),
+        "upload inside an iframe must place one file on the iframe's own #framefile: {}",
+        stdout(&ff_count)
+    );
     // 2h. While scoped to a frame, `--annotate` must fail loud: overlay
     //     coordinates are page-viewport relative, meaningful only on the main
     //     frame — drawing them here would misalign boxes onto a viewport

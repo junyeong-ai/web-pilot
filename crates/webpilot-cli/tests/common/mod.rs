@@ -82,6 +82,7 @@ pub const FRAME: &str = r##"<!doctype html><html><head><title>frame</title></hea
 <a id="framenav" href="/framed2">go framed2</a>
 <a id="topnav" target="_top" href="/second">go top</a>
 <a id="selftarget" target="innerfr" href="/framed2">self by name</a>
+<input id="framefile" type="file">
 <iframe src="/nested"></iframe></body></html>"##;
 
 /// An HTTP iframe nested INSIDE `/frame`. Switching into `/frame` and capturing

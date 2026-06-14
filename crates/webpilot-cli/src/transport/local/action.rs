@@ -197,7 +197,12 @@ impl LocalTransport {
                 return Ok(self.settled_action_result(capture, None).await);
             }
             Action::Upload { index, path } => {
-                self.require_main_frame("upload").await?;
+                // No `require_main_frame`: upload resolves the index in the ACTIVE
+                // frame's bridge world and sets the file on a frame-independent CDP
+                // objectId (`DOM.setFileInputFiles`), with no viewport coordinate
+                // or main-document lookup — so it works on a file input inside a
+                // switched iframe, and gating it would be a constraint the
+                // mechanism doesn't need.
                 let path = path.clone();
                 self.do_upload(*index, &path).await?;
                 return Ok(self.settled_action_result(capture, None).await);
@@ -389,10 +394,11 @@ impl LocalTransport {
         }
     }
 
-    /// Typed guard for actions whose CDP path (page-viewport coordinates or
-    /// main-document node lookup) cannot target an iframe. Inside a switched
-    /// frame these would silently act on the wrong position — fail loudly
-    /// instead.
+    /// Typed guard for actions whose CDP path uses page-viewport coordinates
+    /// (`drag`, `hover`) and so cannot target an iframe: inside a switched frame
+    /// they would silently act on the wrong position — fail loudly instead.
+    /// (Index-resolved actions like `click`/`upload` run in the active frame's
+    /// own bridge world, so they are NOT gated here.)
     pub(super) async fn require_main_frame(&self, kind: &str) -> Result<()> {
         if self.active_frame_id.lock().await.is_some() {
             return Err(WebPilotError::InvalidArgument {

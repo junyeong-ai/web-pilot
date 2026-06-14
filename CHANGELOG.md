@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.15] - 2026-06-14
+
+### Fixed
+
+- `action key-press <key>` accepts a hyphen-led key name (e.g. `-`, the minus
+  key), matching `type`/`select` which already accept hyphen-led values — it was
+  rejected as an unknown flag before.
+- `action upload` now works on a file input inside a switched iframe. The
+  `require_main_frame` constraint that refused it was unnecessary — upload
+  resolves the index in the active frame's own bridge world and sets the file on
+  a frame-independent CDP objectId (`DOM.setFileInputFiles`), with no viewport
+  coordinate or main-document lookup — and the guard's rationale was false for
+  upload (it holds for `drag`/`hover`, which stay gated). Lifted in both modes,
+  with an e2e test uploading to a file input inside a switched iframe.
+
 ## [0.6.14] - 2026-06-14
 
 ### Fixed
