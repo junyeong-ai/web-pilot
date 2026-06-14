@@ -424,11 +424,14 @@ async function handleConsoleRead(since) {
             .map((e) => ({
               level: e.level,
               message: typeof e.message === "string" ? e.message : "",
-              // Coerce a non-numeric timestamp to 0 rather than forward a string
-              // the CLI can't deserialize into `u64` — headless does the same via
-              // `as_u64().unwrap_or(0)`, so a tampered entry yields 0, not a
-              // malformed-reply error.
-              timestamp: typeof e.timestamp === "number" ? e.timestamp : 0,
+              // Coerce to 0 anything the CLI's `u64` can't carry — not just a
+              // non-number but a NON-INTEGER or negative one (a page-reachable
+              // buffer can hold `1.5` / `-1` / `NaN`). Headless does exactly this
+              // via `as_u64().unwrap_or(0)`, which yields `None` (→ 0) for a
+              // fractional/negative value; a bare `typeof === "number"` check
+              // would forward `1.5`, failing the CLI's whole-response decode as a
+              // misleading ConnectionLost where headless keeps the entry.
+              timestamp: Number.isInteger(e.timestamp) && e.timestamp >= 0 ? e.timestamp : 0,
             })),
           // Driven by the eviction flag, not `length >= cap` (headless parity):
           // a buffer at exactly the cap with nothing dropped isn't truncated.
@@ -531,8 +534,15 @@ async function handleNetworkRead(since) {
               typeof e.type === "string" &&
               typeof e.url === "string" &&
               typeof e.method === "string" &&
-              typeof e.duration_ms === "number" &&
-              typeof e.timestamp === "number" &&
+              // `duration_ms` decodes to `f64`: a non-FINITE number (NaN /
+              // ±Infinity) serializes to JSON `null`, which fails that decode and
+              // breaks the whole read — so require finiteness, not bare `number`.
+              Number.isFinite(e.duration_ms) &&
+              // `timestamp` decodes to `u64`: a fractional/negative `number`
+              // (`1.5` / `-1`) passes `typeof` but fails the CLI's whole-response
+              // decode as a misleading ConnectionLost, where headless's per-entry
+              // `from_value().ok()` just drops it. Match that — drop the entry.
+              Number.isInteger(e.timestamp) && e.timestamp >= 0 &&
               (e.status == null ||
                 (Number.isInteger(e.status) && e.status >= 0 && e.status <= 0xffffffff)) &&
               (e.error == null || typeof e.error === "string"),

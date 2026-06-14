@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.18] - 2026-06-15
+
+### Fixed
+
+- **Browser mode: a `console read` / `network read` no longer collapses to a
+  misleading `ConnectionLost`** when a page-reachable MAIN-world monitor buffer
+  holds a tampered `timestamp` or `duration_ms`. The service-worker sanitizers
+  type-checked these with a bare `typeof === "number"`, so a non-integer/negative
+  `timestamp` (`1.5` / `-1`) or non-finite `duration_ms` (`NaN` → JSON `null`)
+  passed the filter but then failed the CLI's whole-response decode into Rust
+  `u64`/`f64` — breaking the entire read, where headless tolerates the identical
+  input. The sanitizers now mirror headless exactly: console coerces a bad
+  `timestamp` to `0` and keeps the entry (`as_u64().unwrap_or(0)`), and network
+  drops only the malformed entry and keeps the rest (per-entry `from_value().ok()`).
+  Monitors are best-effort against a hostile page by design, but a tampered entry
+  must degrade gracefully and consistently across modes, not fake an infra error.
+
 ## [0.6.17] - 2026-06-15
 
 ### Fixed
