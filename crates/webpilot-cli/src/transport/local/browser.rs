@@ -237,9 +237,20 @@ impl LocalTransport {
         // `chrome-error://` page. This is `navigate`'s no-leak contract: a failed
         // load leaves the agent exactly where it started.
         let prev_target = self.target_id.clone();
+
+        // Open the tab BLANK, then drive the requested load through
+        // `navigate_reconnect` — the very path `action navigate` uses.
+        // `Target.createTarget(about:blank)` is instant and always lands a stable
+        // page, so the switch's existence guards never race a refused-URL
+        // error-page transition (the source of an occasional false `TabNotFound`).
+        // The load then reuses `navigate`'s fast, typed failure detection
+        // (`Page.navigate`'s `errorText` → NavigationFailed at once) instead of a
+        // bespoke settle-then-`unreachableUrl` probe that waits the whole
+        // navigation timeout on a refused URL. One load-and-failure path for both
+        // commands, by construction.
         let target_id = self
             .browser
-            .create_target(url, self.browser_context_id.as_deref())
+            .create_target("about:blank", self.browser_context_id.as_deref())
             .await?;
         // A new tab becomes the active one — same UX as `chrome.tabs.create`
         // in browser mode. Rebind through the `tab switch` path so a
@@ -252,54 +263,22 @@ impl LocalTransport {
                 return Ok(other);
             }
         }
-        // Land on a ready page and report its real, post-redirect URL/title —
-        // `tab new` settles like `navigate` does, so the agent's next action
-        // cannot race the new tab's load and the reported URL reflects a redirect
-        // instead of echoing the request. Best-effort: a page that never settles
-        // still returns, carrying whatever URL it reached.
-        let deadline = std::time::Instant::now() + webpilot::settings::timeouts().navigation;
-        super::wait_navigation_settled(&self.page, None, "about:blank", deadline).await;
-        // A load that FAILED (refused connection, DNS) leaves the new tab on
-        // Chrome's error page — CDP marks it: the main frame carries
-        // `unreachableUrl`. Reporting success there is the lie `navigate`
-        // already refuses (NavigationFailed, exit 8); `tab new` is the same
-        // effect under the same policy gate, so it must agree. A tab that
-        // CLOSED during the settle (a self-closing page) is the root-cause
-        // TabNotFound instead.
-        match self.page.send("Page.getFrameTree", None).await {
-            Ok(tree) => {
-                if let Some(unreachable) = tree
-                    .pointer("/frameTree/frame/unreachableUrl")
-                    .and_then(Value::as_str)
-                    .filter(|u| !u.is_empty())
-                {
-                    let url = unreachable.to_string();
-                    // Roll the failed open back: close the dead error tab and
-                    // re-pin the agent's previous tab, so a bad URL is the same
-                    // no-leak NavigationFailed `navigate` produces.
-                    self.rollback_tab_new(&target_id, &prev_target).await;
-                    return Ok(ResponseData::Error {
-                        error: WebPilotError::NavigationFailed {
-                            url,
-                            reason: "the new tab landed on Chrome's error page (unreachable URL)"
-                                .into(),
-                        },
-                    });
-                }
-            }
-            Err(e) => {
-                if let Ok(r) = self.tab_gone_or(e, &target_id).await {
-                    // The new tab vanished during settle; the orphan is already
-                    // gone, but the pin must return to where the agent was.
-                    let _ = self.do_tab_switch(&prev_target, false).await;
-                    return Ok(r);
-                }
-                // The probe itself failed on a live tab — fall through to the
-                // best-effort URL/title reads below, which degrade the same way.
-            }
+        // Load the URL exactly as `navigate` does: a refused/DNS failure is a
+        // typed `NavigationFailed` (fast, via `Page.navigate`'s `errorText`), and a
+        // failed open rolls back to the agent's previous tab — `navigate`'s no-leak
+        // contract, now literally the same code. `navigate_reconnect` settles the
+        // load and re-arms monitors on the new document itself.
+        if let Err(e) = self.navigate_reconnect(url).await {
+            self.rollback_tab_new(&target_id, &prev_target).await;
+            return Err(e);
         }
-        // Re-arm monitors on the settled new document — the early arm in
-        // `do_tab_switch` was skipped (`false`) because this load wipes it.
+        // `navigate_reconnect` re-arms monitors on every path that BUILDS a new
+        // document, but a purely same-document settle (a fragment-only target such
+        // as `about:blank#x`) returns without arming — and the `false` switch above
+        // deferred the arm. Guarantee it here so `do_tab_new`'s postcondition holds
+        // by its own code: the new tab always carries the agent's armed monitors,
+        // whichever settle path the load took. Idempotent — guarded on the install
+        // flag — so the common (new-document) case pays only a no-op probe.
         self.reinstall_monitors().await;
         let url = self
             .eval_in_active("location.href")
@@ -344,7 +323,12 @@ impl LocalTransport {
             )
             .await;
         if prev != orphan {
-            let _ = self.do_tab_switch(prev, false).await;
+            // Restoring the agent's previous tab is a plain `tab switch` back onto
+            // an already-loaded page — re-arm its monitors now (`true`), not the
+            // `false` the forward path used for the about-to-load blank tab. This
+            // makes the rollback land the agent exactly where a `tab switch` would,
+            // monitors included, even if `prev` was navigated out-of-band meanwhile.
+            let _ = self.do_tab_switch(prev, true).await;
         }
     }
 

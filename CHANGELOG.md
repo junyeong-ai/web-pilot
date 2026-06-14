@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-06-14
+
+### Fixed
+
+- `tab new <url>` (headless) opens the tab blank and drives the load through the
+  same path `action navigate` uses, so the two share one fast, correct
+  load-and-failure path. A `tab new` to an unreachable URL now fails as a typed
+  `NavigationFailed` in ~0.1s instead of spinning to the full navigation timeout
+  (~17s), and an intermittent false `TabNotFound` — the new-target existence
+  guard racing a refused-URL error-page transition — is gone, because the tab is
+  created at the always-stable `about:blank` before any switch runs. A failed
+  open still rolls back to the agent's previous tab (the no-leak contract), now
+  re-arming that tab's monitors exactly as a plain `tab switch` does. This
+  removes the bespoke settle + `Page.getFrameTree`/`unreachableUrl` probe that
+  `tab new` carried in parallel to `navigate`.
+
 ## [0.6.3] - 2026-06-14
 
 ### Fixed
