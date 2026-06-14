@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.13] - 2026-06-14
+
+### Fixed
+
+- **Browser mode: a `fetch` to a host that accepts the connection but never
+  responds no longer wedges the tab.** `handleFetch` ran its `Runtime.evaluate`
+  (which awaits the page's `fetch()`) with no deadline, so a never-settling
+  request hung inside the per-tab CDP lock forever — blocking every later command
+  on that tab through the serialized queue. The awaiting-promise evaluate is now
+  bounded by the navigation deadline (the same bound `eval` already had, now
+  shared via one helper), returning a typed `Timeout` and freeing the lock —
+  matching headless, which bounds the identical evaluate at the cdp_send timeout.
+- **Browser mode: a screenshot whose tab closed mid-capture now reports
+  `TabNotFound`** (exit 4 → recover via `tab`) instead of a success with an empty
+  `screenshot_error` for a page that no longer exists — matching headless.
+- **Browser mode: an `eval` in a switched frame retries once if the frame's
+  execution context goes stale** between resolution and the evaluate (the frame
+  navigated in that window) — mirroring headless `eval_in_active`. A mid-flight
+  "execution context destroyed" is still not retried, so a non-idempotent
+  expression can't double-fire.
+
 ## [0.6.12] - 2026-06-14
 
 ### Changed

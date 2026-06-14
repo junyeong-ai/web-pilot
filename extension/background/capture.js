@@ -259,8 +259,14 @@ async function handleCapture(command) {
         return r.data;
       });
     } catch (e) {
-      // Screenshot failure degrades explicitly (headless parity): the DOM is
-      // still useful, and the error rides along in `screenshot_error`.
+      // A screenshot that failed because the TAB CLOSED mid-command is tab-gone
+      // truth, not a degradable capture error — reporting "success, no image" for
+      // a page that no longer exists is the lie headless refuses (TabNotFound,
+      // exit 4 → recover via `tab`, capture.rs). A live page whose image pipeline
+      // failed still degrades explicitly through `screenshot_error`.
+      if (!(await chrome.tabs.get(tabId).catch(() => null))) {
+        return topErr(err("TabNotFound", `Tab not found: ${tabId}`, { tab_id: String(tabId) }));
+      }
       result.screenshot_error = e.message;
     }
   }

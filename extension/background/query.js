@@ -113,6 +113,28 @@ async function frameWorldContextId(tid, tabId, frameId, world) {
 // result (a CDP response is always an object, never this symbol).
 const EVAL_DEADLINE_REACHED = Symbol("eval-deadline-reached");
 
+// Run a `Runtime.evaluate` that AWAITS a page promise, bounded by the navigation
+// deadline. A page promise that never settles (a hung `fetch()`, a bare
+// `new Promise(()=>{})`) would otherwise hang inside `withCdp` forever — wedging
+// the per-tab CDP lock and, through the global command queue, every later
+// command. On deadline `withCdp` returns normally, so its `finally` detaches and
+// frees the lock; the abandoned evaluate is cancelled by that detach and its late
+// settle is swallowed here. Headless bounds the identical evaluate via
+// `send_with_timeout(cdp_send)`. Only an awaitPromise evaluate needs this — every
+// other cdpSend settles promptly. Returns the CDP response, or the deadline
+// sentinel.
+async function evaluateAwaitingPromise(tid, params) {
+  const evalCall = cdpSend(tid, "Runtime.evaluate", params);
+  evalCall.catch(() => {});
+  let timer;
+  return Promise.race([
+    evalCall,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(EVAL_DEADLINE_REACHED), navigationTimeoutMs());
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function cdpEval(tid, code, uniqueContextId) {
   // The form probe compiles WITHOUT a context — a parse (expression vs
   // statements) is context-independent, and compileScript takes only the
@@ -124,37 +146,14 @@ async function cdpEval(tid, code, uniqueContextId) {
     persistScript: false,
   });
   const form = compiled.exceptionDetails ? code : `(()=>(${code}))()`;
-  // Bound the awaitPromise evaluate: a page expression resolving to a
-  // never-settling promise (`new Promise(()=>{})`) would otherwise hang inside
-  // `withCdp` forever — wedging the per-tab CDP lock and, through the global
-  // command queue, every later command. Headless bounds the identical evaluate
-  // with `send_with_timeout(cdp_send)` (transport/local/mod.rs); this is the
-  // browser-mode parity. Only THIS call awaits a page promise — the other
-  // cdpSends settle promptly, so they need no bound.
-  const evalCall = cdpSend(tid, "Runtime.evaluate", {
+  const ev = await evaluateAwaitingPromise(tid, {
     expression: form,
     returnByValue: true,
     awaitPromise: true,
     ...(uniqueContextId != null ? { uniqueContextId } : {}),
   });
-  // A settle AFTER the deadline (or after `withCdp` detaches, which rejects the
-  // in-flight command) is harmless — the race has resolved — but must be caught
-  // so it is not an unhandled rejection. The race below still observes the
-  // original promise; this extra handler only swallows a late outcome.
-  evalCall.catch(() => {});
-  let timer;
-  const deadline = navigationTimeoutMs();
-  const ev = await Promise.race([
-    evalCall,
-    new Promise((resolve) => {
-      timer = setTimeout(() => resolve(EVAL_DEADLINE_REACHED), deadline);
-    }),
-  ]).finally(() => clearTimeout(timer));
   if (ev === EVAL_DEADLINE_REACHED) {
-    // The page promise never settled within the window. `withCdp` returns
-    // normally here (not a throw), so its `finally` detaches and frees the lock;
-    // the abandoned `evalCall` is cancelled by that detach and swallowed above.
-    return { success: false, error: timeoutErr("eval", deadline) };
+    return { success: false, error: timeoutErr("eval", navigationTimeoutMs()) };
   }
   if (ev.exceptionDetails) {
     const msg = ev.exceptionDetails.exception?.description || ev.exceptionDetails.text || "JS exception";
@@ -185,9 +184,18 @@ async function handleEval(command) {
   try {
     const r = await withCdp(tab.id, async (tid) => {
       await cdpEnableRuntime(tid);
-      let uniqueContextId;
-      if (activeFrameId !== 0) {
-        uniqueContextId = await frameWorldContextId(tid, tab.id, activeFrameId, "MAIN");
+      // Main world: no switched frame — evaluate against the default context.
+      if (activeFrameId === 0) {
+        return cdpEval(tid, command.code, undefined);
+      }
+      // A switched frame's MAIN-world context id can go stale between resolution
+      // and the evaluate if the frame navigates in that window — the evaluate then
+      // fails with "Cannot find context with specified id" BEFORE running any code.
+      // Re-resolve and retry ONCE (headless `eval_in_active` does the same). A
+      // mid-flight "Execution context was destroyed" is NOT retried: user code may
+      // have run, so re-issuing would double a side effect.
+      for (let attempt = 0; ; attempt++) {
+        const uniqueContextId = await frameWorldContextId(tid, tab.id, activeFrameId, "MAIN");
         if (uniqueContextId == null) {
           return {
             success: false,
@@ -198,8 +206,15 @@ async function handleEval(command) {
             ),
           };
         }
+        try {
+          return await cdpEval(tid, command.code, uniqueContextId);
+        } catch (e) {
+          if (attempt === 0 && /Cannot find context with specified id/i.test(e?.message || "")) {
+            continue;
+          }
+          throw e;
+        }
       }
-      return cdpEval(tid, command.code, uniqueContextId);
     });
     return { type: "Eval", ...r };
   } catch (e) {
@@ -427,9 +442,15 @@ async function handleFetch(command) {
   try {
     const r = await withCdp(tab.id, async (tid) => {
       const code = fetchExpression(command);
-      const ev = await cdpSend(tid, "Runtime.evaluate", {
+      const ev = await evaluateAwaitingPromise(tid, {
         expression: code, awaitPromise: true, returnByValue: true,
       });
+      // A `fetch()` to a host that accepts the connection but never responds
+      // (or a body stream that never ends) would otherwise hang this evaluate
+      // inside `withCdp` forever, wedging the tab's CDP queue. Bounded like
+      // `eval`: the deadline returns a typed Timeout and the detach frees the
+      // lock. Headless bounds the identical evaluate at the cdp_send timeout.
+      if (ev === EVAL_DEADLINE_REACHED) return { __timeout: true };
       // The IIFE catches a rejected fetch itself and returns `{ neterror }`, so
       // a surfacing eval exception here is an UNEXPECTED engine-level failure
       // (not the request failing) — raise it rather than returning `undefined`
@@ -444,6 +465,13 @@ async function handleFetch(command) {
       }
       return ev.result?.value;
     });
+    if (r?.__timeout) {
+      return {
+        type: "FetchResult",
+        success: false,
+        error: timeoutErr("fetch", navigationTimeoutMs()),
+      };
+    }
     // A network-level failure (refused/unresolved host, blocked request, CORS
     // denial) caught inside the IIFE. Surface the browser's opaque reason
     // sanitized — never the raw V8 message-with-stack — and keep it the same
