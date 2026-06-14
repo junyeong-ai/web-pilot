@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-06-14
+
+### Changed
+
+- Moved every dependency to its latest stable release, including two majors —
+  `sha2` 0.10 → 0.11 and `similar` 2 → 3 — both verified behavior-preserving:
+  the derived extension id is byte-identical (the pinned-constant test still
+  passes) and `diff` output (counts, unified hunks, and the no-final-newline
+  marker) is unchanged, now locked by a golden test.
+
 ## [0.6.0] - 2026-06-14
 
 ### Changed

@@ -333,4 +333,54 @@ mod tests {
             _ => panic!("expected Content output"),
         }
     }
+
+    #[test]
+    fn diff_dom_renders_a_unified_diff_with_counts_and_no_final_newline_marker() {
+        // Pins the user-visible diff output against a silent drift on any future
+        // `similar` upgrade. The change is the LAST field (`total_nodes`), so the
+        // hunk's context reaches the final line of the canonical snapshot — which,
+        // because `to_string_pretty` emits no trailing newline, must carry the
+        // "no newline at end of file" marker (the exact edge a major bump regresses).
+        let dir = std::env::temp_dir().join(format!("wp-diff-golden-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.json");
+        let b = dir.join("b.json");
+        std::fs::write(
+            &a,
+            br#"{"elements":[{"index":1,"tag":"button"}],"total_nodes":2}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &b,
+            br#"{"elements":[{"index":1,"tag":"button"}],"total_nodes":3}"#,
+        )
+        .unwrap();
+        let out = diff_dom(&a, &b).expect("diff ok");
+        let _ = std::fs::remove_dir_all(&dir);
+        let json = match out {
+            CommandOutput::Content { json, .. } => json,
+            _ => panic!("expected Content output"),
+        };
+        // Exactly the `total_nodes` line is replaced (1 in, 1 out); the rest of the
+        // pretty-printed object is unchanged context.
+        assert_eq!(json["changed"], true);
+        assert_eq!(json["added"], 1);
+        assert_eq!(json["removed"], 1);
+        assert!(json["unchanged"].as_u64().unwrap() >= 1);
+        let unified = json["diff"].as_str().unwrap();
+        assert!(
+            unified.contains("--- before")
+                && unified.contains("+++ after")
+                && unified.contains("@@"),
+            "unified diff is missing its headers/hunk: {unified}"
+        );
+        assert!(
+            unified.contains("\"total_nodes\": 2") && unified.contains("\"total_nodes\": 3"),
+            "unified diff does not show the changed lines: {unified}"
+        );
+        assert!(
+            unified.contains("\\ No newline at end of file"),
+            "unified diff lost the no-final-newline marker: {unified}"
+        );
+    }
 }
