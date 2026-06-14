@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.241] - 2026-06-14
+
+### Changed
+
+- **The "is this target gone?" check is one `target_absent(target_id)` method**,
+  not three hand-inlined copies. The tab-gone reclassification at the query
+  (`ConnectionLost`/`FrameNotFound` → `TabNotFound`), tab-op, and screenshot sites
+  each repeated the same `get_targets` + "id not in the live list" scan; they now
+  share one helper that fails closed on an unreadable target list (never claim a
+  vanish on an uncertain read). Behavior-identical; the three call sites keep their
+  own error-shaping around it.
+
 ## [0.4.240] - 2026-06-14
 
 The last two architecture-review follow-ups — both make an existing invariant

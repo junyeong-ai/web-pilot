@@ -100,11 +100,7 @@ impl LocalTransport {
     /// present → the original error (a genuinely failed operation). The same
     /// split browser mode's catch arms already make.
     async fn tab_gone_or(&self, e: anyhow::Error, tab_id: &str) -> Result<ResponseData> {
-        if let Ok(targets) = self.browser.get_targets().await
-            && !targets
-                .iter()
-                .any(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(tab_id))
-        {
+        if self.target_absent(tab_id).await {
             return Ok(ResponseData::Error {
                 error: WebPilotError::TabNotFound {
                     tab_id: tab_id.to_string(),

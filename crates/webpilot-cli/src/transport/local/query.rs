@@ -106,10 +106,7 @@ impl LocalTransport {
         if matches!(
             err,
             WebPilotError::ConnectionLost { .. } | WebPilotError::FrameNotFound { .. }
-        ) && let Ok(targets) = self.browser.get_targets().await
-            && !targets.iter().any(|t| {
-                t.get("targetId").and_then(|v| v.as_str()) == Some(self.target_id.as_str())
-            })
+        ) && self.target_absent(self.target_id.as_str()).await
         {
             return WebPilotError::TabNotFound {
                 tab_id: self.target_id.clone(),

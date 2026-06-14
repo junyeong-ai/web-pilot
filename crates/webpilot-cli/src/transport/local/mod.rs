@@ -789,6 +789,22 @@ impl LocalTransport {
         self.reinstall_monitors().await;
     }
 
+    /// Whether `target_id` is absent from the live target list — the tab-gone
+    /// truth a closed page leaves behind. A failed `get_targets` read returns
+    /// `false` (never claim a vanish on an uncertain read), so a caller keeps its
+    /// original error for a still-live tab. The single source for the three
+    /// tab-gone reclassification sites — a query's `ConnectionLost`/`FrameNotFound`,
+    /// a tab op, a screenshot — whose browser-mode twin is `frameVanishedError`'s
+    /// tab-first split.
+    async fn target_absent(&self, target_id: &str) -> bool {
+        matches!(
+            self.browser.get_targets().await,
+            Ok(targets) if !targets.iter().any(|t| {
+                t.get("targetId").and_then(|v| v.as_str()) == Some(target_id)
+            })
+        )
+    }
+
     /// Whether the switched-into frame is still in the tree. `true` when no frame
     /// is active (nothing to lose) or it is still present; `false` only when a
     /// frame was switched and the document that held it is gone — so the caller
