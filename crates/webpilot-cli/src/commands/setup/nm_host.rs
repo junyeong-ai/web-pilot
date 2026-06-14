@@ -48,7 +48,8 @@ pub(crate) fn install(extension_id: Option<String>) -> Result<StepOutcome> {
         return Err(webpilot::WebPilotError::InvalidArgument {
             detail: format!(
                 "invalid extension ID: {ext_id} — expected 32 characters in [a-p], \
-                 found at chrome://extensions with Developer mode enabled"
+                 found at your browser's extensions page (e.g. chrome://extensions) \
+                 with Developer mode enabled"
             ),
         }
         .into());
