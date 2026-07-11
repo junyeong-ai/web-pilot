@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Headless `tab switch` / popup adoption now commit the pin atomically.** The
+  new page is fully primed (bridge world installed, main frame resolved) BEFORE
+  the transport's pin is moved, so a tab that closes mid-switch leaves the
+  current pin untouched instead of retargeting onto a page with no bridge world.
+  Popup adoption depends on this: a failed switch keeps the pin on the opener
+  rather than silently pointing at a half-primed popup. (`prime_page` is shared
+  by `open` and the switch path so the two priming flows cannot drift.)
+- **A CDP session command whose reply and the tab's close land in the same
+  window no longer discards the delivered reply.** The flat-session response
+  wait now polls the reply channel before consulting the session-liveness flag,
+  so a completed command returns its result even if the tab closed an instant
+  later — matching what the per-target socket delivered; the next command still
+  gets the typed tab-gone signal.
+
 ## [0.7.0] - 2026-07-11
 
 ### Added

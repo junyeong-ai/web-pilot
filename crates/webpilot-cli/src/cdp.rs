@@ -352,23 +352,22 @@ impl CdpClient {
             }
         }
 
-        // Await the response, but poll the session-liveness flag between ticks:
+        // Await the response in short ticks so a session detach can end the wait:
         // on the shared connection a detached session (its tab closed) leaves no
         // dedicated socket to drop, so nothing would otherwise wake this wait
-        // until the full deadline. The detach watcher flips the flag; we then
-        // drop our pending entry and surface ConnectionLost — the same typed
-        // outcome the per-target socket's death produced, so tab-gone
-        // reclassification downstream is unchanged. A dead CONNECTION still
-        // resolves `rx` via the reader's pending-drain, handled below.
+        // until the full deadline. The response is polled FIRST each tick; the
+        // detach watcher's flag is consulted only when a tick elapses with no
+        // reply. That ordering matters: if the reply and the session's detach
+        // land in the same window, the delivered response still wins — the wait
+        // never discards a reply already in `rx` in favour of a same-tick detach,
+        // matching what the per-target socket delivered. When a tick truly passes
+        // with nothing, a detached session means the reply is never coming, so we
+        // drop the pending entry and surface ConnectionLost — the same typed
+        // outcome the socket's death produced, so tab-gone reclassification
+        // downstream is unchanged. A dead CONNECTION still resolves `rx` via the
+        // reader's pending-drain, handled below.
         let mut rx = rx;
         let response = loop {
-            if session_alive.is_some_and(|a| !a.load(Ordering::Acquire)) {
-                self.pending.lock().await.remove(&id);
-                return Err(WebPilotError::ConnectionLost {
-                    detail: format!("CDP session detached while awaiting {method}"),
-                }
-                .into());
-            }
             let now = tokio::time::Instant::now();
             if now >= deadline {
                 self.pending.lock().await.remove(&id);
@@ -388,9 +387,15 @@ impl CdpClient {
                     }
                     .into());
                 }
-                // Tick elapsed with no response — loop to re-check liveness and
-                // the deadline.
-                Err(_) => continue,
+                Err(_) => {
+                    if session_alive.is_some_and(|a| !a.load(Ordering::Acquire)) {
+                        self.pending.lock().await.remove(&id);
+                        return Err(WebPilotError::ConnectionLost {
+                            detail: format!("CDP session detached while awaiting {method}"),
+                        }
+                        .into());
+                    }
+                }
             }
         };
 

@@ -73,9 +73,9 @@ pub struct LocalTransport {
     /// on the retargeted tab; tab management and status proceed so the agent can
     /// re-pin. Cleared on the next process (the dead pin was already dropped).
     pub(crate) pin_vanished: Option<String>,
-    /// Top frame id (CDP string). Refreshed on every page swap (`rebind_page_world`),
-    /// so it always names the bound tab's main frame. Resolves the bridge context
-    /// for the main frame when no iframe is switched.
+    /// Top frame id (CDP string). Refreshed on every page swap (`prime_page`, on
+    /// open and tab switch), so it always names the bound tab's main frame.
+    /// Resolves the bridge context for the main frame when no iframe is switched.
     pub(crate) main_frame_id: String,
     /// frame_id (CDP string) → MAIN-world **`uniqueContextId`**, for page
     /// expressions. Populated by the background subscriber from each frame's
@@ -144,20 +144,12 @@ impl LocalTransport {
         let (mut page, browser_context_id, target_id, context_lock, pin_vanished) =
             resolve_target(&browser, context_name).await?;
 
-        let main_frame_id = fetch_main_frame_id(&page).await?;
-        let frame_contexts = Arc::new(Mutex::new(HashMap::new()));
-        let bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
-        let listener =
-            spawn_frame_context_listener(&page, frame_contexts.clone(), bridge_contexts.clone());
-        page.track(listener);
-        // Register the bridge so it auto-loads into its isolated world on every
-        // document (current one included) — the headless equivalent of the
-        // browser content script, with no per-call injection. `attach_to_page`
-        // already enabled Runtime, but its initial `executionContextCreated`
-        // events (and the bridge world's) predate the listener's subscription,
-        // so re-emit them for every existing context.
-        install_bridge_world(&page).await?;
-        reemit_execution_contexts(&page).await;
+        // Prime the page: spawn its context listener, register the bridge world,
+        // resolve the main frame, re-emit contexts. `attach_to_page` already
+        // enabled Runtime, but its initial `executionContextCreated` events (and
+        // the bridge world's) predate the listener's subscription, so the re-emit
+        // inside `prime_page` repopulates the maps for every existing context.
+        let (frame_contexts, bridge_contexts, main_frame_id) = prime_page(&mut page).await?;
 
         // Re-apply device emulation across CLI invocations: a UA override does
         // not survive the prior process's CDP disconnect, so without this the
@@ -504,28 +496,6 @@ impl LocalTransport {
 
     // ── Navigation (with cross-origin renderer swap handling) ────────────
 
-    /// Re-prime the bound page session: re-subscribe the context listener,
-    /// re-register the bridge world, refresh the main frame id (a tab switch
-    /// binds a different tab whose top frame differs), then re-emit existing
-    /// contexts so both maps repopulate — the same priming `open` does, for the
-    /// new session. The bridge install must succeed; a session that silently ran
-    /// without it would answer every bridge call with `FrameNotFound`.
-    pub(super) async fn rebind_page_world(&mut self) -> Result<()> {
-        self.frame_contexts = Arc::new(Mutex::new(HashMap::new()));
-        self.bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
-        let listener = spawn_frame_context_listener(
-            &self.page,
-            self.frame_contexts.clone(),
-            self.bridge_contexts.clone(),
-        );
-        self.page.track(listener);
-        install_bridge_world(&self.page).await?;
-        self.main_frame_id = fetch_main_frame_id(&self.page).await?;
-        reemit_execution_contexts(&self.page).await;
-        self.await_live_bridge_context().await;
-        Ok(())
-    }
-
     /// Block until the main frame's bridge-world context names the COMMITTED,
     /// PARSED document. Right after a navigation the `executionContextCreated`
     /// for the new document's bridge world can land a poll-cycle after the
@@ -718,11 +688,12 @@ impl LocalTransport {
                         // deadline and every later bridge command fail
                         // `FrameNotFound` on a live page. `reemit` (Runtime
                         // disable/enable) re-fires them deterministically — the
-                        // recovery the deleted cross-site socket-rebind used to
-                        // get from `rebind_page_world`. The navigation has
-                        // committed and parsed here, so the re-emit names the
-                        // NEW document. The old document's now-dead contexts
-                        // prune via their own `executionContextDestroyed`.
+                        // recovery the deleted cross-site socket reconnect used
+                        // to get from re-priming a fresh page connection. The
+                        // navigation has committed and parsed here, so the
+                        // re-emit names the NEW document. The old document's
+                        // now-dead contexts prune via their own
+                        // `executionContextDestroyed`.
                         reemit_execution_contexts(&self.page).await;
                         self.await_live_bridge_context().await;
                         self.reinstall_monitors().await;
@@ -1617,6 +1588,34 @@ async fn install_bridge_world(page: &CdpSession) -> Result<()> {
 /// expressions); the `BRIDGE_WORLD`-named context is where the bridge runs.
 /// `Runtime.enable` is issued by `attach_to_page` before this spawns, so events
 /// flow from first connection.
+/// Prime a freshly-attached page session into a ready state — spawn its context
+/// listener (tracked on the session so `Drop` reaps it), register the bridge
+/// world, resolve the main frame id, and force a context re-emit — all WITHOUT
+/// touching the transport's bound state. Returns the new MAIN-world and bridge
+/// context maps plus the main frame id, so a caller can commit the pin
+/// **atomically** only after priming succeeds: a priming failure (a tab that
+/// closed mid-switch, so `install_bridge_world`/`fetch_main_frame_id` errors)
+/// drops the half-attached page and leaves the current pin intact — never a
+/// silent retarget onto a page with no bridge world. `open` and `do_tab_switch`
+/// share this so the two priming paths cannot drift.
+async fn prime_page(
+    page: &mut CdpSession,
+) -> Result<(
+    Arc<Mutex<HashMap<String, String>>>,
+    Arc<Mutex<HashMap<String, String>>>,
+    String,
+)> {
+    let frame_contexts = Arc::new(Mutex::new(HashMap::new()));
+    let bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
+    let listener =
+        spawn_frame_context_listener(page, frame_contexts.clone(), bridge_contexts.clone());
+    page.track(listener);
+    install_bridge_world(page).await?;
+    let main_frame_id = fetch_main_frame_id(page).await?;
+    reemit_execution_contexts(page).await;
+    Ok((frame_contexts, bridge_contexts, main_frame_id))
+}
+
 #[must_use = "track the listener on its session so Drop aborts it"]
 fn spawn_frame_context_listener(
     page: &CdpSession,

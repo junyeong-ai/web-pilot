@@ -126,16 +126,30 @@ impl LocalTransport {
         {
             return self.tab_gone_or(e, tab_id).await;
         }
-        let new_page = match attach_to_page(&self.browser, tab_id).await {
+        let mut new_page = match attach_to_page(&self.browser, tab_id).await {
             Ok(p) => p,
             Err(e) => return self.tab_gone_or(e, tab_id).await,
         };
+        // Prime the new page BEFORE moving the pin, so the pin move is atomic: a
+        // priming failure (the tab closed mid-switch) drops `new_page` and leaves
+        // the current pin untouched, rather than retargeting to a page with no
+        // bridge world. Popup adoption relies on this — it treats a failed switch
+        // as "not adopted" and keeps the pin on the opener, so the switch must not
+        // half-commit the pin before it can fail.
+        let (frame_contexts, bridge_contexts, main_frame_id) =
+            match super::prime_page(&mut new_page).await {
+                Ok(primed) => primed,
+                Err(e) => return self.tab_gone_or(e, tab_id).await,
+            };
         self.page = new_page;
         self.target_id = tab_id.to_string();
+        self.frame_contexts = frame_contexts;
+        self.bridge_contexts = bridge_contexts;
+        self.main_frame_id = main_frame_id;
         *self.active_frame_id.lock().await = None;
         super::clear_persisted_active_frame(self.persisted_context_key());
         super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
-        self.rebind_page_world().await?;
+        self.await_live_bridge_context().await;
         // Armed monitors follow the agent's working tab. A plain `tab switch` lands
         // on an already-loaded page, so re-arm now. `tab new` and popup adoption
         // pass `false`: their target is still about:blank here and the imminent
