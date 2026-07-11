@@ -104,13 +104,17 @@ Completion is one predicate, `navigation_settled(page, loader_id, before_url)`:
 - committed = (loader_id matches) **or** (frame URL ≠ before_url)
 - ready = `readyState` is `interactive`/`complete`
 
-A URL change can swap the renderer cross-site → rebind a fresh session. Same URL
-= same-site reload → reuse the session (the loaderId distinguishes the new
-document from the old). No loaderId and no error = a same-document (fragment)
-navigation → complete immediately (frame preserved). `net::ERR_ABORTED` is not an
-immediate failure but pending — if it later settles, Ok; if not by the deadline,
-`NavigationFailed`. After a navigation that built a new document, armed
-console/network monitors are re-installed.
+A URL change can swap the renderer cross-site, but the flat-protocol `CdpSession`
+is attached to the target and survives the swap — so instead of reconnecting a
+socket, `navigate_reconnect` just resets document-scoped state (clears the active
+frame, force-re-emits the new document's execution contexts so a dropped
+`executionContextCreated` can't strand the bridge, re-arms monitors). Same URL =
+same-site reload → the loaderId distinguishes the new document from the old. No
+loaderId and no error = a same-document (fragment) navigation → complete
+immediately (frame preserved). `net::ERR_ABORTED` is not an immediate failure but
+pending — if it later settles, Ok; if not by the deadline, `NavigationFailed`.
+After a navigation that built a new document, armed console/network monitors are
+re-installed.
 
 Conventions: `.claude/rules/rust-conventions.md`. For the full command-addition
 checklist and gating rules, see the root `CLAUDE.md`.

@@ -37,7 +37,7 @@ Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`
 ## Transport
 - `Transport` trait — sole boundary between command logic and I/O. `send(Command) -> ResponseData`.
 - `IpcTransport` — Unix socket → NM Host → Extension → bridge.js (browser mode). Does **not** enforce policy (it is only a socket writer); the host does.
-- `LocalTransport` — direct CDP WebSocket → bridge.js (headless mode). Holds `browser`/`page` `CdpClient`s, `ws_url`, optional `browser_context_id`, `target_id`. Owns navigation reconnect logic. Calls `policy::enforce` first — it is the headless privileged sink.
+- `LocalTransport` — direct CDP to bridge.js (headless mode). Holds one `browser: Arc<CdpClient>` (the browser-endpoint WebSocket) and a `page: CdpSession` (a flat-protocol session on it, `Target.attachToTarget { flatten: true }`), plus optional `browser_context_id` and `target_id`. Owns navigation logic (a cross-site swap is handled on the surviving session, no reconnect). Calls `policy::enforce` first — it is the headless privileged sink.
 
 ## Policy
 - `webpilot::protocol::Command::policy_key()` maps a command to its gated `PolicyKey` via an **exhaustive match** (read-only commands return `None` explicitly, no wildcard) — so a new privileged command cannot compile without declaring its gate, and can never default to ungated. `webpilot-cli::policy` owns the single file store (`policy/policies.json`, under the durable data root — not the evictable cache, so OS cache eviction can't silently reset deny rules) and `enforce`; writes are atomic and a torn/unreadable store fails closed. `webpilot policy` is a local file command — no wire variant, no browser round-trip.
