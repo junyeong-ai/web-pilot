@@ -2,6 +2,7 @@
 name = "webpilot"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Browser control tool for AI agents — shared library"
 

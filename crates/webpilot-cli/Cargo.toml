@@ -2,6 +2,7 @@
 name = "webpilot-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Browser control CLI for AI agents"
 publish = false

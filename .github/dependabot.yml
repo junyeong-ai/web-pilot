@@ -8,9 +8,17 @@ updates:
       day: monday
       time: "06:00"
       timezone: Asia/Seoul
+    # Hold each new release for a week before proposing it, so a compromised
+    # release is caught by the ecosystem before it lands here. Security
+    # updates bypass the cooldown.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       actions:
+        patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
         patterns: ["*"]
     commit-message:
       prefix: "ci"
@@ -23,11 +31,16 @@ updates:
       day: monday
       time: "06:00"
       timezone: Asia/Seoul
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       patch-and-minor:
         patterns: ["*"]
         update-types: [patch, minor]
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
     commit-message:
       prefix: "deps"
       include: scope

@@ -5,6 +5,7 @@ members = ["crates/webpilot", "crates/webpilot-cli"]
 [workspace.package]
 version = "0.6.23"
 edition = "2024"
+rust-version = "1.97.0"
 license = "MIT"
 
 [workspace.dependencies]
