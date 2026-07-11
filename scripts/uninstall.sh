@@ -24,9 +24,6 @@
 #
 set -euo pipefail
 
-INSTALL_DIR="${WEBPILOT_INSTALL_DIR:-$HOME/.local/bin}"
-ASSUME_YES=false
-
 if [ -t 2 ]; then C_DIM=$'\033[2m'; C_YEL=$'\033[33m'; C_RED=$'\033[31m'; C_RST=$'\033[0m'
 else            C_DIM=; C_YEL=; C_RED=; C_RST=
 fi
@@ -36,44 +33,54 @@ die()  { printf '  %s✗%s %s\n' "$C_RED" "$C_RST" "$*" >&2; exit 1; }
 
 usage() { sed -n '2,24p' "${BASH_SOURCE[0]:-$0}" | sed 's/^#\{0,1\} \{0,1\}//'; }
 
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -y|--yes)  ASSUME_YES=true ;;
-        -h|--help) usage; exit 0 ;;
-        *)         warn "unknown option: $1"; usage >&2; exit 1 ;;
-    esac
-    shift
-done
+# Every side-effecting step lives in main, invoked only by the last line of the
+# file — so a partially-downloaded `curl | bash` stream defines functions and
+# then ends, instead of executing half an uninstall.
+main() {
+    local install_dir="${WEBPILOT_INSTALL_DIR:-$HOME/.local/bin}"
+    local assume_yes=false
 
-# Locate the binary: the install dir first (what install.sh writes), then PATH.
-BIN=""
-if [ -x "$INSTALL_DIR/webpilot" ]; then
-    BIN="$INSTALL_DIR/webpilot"
-elif command -v webpilot >/dev/null 2>&1; then
-    BIN="$(command -v webpilot)"
-fi
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -y|--yes)  assume_yes=true ;;
+            -h|--help) usage; exit 0 ;;
+            *)         warn "unknown option: $1"; usage >&2; exit 1 ;;
+        esac
+        shift
+    done
 
-# No binary → nothing to delegate to. The artefact paths are the binary's to
-# know; guessing them in shell is exactly the drift-prone duplication this
-# script exists to avoid. Point the user at the one clean recovery instead.
-if [ -z "$BIN" ]; then
-    warn "no webpilot binary on PATH or in $INSTALL_DIR — nothing to uninstall"
-    say  "If artefacts remain after the binary was removed by hand, restore it"
-    say  "and let it clean up after itself:"
-    say  "  curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | WEBPILOT_NO_SETUP=1 bash"
-    say  "  webpilot uninstall"
-    exit 0
-fi
+    # Locate the binary: the install dir first (what install.sh writes), then PATH.
+    local bin=""
+    if [ -x "$install_dir/webpilot" ]; then
+        bin="$install_dir/webpilot"
+    elif command -v webpilot >/dev/null 2>&1; then
+        bin="$(command -v webpilot)"
+    fi
 
-# Hand off to the single source of truth. It removes the skill, extension,
-# NM host, cache/runtime tree, and finally the binary itself — in dependency
-# order, only what it created. `--yes` passes through; without it the binary
-# prompts, so route its stdin from the terminal when we were piped from curl.
-say "Removing via $BIN uninstall"
-if [ "$ASSUME_YES" = true ]; then
-    exec "$BIN" uninstall --yes
-elif [ -r /dev/tty ]; then
-    exec "$BIN" uninstall < /dev/tty
-else
-    die "non-interactive with no terminal to confirm at — re-run with --yes"
-fi
+    # No binary → nothing to delegate to. The artefact paths are the binary's to
+    # know; guessing them in shell is exactly the drift-prone duplication this
+    # script exists to avoid. Point the user at the one clean recovery instead.
+    if [ -z "$bin" ]; then
+        warn "no webpilot binary on PATH or in $install_dir — nothing to uninstall"
+        say  "If artefacts remain after the binary was removed by hand, restore it"
+        say  "and let it clean up after itself:"
+        say  "  curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | WEBPILOT_NO_SETUP=1 bash"
+        say  "  webpilot uninstall"
+        exit 0
+    fi
+
+    # Hand off to the single source of truth. It removes the skill, extension,
+    # NM host, cache/runtime tree, and finally the binary itself — in dependency
+    # order, only what it created. `--yes` passes through; without it the binary
+    # prompts, so route its stdin from the terminal when we were piped from curl.
+    say "Removing via $bin uninstall"
+    if [ "$assume_yes" = true ]; then
+        exec "$bin" uninstall --yes
+    elif [ -r /dev/tty ]; then
+        exec "$bin" uninstall < /dev/tty
+    else
+        die "non-interactive with no terminal to confirm at — re-run with --yes"
+    fi
+}
+
+main "$@"

@@ -28,11 +28,6 @@
 #
 set -euo pipefail
 
-REPO="${WEBPILOT_REPO:-junyeong-ai/web-pilot}"
-INSTALL_DIR="${WEBPILOT_INSTALL_DIR:-$HOME/.local/bin}"
-VERSION="${WEBPILOT_VERSION:-}"
-BUILD="${WEBPILOT_BUILD:-}"
-
 # --- output ------------------------------------------------------------------
 
 if [ -t 2 ]; then C_DIM=$'\033[2m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_RED=$'\033[31m'; C_RST=$'\033[0m'
@@ -56,38 +51,7 @@ ask() {
     printf '%s' "${reply:-$default}"
 }
 
-# --- locate a checkout (enables source builds) -------------------------------
-
-CHECKOUT=""
-src="${BASH_SOURCE[0]:-$0}"
-if dir="$(cd "$(dirname "$src")" 2>/dev/null && pwd -P)" && [ -f "$dir/../Cargo.toml" ]; then
-    CHECKOUT="$(cd "$dir/.." && pwd -P)"
-fi
-
-# --- choose build method -----------------------------------------------------
-
-if [ -z "$BUILD" ]; then
-    if [ -n "$CHECKOUT" ] && [ -r /dev/tty ]; then
-        printf '\n  Install method:\n    [1] prebuilt binary (fast)\n    [2] build from source\n\n' >&2
-        case "$(ask 'Choose [1-2] (default 1):' 1)" in
-            2) BUILD="source" ;;
-            *) BUILD="prebuilt" ;;
-        esac
-    else
-        BUILD="prebuilt"
-    fi
-fi
-
-case "$BUILD" in
-    prebuilt|source) ;;
-    *) die "WEBPILOT_BUILD must be 'prebuilt' or 'source' (got '$BUILD')" ;;
-esac
-[ "$BUILD" = "source" ] && [ -z "$CHECKOUT" ] && \
-    die "source build needs a checkout — clone the repo and run scripts/install.sh from it"
-
-# --- produce a binary at $BIN ------------------------------------------------
-
-BIN=""
+# --- binary production -------------------------------------------------------
 
 build_from_source() {
     require cargo
@@ -104,13 +68,21 @@ download_prebuilt() {
     require curl
     require tar
 
+    local os arch
     case "$(uname -s)" in
         Linux)  os="unknown-linux-gnu" ;;
         Darwin) os="apple-darwin" ;;
         *)      die "unsupported OS: $(uname -s)" ;;
     esac
     case "$(uname -m)" in
-        x86_64|amd64)  arch="x86_64" ;;
+        x86_64|amd64)
+            arch="x86_64"
+            # A shell under Rosetta reports x86_64 on Apple silicon — prefer
+            # the native binary the hardware actually runs best.
+            if [ "$os" = "apple-darwin" ] && [ "$(sysctl -in hw.optional.arm64 2>/dev/null)" = "1" ]; then
+                arch="aarch64"
+            fi
+            ;;
         arm64|aarch64) arch="aarch64" ;;
         *)             die "unsupported architecture: $(uname -m)" ;;
     esac
@@ -151,58 +123,104 @@ download_prebuilt() {
     ok "Downloaded webpilot v$VERSION"
 }
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/webpilot-install.XXXXXX")
-staged=""
 cleanup() {
     rm -rf "$tmp"
     [ -n "$staged" ] && [ -f "$staged" ] && rm -f "$staged"
     return 0  # bash propagates the EXIT trap's last $? as the script's exit status
 }
-trap cleanup EXIT
 
-if [ "$BUILD" = "source" ]; then build_from_source; else download_prebuilt; fi
+# Every side-effecting step lives in main, invoked only by the last line of the
+# file — so a partially-downloaded `curl | bash` stream defines functions and
+# then ends, instead of executing half an install.
+main() {
+    REPO="${WEBPILOT_REPO:-junyeong-ai/web-pilot}"
+    INSTALL_DIR="${WEBPILOT_INSTALL_DIR:-$HOME/.local/bin}"
+    VERSION="${WEBPILOT_VERSION:-}"
+    BUILD="${WEBPILOT_BUILD:-}"
 
-# --- atomic install ----------------------------------------------------------
+    # --- locate a checkout (enables source builds) ---------------------------
 
-mkdir -p "$INSTALL_DIR"
-staged="$INSTALL_DIR/.webpilot.install.$$"
-cp "$BIN" "$staged"
-chmod 0755 "$staged"
-mv -f "$staged" "$INSTALL_DIR/webpilot"
-staged=""  # mv consumed it; tell trap there's nothing to clean
+    CHECKOUT=""
+    local src dir
+    src="${BASH_SOURCE[0]:-$0}"
+    if dir="$(cd "$(dirname "$src")" 2>/dev/null && pwd -P)" && [ -f "$dir/../Cargo.toml" ]; then
+        CHECKOUT="$(cd "$dir/.." && pwd -P)"
+    fi
 
-if [ "$(uname -s)" = "Darwin" ]; then
-    codesign --force --sign - "$INSTALL_DIR/webpilot" 2>/dev/null || true
-fi
+    # --- choose build method --------------------------------------------------
 
-ok "Installed to $INSTALL_DIR/webpilot ($("$INSTALL_DIR/webpilot" --version 2>/dev/null | head -1))"
+    if [ -z "$BUILD" ]; then
+        if [ -n "$CHECKOUT" ] && [ -r /dev/tty ]; then
+            printf '\n  Install method:\n    [1] prebuilt binary (fast)\n    [2] build from source\n\n' >&2
+            case "$(ask 'Choose [1-2] (default 1):' 1)" in
+                2) BUILD="source" ;;
+                *) BUILD="prebuilt" ;;
+            esac
+        else
+            BUILD="prebuilt"
+        fi
+    fi
 
-# --- PATH guidance -----------------------------------------------------------
+    case "$BUILD" in
+        prebuilt|source) ;;
+        *) die "WEBPILOT_BUILD must be 'prebuilt' or 'source' (got '$BUILD')" ;;
+    esac
+    [ "$BUILD" = "source" ] && [ -z "$CHECKOUT" ] && \
+        die "source build needs a checkout — clone the repo and run scripts/install.sh from it"
 
-case ":$PATH:" in
-    *":$INSTALL_DIR:"*) ;;
-    *)
-        warn "$INSTALL_DIR is not on PATH"
-        printf '\n    Add to your shell profile (~/.zshrc, ~/.bashrc):\n' >&2
-        # shellcheck disable=SC2016  # literal $PATH for the user to copy
-        printf '      export PATH="%s:$PATH"\n\n' "$INSTALL_DIR" >&2
-        ;;
-esac
+    # --- produce a binary at $BIN ---------------------------------------------
 
-# --- hand off to `webpilot setup` (installs the skill + extension) -----------
-#
-# `curl ... | bash` consumes stdin with the script content, so route the
-# binary's stdin from /dev/tty when available so `webpilot setup` can prompt.
+    BIN=""
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/webpilot-install.XXXXXX")
+    staged=""
+    trap cleanup EXIT
 
-if [ "${WEBPILOT_NO_SETUP:-0}" = "1" ]; then
-    exit 0
-fi
+    if [ "$BUILD" = "source" ]; then build_from_source; else download_prebuilt; fi
 
-if [ -r /dev/tty ]; then
-    printf '\n' >&2
-    "$INSTALL_DIR/webpilot" setup < /dev/tty
-else
-    # shellcheck disable=SC2016  # literal command to copy
-    printf '\n  Next: run `%s` to install the Claude skill and Chrome extension.\n' \
-        "webpilot setup" >&2
-fi
+    # --- atomic install --------------------------------------------------------
+
+    mkdir -p "$INSTALL_DIR"
+    staged="$INSTALL_DIR/.webpilot.install.$$"
+    cp "$BIN" "$staged"
+    chmod 0755 "$staged"
+    mv -f "$staged" "$INSTALL_DIR/webpilot"
+    staged=""  # mv consumed it; tell trap there's nothing to clean
+
+    if [ "$(uname -s)" = "Darwin" ]; then
+        codesign --force --sign - "$INSTALL_DIR/webpilot" 2>/dev/null || true
+    fi
+
+    ok "Installed to $INSTALL_DIR/webpilot ($("$INSTALL_DIR/webpilot" --version 2>/dev/null | head -1))"
+
+    # --- PATH guidance ----------------------------------------------------------
+
+    case ":$PATH:" in
+        *":$INSTALL_DIR:"*) ;;
+        *)
+            warn "$INSTALL_DIR is not on PATH"
+            printf '\n    Add to your shell profile (~/.zshrc, ~/.bashrc):\n' >&2
+            # shellcheck disable=SC2016  # literal $PATH for the user to copy
+            printf '      export PATH="%s:$PATH"\n\n' "$INSTALL_DIR" >&2
+            ;;
+    esac
+
+    # --- hand off to `webpilot setup` (installs the skill + extension) ---------
+    #
+    # `curl ... | bash` consumes stdin with the script content, so route the
+    # binary's stdin from /dev/tty when available so `webpilot setup` can prompt.
+
+    if [ "${WEBPILOT_NO_SETUP:-0}" = "1" ]; then
+        exit 0
+    fi
+
+    if [ -r /dev/tty ]; then
+        printf '\n' >&2
+        "$INSTALL_DIR/webpilot" setup < /dev/tty
+    else
+        # shellcheck disable=SC2016  # literal command to copy
+        printf '\n  Next: run `%s` to install the Claude skill and Chrome extension.\n' \
+            "webpilot setup" >&2
+    fi
+}
+
+main "$@"
