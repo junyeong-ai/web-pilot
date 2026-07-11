@@ -512,7 +512,7 @@ impl LocalTransport {
     /// started no main-frame load pays nothing: no events, no wait.
     async fn settled_action_url(
         &self,
-        events: &mut tokio::sync::broadcast::Receiver<Value>,
+        events: &mut crate::cdp::SessionEvents,
         before: &str,
         nav_hint: bool,
     ) -> String {
@@ -658,7 +658,7 @@ impl LocalTransport {
     /// THE result of its action. Event-driven via the already-open page
     /// subscription (`Page.domContentEventFired` is buffered from before the
     /// action), so no polling.
-    async fn await_document_ready(&self, events: &mut tokio::sync::broadcast::Receiver<Value>) {
+    async fn await_document_ready(&self, events: &mut crate::cdp::SessionEvents) {
         use tokio::sync::broadcast::error::RecvError;
         // The whole wait — both the readyState probes AND the event waits — is
         // bounded by one PROBE deadline, so a hung renderer can never stretch a
@@ -711,10 +711,7 @@ impl LocalTransport {
     /// for the main frame to commit to a real URL, then for it to parse. A
     /// popup genuinely opened to `about:blank` settles at the deadline (its
     /// real, blank result).
-    pub(super) async fn await_adopted_document(
-        &self,
-        events: &mut tokio::sync::broadcast::Receiver<Value>,
-    ) {
+    pub(super) async fn await_adopted_document(&self, events: &mut crate::cdp::SessionEvents) {
         use tokio::sync::broadcast::error::RecvError;
 
         fn main_committed_real_url(ev: &Value) -> bool {

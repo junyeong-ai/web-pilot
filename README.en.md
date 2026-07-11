@@ -288,7 +288,7 @@ Expose the same engine to any MCP host — with no second implementation.
 webpilot mcp                  # stdio JSON-RPC (MCP) server. --browser / --context still apply
 ```
 
-A curated subset of commands is offered as `browser_*` tools, inheriting the CLI's exact mode, policy, and rendering.
+The full page-interaction loop — observe (`snapshot`/`screenshot`), act (`click`/`type`/`drag`/`upload`, …), semantic `find`, tab/frame switching, `wait`, and `eval` — is offered as 21 `browser_*` tools, inheriting the CLI's exact mode, policy, and rendering. `initialize` negotiates the client's MCP revision (2025-11-25 / 2025-06-18), and read-only tools declare `readOnlyHint` annotations. Environment management (cookies, session, device, policy) stays CLI-only by design.
 
 ---
 

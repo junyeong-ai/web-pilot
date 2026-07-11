@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **MCP: the tool surface now covers the full page-interaction loop.** Eleven
+  new tools over the same handlers the CLI uses: `browser_hover`,
+  `browser_focus`, `browser_scroll_to`, `browser_drag`, `browser_upload`,
+  `browser_back`, `browser_forward`, `browser_reload`, `browser_find` (semantic
+  filters with optional click/fill chaining, deserializing the same `FindArgs`
+  the CLI parses), `browser_tabs` (list/new/switch/close/find), and
+  `browser_frame` (list/switch/url/main). `browser_screenshot` gains
+  `full_page` and `annotate`. Every tool now carries a display `title` and,
+  where it differs from the spec defaults, `annotations`
+  (`readOnlyHint`/`destructiveHint`/`idempotentHint`); every input schema sets
+  `additionalProperties: false`. Environment management (cookies, session,
+  device, policy, monitors) stays CLI-only by curation.
+- **MCP: protocol version negotiation.** `initialize` echoes the client's
+  requested revision when supported (2025-11-25, 2025-06-18) and answers with
+  the newest otherwise, per the MCP lifecycle.
+
+### Fixed
+
+- **`find` rejects `--click` combined with `--fill` at the handler**, not only
+  in the CLI parser — the MCP `browser_find` path reaches the handler without
+  clap's `conflicts_with`, and would otherwise silently run the click and drop
+  the fill text.
+
+### Changed
+
+- Headless CDP now uses one WebSocket to the browser endpoint and drives the
+  pinned page through a flat-protocol session (`Target.attachToTarget
+  { flatten: true }`) on it, replacing the per-target socket. A cross-site
+  navigation no longer reconnects and re-primes a fresh socket — the session is
+  attached to the target and survives the renderer swap, so only document state
+  resets. Each session's events are filtered to its `sessionId` (preserving the
+  per-page event isolation the dedicated socket gave), and a session detach ends
+  an in-flight `wait` at once instead of at its deadline. A cross-site swap
+  force-re-emits the new document's execution contexts so a dropped
+  `executionContextCreated` can't strand the bridge, and `CdpSession::Drop`
+  reaps every task it spawned so the connection can't leak across a long-lived
+  server's Chrome-restart cycles. A tab switch re-attaches a session instead of
+  opening a new socket. `cdp.event_buffer` default raised 256 → 512.
+  (`docs/cdp-flat-session-migration.md` records the design, and why the
+  follow-on OOPIF phase was rejected after headless Chrome was measured NOT to
+  expose cross-site iframes as attachable targets.)
+- Toolchain: Rust 1.97.0; the workspace declares `rust-version` so an older
+  toolchain fails with a clear MSRV error instead of a rustc parse error.
+- CI: third-party actions are pinned to full commit SHAs (Dependabot keeps
+  them current); `actions/checkout` v7; the node24 opt-in env var removed
+  (default since 2026-06-16); Dependabot applies a 7-day cooldown to version
+  updates and groups security updates into one PR per ecosystem.
+- `scripts/install.sh` / `scripts/uninstall.sh` run every side-effecting step
+  from a `main` invoked on the file's last line, so a truncated `curl | bash`
+  stream defines functions and stops instead of executing half an install;
+  the installer also detects Apple silicon under Rosetta
+  (`hw.optional.arm64`) and installs the native arm64 binary.
+- `docs/cdp-flat-session-migration.md` records the CDP transport direction:
+  the planned flat-session migration (OOPIF support), why the in-page monitor
+  hooks are the architecturally forced design for cross-process monitoring,
+  and why WebDriver BiDi is rejected for a Chrome-only tool.
+
 ## [0.6.23] - 2026-06-15
 
 ### Fixed

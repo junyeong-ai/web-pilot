@@ -31,6 +31,8 @@ encode/write in `screenshot.rs`, and the NM/IPC framing in
   `until`.
 - `settings.rs` — single settings layer (defaults < `config.toml` < env). The
   one source for every tunable env read; `Settings::{timeouts,chrome,context,cdp,capture}`.
+  `cdp.event_buffer` defaults to 512: one connection's ring carries the browser
+  domain plus every flat-protocol page session's events.
 - `dirs.rs` — per-user runtime / contexts / artifacts directories (mode 0700);
   pure vs materializing accessors; `config_file_path()`. Paths are env/platform
   only (not settings-driven).

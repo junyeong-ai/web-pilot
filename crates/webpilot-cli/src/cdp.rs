@@ -1,9 +1,13 @@
 //! CDP (Chrome DevTools Protocol) client over WebSocket.
 //!
-//! Owns the WebSocket and routes responses back to per-request `oneshot`
-//! channels. Used by `LocalTransport` to drive a headless Chrome directly,
-//! without an Extension. Higher-level abstractions (page session, bridge
-//! injection, browser-context lifecycle) live in `transport::local`.
+//! One [`CdpClient`] is one WebSocket to Chrome's browser endpoint. Page
+//! targets are driven through flat-protocol sessions ([`CdpSession`], from
+//! [`CdpClient::attach`]): every command is stamped with its `sessionId` and
+//! every session event receiver is filtered to that `sessionId`, so one
+//! connection carries the browser domain and any number of page sessions
+//! without their event streams bleeding into each other. Higher-level
+//! abstractions (bridge injection, navigation, browser-context lifecycle)
+//! live in `transport::local`.
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
@@ -249,12 +253,25 @@ impl CdpClient {
     }
 
     pub async fn send(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        self.send_with_timeout(method, params, webpilot::settings::timeouts().cdp_send)
-            .await
+        self.send_on(
+            None,
+            None,
+            method,
+            params,
+            webpilot::settings::timeouts().cdp_send,
+        )
+        .await
     }
 
-    pub async fn send_with_timeout(
+    /// Send one CDP command, optionally scoped to a flat-protocol session, and
+    /// await its response. This is the single dispatch path: connection-level
+    /// commands pass `None`, [`CdpSession`] stamps its `sessionId` and its
+    /// `session_alive` flag so a detach mid-response ends the wait at once
+    /// rather than at the full deadline.
+    async fn send_on(
         &self,
+        session_id: Option<&str>,
+        session_alive: Option<&AtomicBool>,
         method: &str,
         params: Option<Value>,
         timeout: std::time::Duration,
@@ -267,11 +284,14 @@ impl CdpClient {
         }
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let msg = serde_json::json!({
+        let mut msg = serde_json::json!({
             "id": id,
             "method": method,
             "params": params.unwrap_or(Value::Object(Default::default())),
         });
+        if let Some(session) = session_id {
+            msg["sessionId"] = serde_json::json!(session);
+        }
 
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
@@ -332,22 +352,45 @@ impl CdpClient {
             }
         }
 
-        let response = match tokio::time::timeout_at(deadline, rx).await {
-            Ok(Ok(v)) => v,
-            Ok(Err(_)) => {
+        // Await the response, but poll the session-liveness flag between ticks:
+        // on the shared connection a detached session (its tab closed) leaves no
+        // dedicated socket to drop, so nothing would otherwise wake this wait
+        // until the full deadline. The detach watcher flips the flag; we then
+        // drop our pending entry and surface ConnectionLost — the same typed
+        // outcome the per-target socket's death produced, so tab-gone
+        // reclassification downstream is unchanged. A dead CONNECTION still
+        // resolves `rx` via the reader's pending-drain, handled below.
+        let mut rx = rx;
+        let response = loop {
+            if session_alive.is_some_and(|a| !a.load(Ordering::Acquire)) {
                 self.pending.lock().await.remove(&id);
                 return Err(WebPilotError::ConnectionLost {
-                    detail: format!("CDP channel closed while awaiting {method}"),
+                    detail: format!("CDP session detached while awaiting {method}"),
                 }
                 .into());
             }
-            Err(_) => {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
                 self.pending.lock().await.remove(&id);
                 return Err(WebPilotError::Timeout {
                     kind: method.to_string(),
                     elapsed_ms: timeout.as_millis() as u64,
                 }
                 .into());
+            }
+            let tick = (deadline - now).min(std::time::Duration::from_millis(250));
+            match tokio::time::timeout(tick, &mut rx).await {
+                Ok(Ok(v)) => break v,
+                Ok(Err(_)) => {
+                    self.pending.lock().await.remove(&id);
+                    return Err(WebPilotError::ConnectionLost {
+                        detail: format!("CDP channel closed while awaiting {method}"),
+                    }
+                    .into());
+                }
+                // Tick elapsed with no response — loop to re-check liveness and
+                // the deadline.
+                Err(_) => continue,
             }
         };
 
@@ -363,6 +406,18 @@ impl CdpClient {
             if code == Some(-32602) {
                 return Err(WebPilotError::InvalidArgument {
                     detail: message.unwrap_or("invalid parameters").to_string(),
+                }
+                .into());
+            }
+            // CDP's dedicated "session not found" code: the target this session
+            // was attached to is gone (the tab closed). The dedicated per-target
+            // socket used to surface this as its socket dropping; on a shared
+            // connection the typed equivalent is ConnectionLost, so every
+            // downstream tab-gone reclassification (`target_absent` → TabNotFound)
+            // keeps working unchanged.
+            if code == Some(-32001) && session_id.is_some() {
+                return Err(WebPilotError::ConnectionLost {
+                    detail: format!("CDP session gone while sending {method} (tab closed?)"),
                 }
                 .into());
             }
@@ -399,259 +454,59 @@ impl CdpClient {
         Ok(response.get("result").cloned().unwrap_or(Value::Null))
     }
 
-    /// Subscribe to the broadcast stream of unsolicited CDP events (e.g.,
-    /// `Runtime.executionContextCreated`, `Page.frameNavigated`).
+    /// Subscribe to the broadcast stream of unsolicited CDP events. This is the
+    /// CONNECTION-level view — browser-domain events (`Target.targetCreated`)
+    /// plus every attached session's events. Session-scoped consumers use
+    /// [`CdpSession::subscribe_events`], which filters to one `sessionId`.
     pub fn subscribe_events(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
     }
 
-    /// Auto-answer page javascript dialogs (alert/confirm/prompt/beforeunload).
-    ///
-    /// With a CDP client holding `Page` enabled, Chrome STOPS its headless
-    /// auto-dismiss and waits for `Page.handleJavaScriptDialog` — an unanswered
-    /// `alert()` would wedge the renderer, timing out every later command on
-    /// the page. Accept with the prompt's default, matching the browser-mode
-    /// dialog override (confirm → true, prompt → its default stringified), so
-    /// page flows branching on a dialog proceed identically in both modes.
-    ///
-    /// The answer is written fire-and-forget (no pending entry): the reader
-    /// drops a response whose id has no waiter, and a failed write means the
-    /// connection is dead anyway. The task ends with the event channel.
-    pub fn spawn_dialog_responder(&self) {
-        let mut events = self.events.subscribe();
-        let writer = self.writer.clone();
-        let next_id = self.next_id.clone();
-        let alive = self.alive.clone();
-        tokio::spawn(async move {
+    /// Attach a flat-protocol session to `target_id`. The session shares this
+    /// connection: its commands are stamped with the returned `sessionId` and
+    /// its event receivers see only that session's events.
+    pub async fn attach(self: &Arc<Self>, target_id: &str) -> Result<CdpSession> {
+        let result = self
+            .send(
+                "Target.attachToTarget",
+                Some(serde_json::json!({ "targetId": target_id, "flatten": true })),
+            )
+            .await?;
+        let session_id = result
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("Target.attachToTarget returned no sessionId"))?;
+
+        let session_alive = Arc::new(AtomicBool::new(true));
+        // Mark the session dead the moment Chrome announces its detachment (the
+        // tab closed, or an explicit detach), so in-flight waits unblock within
+        // one poll tick instead of running to their deadline. The `-32001`
+        // mapping in `send_on` is the backstop for a detach event that lagged
+        // out of the ring. The watcher ends itself on that same signal.
+        let mut watch = SessionEvents {
+            rx: self.subscribe_events(),
+            session_id: session_id.clone(),
+        };
+        let alive = session_alive.clone();
+        let watcher = tokio::spawn(async move {
             loop {
-                match events.recv().await {
-                    Ok(ev) => {
-                        if ev.get("method").and_then(Value::as_str)
-                            != Some("Page.javascriptDialogOpening")
-                        {
-                            continue;
-                        }
-                        if !alive.load(Ordering::Acquire) {
-                            break;
-                        }
-                        let prompt_text = ev
-                            .pointer("/params/defaultPrompt")
-                            .and_then(Value::as_str)
-                            .unwrap_or("");
-                        let id = next_id.fetch_add(1, Ordering::Relaxed);
-                        let msg = serde_json::json!({
-                            "id": id,
-                            "method": "Page.handleJavaScriptDialog",
-                            "params": { "accept": true, "promptText": prompt_text },
-                        });
-                        let Ok(payload) = serde_json::to_string(&msg) else {
-                            continue;
-                        };
-                        if writer
-                            .lock()
-                            .await
-                            .send(Message::Text(payload.into()))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
+                match watch.recv().await {
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        alive.store(false, Ordering::Release);
+                        break;
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
-    }
 
-    pub async fn evaluate(&self, expression: &str) -> Result<Value> {
-        let result = self
-            .send(
-                "Runtime.evaluate",
-                Some(serde_json::json!({
-                    "expression": expression,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                })),
-            )
-            .await?;
-
-        if let Some(exception) = result.get("exceptionDetails") {
-            let msg = exception
-                .pointer("/exception/description")
-                .or_else(|| exception.pointer("/text"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("JS exception");
-            anyhow::bail!("{msg}");
-        }
-
-        Ok(result
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .cloned()
-            .unwrap_or(Value::Null))
-    }
-
-    pub async fn wait_for_event(
-        &self,
-        method: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Value> {
-        let target = method.to_string();
-        self.wait_for_event_matching(method, timeout, move |event| {
-            event.get("method").and_then(|v| v.as_str()) == Some(target.as_str())
+        Ok(CdpSession {
+            conn: self.clone(),
+            session_id,
+            session_alive,
+            background: vec![watcher],
         })
-        .await
-    }
-
-    /// Like `wait_for_event`, but settles on the first event satisfying
-    /// `predicate` rather than a bare method-name match — so a caller can ignore
-    /// an event that names the right method but the wrong subject, e.g. a
-    /// subframe `Page.frameNavigated` that would otherwise end a main-frame wait
-    /// early. `label` names the awaited event in diagnostics only.
-    pub async fn wait_for_event_matching(
-        &self,
-        label: &str,
-        timeout: std::time::Duration,
-        predicate: impl Fn(&Value) -> bool,
-    ) -> Result<Value> {
-        let mut rx = self.events.subscribe();
-        let target = label.to_string();
-        let deadline = tokio::time::Instant::now() + timeout;
-        // Whether the event broadcast overflowed mid-wait (a burst larger than
-        // `cdp.event_buffer`). The awaited event may have been one of the dropped
-        // messages, so a subsequent deadline is NOT a confident "it never
-        // happened" — it becomes an inconclusive Timeout that carries the loss,
-        // never a ConnectionLost (the socket is still alive).
-        let mut lagged = false;
-        loop {
-            // A connection that dies mid-wait must surface immediately as
-            // ConnectionLost, not after the full deadline as a misleading
-            // Timeout. The reader sets `alive=false` on death, but the struct
-            // keeps the broadcast sender alive, so `recv()` never observes
-            // `Closed` — poll the flag between events so the wait unblocks within
-            // one tick of the drop. This mirrors `send`, which checks `alive`.
-            if !self.alive.load(Ordering::Acquire) {
-                return Err(WebPilotError::ConnectionLost {
-                    detail: format!("CDP reader exited while waiting for {target}"),
-                }
-                .into());
-            }
-            let now = tokio::time::Instant::now();
-            if now >= deadline {
-                if lagged {
-                    // Events were dropped mid-wait (a burst exceeded
-                    // `cdp.event_buffer`), so the awaited event may have fired
-                    // and been discarded — the deadline is reached, but "it
-                    // never happened" is not a safe conclusion. The socket is
-                    // still alive (the alive-flag check above already caught a
-                    // real drop), so this is a Timeout the agent retries — never
-                    // a ConnectionLost that would have it tear down a live
-                    // session. The free-form kind carries the loss so a retry
-                    // can raise `cdp.event_buffer` rather than re-issue blindly.
-                    return Err(WebPilotError::Timeout {
-                        kind: format!(
-                            "{target} — CDP event buffer overflowed; events were \
-                             dropped, so the wait is inconclusive (retry, or raise \
-                             cdp.event_buffer)"
-                        ),
-                        elapsed_ms: timeout.as_millis() as u64,
-                    }
-                    .into());
-                }
-                anyhow::bail!("Timeout waiting for {target}");
-            }
-            let tick = (deadline - now).min(std::time::Duration::from_millis(250));
-            match tokio::time::timeout(tick, rx.recv()).await {
-                Ok(Ok(event)) => {
-                    if predicate(&event) {
-                        return Ok(event);
-                    }
-                }
-                Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
-                    // Some events were dropped. The one we want may still arrive,
-                    // so keep waiting — but remember the gap so a final timeout is
-                    // reported as event loss, not a clean "never happened".
-                    lagged = true;
-                    continue;
-                }
-                Ok(Err(broadcast::error::RecvError::Closed)) => {
-                    return Err(WebPilotError::ConnectionLost {
-                        detail: format!("CDP event channel closed while waiting for {target}"),
-                    }
-                    .into());
-                }
-                // Poll tick elapsed with no event — loop to re-check `alive` and
-                // the deadline.
-                Err(_) => continue,
-            }
-        }
-    }
-
-    /// Wait, on an EXISTING subscription, for an event matching `predicate`,
-    /// returning whether one arrived before `timeout`. The caller subscribes
-    /// *before* triggering the action, so an event fired between the trigger and
-    /// the wait cannot slip through — the race a fresh `wait_for_event_matching`
-    /// subscription opens. Unlike that method this yields a plain outcome bool,
-    /// not a typed error: a dead connection or a dropped-event buffer overflow
-    /// ends the wait as a non-arrival, and the caller confirms the negative
-    /// another way (it never treats absence alone as proof the event never
-    /// fired).
-    pub async fn wait_on_receiver(
-        &self,
-        rx: &mut broadcast::Receiver<Value>,
-        timeout: std::time::Duration,
-        predicate: impl Fn(&Value) -> bool,
-    ) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if !self.alive.load(Ordering::Acquire) {
-                return false;
-            }
-            let now = tokio::time::Instant::now();
-            if now >= deadline {
-                return false;
-            }
-            let tick = (deadline - now).min(std::time::Duration::from_millis(250));
-            match tokio::time::timeout(tick, rx.recv()).await {
-                Ok(Ok(event)) if predicate(&event) => return true,
-                // A non-match, a buffer overflow (the awaited event may yet
-                // arrive), or a poll tick with no event — keep waiting until the
-                // deadline.
-                Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) | Err(_) => continue,
-                Ok(Err(broadcast::error::RecvError::Closed)) => return false,
-            }
-        }
-    }
-
-    /// Viewport screenshot (PNG, base64).
-    pub async fn screenshot(&self) -> Result<String> {
-        self.screenshot_inner(false).await
-    }
-
-    /// Full-page screenshot (PNG, base64). Uses CDP's `captureBeyondViewport`
-    /// so we get the entire scrollable area in a single call — no tiling.
-    pub async fn screenshot_full_page(&self) -> Result<String> {
-        self.screenshot_inner(true).await
-    }
-
-    async fn screenshot_inner(&self, beyond: bool) -> Result<String> {
-        let mut params = serde_json::json!({"format": "png"});
-        if beyond {
-            params["captureBeyondViewport"] = true.into();
-        }
-        let result = self
-            .send_with_timeout(
-                "Page.captureScreenshot",
-                Some(params),
-                std::time::Duration::from_secs(30),
-            )
-            .await?;
-        result
-            .get("data")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .ok_or_else(|| anyhow!("No screenshot data"))
     }
 
     /// All cookies in the page's browser context. Use this for session export.
@@ -722,6 +577,388 @@ impl CdpClient {
     }
 }
 
+/// The inconclusive form of a wait deadline: events were dropped mid-wait, so
+/// "it never happened" is not a safe conclusion. The socket is still alive, so
+/// this is a Timeout the agent retries — never a ConnectionLost that would have
+/// it tear down a live session. The free-form kind carries the loss so a retry
+/// can raise `cdp.event_buffer` rather than re-issue blindly.
+fn inconclusive_wait_timeout(target: &str, timeout: std::time::Duration) -> anyhow::Error {
+    WebPilotError::Timeout {
+        kind: format!(
+            "{target} — CDP event buffer overflowed; events were \
+             dropped, so the wait is inconclusive (retry, or raise \
+             cdp.event_buffer)"
+        ),
+        elapsed_ms: timeout.as_millis() as u64,
+    }
+    .into()
+}
+
+/// A flat-protocol session to one target, sharing its [`CdpClient`]
+/// connection. Mirrors the page-facing API a dedicated per-target socket used
+/// to provide: sends are stamped with the `sessionId`, event receivers are
+/// filtered to it, and a detached session (its tab closed) surfaces as the
+/// same typed `ConnectionLost` a dropped socket did.
+pub struct CdpSession {
+    conn: Arc<CdpClient>,
+    session_id: String,
+    session_alive: Arc<AtomicBool>,
+    /// Every task this session spawns onto the shared connection: the detach
+    /// watcher (`attach`), the dialog responder (`spawn_dialog_responder`), and
+    /// the frame-context listener (handed in by the transport via `track`).
+    /// `Drop` aborts them all, so none can outlive the session it belongs to.
+    /// For the dialog responder this is load-bearing, not hygiene: it holds an
+    /// `Arc<CdpClient>`, so a responder parked on `recv` would pin the whole
+    /// connection — its `events` sender never drops, so `recv` never returns
+    /// `Closed`, so the task never exits on its own once Chrome is dead. Without
+    /// the abort, each Chrome-death→reopen cycle in a long-lived `webpilot mcp`
+    /// server would leak a `CdpClient` and its reader/heartbeat tasks. The
+    /// watcher and listener hold no such Arc, but tracking them here keeps every
+    /// per-session task on one deterministic teardown instead of relying on a
+    /// detach event that a wedged-then-recovered connection could drop.
+    background: Vec<JoinHandle<()>>,
+}
+
+impl CdpSession {
+    pub async fn send(&self, method: &str, params: Option<Value>) -> Result<Value> {
+        self.send_with_timeout(method, params, webpilot::settings::timeouts().cdp_send)
+            .await
+    }
+
+    pub async fn send_with_timeout(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
+        if !self.session_alive.load(Ordering::Acquire) {
+            return Err(WebPilotError::ConnectionLost {
+                detail: format!("CDP session detached before sending {method}"),
+            }
+            .into());
+        }
+        self.conn
+            .send_on(
+                Some(&self.session_id),
+                Some(&self.session_alive),
+                method,
+                params,
+                timeout,
+            )
+            .await
+    }
+
+    /// Hand a task spawned for this session (e.g. the frame-context listener,
+    /// spawned by the transport with the maps it feeds) to the session so `Drop`
+    /// aborts it — the same deterministic teardown the detach watcher and dialog
+    /// responder get, so no per-session task outlives the session.
+    pub fn track(&mut self, task: JoinHandle<()>) {
+        self.background.push(task);
+    }
+
+    /// Subscribe to this session's events only. Browser-domain events and other
+    /// sessions' events never pass the filter, reproducing the isolation a
+    /// dedicated per-target socket gave — a settle drain can never consume
+    /// another page's `Page.frameStartedLoading`.
+    pub fn subscribe_events(&self) -> SessionEvents {
+        SessionEvents {
+            rx: self.conn.subscribe_events(),
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    /// Auto-answer page javascript dialogs (alert/confirm/prompt/beforeunload).
+    ///
+    /// With `Page` enabled on a session, Chrome STOPS its headless auto-dismiss
+    /// and waits for `Page.handleJavaScriptDialog` — an unanswered `alert()`
+    /// would wedge the renderer, timing out every later command on the page.
+    /// Accept with the prompt's default, matching the browser-mode dialog
+    /// override (confirm → true, prompt → its default stringified), so page
+    /// flows branching on a dialog proceed identically in both modes.
+    ///
+    /// The answer is fire-and-forget (`send_on` with a short deadline, result
+    /// ignored): a failed send means the session or connection is dead anyway.
+    /// The task's handle is retained so `Drop` reaps it — it holds an
+    /// `Arc<CdpClient>` and so cannot be relied on to exit by itself once Chrome
+    /// is dead (see the `background` field).
+    pub fn spawn_dialog_responder(&mut self) {
+        let mut events = self.subscribe_events();
+        let conn = self.conn.clone();
+        let session_id = self.session_id.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(ev) => {
+                        if ev.get("method").and_then(Value::as_str)
+                            != Some("Page.javascriptDialogOpening")
+                        {
+                            continue;
+                        }
+                        let prompt_text = ev
+                            .pointer("/params/defaultPrompt")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        let _ = conn
+                            .send_on(
+                                Some(&session_id),
+                                None,
+                                "Page.handleJavaScriptDialog",
+                                Some(serde_json::json!({
+                                    "accept": true,
+                                    "promptText": prompt_text,
+                                })),
+                                std::time::Duration::from_secs(HEARTBEAT_TIMEOUT_S),
+                            )
+                            .await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        self.background.push(handle);
+    }
+
+    pub async fn evaluate(&self, expression: &str) -> Result<Value> {
+        let result = self
+            .send(
+                "Runtime.evaluate",
+                Some(serde_json::json!({
+                    "expression": expression,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                })),
+            )
+            .await?;
+
+        if let Some(exception) = result.get("exceptionDetails") {
+            let msg = exception
+                .pointer("/exception/description")
+                .or_else(|| exception.pointer("/text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("JS exception");
+            anyhow::bail!("{msg}");
+        }
+
+        Ok(result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+
+    pub async fn wait_for_event(
+        &self,
+        method: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
+        let target = method.to_string();
+        self.wait_for_event_matching(method, timeout, move |event| {
+            event.get("method").and_then(|v| v.as_str()) == Some(target.as_str())
+        })
+        .await
+    }
+
+    /// Like `wait_for_event`, but settles on the first of THIS SESSION's events
+    /// satisfying `predicate` rather than a bare method-name match — so a caller
+    /// can ignore an event that names the right method but the wrong subject,
+    /// e.g. a subframe `Page.frameNavigated` that would otherwise end a
+    /// main-frame wait early. `label` names the awaited event in diagnostics only.
+    pub async fn wait_for_event_matching(
+        &self,
+        label: &str,
+        timeout: std::time::Duration,
+        predicate: impl Fn(&Value) -> bool,
+    ) -> Result<Value> {
+        let mut rx = self.subscribe_events();
+        let target = label.to_string();
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut lagged = false;
+        loop {
+            // A session or connection that dies mid-wait must surface
+            // immediately as ConnectionLost, not after the full deadline as a
+            // misleading Timeout — the same contract the dedicated per-target
+            // socket's death gave. Polled between events, so the wait unblocks
+            // within one tick.
+            if !self.conn.alive.load(Ordering::Acquire)
+                || !self.session_alive.load(Ordering::Acquire)
+            {
+                return Err(WebPilotError::ConnectionLost {
+                    detail: format!("CDP session ended while waiting for {target}"),
+                }
+                .into());
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                if lagged {
+                    return Err(inconclusive_wait_timeout(&target, timeout));
+                }
+                anyhow::bail!("Timeout waiting for {target}");
+            }
+            let tick = (deadline - now).min(std::time::Duration::from_millis(250));
+            match tokio::time::timeout(tick, rx.recv()).await {
+                Ok(Ok(event)) => {
+                    if predicate(&event) {
+                        return Ok(event);
+                    }
+                }
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                    lagged = true;
+                    continue;
+                }
+                Ok(Err(broadcast::error::RecvError::Closed)) => {
+                    return Err(WebPilotError::ConnectionLost {
+                        detail: format!("CDP session ended while waiting for {target}"),
+                    }
+                    .into());
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+
+    /// Wait, on an EXISTING session subscription, for an event matching
+    /// `predicate`, returning whether one arrived before `timeout`. The caller
+    /// subscribes *before* triggering the action, so an event fired between the
+    /// trigger and the wait cannot slip through. Yields a plain outcome bool: a
+    /// dead session/connection or a dropped-event overflow ends the wait as a
+    /// non-arrival, and the caller confirms the negative another way.
+    pub async fn wait_on_receiver(
+        &self,
+        rx: &mut SessionEvents,
+        timeout: std::time::Duration,
+        predicate: impl Fn(&Value) -> bool,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if !self.conn.alive.load(Ordering::Acquire)
+                || !self.session_alive.load(Ordering::Acquire)
+            {
+                return false;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let tick = (deadline - now).min(std::time::Duration::from_millis(250));
+            match tokio::time::timeout(tick, rx.recv()).await {
+                Ok(Ok(event)) if predicate(&event) => return true,
+                Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) | Err(_) => continue,
+                Ok(Err(broadcast::error::RecvError::Closed)) => return false,
+            }
+        }
+    }
+
+    /// Viewport screenshot (PNG, base64).
+    pub async fn screenshot(&self) -> Result<String> {
+        self.screenshot_inner(false).await
+    }
+
+    /// Full-page screenshot (PNG, base64). Uses CDP's `captureBeyondViewport`
+    /// so we get the entire scrollable area in a single call — no tiling.
+    pub async fn screenshot_full_page(&self) -> Result<String> {
+        self.screenshot_inner(true).await
+    }
+
+    async fn screenshot_inner(&self, beyond: bool) -> Result<String> {
+        let mut params = serde_json::json!({"format": "png"});
+        if beyond {
+            params["captureBeyondViewport"] = true.into();
+        }
+        let result = self
+            .send_with_timeout(
+                "Page.captureScreenshot",
+                Some(params),
+                std::time::Duration::from_secs(30),
+            )
+            .await?;
+        result
+            .get("data")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("No screenshot data"))
+    }
+}
+
+impl Drop for CdpSession {
+    fn drop(&mut self) {
+        // Stop every task this session spawned, deterministically — none can
+        // outlive the session it belongs to. This is what makes the dialog
+        // responder's `Arc<CdpClient>` pin harmless: aborting it releases that
+        // Arc so the connection can actually drop, and it covers the detach
+        // watcher too when its detach event never arrives (lag, or a shutdown
+        // that races it).
+        for task in &self.background {
+            task.abort();
+        }
+        self.session_alive.store(false, Ordering::Release);
+        // Detach so a replaced session (a tab switch in a long-lived process)
+        // stops streaming its events into the shared connection. Fire-and-forget:
+        // a process exiting closes the connection, which detaches everything
+        // anyway, and outside a runtime there is no task to spawn.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let conn = self.conn.clone();
+            let session_id = self.session_id.clone();
+            handle.spawn(async move {
+                let _ = conn
+                    .send_on(
+                        None,
+                        None,
+                        "Target.detachFromTarget",
+                        Some(serde_json::json!({ "sessionId": session_id })),
+                        std::time::Duration::from_secs(HEARTBEAT_TIMEOUT_S),
+                    )
+                    .await;
+            });
+        }
+    }
+}
+
+/// A [`CdpSession`]-scoped event receiver: `recv` yields only events carrying
+/// this session's `sessionId`, and translates the session's own
+/// `Target.detachedFromTarget` into `Closed` — so every consumer loop ends the
+/// way it did when the per-target socket closed, instead of parking forever on
+/// a stream that will never speak for this session again.
+pub struct SessionEvents {
+    rx: broadcast::Receiver<Value>,
+    session_id: String,
+}
+
+impl SessionEvents {
+    /// Non-blocking drain counterpart of `recv`, with the same session filter
+    /// and detach translation — for callers replaying events already buffered
+    /// before an action's response arrived.
+    pub fn try_recv(&mut self) -> Result<Value, broadcast::error::TryRecvError> {
+        loop {
+            let event = self.rx.try_recv()?;
+            if event.get("sessionId").and_then(Value::as_str) == Some(self.session_id.as_str()) {
+                return Ok(event);
+            }
+            if event.get("method").and_then(Value::as_str) == Some("Target.detachedFromTarget")
+                && event.pointer("/params/sessionId").and_then(Value::as_str)
+                    == Some(self.session_id.as_str())
+            {
+                return Err(broadcast::error::TryRecvError::Closed);
+            }
+        }
+    }
+
+    pub async fn recv(&mut self) -> Result<Value, broadcast::error::RecvError> {
+        loop {
+            let event = self.rx.recv().await?;
+            if event.get("sessionId").and_then(Value::as_str) == Some(self.session_id.as_str()) {
+                return Ok(event);
+            }
+            if event.get("method").and_then(Value::as_str) == Some("Target.detachedFromTarget")
+                && event.pointer("/params/sessionId").and_then(Value::as_str)
+                    == Some(self.session_id.as_str())
+            {
+                return Err(broadcast::error::RecvError::Closed);
+            }
+        }
+    }
+}
+
 /// Borrow a required array field from a CDP response. These methods always
 /// carry the field on success, so a missing or wrong-typed one is a malformed
 /// response — never silently an empty list. Reading it as empty would let a
@@ -759,7 +996,7 @@ fn char_safe_prefix(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Reply, bind, mock_cdp, ok};
+    use crate::test_support::{Reply, attach_session, bind, mock_cdp, ok};
     use tokio_tungstenite::accept_async;
 
     #[test]
@@ -820,9 +1057,16 @@ mod tests {
 
     #[tokio::test]
     async fn unanswered_request_times_out() {
-        let url = mock_cdp(|_| Reply::Silent).await;
-        let cdp = CdpClient::connect(&url).await.unwrap();
-        let err = cdp
+        let url = mock_cdp(|req| match req["method"].as_str() {
+            Some("Target.attachToTarget") => {
+                Reply::Send(ok(req, serde_json::json!({ "sessionId": "S1" })))
+            }
+            _ => Reply::Silent,
+        })
+        .await;
+        let conn = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let session = attach_session(&conn).await;
+        let err = session
             .send_with_timeout("Hang", None, std::time::Duration::from_millis(150))
             .await
             .unwrap_err();
@@ -854,5 +1098,150 @@ mod tests {
         let cdp = CdpClient::connect(&url).await.unwrap();
         let err = cdp.send("Boom", None).await.unwrap_err();
         assert!(err.to_string().contains("CDP error"));
+    }
+
+    // ── Flat sessions ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn session_commands_carry_the_session_id() {
+        // The mock echoes the request's sessionId back in the result, so the
+        // assertion proves the stamped id crossed the wire — not that the
+        // client remembered it locally.
+        let url = mock_cdp(|req| match req["method"].as_str() {
+            Some("Target.attachToTarget") => {
+                Reply::Send(ok(req, serde_json::json!({ "sessionId": "S1" })))
+            }
+            _ => Reply::Send(ok(
+                req,
+                serde_json::json!({ "sawSession": req["sessionId"] }),
+            )),
+        })
+        .await;
+        let conn = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let session = conn.attach("T1").await.unwrap();
+        let result = session.send("Page.enable", None).await.unwrap();
+        assert_eq!(result["sawSession"], "S1");
+        // A connection-level send carries no sessionId.
+        let result = conn.send("Browser.getVersion", None).await.unwrap();
+        assert_eq!(result["sawSession"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn session_events_are_filtered_to_the_session() {
+        // A request's reply is preceded by three unsolicited events: another
+        // session's, a connection-level one, and ours. Only ours reaches the
+        // session receiver — the isolation the per-target socket used to give.
+        let url = mock_cdp(|req| match req["method"].as_str() {
+            Some("Target.attachToTarget") => {
+                Reply::Send(ok(req, serde_json::json!({ "sessionId": "S1" })))
+            }
+            Some("Trigger") => Reply::SendAll(vec![
+                serde_json::json!({ "method": "Page.loadEventFired", "params": {}, "sessionId": "OTHER" }),
+                serde_json::json!({ "method": "Target.targetCreated", "params": {} }),
+                serde_json::json!({ "method": "Page.loadEventFired", "params": {}, "sessionId": "S1" }),
+                ok(req, serde_json::json!({})),
+            ]),
+            _ => Reply::Send(ok(req, serde_json::json!({}))),
+        })
+        .await;
+        let conn = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let session = attach_session(&conn).await;
+        let mut events = session.subscribe_events();
+        session.send("Trigger", None).await.unwrap();
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .expect("event within deadline")
+            .expect("an event, not closed");
+        assert_eq!(ev["method"], "Page.loadEventFired");
+        assert_eq!(ev["sessionId"], "S1");
+    }
+
+    #[tokio::test]
+    async fn detach_event_closes_session_receivers() {
+        let url = mock_cdp(|req| match req["method"].as_str() {
+            Some("Target.attachToTarget") => {
+                Reply::Send(ok(req, serde_json::json!({ "sessionId": "S1" })))
+            }
+            Some("Trigger") => Reply::SendAll(vec![
+                serde_json::json!({
+                    "method": "Target.detachedFromTarget",
+                    "params": { "sessionId": "S1" },
+                }),
+                ok(req, serde_json::json!({})),
+            ]),
+            _ => Reply::Send(ok(req, serde_json::json!({}))),
+        })
+        .await;
+        let conn = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let session = attach_session(&conn).await;
+        let mut events = session.subscribe_events();
+        session.send("Trigger", None).await.unwrap();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .expect("recv settles within deadline");
+        assert!(
+            matches!(outcome, Err(broadcast::error::RecvError::Closed)),
+            "a detached session's receiver must close, got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_gone_error_maps_to_connection_lost() {
+        // Chrome's dedicated -32001 "session not found" answer (the tab closed
+        // under us) must surface as the same typed ConnectionLost the dedicated
+        // socket's drop used to produce, so tab-gone reclassification holds.
+        let url = mock_cdp(|req| match req["method"].as_str() {
+            Some("Target.attachToTarget") => {
+                Reply::Send(ok(req, serde_json::json!({ "sessionId": "S1" })))
+            }
+            _ => Reply::Send(serde_json::json!({
+                "id": req["id"],
+                "error": { "code": -32001, "message": "Session with given id not found." },
+            })),
+        })
+        .await;
+        let conn = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let session = attach_session(&conn).await;
+        let err = session.send("Page.enable", None).await.unwrap_err();
+        assert!(matches!(
+            webpilot_err(&err),
+            WebPilotError::ConnectionLost { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn dropping_a_session_releases_the_connection_even_with_a_dialog_responder() {
+        // The dialog responder holds an Arc<CdpClient>; if Drop did not abort it,
+        // it would park on `recv` forever (its own Arc keeps the `events` sender
+        // alive, so `recv` never returns Closed) and pin the connection. Assert
+        // the session's Arc is the ONLY extra strong ref after spawning the
+        // responder, and that dropping the session returns the connection to
+        // uniquely-owned — proof no spawned task retains a clone.
+        let url = mock_cdp(|req| match req["method"].as_str() {
+            Some("Target.attachToTarget") => {
+                Reply::Send(ok(req, serde_json::json!({ "sessionId": "S1" })))
+            }
+            _ => Reply::Send(ok(req, serde_json::json!({}))),
+        })
+        .await;
+        let conn = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let mut session = conn.attach("T1").await.unwrap();
+        session.spawn_dialog_responder();
+        // Let the spawned tasks reach their `recv` await, cloning their Arcs.
+        tokio::task::yield_now().await;
+        drop(session);
+        // The detach task Drop spawns also clones the Arc; give it and the
+        // aborted tasks a moment to run their abort/short-circuit and release.
+        for _ in 0..50 {
+            if Arc::strong_count(&conn) == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            Arc::strong_count(&conn),
+            1,
+            "dropping the session must release every task's Arc<CdpClient>, or the connection leaks"
+        );
     }
 }

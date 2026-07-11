@@ -1,9 +1,10 @@
 //! Headless transport — speaks CDP directly to a Chrome for Testing instance.
 //!
 //! `LocalTransport` is the in-process equivalent of the Native Messaging Host
-//! plus the extension service worker plus the content bridge. It owns the
-//! browser-level and page-level CDP connections, plus the cached target id and
-//! optional browser-context id needed for multi-agent isolation.
+//! plus the extension service worker plus the content bridge. It owns one CDP
+//! connection to the browser endpoint and drives the pinned page through a
+//! flat-protocol session on it, plus the cached target id and optional
+//! browser-context id needed for multi-agent isolation.
 //!
 //! Bridge.js auto-loads into the `webpilot_bridge` CDP isolated world on every
 //! document (`install_bridge_world`) — the headless mirror of the browser
@@ -39,7 +40,7 @@ use webpilot::protocol::{Command, ResponseData};
 use webpilot::types::DomSnapshot;
 use webpilot::{WebPilotError, WireError};
 
-use crate::cdp::CdpClient;
+use crate::cdp::{CdpClient, CdpSession};
 use crate::session;
 
 use super::Transport;
@@ -62,9 +63,8 @@ const BRIDGE_WORLD: &str = "webpilot_bridge";
 pub(super) const MAX_FRAME_DEPTH: u32 = 256;
 
 pub struct LocalTransport {
-    pub(crate) browser: CdpClient,
-    pub(crate) page: CdpClient,
-    pub(crate) ws_url: String,
+    pub(crate) browser: Arc<CdpClient>,
+    pub(crate) page: CdpSession,
     pub(crate) browser_context_id: Option<String>,
     pub(crate) target_id: String,
     /// `Some(dead_id)` when this transport opened onto a fallback survivor because
@@ -118,20 +118,17 @@ impl LocalTransport {
         // session is dead, not that the command is impossible — discard it and
         // relaunch once before giving up, so a transient teardown doesn't
         // surface as a hard failure.
-        let (browser, ws_url) = match CdpClient::connect(&ws_url).await {
-            Ok(browser) => (browser, ws_url),
+        let browser = match CdpClient::connect(&ws_url).await {
+            Ok(browser) => browser,
             Err(_) => {
                 // Invalidate only if this is still the session we failed on —
                 // a concurrent `open` may have already relaunched a fresh one.
                 session::invalidate_session_if_current(&ws_url);
-                // Carry the RELAUNCHED url out of the match: it is the one
-                // `browser` just connected to, so resolve_target's page connection
-                // and the stored `ws_url` must use it, not the dead session's URL.
                 let ws_url = session::ensure_session().await?;
-                let browser = CdpClient::connect(&ws_url).await?;
-                (browser, ws_url)
+                CdpClient::connect(&ws_url).await?
             }
         };
+        let browser = Arc::new(browser);
 
         // Push-based target discovery: a click-opened popup is correlated by
         // the `Target.targetCreated` event captured during an action's bridge
@@ -144,16 +141,18 @@ impl LocalTransport {
             )
             .await?;
 
-        let (page, browser_context_id, target_id, context_lock, pin_vanished) =
-            resolve_target(&browser, &ws_url, context_name).await?;
+        let (mut page, browser_context_id, target_id, context_lock, pin_vanished) =
+            resolve_target(&browser, context_name).await?;
 
         let main_frame_id = fetch_main_frame_id(&page).await?;
         let frame_contexts = Arc::new(Mutex::new(HashMap::new()));
         let bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
-        spawn_frame_context_listener(&page, frame_contexts.clone(), bridge_contexts.clone());
+        let listener =
+            spawn_frame_context_listener(&page, frame_contexts.clone(), bridge_contexts.clone());
+        page.track(listener);
         // Register the bridge so it auto-loads into its isolated world on every
         // document (current one included) — the headless equivalent of the
-        // browser content script, with no per-call injection. `connect_to_page`
+        // browser content script, with no per-call injection. `attach_to_page`
         // already enabled Runtime, but its initial `executionContextCreated`
         // events (and the bridge world's) predate the listener's subscription,
         // so re-emit them for every existing context.
@@ -205,7 +204,6 @@ impl LocalTransport {
         let transport = Self {
             browser,
             page,
-            ws_url,
             browser_context_id,
             target_id,
             pin_vanished,
@@ -241,7 +239,7 @@ impl LocalTransport {
         self.browser_context_id.as_deref()
     }
 
-    pub fn page(&self) -> &CdpClient {
+    pub fn page(&self) -> &CdpSession {
         &self.page
     }
 
@@ -515,11 +513,12 @@ impl LocalTransport {
     pub(super) async fn rebind_page_world(&mut self) -> Result<()> {
         self.frame_contexts = Arc::new(Mutex::new(HashMap::new()));
         self.bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
-        spawn_frame_context_listener(
+        let listener = spawn_frame_context_listener(
             &self.page,
             self.frame_contexts.clone(),
             self.bridge_contexts.clone(),
         );
+        self.page.track(listener);
         install_bridge_world(&self.page).await?;
         self.main_frame_id = fetch_main_frame_id(&self.page).await?;
         reemit_execution_contexts(&self.page).await;
@@ -703,17 +702,29 @@ impl LocalTransport {
                 }
                 if target_url != before_url {
                     // Cross-site or cross-page navigation: the renderer process
-                    // may have swapped, leaving the old session's execution
-                    // context dead. Rebind a fresh session to the new target and
-                    // wait for it to commit and parse. A mid-swap target accepts
-                    // the socket but isn't ready, so a failed connect just retries.
-                    if let Ok(new_page) = connect_to_page(&self.ws_url, &target_id).await
-                        && wait_navigation_settled(&new_page, loader, &before_url, deadline).await
-                    {
-                        self.page = new_page;
-                        self.target_id = target_id;
+                    // may have swapped, but the flat session is attached to the
+                    // TARGET and survives it. Only document-scoped state resets:
+                    // the active iframe scope, the bridge-context readiness gate,
+                    // the re-armed monitors. (The context listener and the
+                    // registered bridge world are session-scoped and carry over.)
+                    if navigation_settled(&self.page, loader, &before_url).await {
                         self.clear_active_frame().await;
-                        self.rebind_page_world().await?;
+                        // Force the new document's contexts to re-announce
+                        // themselves. The new bridge/main-world
+                        // `executionContextCreated` events fire once; if that
+                        // burst overflowed the event ring, the async listener
+                        // dropped them and the context maps would stay empty,
+                        // so `await_live_bridge_context` below would poll to its
+                        // deadline and every later bridge command fail
+                        // `FrameNotFound` on a live page. `reemit` (Runtime
+                        // disable/enable) re-fires them deterministically — the
+                        // recovery the deleted cross-site socket-rebind used to
+                        // get from `rebind_page_world`. The navigation has
+                        // committed and parsed here, so the re-emit names the
+                        // NEW document. The old document's now-dead contexts
+                        // prune via their own `executionContextDestroyed`.
+                        reemit_execution_contexts(&self.page).await;
+                        self.await_live_bridge_context().await;
                         self.reinstall_monitors().await;
                         // A target created blank and now landing its FIRST real load:
                         // drop the synthetic `about:blank` entry `Page.navigate`
@@ -950,7 +961,7 @@ const PROBE: std::time::Duration = std::time::Duration::from_secs(2);
 /// `before_url` (a cross-page navigation, where the loader may differ across a
 /// process swap). Parsed = `readyState` is past `loading` — DOMContentLoaded has
 /// fired — so the page is usable without waiting on slow trailing subresources.
-async fn navigation_settled(page: &CdpClient, loader_id: Option<&str>, before_url: &str) -> bool {
+async fn navigation_settled(page: &CdpSession, loader_id: Option<&str>, before_url: &str) -> bool {
     let Ok(Ok(tree)) = tokio::time::timeout(PROBE, page.send("Page.getFrameTree", None)).await
     else {
         return false;
@@ -971,24 +982,6 @@ async fn navigation_settled(page: &CdpClient, loader_id: Option<&str>, before_ur
         tokio::time::timeout(PROBE, page.evaluate("document.readyState")).await,
         Ok(Ok(state)) if matches!(state.as_str(), Some("interactive") | Some("complete"))
     )
-}
-
-/// Poll a freshly-bound page until the navigation settles, bounded by `deadline`.
-async fn wait_navigation_settled(
-    page: &CdpClient,
-    loader_id: Option<&str>,
-    before_url: &str,
-    deadline: std::time::Instant,
-) -> bool {
-    loop {
-        if navigation_settled(page, loader_id, before_url).await {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
-    }
 }
 
 impl Transport for LocalTransport {
@@ -1156,7 +1149,7 @@ impl DeviceState {
     /// Apply this emulation to a page session: metrics, touch, AND user agent are
     /// all set unconditionally, so a `device set` fully defines the device and
     /// never leaves a prior override's stale remnant behind.
-    pub(crate) async fn apply(&self, page: &CdpClient) -> Result<()> {
+    pub(crate) async fn apply(&self, page: &CdpSession) -> Result<()> {
         let applied: Result<()> = async {
             page.send(
                 "Emulation.setDeviceMetricsOverride",
@@ -1311,11 +1304,10 @@ fn clear_persisted_monitors(browser_context_id: Option<&str>) {
 // ── Module-private helpers ────────────────────────────────────────────────
 
 async fn resolve_target(
-    browser: &CdpClient,
-    ws_url: &str,
+    browser: &Arc<CdpClient>,
     context: Option<&str>,
 ) -> Result<(
-    CdpClient,
+    CdpSession,
     Option<String>,
     String,
     Option<std::fs::File>,
@@ -1337,7 +1329,7 @@ async fn resolve_target(
         let (target_id, vanished) =
             pick_active_target(browser, Some(&browser_context_id), Some(&initial)).await?;
 
-        let cdp = connect_to_page(ws_url, &target_id).await?;
+        let cdp = attach_to_page(browser, &target_id).await?;
         Ok((
             cdp,
             Some(browser_context_id),
@@ -1347,7 +1339,7 @@ async fn resolve_target(
         ))
     } else {
         let (target_id, vanished) = pick_active_target(browser, None, None).await?;
-        let cdp = connect_to_page(ws_url, &target_id).await?;
+        let cdp = attach_to_page(browser, &target_id).await?;
         Ok((cdp, None, target_id, None, vanished))
     }
 }
@@ -1488,10 +1480,8 @@ async fn pick_active_target(
     }
 }
 
-pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<CdpClient> {
-    let authority = ws_url.split("/devtools/").next().unwrap_or(ws_url);
-    let page_ws_url = format!("{authority}/devtools/page/{target_id}");
-    let cdp = CdpClient::connect(&page_ws_url).await?;
+pub(super) async fn attach_to_page(conn: &Arc<CdpClient>, target_id: &str) -> Result<CdpSession> {
+    let mut cdp = conn.attach(target_id).await?;
     cdp.send("Page.enable", None).await?;
     // With Page enabled, Chrome stops auto-dismissing javascript dialogs and
     // waits for an answer — an unanswered alert() would wedge the renderer.
@@ -1503,7 +1493,7 @@ pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<Cdp
     // unbounded — but WebPilot reads console only through its own MAIN-world hook
     // (`window.__webpilot_console`), never this buffer, so the replay is pure
     // overhead. Discarding first means a page's runaway `console.log` can neither
-    // re-transfer on every reconnect (a latency cliff) nor grow Chrome's memory
+    // re-transfer on every re-attach (a latency cliff) nor grow Chrome's memory
     // without bound across a long session.
     let _ = cdp.send("Runtime.discardConsoleEntries", None).await;
     cdp.send("Runtime.enable", None).await?;
@@ -1522,7 +1512,7 @@ pub(super) async fn connect_to_page(ws_url: &str, target_id: &str) -> Result<Cdp
 /// discard-before-enable invariant lives for the re-emit sites, so a new one
 /// can't reopen the console-replay wedge by forgetting it. (Browser mode's twin
 /// is `cdpReemitContexts` in cdp.js.)
-async fn reemit_execution_contexts(page: &CdpClient) {
+async fn reemit_execution_contexts(page: &CdpSession) {
     let _ = page.send("Runtime.disable", None).await;
     let _ = page.send("Runtime.discardConsoleEntries", None).await;
     let _ = page.send("Runtime.enable", None).await;
@@ -1591,7 +1581,7 @@ pub(super) fn epoch_ms() -> u128 {
 /// Resolve the page target's top frame id from `Page.getFrameTree`. Stable for
 /// the target's lifetime (a cross-origin navigation swaps the document, not the
 /// frame id), so the caller caches it once at open.
-async fn fetch_main_frame_id(page: &CdpClient) -> Result<String> {
+async fn fetch_main_frame_id(page: &CdpSession) -> Result<String> {
     let tree = page.send("Page.getFrameTree", None).await?;
     tree.pointer("/frameTree/frame/id")
         .and_then(|v| v.as_str())
@@ -1608,7 +1598,7 @@ async fn fetch_main_frame_id(page: &CdpClient) -> Result<String> {
 /// every document, the current one included (`runImmediately`). The browser
 /// content script's declarative injection, expressed for headless — so the
 /// bridge is always present in its own world without per-call injection.
-async fn install_bridge_world(page: &CdpClient) -> Result<()> {
+async fn install_bridge_world(page: &CdpSession) -> Result<()> {
     page.send(
         "Page.addScriptToEvaluateOnNewDocument",
         Some(json!({
@@ -1625,13 +1615,14 @@ async fn install_bridge_world(page: &CdpClient) -> Result<()> {
 /// split each frame's contexts into the two maps the `LocalTransport` routes
 /// against: the frame's default (`isDefault`) context is its MAIN world (page
 /// expressions); the `BRIDGE_WORLD`-named context is where the bridge runs.
-/// `Runtime.enable` is issued by `connect_to_page` before this spawns, so events
+/// `Runtime.enable` is issued by `attach_to_page` before this spawns, so events
 /// flow from first connection.
+#[must_use = "track the listener on its session so Drop aborts it"]
 fn spawn_frame_context_listener(
-    page: &CdpClient,
+    page: &CdpSession,
     main: Arc<Mutex<HashMap<String, String>>>,
     bridge: Arc<Mutex<HashMap<String, String>>>,
-) {
+) -> tokio::task::JoinHandle<()> {
     let mut events = page.subscribe_events();
     tokio::spawn(async move {
         loop {
@@ -1687,7 +1678,7 @@ fn spawn_frame_context_listener(
                 Err(_) => break,
             }
         }
-    });
+    })
 }
 
 /// Clear all per-context session state (active tab/frame markers, armed
@@ -1708,10 +1699,11 @@ pub(crate) fn clear_context_state(browser_context_id: &str) {
 #[cfg(test)]
 mod navigation_settled_tests {
     use super::*;
-    use crate::test_support::{Reply, mock_cdp, ok};
+    use crate::test_support::{Reply, attach_session, mock_cdp, ok};
 
-    /// A mock that answers `Page.getFrameTree` with the given main-frame
-    /// `loaderId`/`url` and `Runtime.evaluate` (document.readyState) with `ready`.
+    /// A mock that answers `Target.attachToTarget` with a session,
+    /// `Page.getFrameTree` with the given main-frame `loaderId`/`url`, and
+    /// `Runtime.evaluate` (document.readyState) with `ready`.
     fn serve_frame(
         loader: &'static str,
         url: &'static str,
@@ -1719,6 +1711,7 @@ mod navigation_settled_tests {
     ) -> impl Fn(&Value) -> Reply {
         move |req| {
             let result = match req["method"].as_str() {
+                Some("Target.attachToTarget") => json!({ "sessionId": "MOCK" }),
                 Some("Page.getFrameTree") => {
                     json!({ "frameTree": { "frame": { "loaderId": loader, "url": url } } })
                 }
@@ -1731,11 +1724,16 @@ mod navigation_settled_tests {
         }
     }
 
+    async fn mock_page(url: &str) -> CdpSession {
+        let conn = Arc::new(CdpClient::connect(url).await.unwrap());
+        attach_session(&conn).await
+    }
+
     #[tokio::test]
     async fn settled_when_loader_matches_and_document_ready() {
         let url = mock_cdp(serve_frame("L1", "https://same", "complete")).await;
-        let cdp = CdpClient::connect(&url).await.unwrap();
-        assert!(navigation_settled(&cdp, Some("L1"), "https://same").await);
+        let page = mock_page(&url).await;
+        assert!(navigation_settled(&page, Some("L1"), "https://same").await);
     }
 
     #[tokio::test]
@@ -1743,21 +1741,21 @@ mod navigation_settled_tests {
         // A cross-page nav: the loader may differ across a process swap, but the
         // URL having moved is enough to count as committed.
         let url = mock_cdp(serve_frame("Lx", "https://new", "interactive")).await;
-        let cdp = CdpClient::connect(&url).await.unwrap();
-        assert!(navigation_settled(&cdp, Some("Lwant"), "https://old").await);
+        let page = mock_page(&url).await;
+        assert!(navigation_settled(&page, Some("Lwant"), "https://old").await);
     }
 
     #[tokio::test]
     async fn not_settled_when_neither_loader_nor_url_committed() {
         let url = mock_cdp(serve_frame("Lx", "https://old", "complete")).await;
-        let cdp = CdpClient::connect(&url).await.unwrap();
-        assert!(!navigation_settled(&cdp, Some("Lwant"), "https://old").await);
+        let page = mock_page(&url).await;
+        assert!(!navigation_settled(&page, Some("Lwant"), "https://old").await);
     }
 
     #[tokio::test]
     async fn not_settled_while_document_still_loading() {
         let url = mock_cdp(serve_frame("L1", "https://same", "loading")).await;
-        let cdp = CdpClient::connect(&url).await.unwrap();
-        assert!(!navigation_settled(&cdp, Some("L1"), "https://same").await);
+        let page = mock_page(&url).await;
+        assert!(!navigation_settled(&page, Some("L1"), "https://same").await);
     }
 }

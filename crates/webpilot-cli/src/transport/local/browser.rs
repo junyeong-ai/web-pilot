@@ -7,7 +7,7 @@ use webpilot::WebPilotError;
 use webpilot::protocol::{FrameSelector, ResponseData, RunMode};
 use webpilot::types::{FrameInfo, TabInfo};
 
-use super::{LocalTransport, action_success, connect_to_page, target_in_context};
+use super::{LocalTransport, action_success, attach_to_page, target_in_context};
 
 /// A frame selector that matched more than one frame is ambiguous: switching
 /// into whichever came first in document order would silently scope every
@@ -126,7 +126,7 @@ impl LocalTransport {
         {
             return self.tab_gone_or(e, tab_id).await;
         }
-        let new_page = match connect_to_page(&self.ws_url, tab_id).await {
+        let new_page = match attach_to_page(&self.browser, tab_id).await {
             Ok(p) => p,
             Err(e) => return self.tab_gone_or(e, tab_id).await,
         };

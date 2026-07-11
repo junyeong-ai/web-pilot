@@ -233,7 +233,10 @@ impl Settings {
                 )),
             },
             cdp: Cdp {
-                event_buffer: usize_var("WEBPILOT_CDP_EVENT_BUFFER", file.cdp.event_buffer, 256),
+                // One connection carries the browser domain plus every page
+                // session's events (flat protocol), so the ring is sized for the
+                // combined stream a busy page produces.
+                event_buffer: usize_var("WEBPILOT_CDP_EVENT_BUFFER", file.cdp.event_buffer, 512),
             },
             capture: Capture {
                 screenshot_max_long_edge: u32_var(
@@ -471,7 +474,7 @@ mod tests {
             context: Context {
                 ttl: Duration::from_secs(3_600),
             },
-            cdp: Cdp { event_buffer: 256 },
+            cdp: Cdp { event_buffer: 512 },
             capture: Capture {
                 screenshot_max_long_edge: 1568,
                 max_record_frames: 3_600,

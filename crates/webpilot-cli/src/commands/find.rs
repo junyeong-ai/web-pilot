@@ -8,28 +8,39 @@ use webpilot::types::{InteractiveElement, line_safe, line_safe_clip};
 use crate::output::CommandOutput;
 use crate::transport::{Transport, lift_error};
 
-#[derive(Args)]
+// Derives serde alongside clap so the MCP `browser_find` tool deserializes the
+// same struct the CLI parses — one filter surface, no parallel mapping. Unknown
+// fields are rejected so a misspelled filter never silently matches everything.
+#[derive(Args, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FindArgs {
     #[arg(long)]
+    #[serde(default)]
     pub role: Option<String>,
     // text / label / placeholder are arbitrary page text that can start with
     // `-` (e.g. searching for "-50%"); `fill` is typed text (e.g. a negative
     // number). Accept a leading-dash value rather than read it as a flag.
     #[arg(long, allow_hyphen_values = true)]
+    #[serde(default)]
     pub text: Option<String>,
     #[arg(long, allow_hyphen_values = true)]
+    #[serde(default)]
     pub label: Option<String>,
     #[arg(long, allow_hyphen_values = true)]
+    #[serde(default)]
     pub placeholder: Option<String>,
     #[arg(long)]
+    #[serde(default)]
     pub tag: Option<String>,
     /// Click the match (the filter must match exactly one element).
     /// Mutually exclusive with --fill.
     #[arg(long, conflicts_with = "fill")]
+    #[serde(default)]
     pub click: bool,
     /// Type into the match (the filter must match exactly one element).
     /// Mutually exclusive with --click.
     #[arg(long, allow_hyphen_values = true)]
+    #[serde(default)]
     pub fill: Option<String>,
 }
 
@@ -65,6 +76,16 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
             }
             .into());
         }
+    }
+    // clap's `conflicts_with` guards only the CLI parse; serde entry points
+    // (the MCP tool) reach here unchecked, so the invariant is enforced where
+    // every caller converges — otherwise `click` would silently win and the
+    // `fill` text be dropped.
+    if args.click && args.fill.is_some() {
+        return Err(webpilot::WebPilotError::InvalidArgument {
+            detail: "--click and --fill are mutually exclusive — chain one action per find".into(),
+        }
+        .into());
     }
 
     let result = transport
@@ -262,5 +283,50 @@ async fn chain_action<T: Transport>(transport: &mut T, action: Action) -> Result
         }
         ResponseData::Error { error } => Err(error.into()),
         _ => anyhow::bail!("Unexpected response shape"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn click_and_fill_are_rejected_together_before_any_io() {
+        // The serde entry point carries no clap `conflicts_with`, so the
+        // handler itself must reject the combination — before any transport
+        // I/O, so the check needs no browser.
+        let mut transport = crate::transport::IpcTransport::new();
+        let Err(err) = run(
+            &mut transport,
+            FindArgs {
+                role: Some("button".into()),
+                text: None,
+                label: None,
+                placeholder: None,
+                tag: None,
+                click: true,
+                fill: Some("x".into()),
+            },
+        )
+        .await
+        else {
+            panic!("click+fill must be rejected");
+        };
+        let e = err.downcast::<webpilot::WebPilotError>().unwrap();
+        assert!(matches!(e, webpilot::WebPilotError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn find_args_deserialize_strictly() {
+        // Defaults fill absent fields; an unknown field is an error, never a
+        // filter that silently matches everything.
+        let ok: FindArgs =
+            serde_json::from_value(json!({ "label": "Email", "fill": "x" })).unwrap();
+        assert_eq!(ok.label.as_deref(), Some("Email"));
+        assert_eq!(ok.fill.as_deref(), Some("x"));
+        assert!(!ok.click);
+        let bad = serde_json::from_value::<FindArgs>(json!({ "lable": "Email" }));
+        assert!(bad.is_err(), "unknown filter field must be rejected");
     }
 }

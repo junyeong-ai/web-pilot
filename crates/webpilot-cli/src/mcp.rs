@@ -21,14 +21,17 @@ use webpilot::WebPilotError;
 use webpilot::action::Action;
 use webpilot::capture::{CaptureField, CaptureOpts};
 
-use crate::commands::{action, capture, eval, wait};
+use crate::commands::{action, capture, eval, find, frame, tab, wait};
 use crate::output::CommandOutput;
 use crate::transport::{IpcTransport, LocalTransport, Transport};
 
-/// The MCP protocol revision this server implements. Per the MCP lifecycle,
-/// `initialize` always answers with a version the server supports — the client
-/// decides whether to continue.
-const PROTOCOL_VERSION: &str = "2025-06-18";
+/// The MCP protocol revisions this server implements, newest first. Per the
+/// MCP lifecycle, `initialize` echoes the client's requested revision when it
+/// is supported, and otherwise answers with the newest — the client decides
+/// whether to continue. Both listed revisions describe this tools-only stdio
+/// server identically; older revisions differ on the wire (they allow JSON-RPC
+/// batching, which this server rejects), so they are not claimed.
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = ["2025-11-25", "2025-06-18"];
 
 #[derive(clap::Args)]
 pub struct McpArgs {}
@@ -165,10 +168,10 @@ where
         // JSON-RPC 2.0: a parse error is answered with a null id, never dropped.
         return Some(error_reply(Value::Null, -32700, "parse error"));
     };
-    // A top-level array is a JSON-RPC batch. MCP (2025-06-18) does not use
-    // batching, so reject it with an invalid-request rather than letting it fall
-    // through to the no-id notification path, where the client would hang
-    // waiting for a batch response that never comes.
+    // A top-level array is a JSON-RPC batch. No supported MCP revision uses
+    // batching (removed in 2025-06-18), so reject it with an invalid-request
+    // rather than letting it fall through to the no-id notification path,
+    // where the client would hang waiting for a batch response that never comes.
     if msg.is_array() {
         return Some(error_reply(
             Value::Null,
@@ -210,7 +213,7 @@ where
         // check the spec allows at any time, before initialization included.
         "initialize" => {
             *initialized = true;
-            Some(ok_reply(id, initialize_result()))
+            Some(ok_reply(id, initialize_result(&params)))
         }
         "ping" => Some(ok_reply(id, json!({}))),
         // Operational methods require initialization first (MCP lifecycle): a
@@ -239,9 +242,14 @@ fn error_reply(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-fn initialize_result() -> Value {
+fn initialize_result(params: &Value) -> Value {
+    let version = params
+        .get("protocolVersion")
+        .and_then(Value::as_str)
+        .filter(|v| SUPPORTED_PROTOCOL_VERSIONS.contains(v))
+        .unwrap_or(SUPPORTED_PROTOCOL_VERSIONS[0]);
     json!({
-        "protocolVersion": PROTOCOL_VERSION,
+        "protocolVersion": version,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "webpilot", "version": env!("CARGO_PKG_VERSION") },
     })
@@ -374,12 +382,17 @@ async fn call_tool<T: Transport>(
             .await
         }
         "browser_screenshot" => {
+            let opts = CaptureOpts {
+                full_page: bool_arg(args, "full_page")?,
+                annotate: bool_arg(args, "annotate")?,
+                ..CaptureOpts::default()
+            };
             let output = capture::run(
                 transport,
                 capture::CaptureArgs {
                     include: vec![CaptureField::Screenshot],
                     url: None,
-                    opts: CaptureOpts::default(),
+                    opts,
                 },
             )
             .await
@@ -387,7 +400,9 @@ async fn call_tool<T: Transport>(
             return screenshot_content(&output);
         }
         "browser_click" | "browser_type" | "browser_press_key" | "browser_scroll"
-        | "browser_select" => {
+        | "browser_scroll_to" | "browser_hover" | "browser_focus" | "browser_select"
+        | "browser_upload" | "browser_drag" | "browser_back" | "browser_forward"
+        | "browser_reload" => {
             let action = build_action(name, args)?;
             action::run(
                 transport,
@@ -397,6 +412,61 @@ async fn call_tool<T: Transport>(
                 },
             )
             .await
+        }
+        "browser_find" => {
+            let find_args: find::FindArgs = serde_json::from_value(args.clone()).map_err(|e| {
+                WebPilotError::InvalidArgument {
+                    detail: format!("invalid arguments for browser_find: {e}"),
+                }
+            })?;
+            find::run(transport, find_args).await
+        }
+        "browser_tabs" => {
+            let command = match str_arg(args, "action")?.as_str() {
+                "list" => None,
+                "new" => Some(tab::TabCommand::New {
+                    url: str_arg(args, "url")?,
+                }),
+                "switch" => Some(tab::TabCommand::Switch {
+                    tab_id: str_arg(args, "tab_id")?,
+                }),
+                "close" => Some(tab::TabCommand::Close {
+                    tab_id: str_arg(args, "tab_id")?,
+                }),
+                "find" => Some(tab::TabCommand::Find {
+                    url: str_arg(args, "url")?,
+                }),
+                other => {
+                    return Err(WebPilotError::InvalidArgument {
+                        detail: format!(
+                            "unknown tabs action: {other} (expected list, new, switch, close, or find)"
+                        ),
+                    });
+                }
+            };
+            tab::run(transport, tab::TabArgs { command }).await
+        }
+        // `FrameCommand::Find` (JS-predicate switching) stays CLI-only: the
+        // curated MCP surface addresses frames by name or URL pattern.
+        "browser_frame" => {
+            let command = match str_arg(args, "action")?.as_str() {
+                "list" => None,
+                "switch" => Some(frame::FrameCommand::Switch {
+                    name: str_arg(args, "name")?,
+                }),
+                "url" => Some(frame::FrameCommand::Url {
+                    pattern: str_arg(args, "pattern")?,
+                }),
+                "main" => Some(frame::FrameCommand::Main),
+                other => {
+                    return Err(WebPilotError::InvalidArgument {
+                        detail: format!(
+                            "unknown frame action: {other} (expected list, switch, url, or main)"
+                        ),
+                    });
+                }
+            };
+            frame::run(transport, frame::FrameArgs { command }).await
         }
         "browser_eval" => {
             eval::run(
@@ -462,7 +532,15 @@ fn build_action(tool: &str, args: &Value) -> std::result::Result<Action, WebPilo
         "browser_type" => "type",
         "browser_press_key" => "key_press",
         "browser_scroll" => "scroll",
+        "browser_scroll_to" => "scroll_to",
+        "browser_hover" => "hover",
+        "browser_focus" => "focus",
         "browser_select" => "select",
+        "browser_upload" => "upload",
+        "browser_drag" => "drag",
+        "browser_back" => "back",
+        "browser_forward" => "forward",
+        "browser_reload" => "reload",
         _ => unreachable!("build_action only called for action tools"),
     };
     let mut obj = args.as_object().cloned().unwrap_or_default();
@@ -517,53 +595,89 @@ fn str_arg(args: &Value, key: &str) -> std::result::Result<String, WebPilotError
         })
 }
 
-/// The exposed tool surface, with JSON Schemas. Curated to the core
-/// observe→act→observe agent loop; each acting tool auto-captures the resulting
-/// DOM so the model always gets a fresh snapshot back.
+/// An optional boolean argument: absent (or null) is `false`; present but
+/// non-boolean is a typed error, never a silent fall-back — an option the
+/// caller set must not be dropped.
+fn bool_arg(args: &Value, key: &str) -> std::result::Result<bool, WebPilotError> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(v) => v.as_bool().ok_or_else(|| WebPilotError::InvalidArgument {
+            detail: format!("{key} must be a boolean"),
+        }),
+    }
+}
+
+/// The exposed tool surface, with JSON Schemas. Curated to the agent loop —
+/// observe (snapshot/screenshot), act (the `Action` surface), orient (find /
+/// tabs / frame), synchronize (wait) — plus `eval` as the escape hatch; each
+/// acting tool auto-captures the resulting DOM so the model always gets a
+/// fresh snapshot back. Every schema sets `additionalProperties: false`: the
+/// schema is the argument contract, never a hint.
+///
+/// `annotations` carry only hints that differ from the spec defaults
+/// (readOnlyHint=false, destructiveHint=true, idempotentHint=false,
+/// openWorldHint=true). On the open web any page handler may commit changes,
+/// so interacting tools keep the conservative defaults; only viewport/routing
+/// tools (scroll, hover, focus, frame) are marked non-destructive.
 fn tool_specs() -> Value {
     let index = json!({
         "type": "integer",
         "minimum": 1,
         "description": "Element index from the most recent snapshot's [N] markers.",
     });
+    let modifiers = json!({
+        "type": "object",
+        "description": "Optional modifier keys held during the input.",
+        "properties": {
+            "ctrl": { "type": "boolean" },
+            "shift": { "type": "boolean" },
+            "alt": { "type": "boolean" },
+            "meta": { "type": "boolean" },
+        },
+        "additionalProperties": false,
+    });
     json!([
         {
             "name": "browser_navigate",
+            "title": "Navigate to URL",
             "description": "Navigate to a URL and return the page's interactive-element snapshot.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "url": { "type": "string", "description": "Absolute URL to load." } },
                 "required": ["url"],
+                "additionalProperties": false,
             },
         },
         {
             "name": "browser_snapshot",
+            "title": "Page snapshot",
             "description": "Re-capture the current page's interactive-element snapshot (the [N]-indexed list used to address elements).",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+            "annotations": { "readOnlyHint": true },
         },
         {
             "name": "browser_screenshot",
+            "title": "Screenshot",
             "description": "Capture a screenshot of the current page; returns the image and its saved path.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "full_page": { "type": "boolean", "description": "Capture the entire scrollable area instead of the viewport.", "default": false },
+                    "annotate": { "type": "boolean", "description": "Draw the snapshot's [N] labels on interactive elements (viewport only; cannot be combined with full_page).", "default": false },
+                },
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
         },
         {
             "name": "browser_click",
+            "title": "Click element",
             "description": "Click the element at the given snapshot index, then return the updated snapshot. Modifier flags reach the page's own handlers; browser-level open-in-new-tab does not apply to a synthetic click — browser_navigate to the link's URL instead.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "index": index,
-                    "modifiers": {
-                        "type": "object",
-                        "description": "Optional modifier keys held during the click.",
-                        "properties": {
-                            "ctrl": { "type": "boolean" },
-                            "shift": { "type": "boolean" },
-                            "alt": { "type": "boolean" },
-                            "meta": { "type": "boolean" },
-                        },
-                        "additionalProperties": false,
-                    },
+                    "modifiers": modifiers,
                 },
                 "required": ["index"],
                 // The handler deserializes a strict `Action` (`deny_unknown_fields`),
@@ -574,6 +688,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "browser_type",
+            "title": "Type text",
             "description": "Type text into the element at the given index, then return the updated snapshot.",
             "inputSchema": {
                 "type": "object",
@@ -588,22 +703,13 @@ fn tool_specs() -> Value {
         },
         {
             "name": "browser_press_key",
+            "title": "Press key",
             "description": "Press a key (e.g. Enter, Tab, Escape, ArrowDown) on the focused element.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "key": { "type": "string", "description": "Key name, e.g. \"Enter\" or a single character." },
-                    "modifiers": {
-                        "type": "object",
-                        "description": "Optional modifier keys held during the press.",
-                        "properties": {
-                            "ctrl": { "type": "boolean" },
-                            "shift": { "type": "boolean" },
-                            "alt": { "type": "boolean" },
-                            "meta": { "type": "boolean" },
-                        },
-                        "additionalProperties": false,
-                    },
+                    "modifiers": modifiers,
                 },
                 "required": ["key"],
                 "additionalProperties": false,
@@ -611,6 +717,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "browser_scroll",
+            "title": "Scroll page",
             "description": "Scroll the page up or down by a pixel amount.",
             "inputSchema": {
                 "type": "object",
@@ -621,9 +728,47 @@ fn tool_specs() -> Value {
                 "required": ["direction"],
                 "additionalProperties": false,
             },
+            "annotations": { "destructiveHint": false },
+        },
+        {
+            "name": "browser_scroll_to",
+            "title": "Scroll to element",
+            "description": "Scroll until the element at the given index is in view, then return the updated snapshot.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "index": index },
+                "required": ["index"],
+                "additionalProperties": false,
+            },
+            "annotations": { "destructiveHint": false, "idempotentHint": true },
+        },
+        {
+            "name": "browser_hover",
+            "title": "Hover element",
+            "description": "Hover over the element at the given index (triggers hover menus and tooltips), then return the updated snapshot.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "index": index },
+                "required": ["index"],
+                "additionalProperties": false,
+            },
+            "annotations": { "destructiveHint": false, "idempotentHint": true },
+        },
+        {
+            "name": "browser_focus",
+            "title": "Focus element",
+            "description": "Focus the element at the given index, then return the updated snapshot.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "index": index },
+                "required": ["index"],
+                "additionalProperties": false,
+            },
+            "annotations": { "destructiveHint": false, "idempotentHint": true },
         },
         {
             "name": "browser_select",
+            "title": "Select option",
             "description": "Select an option by value in the <select> element at the given index.",
             "inputSchema": {
                 "type": "object",
@@ -636,16 +781,115 @@ fn tool_specs() -> Value {
             },
         },
         {
+            "name": "browser_upload",
+            "title": "Upload file",
+            "description": "Attach a file to the <input type=file> element at the given index, then return the updated snapshot.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "index": index,
+                    "path": { "type": "string", "description": "Path of the file to upload, on the machine running WebPilot." },
+                },
+                "required": ["index", "path"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "browser_drag",
+            "title": "Drag element",
+            "description": "Drag one element to another's position, then return the updated snapshot.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": { "type": "integer", "minimum": 1, "description": "Index of the element to drag." },
+                    "target": { "type": "integer", "minimum": 1, "description": "Index of the element to drop onto." },
+                    "steps": { "type": "integer", "minimum": 1, "description": "Intermediate mouse-move steps.", "default": 5 },
+                },
+                "required": ["source", "target"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "browser_back",
+            "title": "History back",
+            "description": "Go back one entry in the tab's history, then return the updated snapshot.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        },
+        {
+            "name": "browser_forward",
+            "title": "History forward",
+            "description": "Go forward one entry in the tab's history, then return the updated snapshot.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        },
+        {
+            "name": "browser_reload",
+            "title": "Reload page",
+            "description": "Reload the current page, then return the updated snapshot.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        },
+        {
+            "name": "browser_find",
+            "title": "Find elements",
+            "description": "Find interactive elements by semantic filters (role, visible text, label, placeholder, tag) and list them with their snapshot indices. With click or fill, also acts on the match — the filter must then match exactly one element.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "role": { "type": "string", "description": "ARIA role or input type, e.g. button, link, textbox." },
+                    "text": { "type": "string", "description": "Substring of the element's visible text." },
+                    "label": { "type": "string", "description": "Substring of the element's label." },
+                    "placeholder": { "type": "string", "description": "Substring of the element's placeholder." },
+                    "tag": { "type": "string", "description": "Exact tag name, e.g. input, button." },
+                    "click": { "type": "boolean", "description": "Click the single match. Mutually exclusive with fill.", "default": false },
+                    "fill": { "type": "string", "description": "Replace the single match's value with this text. Mutually exclusive with click." },
+                },
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "browser_tabs",
+            "title": "Manage tabs",
+            "description": "Manage browser tabs: list them, open a URL in a new tab, switch to or close a tab by id, or find (and switch to) the single tab matching a *-glob URL pattern.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "new", "switch", "close", "find"] },
+                    "tab_id": { "type": "string", "description": "Tab id from `list` (required for switch/close)." },
+                    "url": { "type": "string", "description": "URL to open (new) or *-glob pattern to match (find)." },
+                },
+                "required": ["action"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "browser_frame",
+            "title": "Switch frame",
+            "description": "Route subsequent commands to an iframe: list frames, switch by frame name or *-glob URL pattern, or return to the main frame. The active frame persists until switched again.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "switch", "url", "main"] },
+                    "name": { "type": "string", "description": "Frame name (required for switch)." },
+                    "pattern": { "type": "string", "description": "*-glob URL pattern matching exactly one frame (required for url)." },
+                },
+                "required": ["action"],
+                "additionalProperties": false,
+            },
+            "annotations": { "destructiveHint": false, "idempotentHint": true },
+        },
+        {
             "name": "browser_eval",
+            "title": "Evaluate JavaScript",
             "description": "Evaluate JavaScript in the page (MAIN world) and return the JSON-serialized result.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "code": { "type": "string", "description": "JavaScript expression or statements." } },
                 "required": ["code"],
+                "additionalProperties": false,
             },
         },
         {
             "name": "browser_wait",
+            "title": "Wait for condition",
             "description": "Wait for a condition before continuing.",
             "inputSchema": {
                 "type": "object",
@@ -655,7 +899,9 @@ fn tool_specs() -> Value {
                     "timeout_ms": { "type": "integer", "minimum": 1, "default": 10000 },
                 },
                 "required": ["until"],
+                "additionalProperties": false,
             },
+            "annotations": { "readOnlyHint": true },
         },
     ])
 }
@@ -665,18 +911,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initialize_advertises_the_supported_protocol_version() {
-        // The server implements exactly one revision; per the MCP lifecycle it
-        // must answer with a version it supports (never echo an unknown one)
-        // and let the client decide.
-        let r = initialize_result();
-        assert_eq!(r["protocolVersion"], PROTOCOL_VERSION);
+    fn initialize_negotiates_the_protocol_version() {
+        // A supported requested revision is echoed back; an unsupported or
+        // absent one gets the newest supported revision — the client decides
+        // whether to continue.
+        for v in SUPPORTED_PROTOCOL_VERSIONS {
+            let r = initialize_result(&json!({ "protocolVersion": v }));
+            assert_eq!(r["protocolVersion"], v);
+        }
+        let r = initialize_result(&json!({ "protocolVersion": "2024-11-05" }));
+        assert_eq!(r["protocolVersion"], SUPPORTED_PROTOCOL_VERSIONS[0]);
+        let r = initialize_result(&Value::Null);
+        assert_eq!(r["protocolVersion"], SUPPORTED_PROTOCOL_VERSIONS[0]);
         assert_eq!(r["serverInfo"]["name"], "webpilot");
         assert!(r["capabilities"]["tools"].is_object());
     }
 
     #[test]
-    fn tool_specs_cover_the_agent_loop_with_object_schemas() {
+    fn tool_specs_cover_the_agent_loop_with_strict_object_schemas() {
         let specs = tool_specs();
         let names: Vec<&str> = specs
             .as_array()
@@ -687,28 +939,71 @@ mod tests {
         for expected in [
             "browser_navigate",
             "browser_snapshot",
+            "browser_screenshot",
             "browser_click",
             "browser_type",
+            "browser_press_key",
+            "browser_scroll",
+            "browser_scroll_to",
+            "browser_hover",
+            "browser_focus",
+            "browser_select",
+            "browser_upload",
+            "browser_drag",
+            "browser_back",
+            "browser_forward",
+            "browser_reload",
+            "browser_find",
+            "browser_tabs",
+            "browser_frame",
             "browser_eval",
             "browser_wait",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
+        // Every schema is a strict object contract and every tool carries a
+        // display title — uniformly, so no tool's arguments are ever a hint.
         for tool in specs.as_array().unwrap() {
             assert_eq!(
                 tool["inputSchema"]["type"], "object",
                 "{} schema",
                 tool["name"]
             );
+            assert_eq!(
+                tool["inputSchema"]["additionalProperties"],
+                json!(false),
+                "{} schema must forbid unknown properties",
+                tool["name"]
+            );
+            assert!(tool["title"].is_string(), "{} needs a title", tool["name"]);
         }
     }
 
     #[test]
+    fn read_only_annotations_mark_exactly_the_observing_tools() {
+        // readOnlyHint lets a host skip confirmation for pure observation.
+        // `browser_find` is NOT read-only: its click/fill arguments act on the
+        // page, and a static hint must cover the tool's whole capability.
+        let specs = tool_specs();
+        let read_only: Vec<&str> = specs
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["annotations"]["readOnlyHint"] == json!(true))
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            read_only,
+            ["browser_snapshot", "browser_screenshot", "browser_wait"]
+        );
+    }
+
+    #[test]
     fn action_tool_schemas_forbid_unknown_properties() {
-        // Every tool whose handler deserializes a strict `Action`
-        // (`deny_unknown_fields`) must advertise `additionalProperties: false`,
-        // so a client learns an unknown property is rejected from the schema,
-        // not only at runtime.
+        // Every tool whose handler deserializes a strict type
+        // (`deny_unknown_fields` on `Action` / `FindArgs`) must advertise
+        // `additionalProperties: false`, so a client learns an unknown
+        // property is rejected from the schema, not only at runtime.
         let specs = tool_specs();
         let arr = specs.as_array().unwrap();
         for name in [
@@ -716,7 +1011,13 @@ mod tests {
             "browser_type",
             "browser_press_key",
             "browser_scroll",
+            "browser_scroll_to",
+            "browser_hover",
+            "browser_focus",
             "browser_select",
+            "browser_upload",
+            "browser_drag",
+            "browser_find",
         ] {
             let tool = arr.iter().find(|t| t["name"] == name).unwrap();
             assert_eq!(
@@ -732,11 +1033,16 @@ mod tests {
         // A tool that takes NO arguments must also advertise `additionalProperties:
         // false`. Its handler ignores `arguments` entirely, so the schema is the
         // only contract: without this, a client that guesses at an unsupported
-        // option (a `full_page` on `browser_screenshot`) has it silently dropped
-        // and gets a different result than it asked for, with no error.
+        // option (a `hard` on `browser_reload`) has it silently dropped and gets
+        // a different result than it asked for, with no error.
         let specs = tool_specs();
         let arr = specs.as_array().unwrap();
-        for name in ["browser_snapshot", "browser_screenshot"] {
+        for name in [
+            "browser_snapshot",
+            "browser_back",
+            "browser_forward",
+            "browser_reload",
+        ] {
             let tool = arr.iter().find(|t| t["name"] == name).unwrap();
             assert_eq!(
                 tool["inputSchema"]["properties"],
@@ -823,6 +1129,26 @@ mod tests {
             }
             other => panic!("expected Click, got {other:?}"),
         }
+        // `drag` without `steps` → the shared default applies.
+        let a = build_action("browser_drag", &json!({ "source": 1, "target": 2 })).unwrap();
+        assert_eq!(
+            a,
+            Action::Drag {
+                source: 1,
+                target: 2,
+                steps: 5,
+            }
+        );
+        // A no-argument history tool builds its unit variant.
+        let a = build_action("browser_back", &json!({})).unwrap();
+        assert_eq!(a, Action::Back);
+        // `upload` carries the server-local path through as a PathBuf.
+        let a = build_action(
+            "browser_upload",
+            &json!({ "index": 2, "path": "/tmp/f.png" }),
+        )
+        .unwrap();
+        assert!(matches!(a, Action::Upload { index: 2, .. }));
     }
 
     #[test]

@@ -12,6 +12,9 @@ use tokio_tungstenite::tungstenite::Message;
 pub(crate) enum Reply {
     /// Send this full `{ id, ... }` response value.
     Send(Value),
+    /// Send several frames in order — unsolicited events interleaved with (or
+    /// preceding) the response, so tests can stage event traffic around a call.
+    SendAll(Vec<Value>),
     /// Read the request but never reply — simulates a hung call.
     Silent,
     /// Close the connection after reading the request.
@@ -52,10 +55,24 @@ where
                 Reply::Send(v) => {
                     let _ = ws.send(Message::Text(v.to_string().into())).await;
                 }
+                Reply::SendAll(frames) => {
+                    for v in frames {
+                        let _ = ws.send(Message::Text(v.to_string().into())).await;
+                    }
+                }
                 Reply::Silent => {}
                 Reply::Close => break,
             }
         }
     });
     url
+}
+
+/// Attach a session to a mock whose handler answers `Target.attachToTarget`.
+pub(crate) async fn attach_session(
+    conn: &std::sync::Arc<crate::cdp::CdpClient>,
+) -> crate::cdp::CdpSession {
+    conn.attach("MOCK_TARGET")
+        .await
+        .expect("mock answers Target.attachToTarget")
 }

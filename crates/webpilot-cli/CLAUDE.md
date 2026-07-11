@@ -27,10 +27,12 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
     host gates.
   - `local/` — `LocalTransport` (headless), **split by domain**. `send` calls
     `policy::enforce` first:
-    - `mod.rs` — struct, `open`, `Transport` impl, the **isolated-world bridge**
-      (`install_bridge_world` auto-loads `bridge.js` into the `webpilot_bridge`
-      world per document; `bridge_context_id` vs `active_context_id` route bridge
-      calls vs page expressions), **navigation** (`navigate_reconnect`), monitor
+    - `mod.rs` — struct (`browser: Arc<CdpClient>`, `page: CdpSession`), `open`,
+      `Transport` impl, the **isolated-world bridge** (`install_bridge_world`
+      auto-loads `bridge.js` into the `webpilot_bridge` world per document;
+      `bridge_context_id` vs `active_context_id` route bridge calls vs page
+      expressions), **navigation** (`navigate_reconnect` — a cross-site swap
+      resets document state on the surviving session, no reconnect), monitor
       re-install after navigation.
     - `action.rs` — page-mutating (click/type/scroll/drag, `do_action`).
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
@@ -55,9 +57,16 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
     - `browser.rs` — tab / frame / status.
   - `local_context.rs` — per-user CDP browser-context store (multi-agent,
     `MAX_CONTEXTS`).
-- `cdp.rs` — `CdpClient` (tokio-tungstenite WebSocket). id→oneshot routing;
-  heartbeat tolerates up to `HEARTBEAT_MAX_MISSES` consecutive misses before
-  declaring the connection dead; maps `ConnectionLost`/`Timeout`.
+- `cdp.rs` — `CdpClient` (one tokio-tungstenite WebSocket to the browser
+  endpoint) + `CdpSession` (a flat-protocol session on it, from
+  `CdpClient::attach` → `Target.attachToTarget { flatten: true }`). id→oneshot
+  routing; heartbeat tolerates up to `HEARTBEAT_MAX_MISSES` consecutive misses
+  before declaring the connection dead; maps `ConnectionLost`/`Timeout`. Every
+  session send is stamped with its `sessionId`; `SessionEvents` filters the
+  shared event ring to one session (isolating each page's events); a detach
+  watcher flips `session_alive` so an in-flight wait ends at once when the tab
+  closes (backstopped by Chrome's `-32001`). The page is a `CdpSession` that
+  survives a cross-site renderer swap — no socket rebind.
 - `session.rs` — Chrome lifecycle + `flock` launch lock; `headless_viewport()`
   (settings).
 - `host.rs` — NM host process (IPC ↔ stdin/stdout). The browser-mode policy sink:
@@ -71,10 +80,15 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
 - `output.rs` — `CommandOutput` → human/json `render()`. `to_agent_text()` reuses
   the same renderers to build MCP tool results.
 - `mcp.rs` — `webpilot mcp`: a stdio JSON-RPC (MCP) server, hand-rolled with no
-  protocol dependency (same philosophy as native messaging / CDP / IPC). Each
-  tool builds a typed `Command`/`Action` and runs it through the existing handler
-  over the shared `Transport`, inheriting mode, policy, and rendering. Action
-  tools inject the wire `kind` to reuse `Action`'s deserialization and defaults.
+  protocol dependency (same philosophy as native messaging / CDP / IPC).
+  `initialize` negotiates the protocol revision (`SUPPORTED_PROTOCOL_VERSIONS`,
+  newest wins when the client's is unknown). Each tool builds a typed
+  `Command`/`Action` and runs it through the existing handler over the shared
+  `Transport`, inheriting mode, policy, and rendering. Action tools inject the
+  wire `kind` to reuse `Action`'s deserialization and defaults; `browser_find`
+  deserializes the CLI's own `FindArgs`. The surface is curated to page
+  interaction (act/observe/orient/wait + `eval`) — environment management
+  (cookies, session, device, policy, monitors) stays CLI-only.
   `Execution::Mcp` puts it in the compiler-checked topology.
 - `assets.rs` — compile-time embedded skill + extension (`include_dir!`);
   `expected_extension_version()` (stale-install gate) and

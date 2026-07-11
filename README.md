@@ -288,7 +288,7 @@ webpilot --context agent-2 capture --include dom --url "http://localhost:8700/"
 webpilot mcp                  # stdio JSON-RPC (MCP) 서버. --browser / --context 도 그대로 적용
 ```
 
-curated된 명령 일부가 `browser_*` 툴로 제공되며, CLI와 동일한 모드·정책·렌더링을 물려받습니다.
+페이지 상호작용 전반(관찰 `snapshot`/`screenshot`, 액션 `click`/`type`/`drag`/`upload` 등, 시맨틱 검색 `find`, 탭/프레임 전환, `wait`, `eval`)이 21개 `browser_*` 툴로 제공되며, CLI와 동일한 모드·정책·렌더링을 물려받습니다. `initialize`는 클라이언트의 MCP 리비전을 협상하고(2025-11-25 / 2025-06-18), 읽기 전용 툴은 `readOnlyHint` 어노테이션을 선언합니다. 환경 관리(쿠키·세션·디바이스·정책)는 의도적으로 CLI 전용입니다.
 
 ---
 
