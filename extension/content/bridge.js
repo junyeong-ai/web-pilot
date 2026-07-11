@@ -969,6 +969,25 @@
       ctrlKey: mods.ctrl === true, shiftKey: mods.shift === true,
       altKey: mods.alt === true, metaKey: mods.meta === true,
     };
+    // A click can start a navigation that static link/form analysis cannot
+    // predict — a `location.href` / `location.assign` / `form.submit()` run by an
+    // onclick handler. The Navigation API fires `navigate` SYNCHRONOUSLY when this
+    // frame begins such a navigation, so a listener spanning the click sequence
+    // records it. Only a CROSS-DOCUMENT http(s)/file start counts (`sameDocument`
+    // false): a same-document hash/pushState loads no new document, and hinting it
+    // would burn the settle's whole commit-wait; a download is not a navigation.
+    // Removed right after the sequence so it never catches a later, unrelated nav.
+    let programmaticNav = false;
+    const nav = window.navigation;
+    const onNavigate = (e) => {
+      const d = e.destination;
+      if (!d || d.sameDocument || e.downloadRequest) return;
+      try {
+        const proto = new URL(d.url).protocol;
+        if (proto === "http:" || proto === "https:" || proto === "file:") programmaticNav = true;
+      } catch { /* opaque destination — not a document load this settle waits on */ }
+    };
+    if (nav) nav.addEventListener("navigate", onNavigate);
     el.dispatchEvent(new PointerEvent("pointerdown", opts));
     const mousedownLive = el.dispatchEvent(new MouseEvent("mousedown", opts));
     // A real click focuses the target as mousedown's default action — unless the
@@ -982,9 +1001,16 @@
     el.dispatchEvent(new PointerEvent("pointerup", opts));
     el.dispatchEvent(new MouseEvent("mouseup", opts));
     const notCanceled = el.dispatchEvent(new MouseEvent("click", opts));
+    if (nav) nav.removeEventListener("navigate", onNavigate);
+    // Static analysis catches `<a href>` / form-submit (including cross-frame
+    // targets); the navigate event catches a programmatic navigation a handler
+    // started. A programmatic nav loads the TOP document when this frame IS the
+    // top (drives `navigates`/`url_changed`), otherwise it loads the current
+    // active frame (drives `frame_navigates`).
+    const isTop = window.top === window;
     return {
-      navigates: clickNavigates(el, notCanceled),
-      frameNavigates: frameNavigates(el, notCanceled),
+      navigates: clickNavigates(el, notCanceled) || (programmaticNav && isTop),
+      frameNavigates: frameNavigates(el, notCanceled) || (programmaticNav && !isTop),
     };
   }
 

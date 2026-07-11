@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A click whose handler navigates programmatically (`location.href` /
+  `location.assign` / `form.submit()`) now reliably reports `url_changed` and
+  settles the destination.** Static link/form analysis can't predict a
+  handler-initiated navigation, so the bridge now also listens for the
+  Navigation API's `navigate` event during the click — a synchronous, reliable
+  signal for a cross-document load (`destination.sameDocument === false`),
+  distinct from a same-document hash/pushState. This removes the settle's
+  dependence on the queued `frameStartedLoading` racing the click's response,
+  which surfaced as a flaky `url_changed: null` under load.
 - **Headless `tab switch` / popup adoption now commit the pin atomically.** The
   new page is fully primed (bridge world installed, main frame resolved) BEFORE
   the transport's pin is moved, so a tab that closes mid-switch leaves the
