@@ -157,6 +157,8 @@ webpilot find --placeholder "Search" --click       # find + click
 webpilot find --tag input
 ```
 
+A broad filter is bounded like a capture's listing: `count` is the true number of matches, `matches_truncated` says the rows were shortened, and the summary asks you to narrow it.
+
 `--click`/`--fill` require the filter to match **exactly one** element — an
 ambiguous filter fails loud listing the matches (narrow it, or use
 `action click N`). A bare `find` lists every match.

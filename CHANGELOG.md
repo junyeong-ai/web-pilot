@@ -31,7 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thousands of tokens in a single response. The bound is on what is rendered, not
   on what is extracted: the browser keeps the page's whole index, so an element
   past the listing stays addressable and `find` still matches it. A shortened
-  capture sets `elements_truncated` and says so in the footer.
+  capture sets `elements_truncated` and says so in the footer. `find` is bounded
+  by the same knob — it reports the true match count and asks for a narrower
+  filter rather than returning the whole page as rows.
 
 ### Added
 

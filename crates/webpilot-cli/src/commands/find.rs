@@ -126,7 +126,16 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
         .into());
     }
 
-    let human_lines: Vec<String> = matches
+    // `find` renders only what it matched, which is what lets it reach an
+    // element the capture's own listing left out — but a filter broad enough to
+    // match most of the page turns that into the unbounded response the listing
+    // cap exists to prevent. Bound it by the same knob and report the true total,
+    // so a filter that needs narrowing says so instead of arriving as a wall of
+    // rows.
+    let total = matches.len();
+    let listed = &matches[..total.min(webpilot::settings::get().capture.max_elements)];
+
+    let human_lines: Vec<String> = listed
         .iter()
         .map(|el| {
             // Every page-controlled field is line-safed: a `\n` in an id, the
@@ -150,8 +159,19 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
             )
         })
         .collect();
-    let summary = format!("({} matches)", matches.len());
-    let mut items = serde_json::json!({"matches": matches, "count": matches.len()});
+    let summary = if listed.len() < total {
+        format!(
+            "({total} matches, {} shown — narrow the filter)",
+            listed.len()
+        )
+    } else {
+        format!("({total} matches)")
+    };
+    let mut items = serde_json::json!({
+        "matches": listed,
+        "count": total,
+        "matches_truncated": listed.len() < total,
+    });
     let mut human_lines = human_lines;
 
     // The strict-selector contract (`frame url` v0.4.152, `tab find` v0.4.169):

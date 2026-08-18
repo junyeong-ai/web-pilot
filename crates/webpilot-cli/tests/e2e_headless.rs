@@ -3745,6 +3745,18 @@ fn headless_behavioral_flow() {
         0,
         "an index past the cap must still resolve"
     );
+    // A filter broad enough to match most of the page must not become the
+    // unbounded response the listing cap exists to prevent — and the count it
+    // reports stays the true one, so "narrow the filter" is actionable.
+    let broad = fx.run(&["find", "--tag", "a"]);
+    let broad_json: serde_json::Value = serde_json::from_str(&stdout(&broad)).expect("json");
+    assert_eq!(broad_json["count"], 1200, "the total must be the real one");
+    assert_eq!(
+        broad_json["matches"].as_array().expect("matches").len(),
+        1000,
+        "a broad find must be bounded like the listing"
+    );
+    assert_eq!(broad_json["matches_truncated"], true);
 
     // 8e-dl. A navigation that resolves to an ATTACHMENT is a stay-put whose
     //     cause the agent could not previously see: the page never moves, so an
