@@ -1,7 +1,8 @@
 //! Headless Chrome session management via direct CDP.
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use webpilot::dirs;
 
 const SYSTEM_CHROME_PATHS: &[&str] = &[
@@ -439,8 +440,45 @@ pub async fn ensure_session() -> Result<String> {
     // the profile's SingletonLock and would wedge the launch below.
     kill_profile_orphans();
 
+    sweep_expired_artifacts();
+
     let (_, ws_url) = launch_chrome().await?;
     Ok(ws_url)
+}
+
+/// Drop artifacts past their TTL — screenshots, PDFs, accessibility trees,
+/// exported sessions, downloaded files. Every one is minted under a fresh name,
+/// so the directory has no other bound.
+///
+/// Runs here, under the launch lock, on the one path that starts a session: no
+/// other process is launching, no Chrome is writing, and a surviving CLI holds
+/// only paths older than the sweep window. Sweeping per command would instead
+/// stat the whole directory on every invocation and race the artifact a
+/// concurrent capture is mid-write on.
+fn sweep_expired_artifacts() {
+    let Some(cutoff) = SystemTime::now().checked_sub(webpilot::settings::get().artifacts.ttl)
+    else {
+        return;
+    };
+    sweep_artifacts(&dirs::artifacts_dir(), cutoff);
+}
+
+/// Remove files last written before `cutoff`, and any directory left empty by
+/// doing so — a per-context download folder outlives its context otherwise.
+fn sweep_artifacts(dir: &Path, cutoff: SystemTime) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            sweep_artifacts(&path, cutoff);
+            let _ = std::fs::remove_dir(&path);
+        } else if meta.modified().is_ok_and(|m| m < cutoff) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 /// Shut down the entire headless Chrome session. Idempotent.
@@ -511,6 +549,60 @@ pub async fn quit_session() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn sweep_drops_expired_artifacts_and_keeps_fresh_ones() {
+        use std::time::Duration;
+
+        let root = std::env::temp_dir().join(format!(
+            "wp-sweep-{}-{:?}",
+            std::process::id(),
+            thread_tag()
+        ));
+        let downloads = root.join("downloads/ctx-a");
+        let live = root.join("downloads/ctx-b");
+        std::fs::create_dir_all(&downloads).unwrap();
+        std::fs::create_dir_all(&live).unwrap();
+
+        let old_file = downloads.join("old");
+        let new_file = live.join("new");
+        std::fs::write(&old_file, b"x").unwrap();
+        std::fs::write(&new_file, b"x").unwrap();
+        std::fs::write(root.join("capture.png"), b"x").unwrap();
+
+        // A cutoff just ahead of `old_file` and behind the two written after it.
+        std::thread::sleep(Duration::from_millis(20));
+        let cutoff = SystemTime::now();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&new_file, b"y").unwrap();
+        std::fs::write(root.join("capture.png"), b"y").unwrap();
+
+        sweep_artifacts(&root, cutoff);
+
+        assert!(!old_file.exists(), "an expired artifact must be removed");
+        assert!(
+            !downloads.exists(),
+            "a download folder emptied by the sweep must go with it"
+        );
+        assert!(new_file.exists(), "a fresh artifact must survive");
+        assert!(
+            root.join("capture.png").exists(),
+            "a fresh artifact at the root must survive"
+        );
+        assert!(
+            live.exists(),
+            "a folder that still holds a file must survive"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn thread_tag() -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        std::thread::current().id().hash(&mut h);
+        h.finish()
+    }
     use super::*;
 
     #[test]

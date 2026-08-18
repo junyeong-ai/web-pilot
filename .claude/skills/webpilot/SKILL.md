@@ -83,7 +83,7 @@ running animation/layout shift) a box can land slightly off its element by
 the time the shot is taken — the numbering is exact on a settled page (the
 common case); `wait idle` first if the page is still moving.
 
-`Read` the file paths returned in `screenshot_path` / `pdf_path` / `accessibility_path` — they are absolute, so just open them. (They live under the per-user cache: `~/Library/Caches/webpilot/artifacts/` on macOS, `$XDG_RUNTIME_DIR`/`$XDG_CACHE_HOME`/`~/.cache/webpilot/artifacts/` on Linux, or `$WEBPILOT_HOME` when set — always trust the returned path rather than guessing.)
+`Read` the file paths returned in `screenshot_path` / `pdf_path` / `accessibility_path` — they are absolute, so just open them. (They live under the per-user cache: `~/Library/Caches/webpilot/artifacts/` on macOS, `$XDG_RUNTIME_DIR`/`$XDG_CACHE_HOME`/`~/.cache/webpilot/artifacts/` on Linux, or `$WEBPILOT_HOME` when set — always trust the returned path rather than guessing.) Artifacts are cache: they are swept a week after they are written, so copy anything the user should keep.
 
 ## Action
 

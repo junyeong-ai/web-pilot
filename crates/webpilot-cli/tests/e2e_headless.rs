@@ -3705,12 +3705,19 @@ fn headless_behavioral_flow() {
     //     content-heavy page reaches four figures of links on its own. The clip
     //     must announce itself: a short index read as the whole page is what makes
     //     an agent conclude a control does not exist.
-    let many = fx.run(&["capture", "--include", "dom", "--url", &format!("{base}/many")]);
+    let many = fx.run(&[
+        "capture",
+        "--include",
+        "dom",
+        "--url",
+        &format!("{base}/many"),
+    ]);
     let many_json: serde_json::Value = serde_json::from_str(&stdout(&many)).expect("json");
     let listed = many_json["elements"].as_array().expect("elements").len();
     assert_eq!(listed, 1000, "the index must be capped: {listed}");
     assert_eq!(
-        many_json["elements_truncated"], true,
+        many_json["elements_truncated"],
+        true,
         "a capped index must say so: {}",
         stdout(&many)
     );

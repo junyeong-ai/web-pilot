@@ -39,6 +39,7 @@ pub struct Settings {
     pub context: Context,
     pub cdp: Cdp,
     pub capture: Capture,
+    pub artifacts: Artifacts,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +77,16 @@ pub struct Chrome {
 #[derive(Debug, Clone)]
 pub struct Context {
     /// Idle lifetime before a multi-agent context is garbage-collected.
+    pub ttl: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct Artifacts {
+    /// How long a screenshot, PDF, accessibility tree, exported session or
+    /// downloaded file stays on disk. Every artifact is minted under a fresh
+    /// name, so without an expiry the directory only ever grows; the paths are
+    /// handed to an agent to read, so the window has to outlast the task that
+    /// produced them rather than the session.
     pub ttl: Duration,
 }
 
@@ -232,6 +243,13 @@ impl Settings {
                     3_600,
                 )),
             },
+            artifacts: Artifacts {
+                ttl: Duration::from_secs(u64_var(
+                    "WEBPILOT_ARTIFACT_TTL",
+                    file.artifacts.ttl_secs,
+                    604_800,
+                )),
+            },
             cdp: Cdp {
                 // One connection carries the browser domain plus every page
                 // session's events (flat protocol), so the ring is sized for the
@@ -316,6 +334,7 @@ struct FileSettings {
     timeouts: FileTimeouts,
     chrome: FileChrome,
     context: FileContext,
+    artifacts: FileArtifacts,
     cdp: FileCdp,
     capture: FileCapture,
 }
@@ -347,6 +366,12 @@ struct FileChrome {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct FileContext {
+    ttl_secs: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct FileArtifacts {
     ttl_secs: Option<u64>,
 }
 
@@ -473,6 +498,9 @@ mod tests {
             },
             context: Context {
                 ttl: Duration::from_secs(3_600),
+            },
+            artifacts: Artifacts {
+                ttl: Duration::from_secs(604_800),
             },
             cdp: Cdp { event_buffer: 512 },
             capture: Capture {
