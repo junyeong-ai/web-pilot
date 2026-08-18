@@ -124,6 +124,25 @@ webpilot action click N --capture                  # auto-capture DOM after succ
 
 Action responses include `url_changed` if navigation happened and `new_tab` if a `target="_blank"` opened (it is auto-switched to; `--capture` then snapshots the tab you're now on). A successful `--capture` returns the destination DOM snapshot directly; if the snapshot itself fails, the response carries a `capture_error` field instead — the action's side effect already ran, so **do not retry the action**; just run `capture --include dom`.
 
+`click` dispatches the event in the page, so it carries **no user activation**
+(`navigator.userActivation` stays false). Chrome gates a handful of page features
+on activation, and refuses them silently — no error, no console message. If a
+button does nothing and the response is a bare success, that is the likely
+reason. It shows up on buttons that **export or download after an `await`**,
+copy to the clipboard, open a popup window, or go fullscreen.
+
+`key-press` is a real browser key event and does carry activation, so drive
+those through focus instead — `focus` fails loudly if the element cannot take
+focus, so this never misfires silently:
+
+```bash
+webpilot action focus N && webpilot action key-press Enter
+```
+
+This reaches anything focusable that Enter or Space activates (`button`,
+`a[href]`, submit controls). A non-focusable `<div onclick>` export button has no
+activation path — drive its effect with `eval` instead.
+
 A link or navigation that resolves to a **file** leaves the page exactly where
 it was — the download is the whole outcome. Those responses carry a `downloads`
 list (`capture`, every action, `tab new`), so a command that looks like a no-op
