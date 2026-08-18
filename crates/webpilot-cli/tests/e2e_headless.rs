@@ -21,6 +21,28 @@ use common::{code, spawn_server, stdout};
 const BIN: &str = env!("CARGO_BIN_EXE_webpilot");
 
 /// The captured index of the element with the given DOM id, as a CLI argument.
+/// Block until the driven page carries a frame named `name`. A frame's name is
+/// the frame's own to set, so a test that turns on one waits for that frame to
+/// run — not merely for the page that hosts it.
+fn await_frame_named(fx: &Fixture, name: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let listing = stdout(&fx.run(&["frame"]));
+        let v: serde_json::Value = serde_json::from_str(&listing).expect("frame json");
+        let found = v["frames"]
+            .as_array()
+            .is_some_and(|frames| frames.iter().any(|f| f["name"] == name));
+        if found {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no frame named {name} appeared: {listing}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 fn index_of(cap: &Output, id: &str) -> String {
     let v: serde_json::Value = serde_json::from_str(&stdout(cap)).expect("capture json");
     v["elements"]
@@ -3715,6 +3737,11 @@ fn headless_behavioral_flow() {
         "--url",
         &format!("{base}/named"),
     ]);
+    // Both verdicts hinge on the child having renamed ITSELF, and a capture
+    // settles on the main document — `interactive` does not wait for subframes.
+    // Wait for the live name to exist, or the click races the frame's own script
+    // and asks the browser about a name that is not there yet.
+    await_frame_named(&fx, "livename");
     let started = std::time::Instant::now();
     let live = fx.run(&["action", "click", &index_of(&cap_named, "livetarget")]);
     let live_elapsed = started.elapsed();
@@ -3753,6 +3780,7 @@ fn headless_behavioral_flow() {
         "--url",
         &format!("{base}/named"),
     ]);
+    await_frame_named(&fx, "livename");
     let stale = fx.run(&["action", "click", &index_of(&cap_stale, "staletarget")]);
     let stale_json: serde_json::Value = serde_json::from_str(&stdout(&stale)).expect("json");
     assert!(
