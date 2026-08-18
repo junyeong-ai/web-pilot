@@ -1102,6 +1102,7 @@ pub(super) struct DownloadSweep {
 }
 
 pub(super) struct DownloadWatch {
+    guid: String,
     frame_id: String,
     url: String,
     suggested_filename: String,
@@ -1227,6 +1228,7 @@ fn apply_download_event(
             // is what makes an unfinished download still worth reporting a path
             // for. `filePath` on the completing event confirms it.
             sweep.watches.push(DownloadWatch {
+                guid: guid.to_string(),
                 frame_id: text("frameId"),
                 url: text("url"),
                 suggested_filename: text("suggestedFilename"),
@@ -1235,7 +1237,7 @@ fn apply_download_event(
             });
         }
         "Browser.downloadProgress" => {
-            let Some(watch) = sweep.watches.iter_mut().find(|w| w.path.ends_with(guid)) else {
+            let Some(watch) = sweep.watches.iter_mut().find(|w| w.guid == guid) else {
                 return;
             };
             match params.get("state").and_then(Value::as_str) {

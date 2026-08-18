@@ -49,15 +49,16 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <a id="dlpopup" href="/attachment" target="_blank" rel="noopener">download in a new tab</a>
 <a id="dlslow" href="/slowattachment">slow download</a>
 <button id="dlblob" onclick="webpilotExport()">export blob</button>
+<button id="dlpair" onclick="webpilotExport('one.csv'); webpilotExport('two.csv')">export pair</button>
 <script>
   // An export button of the shape SPAs actually ship: build the file client-side
   // and click a hidden `<a download>`. The browser never navigates, so only the
   // Navigation API's `downloadRequest` reveals that a file was written.
-  function webpilotExport() {
+  function webpilotExport(name) {
     const blob = new Blob(["a,b\n1,2\n"], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = window.URL.createObjectURL(blob);
-    a.download = "export.csv";
+    a.download = name || "export.csv";
     document.body.appendChild(a);
     a.click();
     a.remove();

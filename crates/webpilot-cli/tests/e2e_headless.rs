@@ -3837,6 +3837,24 @@ fn headless_behavioral_flow() {
         );
     }
 
+    // 8e-dl-pair. One click, two files: each download is followed by the guid
+    //     Chrome gave it, so a second transfer cannot be folded into the first's
+    //     record — and neither can be dropped for having no record of its own.
+    let cap_pair = fx.run(&["capture", "--include", "dom", "--url", &base]);
+    let pair = fx.run(&["action", "click", &index_of(&cap_pair, "dlpair")]);
+    let pair_json: serde_json::Value = serde_json::from_str(&stdout(&pair)).expect("json");
+    let names: Vec<&str> = pair_json["downloads"]
+        .as_array()
+        .expect("downloads")
+        .iter()
+        .filter_map(|d| d["suggested_filename"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"one.csv") && names.contains(&"two.csv"),
+        "both downloads from one click must be reported: {}",
+        stdout(&pair)
+    );
+
     // 8e-dl-slow. The outcome is Chrome's, not WebPilot's configuration: a
     //     transfer still running when the command returns must say so, or the
     //     agent reads the prefix of a file the response called Downloaded.

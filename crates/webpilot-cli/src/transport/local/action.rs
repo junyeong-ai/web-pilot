@@ -257,7 +257,6 @@ impl LocalTransport {
             None
         };
         let mut target_events = self.browser.subscribe_events();
-        let mut download_events = self.browser.subscribe_events();
         let mut page_events = self.page.subscribe_events();
 
         // `key_press` dispatches a native CDP key event (real Tab/Backspace/
