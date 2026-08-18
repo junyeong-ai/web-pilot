@@ -69,15 +69,25 @@ main() {
         exit 0
     fi
 
+    # This script is fetched fresh while the binary is whatever the user
+    # installed, so the spelling is the BINARY's to decide: `self uninstall` only
+    # exists from 0.8.1. Ask it rather than assume — `--help` succeeds exactly
+    # when the subcommand is there, so the answer comes from the binary itself
+    # instead of a version string parsed here.
+    local -a cmd=(uninstall)
+    if "$bin" self uninstall --help >/dev/null 2>&1; then
+        cmd=(self uninstall)
+    fi
+
     # Hand off to the single source of truth. It removes the skill, extension,
     # NM host, cache/runtime tree, and finally the binary itself — in dependency
     # order, only what it created. `--yes` passes through; without it the binary
     # prompts, so route its stdin from the terminal when we were piped from curl.
-    say "Removing via $bin self uninstall"
+    say "Removing via $bin ${cmd[*]}"
     if [ "$assume_yes" = true ]; then
-        exec "$bin" self uninstall --yes
+        exec "$bin" "${cmd[@]}" --yes
     elif [ -r /dev/tty ]; then
-        exec "$bin" self uninstall < /dev/tty
+        exec "$bin" "${cmd[@]}" < /dev/tty
     else
         die "non-interactive with no terminal to confirm at — re-run with --yes"
     fi
