@@ -155,11 +155,7 @@ fn read_record() -> Option<String> {
 /// and a missing record only costs a later refresh its precision — never the
 /// deployment itself.
 fn write_record(digest: &str) {
-    let path = webpilot::dirs::skill_record_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = webpilot::dirs::atomic_write(&path, digest.as_bytes());
+    let _ = webpilot::dirs::atomic_write(&webpilot::dirs::skill_record_file(), digest.as_bytes());
 }
 
 #[derive(Copy, Clone)]

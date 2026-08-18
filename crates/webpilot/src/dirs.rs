@@ -228,6 +228,18 @@ pub fn skill_record_path() -> PathBuf {
         .join(SKILL_RECORD_FILE)
 }
 
+/// Materialising twin of [`skill_record_path`]. `setup skill` can be the first
+/// thing to touch the durable root — `self update` shells out to exactly that —
+/// so the root is created here at 0700 rather than at the umask default, which
+/// no later call would tighten.
+pub fn skill_record_file() -> PathBuf {
+    let path = skill_record_path();
+    if let Some(parent) = path.parent() {
+        materialise(parent.to_path_buf(), Owner::User);
+    }
+    path
+}
+
 /// Directory holding the policy store. Policy is persistent security config, not
 /// a regenerable cache artifact, so it lives under the DURABLE data root — never
 /// the cache root, where OS cache eviction (or a cache cleaner) would silently
