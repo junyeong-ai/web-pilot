@@ -3700,6 +3700,67 @@ fn headless_behavioral_flow() {
         "the recovered session must capture the navigated page"
     );
 
+    // 8g-target. A non-keyword `target` names a browsing context. The clicking
+    //     frame can only answer for names it can read — its own and a same-origin
+    //     ancestor's — so every other name is resolved against the frame tree,
+    //     which carries the LIVE browsing-context name. A link naming a frame
+    //     loads that frame: no context opens, so the click does not sit out the
+    //     new-context download watch (a fixed 2s, which is what the bound below
+    //     separates). A link naming a frame's stale `<iframe name>` attribute
+    //     resolves to nothing and opens a context after all.
+    let cap_named = fx.run(&[
+        "capture",
+        "--include",
+        "dom",
+        "--url",
+        &format!("{base}/named"),
+    ]);
+    let started = std::time::Instant::now();
+    let live = fx.run(&["action", "click", &index_of(&cap_named, "livetarget")]);
+    let live_elapsed = started.elapsed();
+    let live_json: serde_json::Value = serde_json::from_str(&stdout(&live)).expect("json");
+    assert!(
+        live_json["new_tab"].is_null(),
+        "a link naming an existing frame must not open a tab: {}",
+        stdout(&live)
+    );
+    assert!(
+        live_elapsed < std::time::Duration::from_millis(1500),
+        "a click that opens no context must not wait out the download watch, took {live_elapsed:?}"
+    );
+    // The click loads a frame the agent is not in, so that load is outside the
+    // settle (which covers the main frame and the active one) — the agent reaches
+    // it by switching, and the switch is what has to find the new document.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let r = stdout(&fx.run(&["frame", "url", "framed2"]));
+        let v: serde_json::Value = serde_json::from_str(&r).expect("frame json");
+        if v["success"] == true {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the named frame never navigated: {r}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    fx.run(&["frame", "main"]);
+
+    let cap_stale = fx.run(&[
+        "capture",
+        "--include",
+        "dom",
+        "--url",
+        &format!("{base}/named"),
+    ]);
+    let stale = fx.run(&["action", "click", &index_of(&cap_stale, "staletarget")]);
+    let stale_json: serde_json::Value = serde_json::from_str(&stdout(&stale)).expect("json");
+    assert!(
+        !stale_json["new_tab"].is_null(),
+        "a target naming no live context must open one: {}",
+        stdout(&stale)
+    );
+
     // 8f-cap. Every other axis of a capture is bounded — page text, element text,
     //     option lists, the shadow walk — but the index itself was not, and a
     //     content-heavy page reaches four figures of links on its own. The bound

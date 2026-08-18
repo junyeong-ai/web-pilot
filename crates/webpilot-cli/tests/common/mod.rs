@@ -116,6 +116,21 @@ pub const NESTED: &str = r##"<!doctype html><html><head><title>nested</title></h
 pub const FRAMED2: &str = r##"<!doctype html><html><head><title>framed2</title></head>
 <body><button id="framed2btn">on framed2</button></body></html>"##;
 
+/// Named-target resolution. A `target` that is not a keyword names a browsing
+/// context, and the name that resolves is the context's LIVE one: an
+/// `<iframe name>` attribute only seeds it, so a frame that has renamed itself
+/// answers to the new name and nothing answers to the attribute's stale value.
+pub const NAMED: &str = r##"<!doctype html><html><head><title>named</title></head>
+<body>
+<a id="livetarget" href="/framed2" target="livename">into the renamed frame</a>
+<a id="staletarget" href="/framed2" target="attrname">by the stale attribute</a>
+<iframe src="/renamed" name="attrname"></iframe>
+</body></html>"##;
+
+/// The child of `/named`, which renames its own browsing context on load.
+pub const RENAMED: &str = r##"<!doctype html><html><head><title>renamed</title></head>
+<body><script>window.name = "livename";</script><p id="renamedmark">renamed</p></body></html>"##;
+
 /// Two iframes with the SAME URL — `frame url /framed2` matches both, so the
 /// switch must fail loud as an ambiguous selector rather than silently pick the
 /// first. The disambiguation surface (`frame predicate`) stays first-match.
@@ -248,6 +263,10 @@ pub fn spawn_server() -> String {
                     (FRAMED2, "")
                 } else if req.starts_with("GET /nested") {
                     (NESTED, "")
+                } else if req.starts_with("GET /named") {
+                    (NAMED, "")
+                } else if req.starts_with("GET /renamed") {
+                    (RENAMED, "")
                 } else if req.starts_with("GET /frame") {
                     (FRAME, "")
                 } else if req.starts_with("GET /cspframe") {

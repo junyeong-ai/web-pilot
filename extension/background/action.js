@@ -432,16 +432,19 @@ async function dispatchActionToPage(tab, action) {
     // `target=_top` link clicked inside a switched iframe), while
     // `frame_navigates` drives the iframe-internal settle. `downloads` steers the
     // headless transport's announcement wait and has no browser-mode counterpart,
-    // since downloads there are the user's own browser's business. Read what this
-    // side uses, then drop all three: the wire response models `downloads` as a
-    // list of files, so leaking the hint's boolean fails the host reply's typed
-    // parse and turns a click that SUCCEEDED into a transport error.
+    // since downloads there are the user's own browser's business, and
+    // `opens_context`/`target_name` feed the frame-tree lookup that steers it.
+    // Read what this side uses, then drop every hint: the wire response models
+    // `downloads` as a list of files, so leaking the hint's boolean fails the
+    // host reply's typed parse and turns a click that SUCCEEDED into a transport
+    // error.
     const navHint = r.navigates === true;
     const frameNavigates = r.frame_navigates === true;
     delete result.navigates;
     delete result.frame_navigates;
     delete result.downloads;
     delete result.opens_context;
+    delete result.target_name;
 
     // Report the settled destination of a same-tab navigation the action
     // triggered; a non-navigating action adds no url_changed and pays no wait.

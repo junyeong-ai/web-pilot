@@ -832,29 +832,11 @@
     return r.error ? { error: r.error } : { target: r.el };
   }
 
-  // True when this click loads a new document IN THE CURRENT FRAME — either a
-  // non-prevented self-targeting `a[href]` to a different http(s)/file URL (not a
-  // fragment, not a popup target), OR a click on a form's submit control (which
-  // submits the form and loads a document with no href). The settle layer needs
-  // this because the navigation is queued (HTML spec): its frameStartedLoading
-  // can arrive AFTER the click response and miss a one-shot event drain, so it
-  // must be derived deterministically at click time. `notCanceled` is the click
-  // event's dispatch result, so a preventDefault'd SPA link/button reports no
-  // navigation. The frame may be the top frame or a switched iframe; the settle
-  // uses it to catch an iframe-internal navigation the top-frame `navigates`
-  // signal can't see.
-  // The ancestor a (non-cancelled) navigating click targets — "_self" (this
-  // frame), "_top", or "_parent" — or null when it loads no document in an
-  // existing frame (a popup / named or `_blank` target, a javascript:/mailto:
-  // url, or a fragment-only same-document change). Shared by both nav hints so
-  // they can never disagree about WHETHER — and WHERE — a click navigates.
   // A non-keyword target NAME navigates an existing frame when it matches one
-  // (HTML's browsing-context name lookup) — most commonly THIS frame, a named
-  // iframe whose own links target its own name. Map the names this frame can
-  // see to their keyword equivalent; cross-origin ancestors throw on `.name`
-  // and stay null (conservative: treated as a popup, the pre-existing
-  // behaviour). Name matching is case-SENSITIVE per spec — only the keywords
-  // are case-insensitive.
+  // (HTML's browsing-context name lookup). A frame is the authority on its OWN
+  // name, and same-origin ancestors answer for theirs; every other frame is
+  // answered for by the browser side, which alone can enumerate the tree. Name
+  // matching is case-SENSITIVE per spec — only the keywords are case-insensitive.
   function resolveNamedTarget(name) {
     if (window.name === name) return "_self";
     try {
@@ -867,7 +849,7 @@
     } catch {
       /* cross-origin top — unreadable */
     }
-    return null; // no reachable frame carries the name → a popup
+    return null; // not nameable from here — the browser side resolves it
   }
 
   // A click that loads a document in a context this page cannot name — a
@@ -877,39 +859,58 @@
   // before anything can be adopted from it.
   const NEW_CONTEXT = "_newcontext";
 
-  function navTargetKeyword(el, notCanceled) {
-    if (!notCanceled) return null;
+  const NO_NAV = { target: null, name: null };
+
+  // Where a (non-cancelled) click loads a document: "_self" (this frame),
+  // "_top", "_parent", or `NEW_CONTEXT` when the destination is not a frame this
+  // one can name. `name` carries the raw target name behind a `NEW_CONTEXT`
+  // verdict, so the browser side can settle whether it names an existing frame
+  // after all. Keywords are matched case-insensitively and never against frame
+  // names, so a page that names a frame `_blank` cannot steer the lookup.
+  function navTargetFor(raw) {
+    const keyword = raw.trim().toLowerCase();
+    if (keyword === "_blank" || keyword === "_unfencedtop") {
+      return { target: NEW_CONTEXT, name: null };
+    }
+    if (!keyword || keyword === "_self" || keyword === "_top" || keyword === "_parent") {
+      return { target: keyword || "_self", name: null };
+    }
+    const name = raw.trim();
+    const resolved = resolveNamedTarget(name);
+    return resolved ? { target: resolved, name: null } : { target: NEW_CONTEXT, name };
+  }
+
+  // The one derivation both nav hints read, so they can never disagree about
+  // WHETHER — and WHERE — a click navigates. A link counts only as a
+  // non-prevented `a[href]` to a different http(s)/file URL (not a fragment); a
+  // form's submit control counts with no href of its own. The settle layer needs
+  // it derived at click time because the navigation is QUEUED (HTML spec): its
+  // frameStartedLoading can arrive AFTER the click response and miss a one-shot
+  // event drain. `notCanceled` is the click event's dispatch result, so a
+  // preventDefault'd SPA link/button reports no navigation. The frame may be the
+  // top frame or a switched iframe — the settle uses this to catch an
+  // iframe-internal navigation the top-frame `navigates` signal can't see.
+  function navTarget(el, notCanceled) {
+    if (!notCanceled) return NO_NAV;
     const a = el.closest("a[href]");
     if (a) {
-      let target = (a.target || "").trim().toLowerCase();
-      // `_blank` (always a new context) and `_unfencedTop` (fenced frames) are
-      // reserved keywords — never matched against frame names, so a page that
-      // names a frame after one can't trick the lookup into `_self`.
-      const blank = target === "_blank" || target === "_unfencedtop";
-      if (!blank && target && target !== "_self" && target !== "_top" && target !== "_parent") {
-        // Not a keyword: resolve the raw (case-sensitive) name to a frame this
-        // click would actually navigate, or fall through as a new context.
-        target = resolveNamedTarget((a.target || "").trim()) || NEW_CONTEXT;
-      } else if (blank) {
-        target = NEW_CONTEXT;
-      }
       let dest, cur;
       try {
         dest = new URL(a.href, location.href);
         cur = new URL(location.href);
       } catch {
-        return null;
+        return NO_NAV;
       }
       if (dest.protocol !== "http:" && dest.protocol !== "https:" && dest.protocol !== "file:") {
-        return null; // javascript:/mailto:/tel:/… never load a document
+        return NO_NAV; // javascript:/mailto:/tel:/… never load a document
       }
       // A change confined to the fragment is a same-document nav (no load event):
       // hinting it would burn the settle's whole PROBE waiting for a commit that
       // never comes.
       if (dest.origin === cur.origin && dest.pathname === cur.pathname && dest.search === cur.search) {
-        return null;
+        return NO_NAV;
       }
-      return target || "_self";
+      return navTargetFor(a.target || "");
     }
     // A submit control submits its associated form on click → a new document
     // loads, but it carries no `href` so the link path above misses it. (A form
@@ -918,30 +919,18 @@
     // with no type defaults to submit.
     const btn = el.closest('button, input[type="submit"], input[type="image"]');
     if (btn && btn.form && (btn.tagName !== "BUTTON" || btn.type === "submit")) {
-      const raw = (btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "").trim();
-      let t = raw.toLowerCase();
-      // `_blank` / `_unfencedTop` are reserved — never a frame-name match.
-      const blank = t === "_blank" || t === "_unfencedtop";
-      if (!blank && t && t !== "_self" && t !== "_top" && t !== "_parent") {
-        // Same name resolution as the link path: a form targeting an existing
-        // frame's name submits INTO that frame, not a new context.
-        t = resolveNamedTarget(raw) || NEW_CONTEXT;
-      } else if (blank) {
-        t = NEW_CONTEXT;
-      }
-      return t || "_self";
+      return navTargetFor(btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "");
     }
-    return null;
+    return NO_NAV;
   }
 
   // Does the navigation land in the ACTIVE frame (where the bridge runs)? Drives
   // the active-frame settle. `_self` always lands here; `_top`/`_parent` resolve
   // to an ancestor and land here only when THIS frame is the top (then they are
   // itself). A nav into an ancestor is not a current-frame load.
-  function frameNavigates(el, notCanceled) {
-    const t = navTargetKeyword(el, notCanceled);
-    if (t === null || t === NEW_CONTEXT) return false;
-    if (t === "_self") return true;
+  function frameNavigates(target) {
+    if (target === null || target === NEW_CONTEXT) return false;
+    if (target === "_self") return true;
     return window.top === window; // _top / _parent of the top frame IS the top
   }
 
@@ -950,11 +939,10 @@
   // the top frame; `_parent` only from a direct child of the top. A `_top` link
   // clicked inside a switched iframe IS a top navigation — the active frame does
   // not move — so this hint must fire for it, not `frameNavigates`.
-  function clickNavigates(el, notCanceled) {
-    const t = navTargetKeyword(el, notCanceled);
-    if (t === null || t === NEW_CONTEXT) return false;
-    if (t === "_top") return true;
-    if (t === "_parent") return window.parent === window.top;
+  function clickNavigates(target) {
+    if (target === null || target === NEW_CONTEXT) return false;
+    if (target === "_top") return true;
+    if (target === "_parent") return window.parent === window.top;
     return window.top === window; // _self
   }
 
@@ -1026,11 +1014,13 @@
     // top (drives `navigates`/`url_changed`), otherwise it loads the current
     // active frame (drives `frame_navigates`).
     const isTop = window.top === window;
+    const dest = navTarget(el, notCanceled);
     return {
-      navigates: clickNavigates(el, notCanceled) || (programmaticNav && isTop),
-      frameNavigates: frameNavigates(el, notCanceled) || (programmaticNav && !isTop),
+      navigates: clickNavigates(dest.target) || (programmaticNav && isTop),
+      frameNavigates: frameNavigates(dest.target) || (programmaticNav && !isTop),
       downloads: downloadStarted,
-      opensContext: navTargetKeyword(el, notCanceled) === NEW_CONTEXT,
+      opensContext: dest.target === NEW_CONTEXT,
+      targetName: dest.name,
     };
   }
 
@@ -1223,6 +1213,7 @@
             frame_navigates: nav.frameNavigates,
             downloads: nav.downloads,
             opens_context: nav.opensContext,
+            target_name: nav.targetName,
           };
         }
 

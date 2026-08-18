@@ -307,6 +307,14 @@ impl LocalTransport {
                     .get("opens_context")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                // A target NAME the clicking frame could not resolve. The frame
+                // tree is the authority on browsing-context names, so a match
+                // there means the click loads an EXISTING frame of this page
+                // rather than opening a context.
+                let opens_context = match resp.get("target_name").and_then(Value::as_str) {
+                    Some(name) => !self.has_frame_named(name).await,
+                    None => opens_context,
+                };
                 (navigates, frame_navigates, downloads, opens_context)
             }
         };

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A link targeting a frame by name no longer stalls the click.** A `target`
+  that is not a keyword names a browsing context, and the clicking frame can read
+  only its own name and a same-origin ancestor's — so a link into a named child
+  frame, the shape a frameset-style console is built from, looked like it opened
+  a new window. Nothing then appeared to adopt, which is exactly what a download
+  that discards its own tab looks like, so every such click sat out the whole
+  download watch before returning. The name is now resolved against the frame
+  tree, which carries each context's live name: a match loads that frame and the
+  click returns at once. The tree is the authority on purpose — an `<iframe name>`
+  attribute only seeds the name, so a frame that has since renamed itself answers
+  to the new name alone and a link carrying the stale attribute still opens a
+  context, exactly as the browser does it.
+
 ## [0.8.0] - 2026-08-18
 
 ### Added
@@ -15,6 +32,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runtime root, rotating to `host.log.1` at 1 MB — renamed rather than
   truncated, so the previous session survives. The CLI keeps stderr, where its
   caller does capture it.
+- **Downloads are a reported command outcome, and the files are WebPilot's.** A
+  navigation that resolves to an attachment is a stay-put — the page never moves
+  — so a command that downloaded a file used to return success on an unchanged
+  snapshot with nothing to show for it, and an agent reading that as a no-op
+  retried and downloaded again. `capture`, every action, and `tab new` now carry
+  a `downloads` list naming what was written. Files land under
+  `artifacts/downloads/<browser-context>/`, partitioned like cookies and storage
+  already are, rather than in the user's OS download folder where nothing
+  WebPilot owns would reclaim them. Chrome names each file by its download id
+  (`allowAndName`), so a server's `Content-Disposition` can no longer choose a
+  path on disk; the name it suggested travels as metadata.
+- **`policy set --operation download`.** The verdict selects Chrome's own
+  download behavior, so a `deny` refuses the transfer in the browser instead of
+  cancelling it after the bytes start. A refused download is still reported, and
+  carries no path.
 
 ### Changed
 
@@ -35,24 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capture sets `elements_truncated` and says so in the footer. `find` is bounded
   by the same knob — it reports the true match count and asks for a narrower
   filter rather than returning the whole page as rows.
-
-### Added
-
-- **Downloads are a reported command outcome, and the files are WebPilot's.** A
-  navigation that resolves to an attachment is a stay-put — the page never moves
-  — so a command that downloaded a file used to return success on an unchanged
-  snapshot with nothing to show for it, and an agent reading that as a no-op
-  retried and downloaded again. `capture`, every action, and `tab new` now carry
-  a `downloads` list naming what was written. Files land under
-  `artifacts/downloads/<browser-context>/`, partitioned like cookies and storage
-  already are, rather than in the user's OS download folder where nothing
-  WebPilot owns would reclaim them. Chrome names each file by its download id
-  (`allowAndName`), so a server's `Content-Disposition` can no longer choose a
-  path on disk; the name it suggested travels as metadata.
-- **`policy set --operation download`.** The verdict selects Chrome's own
-  download behavior, so a `deny` refuses the transfer in the browser instead of
-  cancelling it after the bytes start. A refused download is still reported, and
-  carries no path.
 
 ## [0.7.1] - 2026-07-11
 
