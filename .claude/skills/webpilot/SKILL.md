@@ -123,6 +123,21 @@ webpilot action click N --capture                  # auto-capture DOM after succ
 
 Action responses include `url_changed` if navigation happened and `new_tab` if a `target="_blank"` opened (it is auto-switched to; `--capture` then snapshots the tab you're now on). A successful `--capture` returns the destination DOM snapshot directly; if the snapshot itself fails, the response carries a `capture_error` field instead — the action's side effect already ran, so **do not retry the action**; just run `capture --include dom`.
 
+A link or navigation that resolves to a **file** leaves the page exactly where
+it was — the download is the whole outcome. Those responses carry a `downloads`
+list (`capture`, every action, `tab new`), so a command that looks like a no-op
+is never actually one:
+
+```
+Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<guid> ("invoice.pdf" from https://…)
+```
+
+`Read` the reported path — the file is named by its download id, so a page
+cannot pick a path on your disk; `suggested_filename` is what the server called
+it. Files land under WebPilot's artifact root (per `--context`), never the OS
+download folder. `policy set --operation download --verdict deny` refuses the
+transfer in the browser; the attempt is still reported, with no path.
+
 Javascript dialogs are **auto-answered** so they never block automation:
 `alert` is dismissed, `confirm` answers **true**, `prompt` returns its
 **default value** — identically in both modes. A flow that needs the
@@ -285,7 +300,7 @@ for exactly what the task needs. Deny `eval` first when locking down — with
 `eval` allowed, page JS can reproduce navigate/fetch/cookie effects, so
 narrower denies are advisory.
 
-`--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus the non-action operations that run code, mutate state, or move credentials: `eval`, `fetch`, `dom_set` (gates `dom set-text` / `set-attr`; `dom set-html` runs an inline-handler JS sink so it is gated by `eval`, not `dom_set`), `tab_close`, `cookie_list` (gate `cookie list` **and** `cookie get` — both return live cookie values), `cookie_set` / `cookie_delete`, `session_export` / `session_import`, `device` (emulation: viewport + UA spoofing), and `context_close` (`context close` destroys a context and all its tabs).
+`--operation` accepts any action kind — `click | type | key_press | navigate | back | forward | reload | scroll | scroll_to | hover | focus | select | upload | drag` — plus the non-action operations that run code, mutate state, or move credentials: `eval`, `fetch`, `dom_set` (gates `dom set-text` / `set-attr`; `dom set-html` runs an inline-handler JS sink so it is gated by `eval`, not `dom_set`), `tab_close`, `cookie_list` (gate `cookie list` **and** `cookie get` — both return live cookie values), `cookie_set` / `cookie_delete`, `session_export` / `session_import`, `device` (emulation: viewport + UA spoofing), `context_close` (`context close` destroys a context and all its tabs), and `download` (a file the page makes the browser write — a `deny` refuses the transfer itself, so nothing reaches disk).
 
 Keys gate by **effect**, not command name:
 - `navigate` blocks every URL load — the `navigate` action, `capture --url`, and `tab new URL` — so denying it actually prevents the agent from reaching new pages.

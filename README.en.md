@@ -205,6 +205,26 @@ webpilot action upload 4 ./resume.pdf                # upload a file
 
 `key-press`, `hover`, and `click` go in as native CDP input rather than synthetic events, so Tab actually moves focus and Enter submits a form.
 
+### Downloads
+
+A link or URL that resolves to a file leaves the page where it was — the
+download is the whole outcome. Responses carry a `downloads` list, so a command
+that looks like a no-op never silently is one.
+
+```bash
+webpilot capture --include dom --url "https://example.com/invoice"
+```
+
+```
+--- Page: Invoices (https://example.com/) ---
+Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<id> ("invoice.pdf" from https://example.com/invoice)
+```
+
+Files are named by their download id and land under WebPilot's artifact root
+(partitioned per `--context`), so a server-chosen filename never becomes a path
+on disk. `webpilot policy set --operation download --verdict deny` refuses the
+transfer in the browser; the attempt is still reported, without a path.
+
 ### Network & console monitoring
 
 Arm a monitor, then read back what the page did. Here, clicking the dashboard's “New task” button:

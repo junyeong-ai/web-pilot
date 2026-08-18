@@ -91,7 +91,7 @@ appears when a shadow-component-heavy page exhausts the traversal budget
 |---|---|
 | Action | `{"kind": "click", "index": 7}` — one definition (clap + serde, snake_case) |
 | ActionKind | snake_case wire tag, matching `Action.kind` exactly |
-| PolicyKey | Effect-keyed gate: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`, `device`, `context_close`}. Keyed by **effect, not command** — `navigate` gates every URL-load (`navigate` action, `capture --url`, `tab new URL`); `eval` gates every MAIN-world JS sink (`eval`, `frame find`, `console`/`network start`, `dom set-html`). `Command::policy_key()` maps command→key via an **exhaustive match** (reads → `None`), so a new command can't compile without declaring its gate. Enforced at the browser-reaching sink — `LocalTransport::send` (headless) / NM host (browser), never the CLI `IpcTransport`; the host re-parses the wire value to a typed `Command` before enforcing (blocks a Rust-rejects/JS-coerces bypass). Store `policy/policies.json` under the durable data root (survives cache eviction). Per-effect gating rationale lives in the `PolicyKey` variant doc-comments + the `policy_key()` arms. |
+| PolicyKey | Effect-keyed gate: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`, `device`, `context_close`, `download`}. Keyed by **effect, not command** — `navigate` gates every URL-load (`navigate` action, `capture --url`, `tab new URL`); `download` gates the file a page makes the browser write, whatever started it — a `deny` becomes Chrome's own `Browser.setDownloadBehavior` refusal, so the transfer never begins; `eval` gates every MAIN-world JS sink (`eval`, `frame find`, `console`/`network start`, `dom set-html`). `Command::policy_key()` maps command→key via an **exhaustive match** (reads → `None`), so a new command can't compile without declaring its gate. Enforced at the browser-reaching sink — `LocalTransport::send` (headless) / NM host (browser), never the CLI `IpcTransport`; the host re-parses the wire value to a typed `Command` before enforcing (blocks a Rust-rejects/JS-coerces bypass). Store `policy/policies.json` under the durable data root (survives cache eviction). Per-effect gating rationale lives in the `PolicyKey` variant doc-comments + the `policy_key()` arms. |
 | Wait | `Wait { condition, timeout_ms }`; `condition` is the `until`-tagged `WaitCondition` — `{"until": "selector", "value": ".loading"}`, one of `selector`/`text`/`navigation`/`idle` |
 | Capture | `{"include": ["dom","screenshot"], "opts": {...}}` |
 | Status | `{connected, mode: "headless"\|"browser", chrome_version, extension_version}` — per-mode semantics |
@@ -162,7 +162,8 @@ $XDG_CACHE_HOME/webpilot    Linux fallback, then ~/.cache/webpilot
 (full resolution order in `dirs.rs`)
 
 Subdirectories: `runtime/` (sockets, PIDs, locks), `contexts/` (multi-agent),
-`artifacts/` (screenshots, PDFs, sessions), `chrome-profile/`. The **policy store**
+`artifacts/` (screenshots, PDFs, sessions, plus `downloads/<browser-context>/`
+for files a page downloads), `chrome-profile/`. The **policy store**
 (`policy/policies.json`) lives instead under the durable data root
 (`$WEBPILOT_DATA_HOME` / `~/Library/Application Support/webpilot` /
 `$XDG_DATA_HOME` / `~/.local/share/webpilot`), or under `$WEBPILOT_HOME` when set:

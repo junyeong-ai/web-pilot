@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Downloads are a reported command outcome, and the files are WebPilot's.** A
+  navigation that resolves to an attachment is a stay-put — the page never moves
+  — so a command that downloaded a file used to return success on an unchanged
+  snapshot with nothing to show for it, and an agent reading that as a no-op
+  retried and downloaded again. `capture`, every action, and `tab new` now carry
+  a `downloads` list naming what was written. Files land under
+  `artifacts/downloads/<browser-context>/`, partitioned like cookies and storage
+  already are, rather than in the user's OS download folder where nothing
+  WebPilot owns would reclaim them. Chrome names each file by its download id
+  (`allowAndName`), so a server's `Content-Disposition` can no longer choose a
+  path on disk; the name it suggested travels as metadata.
+- **`policy set --operation download`.** The verdict selects Chrome's own
+  download behavior, so a `deny` refuses the transfer in the browser instead of
+  cancelling it after the bytes start. A refused download is still reported, and
+  carries no path.
+
 ## [0.7.1] - 2026-07-11
 
 ### Fixed

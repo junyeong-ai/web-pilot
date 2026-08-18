@@ -205,6 +205,21 @@ webpilot action upload 4 ./resume.pdf                # 파일 업로드
 
 `key-press`·`hover`·`click`은 합성 이벤트가 아니라 네이티브 CDP 입력으로 들어가, Tab은 실제로 포커스를 옮기고 Enter는 폼을 제출합니다.
 
+### 다운로드
+
+첨부 파일로 이어지는 링크나 URL은 페이지를 그대로 둔 채 파일만 내려받습니다 — 다운로드 자체가 그 명령의 결과입니다. 그래서 응답에 `downloads`가 실리고, 아무 일도 없었던 것처럼 보이는 명령이 실제로는 파일을 쓴 경우를 놓치지 않습니다.
+
+```bash
+webpilot capture --include dom --url "https://example.com/invoice"
+```
+
+```
+--- Page: Invoices (https://example.com/) ---
+Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<id> ("invoice.pdf" from https://example.com/invoice)
+```
+
+파일은 다운로드 id로 이름 지어져 WebPilot의 아티팩트 루트(`--context`별로 분리)에 저장됩니다 — 서버가 보낸 파일명이 디스크 경로가 되는 일은 없습니다. `webpilot policy set --operation download --verdict deny`는 브라우저에서 전송 자체를 거부하며, 시도는 경로 없이 그대로 보고됩니다.
+
 ### 네트워크 · 콘솔 관찰
 
 모니터를 켜둔 뒤(arm) 페이지가 일으킨 활동을 읽습니다. 아래는 대시보드에서 “New task” 버튼을 눌렀을 때:
