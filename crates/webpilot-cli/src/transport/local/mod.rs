@@ -685,7 +685,8 @@ impl LocalTransport {
         events: &mut tokio::sync::broadcast::Receiver<Value>,
         promised: bool,
     ) -> Vec<Download> {
-        let sweep = collect_downloads(events, &self.downloads_dir(), promised).await;
+        let sweep =
+            collect_downloads(events, &self.downloads_dir(), &self.target_id, promised).await;
         self.credit_downloads(sweep).await
     }
 
@@ -1138,6 +1139,7 @@ impl DownloadWatch {
 pub(super) async fn collect_downloads(
     events: &mut tokio::sync::broadcast::Receiver<Value>,
     dir: &std::path::Path,
+    opener: &str,
     promised: bool,
 ) -> DownloadSweep {
     use tokio::sync::broadcast::error::{RecvError, TryRecvError};
@@ -1149,7 +1151,7 @@ pub(super) async fn collect_downloads(
     loop {
         loop {
             match events.try_recv() {
-                Ok(event) => apply_download_event(&mut sweep, &event, dir),
+                Ok(event) => apply_download_event(&mut sweep, &event, dir, opener),
                 Err(TryRecvError::Lagged(_)) => lagged = true,
                 Err(_) => break,
             }
@@ -1164,7 +1166,7 @@ pub(super) async fn collect_downloads(
             break;
         }
         match tokio::time::timeout(deadline - now, events.recv()).await {
-            Ok(Ok(event)) => apply_download_event(&mut sweep, &event, dir),
+            Ok(Ok(event)) => apply_download_event(&mut sweep, &event, dir, opener),
             Ok(Err(RecvError::Lagged(_))) => lagged = true,
             Ok(Err(RecvError::Closed)) | Err(_) => break,
         }
@@ -1181,7 +1183,12 @@ pub(super) async fn collect_downloads(
 }
 
 /// Fold one browser-level event into the sweep.
-fn apply_download_event(sweep: &mut DownloadSweep, event: &Value, dir: &std::path::Path) {
+fn apply_download_event(
+    sweep: &mut DownloadSweep,
+    event: &Value,
+    dir: &std::path::Path,
+    opener: &str,
+) {
     let Some(method) = event.get("method").and_then(Value::as_str) else {
         return;
     };
@@ -1189,11 +1196,14 @@ fn apply_download_event(sweep: &mut DownloadSweep, event: &Value, dir: &std::pat
         return;
     };
     // A page target's id IS its main frame's id, and a download opened with
-    // `target="_blank"` is announced against that frame — so a tab this command
-    // opened is exactly as much "this command's doing" as the page it clicked in.
+    // `target="_blank"` is announced against that frame — so a tab the driven
+    // page opened is as much this command's doing as the page itself. Keyed on
+    // the opener, like popup adoption: the subscription is browser-wide, and a
+    // tab another agent opened at the same moment is not this command's.
     if method == "Target.targetCreated"
         && let Some(info) = params.get("targetInfo")
         && info.get("type").and_then(Value::as_str) == Some("page")
+        && info.get("openerId").and_then(Value::as_str) == Some(opener)
         && let Some(id) = info.get("targetId").and_then(Value::as_str)
     {
         sweep.opened_targets.insert(id.to_string());
