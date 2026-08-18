@@ -2,7 +2,7 @@
 // Mirrors crates/webpilot/src/error.rs.
 
 function err(code, message, data) {
-  return { code, message, ...(data || {}) };
+  return { code, message, ...data };
 }
 const otherErr = (msg) => err("Other", msg);
 // Preserve a thrown error's typed `code` (e.g. BridgeUnavailable → exit 3)

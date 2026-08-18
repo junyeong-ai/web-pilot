@@ -97,7 +97,7 @@ async function injectConsoleMonitoring(tabId) {
             buf.push({ level: m, message: msg, timestamp: nowFn() });
             // `truncated` is driven by this eviction flag, not `length >= cap`.
             if (buf.length > cap) { buf.shift(); window.__webpilot_console_dropped = true; }
-          } catch (e) {}
+          } catch {}
           orig[m].apply(console, args);
         };
       });
@@ -122,7 +122,7 @@ async function injectNetworkMonitoring(tabId) {
       const nowFn = Date.now;
       const perfObj = performance;
       const perfNowRaw = perfObj.now;
-      const perfNow = () => { try { return perfNowRaw.call(perfObj); } catch (e) { return 0; } };
+      const perfNow = () => { try { return perfNowRaw.call(perfObj); } catch { return 0; } };
       const MAX = 4096;
       // CODEPOINT-safe clip (a lone surrogate breaks serialization — see console).
       const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
@@ -145,7 +145,7 @@ async function injectNetworkMonitoring(tabId) {
           const buf = window.__webpilot_network;
           buf.push(entry);
           if (buf.length > cap) { buf.shift(); window.__webpilot_network_dropped = true; }
-        } catch (e) { entry = null; }
+        } catch { entry = null; }
         // origFetch can throw SYNCHRONOUSLY (`fetch()` with no args is a
         // TypeError, not a rejected promise). Stamp the entry errored instead of
         // leaving it in-flight forever, then rethrow so the page sees it.
@@ -153,7 +153,7 @@ async function injectNetworkMonitoring(tabId) {
         try {
           p = origFetch.apply(this, args);
         } catch (e) {
-          if (entry) { try { entry.error = String(e && e.message || e); entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e2) {} }
+          if (entry) { try { entry.error = String(e && e.message || e); entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch {} }
           throw e;
         }
         if (!entry) return p;
@@ -162,10 +162,10 @@ async function injectNetworkMonitoring(tabId) {
           // start time the entry carried while in-flight sits before a cursor taken
           // after the request began, which would hide the resolved entry from a
           // poller. A plain read (no `since`) shows it either way.
-          try { entry.status = response.status; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
+          try { entry.status = response.status; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch {}
           return response;
         }).catch((err) => {
-          try { entry.error = err.message; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
+          try { entry.error = err.message; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch {}
           throw err;
         });
       };
@@ -177,7 +177,7 @@ async function injectNetworkMonitoring(tabId) {
       const origSend = xhrProto.send;
       const xhrMeta = new WeakMap();
       xhrProto.open = function (m, u, ...a) {
-        try { xhrMeta.set(this, { method: m, url: String(u) }); } catch (e) {}
+        try { xhrMeta.set(this, { method: m, url: String(u) }); } catch {}
         return origOpen.apply(this, [m, u, ...a]);
       };
       xhrProto.send = function (...a) {
@@ -199,9 +199,9 @@ async function injectNetworkMonitoring(tabId) {
           this.addEventListener("timeout", () => { terminalError = "timeout"; }, { once: true });
           this.addEventListener("error", () => { terminalError = "Network error"; }, { once: true });
           this.addEventListener("loadend", () => {
-            try { entry.status = this.status || undefined; entry.error = terminalError; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
+            try { entry.status = this.status || undefined; entry.error = terminalError; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch {}
           }, { once: true });
-        } catch (e) { entry = null; }
+        } catch { entry = null; }
         return origSend.apply(this, a);
       };
     },

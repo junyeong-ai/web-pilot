@@ -51,6 +51,13 @@ jobs:
         with:
           cache-key: lint
 
+      # The extension is the half of the engine the Rust gates cannot see: the
+      # DOM index, the click settle and the monitors are all authored here, and
+      # `browser_parity` only asserts that a router case exists, never that its
+      # handler holds together. Pinned like the actions are.
+      - name: oxlint (extension)
+        run: npx --yes oxlint@1.78.0 --deny-warnings extension/
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
 

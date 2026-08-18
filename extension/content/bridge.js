@@ -41,7 +41,7 @@
   // ── Error helpers ─────────────────────────────────────────────────────────
   const err = (code, message, data) => ({
     success: false,
-    error: { code, message, ...(data || {}) },
+    error: { code, message, ...data },
   });
 
   const elementNotFound = (requested, available) =>
@@ -1686,7 +1686,7 @@
       // Storage is origin-scoped state, so the export records WHOSE it is — the
       // import refuses to write it into a page on a different origin.
       return { origin: location.origin, localStorage: localObj, sessionStorage: sessionObj };
-    } catch (e) {
+    } catch {
       return err(
         "Other",
         "Storage is not accessible on this page (a data: URL, a sandboxed frame, or storage disabled) — cannot export a session here",

@@ -9,6 +9,7 @@ command handlers.
 
 ```bash
 cargo fmt --all -- --check     # CI gates on this — run it in every local pass too
+npx oxlint@1.78.0 --deny-warnings extension/   # the extension's gate (.oxlintrc.json)
 cargo build --workspace --release
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
@@ -52,7 +53,7 @@ side adds a case in `extension/background/router.js` and its handler in the
 domain module that mirrors the Rust file (`action`/`capture`/`query`/`state`/
 `browser`.js ↔ the same-named `.rs`) — JS, so not compiler-checked, but
 `tests/browser_parity.rs` fails the build if any `Command` variant lacks a
-router case. Add a `bridge.js` case only when new content-script behavior is
+router case, and `oxlint` gates the extension the way `clippy` gates the crates. Add a `bridge.js` case only when new content-script behavior is
 needed. Gate a command by adding an arm to `protocol::Command::policy_key()` —
 that match is exhaustive too, so a new command **must declare its gate** and
 cannot leak ungated (enforcement runs automatically at each privileged sink).
