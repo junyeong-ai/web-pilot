@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.1] - 2026-08-18
 
 ### Added
 
@@ -42,11 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a new window. Nothing then appeared to adopt, which is exactly what a download
   that discards its own tab looks like, so every such click sat out the whole
   download watch before returning. The name is now resolved against the frame
-  tree, which carries each context's live name: a match loads that frame and the
-  click returns at once. The tree is the authority on purpose — an `<iframe name>`
-  attribute only seeds the name, so a frame that has since renamed itself answers
-  to the new name alone and a link carrying the stale attribute still opens a
-  context, exactly as the browser does it.
+  tree, which carries each context's live name: a match means the click loads
+  that frame, and the command waits for that frame to commit rather than for a
+  context that was never going to appear — returning as soon as it does. The
+  tree is the authority on purpose — an `<iframe name>` attribute only seeds the
+  name, so a frame that has since renamed itself answers to the new name alone
+  and a link carrying the stale attribute still opens a context, exactly as the
+  browser does it. A named-frame link whose response turns out to be an
+  attachment commits nothing, and that is the case the wait still covers, so the
+  download is reported rather than lost to a command that returned first.
 - **`self update` refreshes the Claude skill.** It already re-deployed the
   extension, whose drift the host rejects at connect time; the skill had no such
   gate, so an updated binary was left described by its predecessor's
@@ -55,7 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   content alone a stale copy and an edited one are the same thing. Each install
   now records the digest it wrote, so a later one can tell its own copy — which
   it refreshes silently — from the user's, which it keeps and names in the
-  report.
+  report. Only a build that records can be recognised, so the hop out of a
+  release that did not (0.8.0 and earlier) still reports the skill as kept; the
+  outgoing build claims its own copy on the way past, which makes every hop
+  after this one automatic.
 
 ## [0.8.0] - 2026-08-18
 
