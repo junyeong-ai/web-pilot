@@ -237,6 +237,13 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
         ));
     }
 
+    if !effect.downloads.is_empty() {
+        items["downloads"] = serde_json::to_value(&effect.downloads).expect("Download serializes");
+        for d in &effect.downloads {
+            human_lines.push(format!("→ {}", d.to_line()));
+        }
+    }
+
     Ok(CommandOutput::List {
         items,
         human_lines,
@@ -278,6 +285,7 @@ fn render_filter(filter: &webpilot::types::ElementFilter) -> String {
 struct ChainEffect {
     url_changed: Option<String>,
     new_tab: Option<webpilot::types::TabInfo>,
+    downloads: Vec<webpilot::types::Download>,
 }
 
 async fn chain_action<T: Transport>(transport: &mut T, action: Action) -> Result<ChainEffect> {
@@ -293,12 +301,15 @@ async fn chain_action<T: Transport>(transport: &mut T, action: Action) -> Result
             error,
             url_changed,
             new_tab,
-            ..
+            downloads,
+            dom: _,
+            capture_error: _,
         } => {
             lift_error(success, error, ())?;
             Ok(ChainEffect {
                 url_changed,
                 new_tab,
+                downloads,
             })
         }
         ResponseData::Error { error } => Err(error.into()),

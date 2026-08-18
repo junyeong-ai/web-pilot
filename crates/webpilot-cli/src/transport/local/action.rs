@@ -253,7 +253,7 @@ impl LocalTransport {
         // arrow/text behaviour), but still flows through the navigation +
         // popup detection below because Enter can submit a form. Every other
         // page-mutating action runs in the page via the bridge.
-        let (nav_hint, frame_navigates) = match &action {
+        let (nav_hint, frame_navigates, download_hint) = match &action {
             Action::KeyPress { key, modifiers } => {
                 self.do_key_press(key, modifiers).await?;
                 // Enter can submit a form, and that navigation is QUEUED (HTML
@@ -263,7 +263,7 @@ impl LocalTransport {
                 // so the settle waits (PROBE-bound) for the commit, exactly as a
                 // link click's `navigates` hint does. A non-submitting Enter just
                 // pays that short probe. Other keys never navigate.
-                (key == "Enter", false)
+                (key == "Enter", false, false)
             }
             _ => {
                 let action_json = serde_json::to_value(&action)?;
@@ -283,7 +283,14 @@ impl LocalTransport {
                     .get("frame_navigates")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                (navigates, frame_navigates)
+                // The Navigation API told the bridge this click began a download.
+                // Chrome will announce it, so the drain below waits for it — a
+                // download loads no document, so nothing else in the settle would.
+                let downloads = resp
+                    .get("downloads")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                (navigates, frame_navigates, downloads)
             }
         };
 
@@ -335,7 +342,7 @@ impl LocalTransport {
 
         let downloads = self
             .credit_downloads(
-                super::drain_download_announcements(&mut download_events, false).await,
+                super::drain_download_announcements(&mut download_events, download_hint).await,
             )
             .await;
 

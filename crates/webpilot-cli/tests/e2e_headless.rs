@@ -3817,6 +3817,38 @@ fn headless_behavioral_flow() {
         "the click's reported path must name the real bytes"
     );
 
+    // 8e-dl-client. A download the PAGE decides — an `<a download>`, or the
+    //     hidden one an export button builds and clicks — never navigates, so
+    //     nothing in the settle waits for Chrome's announcement and the report was
+    //     lost for all but the server-attachment shape. The Navigation API names
+    //     it synchronously (`downloadRequest`), so the bridge hints it and the
+    //     drain waits, the way `Page.navigate`'s `isDownload` does for a navigated
+    //     one. Measured before the hint: 0/20 for `<a download>`, 2/20 for the
+    //     export button.
+    for id in ["dldirect", "dlblob"] {
+        let cap = fx.run(&["capture", "--include", "dom", "--url", &base]);
+        let clicked = fx.run(&["action", "click", &index_of(&cap, id)]);
+        let json: serde_json::Value = serde_json::from_str(&stdout(&clicked)).expect("json");
+        assert_eq!(
+            json["downloads"][0]["state"],
+            "saved",
+            "a page-initiated download from #{id} must be reported: {}",
+            stdout(&clicked)
+        );
+    }
+
+    // 8e-dl-tabnew. `tab new` onto an attachment reports it too — the renderer
+    //     reads the same field the action and capture renderers do, so a download
+    //     cannot be lost to whichever command happened to open the page.
+    let tab_dl = fx.run(&["tab", "new", &format!("{base}/attachment")]);
+    let tab_json: serde_json::Value = serde_json::from_str(&stdout(&tab_dl)).expect("json");
+    assert_eq!(
+        tab_json["downloads"][0]["state"],
+        "saved",
+        "tab new onto an attachment must report the download: {}",
+        stdout(&tab_dl)
+    );
+
     // 8e-dl-deny. `download deny` refuses the transfer in the browser, so nothing
     //     is written — and the refusal is REPORTED rather than dropped, or the
     //     agent would retry a click that can never succeed. A denied download

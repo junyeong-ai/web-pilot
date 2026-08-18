@@ -45,7 +45,21 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <div style="height:3000px"></div>
 <button id="deepbtn" onclick="document.title='deep-clicked'">deep button</button>
 <a id="dlnav" href="/attachment">download invoice</a>
+<a id="dldirect" download="direct.txt" href="data:text/plain,hello">direct download</a>
+<button id="dlblob" onclick="webpilotExport()">export blob</button>
 <script>
+  // An export button of the shape SPAs actually ship: build the file client-side
+  // and click a hidden `<a download>`. The browser never navigates, so only the
+  // Navigation API's `downloadRequest` reveals that a file was written.
+  function webpilotExport() {
+    const blob = new Blob(["a,b\n1,2\n"], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = window.URL.createObjectURL(blob);
+    a.download = "export.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
   // A DOCUMENT-level delegated click listener: it fires for a click inside the
   // shadow root only if the synthetic event is `composed` (crosses the boundary).
   // `e.target` is retargeted to the host once it leaves the shadow root, so the

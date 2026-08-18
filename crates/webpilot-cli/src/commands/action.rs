@@ -65,7 +65,6 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
             new_tab,
             capture_error,
             downloads,
-            ..
         } => {
             lift_error(success, error, ())?;
 

@@ -969,19 +969,30 @@
       ctrlKey: mods.ctrl === true, shiftKey: mods.shift === true,
       altKey: mods.alt === true, metaKey: mods.meta === true,
     };
-    // A click can start a navigation that static link/form analysis cannot
-    // predict — a `location.href` / `location.assign` / `form.submit()` run by an
-    // onclick handler. The Navigation API fires `navigate` SYNCHRONOUSLY when this
-    // frame begins such a navigation, so a listener spanning the click sequence
-    // records it. Only a CROSS-DOCUMENT http(s)/file start counts (`sameDocument`
+    // A click can start a navigation — or a download — that static link/form
+    // analysis cannot predict: a `location.href` / `form.submit()` run by an
+    // onclick handler, or the hidden `<a download>` an export button builds and
+    // clicks. The Navigation API fires `navigate` SYNCHRONOUSLY as this frame
+    // begins either, so a listener spanning the click sequence records which one
+    // it was. `downloadRequest` is the browser's own answer — a string (the
+    // suggested name, EMPTY for a bare `download` attribute, so only `null` means
+    // "not a download"). A download loads no document, so it drives no settle;
+    // it tells the transport a download announcement is coming and must be waited
+    // for, the way `Page.navigate`'s `isDownload` does for a navigated one.
+    // Otherwise only a CROSS-DOCUMENT http(s)/file start counts (`sameDocument`
     // false): a same-document hash/pushState loads no new document, and hinting it
-    // would burn the settle's whole commit-wait; a download is not a navigation.
+    // would burn the settle's whole commit-wait.
     // Removed right after the sequence so it never catches a later, unrelated nav.
     let programmaticNav = false;
+    let downloadStarted = false;
     const nav = window.navigation;
     const onNavigate = (e) => {
       const d = e.destination;
-      if (!d || d.sameDocument || e.downloadRequest) return;
+      if (!d || d.sameDocument) return;
+      if (e.downloadRequest !== null) {
+        downloadStarted = true;
+        return;
+      }
       try {
         const proto = new URL(d.url).protocol;
         if (proto === "http:" || proto === "https:" || proto === "file:") programmaticNav = true;
@@ -1011,6 +1022,7 @@
     return {
       navigates: clickNavigates(el, notCanceled) || (programmaticNav && isTop),
       frameNavigates: frameNavigates(el, notCanceled) || (programmaticNav && !isTop),
+      downloads: downloadStarted,
     };
   }
 
@@ -1197,7 +1209,12 @@
           // navigation under a switched frame — even before the queued
           // frameStartedLoading is observable.
           const nav = reliableClick(r.target, action.modifiers || {});
-          return { success: true, navigates: nav.navigates, frame_navigates: nav.frameNavigates };
+          return {
+            success: true,
+            navigates: nav.navigates,
+            frame_navigates: nav.frameNavigates,
+            downloads: nav.downloads,
+          };
         }
 
         case "type": {
