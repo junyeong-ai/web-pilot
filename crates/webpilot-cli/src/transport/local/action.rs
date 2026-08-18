@@ -258,12 +258,13 @@ impl LocalTransport {
         };
         let mut target_events = self.browser.subscribe_events();
         let mut page_events = self.page.subscribe_events();
+        let mut frame_events = self.page.subscribe_events();
 
         // `key_press` dispatches a native CDP key event (real Tab/Backspace/
         // arrow/text behaviour), but still flows through the navigation +
         // popup detection below because Enter can submit a form. Every other
         // page-mutating action runs in the page via the bridge.
-        let (nav_hint, frame_navigates, download_hint, opens_context) = match &action {
+        let (nav_hint, frame_navigates, download_hint, opens_context, named_frame) = match &action {
             Action::KeyPress { key, modifiers } => {
                 self.do_key_press(key, modifiers).await?;
                 // Enter can submit a form, and that navigation is QUEUED (HTML
@@ -273,7 +274,7 @@ impl LocalTransport {
                 // so the settle waits (PROBE-bound) for the commit, exactly as a
                 // link click's `navigates` hint does. A non-submitting Enter just
                 // pays that short probe. Other keys never navigate.
-                (key == "Enter", false, false, false)
+                (key == "Enter", false, false, false, None)
             }
             _ => {
                 let action_json = serde_json::to_value(&action)?;
@@ -311,11 +312,21 @@ impl LocalTransport {
                 // tree is the authority on browsing-context names, so a match
                 // there means the click loads an EXISTING frame of this page
                 // rather than opening a context.
-                let opens_context = match resp.get("target_name").and_then(Value::as_str) {
-                    Some(name) => !self.has_frame_named(name).await,
+                let named_frame = match resp.get("target_name").and_then(Value::as_str) {
+                    Some(name) => self.frame_named(name).await,
+                    None => None,
+                };
+                let opens_context = match resp.get("target_name") {
+                    Some(_) => named_frame.is_none(),
                     None => opens_context,
                 };
-                (navigates, frame_navigates, downloads, opens_context)
+                (
+                    navigates,
+                    frame_navigates,
+                    downloads,
+                    opens_context,
+                    named_frame,
+                )
             }
         };
 
@@ -387,6 +398,16 @@ impl LocalTransport {
         // turns out to be an attachment. So a download IS coming, and the drain
         // waits for it the way `isDownload` makes a navigation wait; a popup that
         // really is a page was adopted, and waits for nothing.
+        // A click into a frame the settle does not cover — neither the main frame
+        // nor the active one — ends nowhere this command otherwise looks. Wait
+        // for that frame to commit: an ordinary navigation returns as soon as it
+        // does, while a response that turns out to be an attachment never
+        // commits at all and the announcement is what arrives instead.
+        if let Some(frame_id) = named_frame {
+            self.await_frame_navigation(&mut frame_events, &frame_id)
+                .await;
+        }
+
         let vanished_context = opens_context && new_tab.is_none();
         let sweep = super::collect_downloads(
             &mut download_events,
@@ -766,6 +787,38 @@ impl LocalTransport {
             tokio::time::timeout(deadline - now, self.page.evaluate("document.readyState")).await,
             Ok(Ok(v)) if v.as_str().is_some_and(|s| s != "loading")
         )
+    }
+
+    /// Wait — bounded by `PROBE` — for `frame_id` to commit a document.
+    ///
+    /// The receiver is subscribed before the action, so an event emitted while
+    /// the click was in flight is already buffered and cannot be missed.
+    async fn await_frame_navigation(&self, events: &mut crate::cdp::SessionEvents, frame_id: &str) {
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+
+        let committed = |event: &Value| {
+            event.get("method").and_then(Value::as_str) == Some("Page.frameNavigated")
+                && event.pointer("/params/frame/id").and_then(Value::as_str) == Some(frame_id)
+        };
+        loop {
+            match events.try_recv() {
+                Ok(event) if committed(&event) => return,
+                Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+        let deadline = tokio::time::Instant::now() + super::PROBE;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return;
+            }
+            match tokio::time::timeout(deadline - now, events.recv()).await {
+                Ok(Ok(event)) if committed(&event) => return,
+                Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
+                Ok(Err(RecvError::Closed)) | Err(_) => return,
+            }
+        }
     }
 
     /// Wait — bounded by `PROBE` — for a freshly adopted popup to settle on

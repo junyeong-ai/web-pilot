@@ -161,21 +161,18 @@ impl LocalTransport {
         Ok(action_success(None))
     }
 
-    /// Does the driven page carry a frame named `name`? Browsing-context names
-    /// live in the frame tree, never in the page's own markup: an `<iframe name>`
-    /// attribute seeds the name but goes stale the moment that frame renames
-    /// itself, so a click targeting the attribute's value opens a new context
-    /// while one targeting the live name loads the frame.
-    pub(super) async fn has_frame_named(&self, name: &str) -> bool {
-        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
-            return false;
-        };
-        let Some(root) = tree.get("frameTree") else {
-            return false;
-        };
+    /// The driven page's frame named `name`, if it has one. Browsing-context
+    /// names live in the frame tree, never in the page's own markup: an
+    /// `<iframe name>` attribute seeds the name but goes stale the moment that
+    /// frame renames itself, so a click targeting the attribute's value opens a
+    /// new context while one targeting the live name loads the frame.
+    pub(super) async fn frame_named(&self, name: &str) -> Option<String> {
+        let tree = self.page.send("Page.getFrameTree", None).await.ok()?;
         let mut all = Vec::new();
-        collect_frames(root, 0, &mut all);
-        all.iter().any(|f| f.name.as_deref() == Some(name))
+        collect_frames(tree.get("frameTree")?, 0, &mut all);
+        all.into_iter()
+            .find(|f| f.name.as_deref() == Some(name))
+            .map(|f| f.frame_id)
     }
 
     /// Adopt a tab the acted-on page opened during the action window — the

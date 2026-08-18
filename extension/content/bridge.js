@@ -867,7 +867,7 @@
   // verdict, so the browser side can settle whether it names an existing frame
   // after all. Keywords are matched case-insensitively and never against frame
   // names, so a page that names a frame `_blank` cannot steer the lookup.
-  function navTargetFor(raw, disowned) {
+  function navTargetFor(raw) {
     const keyword = raw.trim().toLowerCase();
     if (keyword === "_blank" || keyword === "_unfencedtop") {
       return { target: NEW_CONTEXT, name: null };
@@ -875,24 +875,12 @@
     if (!keyword || keyword === "_self" || keyword === "_top" || keyword === "_parent") {
       return { target: keyword || "_self", name: null };
     }
-    // `noopener` skips the name lookup entirely and creates a fresh top-level
-    // context, so a matching frame is irrelevant — the link opens one either way.
-    if (disowned) return { target: NEW_CONTEXT, name: null };
     const name = raw.trim();
     const resolved = resolveNamedTarget(name);
     return resolved
       ? { target: resolved, name: null }
       : { target: NEW_CONTEXT, name: clip(name, 200) };
   }
-
-  // `noreferrer` implies `noopener`; both are ASCII case-insensitive tokens of a
-  // space-separated list, so the raw attribute is lowercased and split rather
-  // than matched against `relList` (whose `contains` is case-sensitive).
-  const disownsOpener = (el) =>
-    (el.rel || "")
-      .toLowerCase()
-      .split(/\s+/)
-      .some((token) => token === "noopener" || token === "noreferrer");
 
   // The one derivation both nav hints read, so they can never disagree about
   // WHETHER — and WHERE — a click navigates. A link counts only as a
@@ -924,7 +912,7 @@
       if (dest.origin === cur.origin && dest.pathname === cur.pathname && dest.search === cur.search) {
         return NO_NAV;
       }
-      return navTargetFor(a.target || "", disownsOpener(a));
+      return navTargetFor(a.target || "");
     }
     // A submit control submits its associated form on click → a new document
     // loads, but it carries no `href` so the link path above misses it. (A form
@@ -933,10 +921,7 @@
     // with no type defaults to submit.
     const btn = el.closest('button, input[type="submit"], input[type="image"]');
     if (btn && btn.form && (btn.tagName !== "BUTTON" || btn.type === "submit")) {
-      return navTargetFor(
-        btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "",
-        disownsOpener(btn.form),
-      );
+      return navTargetFor(btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "");
     }
     return NO_NAV;
   }
