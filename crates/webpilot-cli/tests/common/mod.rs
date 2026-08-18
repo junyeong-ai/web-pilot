@@ -46,6 +46,8 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <button id="deepbtn" onclick="document.title='deep-clicked'">deep button</button>
 <a id="dlnav" href="/attachment">download invoice</a>
 <a id="dldirect" download="direct.txt" href="data:text/plain,hello">direct download</a>
+<a id="dlpopup" href="/attachment" target="_blank" rel="noopener">download in a new tab</a>
+<a id="dlslow" href="/slowattachment">slow download</a>
 <button id="dlblob" onclick="webpilotExport()">export blob</button>
 <script>
   // An export button of the shape SPAs actually ship: build the file client-side
@@ -210,6 +212,22 @@ pub fn spawn_server() -> String {
                         body
                     );
                     let _ = stream.write_all(resp.as_bytes());
+                    return;
+                }
+                // Bytes that arrive over several seconds, so a command cannot
+                // observe a terminal state within its budget: the outcome must be
+                // reported as still running rather than as finished.
+                if req.starts_with("GET /slowattachment") {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"slow.bin\"\r\nContent-Length: 60000\r\nConnection: close\r\n\r\n",
+                    );
+                    for _ in 0..6 {
+                        if stream.write_all(&[b'Z'; 10_000]).is_err() {
+                            return;
+                        }
+                        let _ = stream.flush();
+                        std::thread::sleep(std::time::Duration::from_millis(700));
+                    }
                     return;
                 }
                 if req.starts_with("GET /attachment") {

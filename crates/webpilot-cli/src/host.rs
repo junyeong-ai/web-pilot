@@ -93,13 +93,30 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RotatingLog {
 /// about a session that has already ended needs.
 fn open_log(path: &std::path::Path) -> Option<std::fs::File> {
     if std::fs::metadata(path).is_ok_and(|m| m.len() >= LOG_ROTATE_BYTES) {
-        let _ = std::fs::rename(path, path.with_extension("log.1"));
+        rotate_log(path);
     }
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .ok()
+}
+
+/// Rename the full log aside, under a lock.
+///
+/// Chrome spawns one host per `connectNative` port, so two can reach this at
+/// once. Unlocked, both would see a full log and both would rename: the second
+/// rename overwrites the retained history with the first one's brand-new empty
+/// file, destroying exactly what `host.log.1` exists to keep. The size is
+/// re-checked while holding the lock, so the loser rotates nothing.
+fn rotate_log(path: &std::path::Path) {
+    let Ok(Some(_guard)) = crate::lockfile::flock_exclusive(&path.with_extension("rotate"), false)
+    else {
+        return;
+    };
+    if std::fs::metadata(path).is_ok_and(|m| m.len() >= LOG_ROTATE_BYTES) {
+        let _ = std::fs::rename(path, path.with_extension("log.1"));
+    }
 }
 
 pub async fn run_host() -> anyhow::Result<()> {
@@ -481,6 +498,12 @@ async fn handle_one_cli_request(
         Ok(command) => command,
         Err(e) => return reply_error(&mut writer, cli_id, e).await,
     };
+
+    // Browser mode writes its screenshots and PDFs into the same artifact root
+    // headless does, and this host outlives every CLI that talks to it — so the
+    // retention sweep has to be reached from here too, or a browser-only install
+    // never expires anything. Gated by the same hourly marker.
+    crate::session::sweep_expired_artifacts();
     // Forward a FRESHLY BUILT envelope — never the caller's JSON mutated in
     // place. Re-serializing `command` strips unmodeled fields INSIDE it, but a
     // direct socket writer could also append a top-level SIBLING the extension

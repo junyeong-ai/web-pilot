@@ -179,7 +179,8 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
     // element matched first — a side-effecting guess with no signal the others
     // existed (the wrong form submitted, the wrong field filled). Fail loud
     // naming the matches; the agent narrows the filter or acts by index. A
-    // bare `find` (no action) still lists every match — that is its job.
+    // bare `find` (no action) lists its matches up to the render bound, and says
+    // how many it had — that is its job.
     if (args.click || args.fill.is_some()) && matches.len() > 1 {
         let listed: Vec<String> = matches
             .iter()

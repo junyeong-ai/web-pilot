@@ -413,8 +413,6 @@ pub fn invalidate_session_if_current(failed_ws_url: &str) {
 /// Ensure a headless session is running. Uses an advisory file lock so that
 /// concurrent agents do not race to launch Chrome.
 pub async fn ensure_session() -> Result<String> {
-    sweep_expired_artifacts();
-
     if let Some(url) = get_existing_session() {
         return Ok(url);
     }
@@ -456,13 +454,16 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(3_600);
 /// exported sessions, downloaded files. Every one is minted under a fresh name,
 /// so the directory has no other bound.
 ///
-/// Every command reaching the browser passes here, and the marker's age is what
-/// decides: one `stat` in the common case, a full pass at most hourly. The marker
+/// Called from the sinks every command passes — the headless transport's `send`
+/// and the host's request loop — because a session outlives any one process:
+/// tying it to a launch or to a process start would leave a long-lived server
+/// sweeping exactly once. The marker's age decides: one `stat` in the common
+/// case, a full pass at most hourly. The marker
 /// is stamped BEFORE the pass, so two agents starting together do not both walk
 /// the directory — and since removal is idempotent, a race costs work, never
 /// correctness. Nothing here can touch an artifact a concurrent capture is
 /// writing: those are minted under a fresh name and the cutoff is days old.
-fn sweep_expired_artifacts() {
+pub fn sweep_expired_artifacts() {
     let marker = dirs::runtime_dir().join("last-sweep");
     let swept_recently = std::fs::metadata(&marker)
         .and_then(|m| m.modified())
@@ -475,25 +476,37 @@ fn sweep_expired_artifacts() {
         return;
     };
     let _ = std::fs::File::create(&marker);
-    sweep_artifacts(&dirs::artifacts_dir(), cutoff);
+    let removed = sweep_artifacts(&dirs::artifacts_dir(), cutoff);
+    // These are paths an agent may have been handed. When one turns up missing,
+    // the record is the difference between a diagnosis and a guess.
+    if removed > 0 {
+        tracing::debug!("swept {removed} artifact(s) past the retention window");
+    }
 }
 
 /// Remove files last written before `cutoff`, and any directory left empty by
 /// doing so — a per-context download folder outlives its context otherwise.
-fn sweep_artifacts(dir: &Path, cutoff: SystemTime) {
+fn sweep_artifacts(dir: &Path, cutoff: SystemTime) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+        return 0;
     };
+    let mut removed = 0;
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
         let Ok(meta) = entry.metadata() else { continue };
         if meta.is_dir() {
-            sweep_artifacts(&path, cutoff);
+            removed += sweep_artifacts(&path, cutoff);
+            // Succeeds only on a directory that is empty at this instant, so a
+            // context that just claimed one keeps it.
             let _ = std::fs::remove_dir(&path);
         } else if meta.modified().is_ok_and(|m| m < cutoff) {
-            let _ = std::fs::remove_file(&path);
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(e) => tracing::debug!("could not sweep {}: {e}", path.display()),
+            }
         }
     }
+    removed
 }
 
 /// Shut down the entire headless Chrome session. Idempotent.

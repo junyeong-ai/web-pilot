@@ -17,8 +17,9 @@ pub struct ProfileArgs {
 }
 
 pub async fn run(local: &mut LocalTransport, args: ProfileArgs) -> Result<CommandOutput> {
+    let mut downloads = Vec::new();
     if let Some(url) = args.url {
-        crate::transport::navigate_to(local, url).await?;
+        downloads = crate::transport::navigate_to(local, url).await?;
     }
 
     let cdp = local.page();
@@ -44,8 +45,16 @@ pub async fn run(local: &mut LocalTransport, args: ProfileArgs) -> Result<Comman
     let path = dirs::artifact_path("profile", "cpuprofile");
     std::fs::write(&path, serde_json::to_string(&data)?)?;
 
-    Ok(CommandOutput::Data {
-        json: serde_json::json!({"path": path.to_string_lossy()}),
-        human: format!("Profile saved: {}", path.display()),
-    })
+    let mut json = serde_json::json!({"path": path.to_string_lossy()});
+    let mut human = format!("Profile saved: {}", path.display());
+    // `--url` can land on a file rather than a page; the profile is still the
+    // command's result, but the file it wrote is not the agent's to discover.
+    if !downloads.is_empty() {
+        json["downloads"] = serde_json::to_value(&downloads).expect("Download serializes");
+        for d in &downloads {
+            human.push('\n');
+            human.push_str(&d.to_line());
+        }
+    }
+    Ok(CommandOutput::Data { json, human })
 }

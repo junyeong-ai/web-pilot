@@ -44,7 +44,10 @@ pub fn lift_error<T>(success: bool, error: Option<WebPilotError>, payload: T) ->
 /// Navigate before another command runs, surfacing navigation failures
 /// (`NavigationFailed`/`Timeout`) rather than swallowing them — a pre-step
 /// that lands on the wrong page must fail loudly, not profile/record silently.
-pub async fn navigate_to<T: Transport>(transport: &mut T, url: String) -> Result<()> {
+pub async fn navigate_to<T: Transport>(
+    transport: &mut T,
+    url: String,
+) -> Result<Vec<webpilot::types::Download>> {
     use webpilot::Action;
     match transport
         .send(Command::Action {
@@ -53,7 +56,15 @@ pub async fn navigate_to<T: Transport>(transport: &mut T, url: String) -> Result
         })
         .await?
     {
-        ResponseData::Action { success, error, .. } => lift_error(success, error, ()),
+        ResponseData::Action {
+            success,
+            error,
+            downloads,
+            dom: _,
+            url_changed: _,
+            new_tab: _,
+            capture_error: _,
+        } => lift_error(success, error, downloads),
         ResponseData::Error { error } => Err(error.into()),
         other => Err(anyhow::anyhow!("unexpected navigate response: {other:?}")),
     }

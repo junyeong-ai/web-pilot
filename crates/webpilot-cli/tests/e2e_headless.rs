@@ -3837,6 +3837,38 @@ fn headless_behavioral_flow() {
         );
     }
 
+    // 8e-dl-slow. The outcome is Chrome's, not WebPilot's configuration: a
+    //     transfer still running when the command returns must say so, or the
+    //     agent reads the prefix of a file the response called Downloaded.
+    let cap_slow = fx.run(&["capture", "--include", "dom", "--url", &base]);
+    let slow = fx.run(&["action", "click", &index_of(&cap_slow, "dlslow")]);
+    let slow_json: serde_json::Value = serde_json::from_str(&stdout(&slow)).expect("json");
+    assert_eq!(
+        slow_json["downloads"][0]["state"],
+        "in_progress",
+        "a transfer that outlives the command must not be reported as finished: {}",
+        stdout(&slow)
+    );
+    assert!(
+        slow_json["downloads"][0]["path"].is_string(),
+        "an unfinished download still names where its bytes are landing: {}",
+        stdout(&slow)
+    );
+
+    // 8e-dl-popup. `target="_blank"` on a download link lands the file in the
+    //     popup's frame, which is not in the opener's tree the credit filter is
+    //     resolved against — so the filter has to widen to the tab that was
+    //     adopted.
+    let cap_pop = fx.run(&["capture", "--include", "dom", "--url", &base]);
+    let popup = fx.run(&["action", "click", &index_of(&cap_pop, "dlpopup")]);
+    let popup_json: serde_json::Value = serde_json::from_str(&stdout(&popup)).expect("json");
+    assert_eq!(
+        popup_json["downloads"][0]["suggested_filename"],
+        "invoice.pdf",
+        "a download opened in a new tab must still be credited: {}",
+        stdout(&popup)
+    );
+
     // 8e-dl-tabnew. `tab new` onto an attachment reports it too — the renderer
     //     reads the same field the action and capture renderers do, so a download
     //     cannot be lost to whichever command happened to open the page.

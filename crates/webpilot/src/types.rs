@@ -315,19 +315,26 @@ pub struct Download {
     pub outcome: DownloadOutcome,
 }
 
-/// What became of a download. Chrome announces one before it decides whether to
-/// accept it, so a refusal is reported rather than dropped — a page that tried
-/// to write a file and was stopped is exactly what a `download deny` policy
-/// exists to make visible, and silence there would leave the agent retrying a
-/// click that can never succeed.
+/// What became of a download, as Chrome reported it — never as WebPilot
+/// configured it. A transfer can be refused by policy, cancelled by the network
+/// or the disk, or simply still be running when the command returns, and an
+/// agent told to read a path needs to know which.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum DownloadOutcome {
-    /// Chrome accepted the transfer and is writing it to `path`. Under
-    /// `allowAndName` it never renames, so the path is final from the start.
+    /// The transfer finished; `path` is Chrome's own, and the bytes are all
+    /// there.
     Saved { path: String },
     /// The `download` policy refused the transfer. No file exists.
     Denied,
+    /// Chrome ended the transfer without finishing it — a reset connection, a
+    /// full disk, a Safe Browsing block. Whatever reached `path` is a fragment,
+    /// so it is not offered as one.
+    Canceled,
+    /// Still running when the command returned. `path` is where the bytes are
+    /// landing, so it can be read once it settles — but reading it now yields a
+    /// prefix.
+    InProgress { path: String },
 }
 
 // ── DOM ──────────────────────────────────────────────────────────────────────
@@ -769,6 +776,12 @@ impl Download {
             }
             DownloadOutcome::Denied => {
                 format!("Download denied by policy: \"{name}\" from {from}")
+            }
+            DownloadOutcome::Canceled => {
+                format!("Download failed before it finished: \"{name}\" from {from}")
+            }
+            DownloadOutcome::InProgress { path } => {
+                format!("Downloading (not finished): {path} (\"{name}\" from {from})")
             }
         }
     }

@@ -133,11 +133,18 @@ is never actually one:
 Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<guid> ("invoice.pdf" from https://…)
 ```
 
-`Read` the reported path — the file is named by its download id, so a page
-cannot pick a path on your disk; `suggested_filename` is what the server called
-it. Files land under WebPilot's artifact root (per `--context`), never the OS
-download folder. `policy set --operation download --verdict deny` refuses the
-transfer in the browser; the attempt is still reported, with no path.
+`state` is what Chrome did, not what was asked of it:
+
+- `saved` — finished; `path` holds every byte, so `Read` it.
+- `in_progress` — still transferring; `path` is where the bytes are landing, so
+  reading it now gives a prefix. Re-check the file, or capture again later.
+- `denied` — the `download` policy refused it. No file exists.
+- `canceled` — the transfer broke (reset connection, full disk, a browser
+  block). Whatever reached disk is a fragment and no path is offered.
+
+The file is named by its download id, so a page cannot pick a path on your disk;
+`suggested_filename` is what the server called it. Files land under WebPilot's
+artifact root (per `--context`), never the OS download folder.
 
 Headless only. Under `--browser` a download goes to the user's own download
 folder and is not reported — check with them rather than assuming a click that

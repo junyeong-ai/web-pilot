@@ -141,6 +141,11 @@ impl LocalTransport {
         action: Action,
         capture: bool,
     ) -> Result<ResponseData> {
+        // Subscribed before anything runs, for every action kind: a reload whose
+        // page exports on load, or a drag that a handler turns into a file, is
+        // no less a download than a click on a link, and classifying kinds as
+        // unable to download is how one gets missed.
+        let mut download_events = self.browser.subscribe_events();
         match &action {
             Action::Navigate { url } => {
                 let url = url.clone();
@@ -154,11 +159,13 @@ impl LocalTransport {
             }
             Action::Back => {
                 self.history_nav(HistoryNav::Back).await?;
-                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
+                let downloads = self.downloads_from(&mut download_events, false).await;
+                return Ok(self.settled_action_result(capture, None, downloads).await);
             }
             Action::Forward => {
                 self.history_nav(HistoryNav::Forward).await?;
-                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
+                let downloads = self.downloads_from(&mut download_events, false).await;
+                return Ok(self.settled_action_result(capture, None, downloads).await);
             }
             Action::Reload => {
                 // Subscribe BEFORE issuing the reload, so the completion event
@@ -196,7 +203,8 @@ impl LocalTransport {
                     }
                 }
                 self.settle_new_document().await;
-                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
+                let downloads = self.downloads_from(&mut download_events, false).await;
+                return Ok(self.settled_action_result(capture, None, downloads).await);
             }
             Action::Drag {
                 source,
@@ -205,7 +213,8 @@ impl LocalTransport {
             } => {
                 self.require_main_frame("drag").await?;
                 self.do_drag(*source, *target, *steps).await?;
-                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
+                let downloads = self.downloads_from(&mut download_events, false).await;
+                return Ok(self.settled_action_result(capture, None, downloads).await);
             }
             Action::Hover { index } => {
                 // Browser-input mouse move so CSS `:hover` actually fires.
@@ -213,7 +222,8 @@ impl LocalTransport {
                 // internal hover state.
                 self.require_main_frame("hover").await?;
                 self.do_hover(*index).await?;
-                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
+                let downloads = self.downloads_from(&mut download_events, false).await;
+                return Ok(self.settled_action_result(capture, None, downloads).await);
             }
             Action::Upload { index, path } => {
                 // No `require_main_frame`: upload resolves the index in the ACTIVE
@@ -224,7 +234,8 @@ impl LocalTransport {
                 // mechanism doesn't need.
                 let path = path.clone();
                 self.do_upload(*index, &path).await?;
-                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
+                let downloads = self.downloads_from(&mut download_events, false).await;
+                return Ok(self.settled_action_result(capture, None, downloads).await);
             }
             _ => {}
         }
@@ -340,10 +351,11 @@ impl LocalTransport {
                 .await;
         }
 
+        // Credited while the pin is still on the opener — a `target="_blank"`
+        // download is answered for by the opened-target id the sweep recorded,
+        // not by whichever page the pin ends up on.
         let downloads = self
-            .credit_downloads(
-                super::drain_download_announcements(&mut download_events, download_hint).await,
-            )
+            .downloads_from(&mut download_events, download_hint)
             .await;
 
         // Adopt a click-opened tab BEFORE the capture: the pin moves to the

@@ -21,9 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Artifacts expire.** Screenshots, PDFs, accessibility trees, exported
   sessions and downloaded files are each minted under a fresh name, so the
   directory had no bound at all and only ever grew. They are now swept a week
-  after they are written (`[artifacts] ttl`, `WEBPILOT_ARTIFACT_TTL`), at
-  session launch and under the launch lock, so the sweep never races an artifact
-  a concurrent capture is writing.
+  after they are written (`[artifacts] ttl`, `WEBPILOT_ARTIFACT_TTL`). The sweep
+  is due at most hourly and runs from the sinks every command passes, since a
+  Chrome session outlives any one process; it cannot race a capture, because a
+  file being written has an mtime days newer than the cutoff.
 - **A capture lists at most `[capture] max_elements` (1000) interactive
   elements.** Page text, element text, option lists and the shadow walk were all
   bounded; the index — the largest part of a capture — was not, and an ordinary

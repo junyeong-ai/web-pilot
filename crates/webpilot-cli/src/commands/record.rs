@@ -90,8 +90,9 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
     // Navigate only after the request is known-valid: the `--frames`/`--duration`
     // contradiction and the frame-count cap are pure checks, so a rejected
     // recording must not first mutate browser state by loading `--url`.
+    let mut downloads = Vec::new();
     if let Some(url) = args.url {
-        crate::transport::navigate_to(local, url).await?;
+        downloads = crate::transport::navigate_to(local, url).await?;
     }
 
     let dir = dirs::artifacts_dir();
@@ -177,6 +178,9 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
         "count": frame_count,
         "frames": frames,
     });
+    if !downloads.is_empty() {
+        payload["downloads"] = serde_json::to_value(&downloads).expect("Download serializes");
+    }
     if args.dom {
         payload["dom"] = serde_json::Value::from(dom_files);
     }

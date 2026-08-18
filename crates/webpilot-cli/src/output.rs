@@ -114,11 +114,9 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
     // A download leaves the page exactly where it was, so the snapshot alone
     // reads as a command that did nothing.
     if let Some(downloads) = extra.get("downloads") {
-        for d in serde_json::from_value::<Vec<webpilot::types::Download>>(downloads.clone())
-            .unwrap_or_default()
-        {
-            lines.push(d.to_line());
-        }
+        let downloads: Vec<webpilot::types::Download> = serde_json::from_value(downloads.clone())
+            .expect("`downloads` is serialized from `Vec<Download>` by the handler that set it");
+        lines.extend(downloads.iter().map(webpilot::types::Download::to_line));
     }
     lines
 }

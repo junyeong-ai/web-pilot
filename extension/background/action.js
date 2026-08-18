@@ -423,18 +423,24 @@ async function dispatchActionToPage(tab, action) {
       r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
     }
     const result = { type: "Action", ...r };
-    // `navigates` (a new TOP document) and `frame_navigates` (the CURRENT frame)
-    // are internal bridge hints, not part of the typed Action response. Browser
-    // mode resolves the destination from its own main-frame watch, but a link
-    // click QUEUES its navigation, so the events can land after this response —
-    // `navigates` tells `settledActionUrl` to wait for that start instead of
-    // missing it (e.g. a `target=_top` link clicked inside a switched iframe),
-    // while `frame_navigates` drives the iframe-internal settle. Read both, then
-    // drop them rather than leak fields the wire response never models.
+    // `navigates` (a new TOP document), `frame_navigates` (the CURRENT frame) and
+    // `downloads` (the Navigation API saw a download start) are internal bridge
+    // hints, not part of the typed Action response. Browser mode resolves the
+    // destination from its own main-frame watch, but a link click QUEUES its
+    // navigation, so the events can land after this response — `navigates` tells
+    // `settledActionUrl` to wait for that start instead of missing it (e.g. a
+    // `target=_top` link clicked inside a switched iframe), while
+    // `frame_navigates` drives the iframe-internal settle. `downloads` steers the
+    // headless transport's announcement wait and has no browser-mode counterpart,
+    // since downloads there are the user's own browser's business. Read what this
+    // side uses, then drop all three: the wire response models `downloads` as a
+    // list of files, so leaking the hint's boolean fails the host reply's typed
+    // parse and turns a click that SUCCEEDED into a transport error.
     const navHint = r.navigates === true;
     const frameNavigates = r.frame_navigates === true;
     delete result.navigates;
     delete result.frame_navigates;
+    delete result.downloads;
 
     // Report the settled destination of a same-tab navigation the action
     // triggered; a non-navigating action adds no url_changed and pays no wait.
