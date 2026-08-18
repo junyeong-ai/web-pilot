@@ -118,9 +118,15 @@ jobs:
       - id: msrv
         run: |
           set -euo pipefail
-          version="$(cargo metadata --format-version 1 --no-deps \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["rust_version"])')"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # Every workspace crate must agree, or the gate would check whichever
+          # one `cargo metadata` happened to list first.
+          declared="$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(*sorted({p["rust_version"] for p in json.load(sys.stdin)["packages"]}))')"
+          if [ "$(printf %s "$declared" | wc -w)" -ne 1 ]; then
+            echo "workspace crates declare different rust-version: $declared" >&2
+            exit 1
+          fi
+          echo "version=${declared}" >> "$GITHUB_OUTPUT"
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:

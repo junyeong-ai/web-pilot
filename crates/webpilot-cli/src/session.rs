@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use webpilot::dirs;
 
 const SYSTEM_CHROME_PATHS: &[&str] = &[
@@ -413,6 +413,8 @@ pub fn invalidate_session_if_current(failed_ws_url: &str) {
 /// Ensure a headless session is running. Uses an advisory file lock so that
 /// concurrent agents do not race to launch Chrome.
 pub async fn ensure_session() -> Result<String> {
+    sweep_expired_artifacts();
+
     if let Some(url) = get_existing_session() {
         return Ok(url);
     }
@@ -440,26 +442,39 @@ pub async fn ensure_session() -> Result<String> {
     // the profile's SingletonLock and would wedge the launch below.
     kill_profile_orphans();
 
-    sweep_expired_artifacts();
-
     let (_, ws_url) = launch_chrome().await?;
     Ok(ws_url)
 }
+
+/// How long a sweep stands before the next one is due. Chrome is a persistent
+/// singleton by design, so tying the sweep to a launch would run it once per
+/// Chrome lifetime — weeks, on a session nobody quits — and leave the TTL
+/// unenforced for exactly the long-running use the tool is built around.
+const SWEEP_INTERVAL: Duration = Duration::from_secs(3_600);
 
 /// Drop artifacts past their TTL — screenshots, PDFs, accessibility trees,
 /// exported sessions, downloaded files. Every one is minted under a fresh name,
 /// so the directory has no other bound.
 ///
-/// Runs here, under the launch lock, on the one path that starts a session: no
-/// other process is launching, no Chrome is writing, and a surviving CLI holds
-/// only paths older than the sweep window. Sweeping per command would instead
-/// stat the whole directory on every invocation and race the artifact a
-/// concurrent capture is mid-write on.
+/// Every command reaching the browser passes here, and the marker's age is what
+/// decides: one `stat` in the common case, a full pass at most hourly. The marker
+/// is stamped BEFORE the pass, so two agents starting together do not both walk
+/// the directory — and since removal is idempotent, a race costs work, never
+/// correctness. Nothing here can touch an artifact a concurrent capture is
+/// writing: those are minted under a fresh name and the cutoff is days old.
 fn sweep_expired_artifacts() {
+    let marker = dirs::runtime_dir().join("last-sweep");
+    let swept_recently = std::fs::metadata(&marker)
+        .and_then(|m| m.modified())
+        .is_ok_and(|m| m.elapsed().is_ok_and(|age| age < SWEEP_INTERVAL));
+    if swept_recently {
+        return;
+    }
     let Some(cutoff) = SystemTime::now().checked_sub(webpilot::settings::get().artifacts.ttl)
     else {
         return;
     };
+    let _ = std::fs::File::create(&marker);
     sweep_artifacts(&dirs::artifacts_dir(), cutoff);
 }
 

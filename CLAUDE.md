@@ -183,9 +183,11 @@ Subdirectories: `runtime/` (sockets, PIDs, locks), `contexts/` (multi-agent),
 the NM host's stdio, so its account of a session reaches nobody otherwise; the
 CLI keeps stderr, which its caller does capture),
 `artifacts/` (screenshots, PDFs, sessions, plus `downloads/<browser-context>/`
-for files a page downloads), `chrome-profile/`. Artifacts are swept at session
-launch once past `[artifacts] ttl` (7d) — every one is minted under a fresh name,
-so nothing else bounds the directory. The **policy store**
+for files a page downloads), `chrome-profile/`. Artifacts are swept past
+`[artifacts] ttl` (7d) — every one is minted under a fresh name, so nothing else
+bounds the directory. The sweep is due at most hourly, tracked by
+`runtime/last-sweep`: Chrome is a persistent singleton, so tying it to a launch
+would run it once per Chrome lifetime. The **policy store**
 (`policy/policies.json`) lives instead under the durable data root
 (`$WEBPILOT_DATA_HOME` / `~/Library/Application Support/webpilot` /
 `$XDG_DATA_HOME` / `~/.local/share/webpilot`), or under `$WEBPILOT_HOME` when set:

@@ -49,21 +49,38 @@ const LOG_ROTATE_BYTES: u64 = 1024 * 1024;
 /// a browser-mode session that misbehaves leaves no trace of what the host saw.
 /// The CLI keeps stderr, where the caller does capture it.
 ///
-/// Falls back to stderr if the file cannot be opened — a host that cannot log is
-/// still a host that must serve.
+/// Falls back to stderr if the destination cannot be opened — a host that cannot
+/// log is still a host that must serve, and the one stream it has beats sinking
+/// every line.
 fn init_logging() {
+    let path = dirs::host_log_path();
     let builder = tracing_subscriber::fmt()
         .with_env_filter("info")
         .with_target(false);
-    match open_log() {
-        Some(file) => {
-            let _ = builder
-                .with_writer(Arc::new(file))
-                .with_ansi(false)
-                .try_init();
-        }
-        None => {
-            let _ = builder.with_writer(std::io::stderr).try_init();
+    if open_log(&path).is_some() {
+        let _ = builder
+            .with_writer(RotatingLog { path })
+            .with_ansi(false)
+            .try_init();
+    } else {
+        let _ = builder.with_writer(std::io::stderr).try_init();
+    }
+}
+
+/// The log destination, resolved per record so the bound is enforced as the file
+/// grows rather than once at startup — a host lives as long as Chrome keeps its
+/// port open, which is far longer than it takes an error loop to fill a file.
+struct RotatingLog {
+    path: std::path::PathBuf,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RotatingLog {
+    type Writer = Box<dyn std::io::Write>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        match open_log(&self.path) {
+            Some(file) => Box::new(file),
+            None => Box::new(std::io::stderr()),
         }
     }
 }
@@ -74,11 +91,7 @@ fn init_logging() {
 /// inode keeps landing in `host.log.1` instead of leaving a hole in the new
 /// file, and the previous session's account survives — which is the one a report
 /// about a session that has already ended needs.
-fn open_log() -> Option<std::fs::File> {
-    open_log_at(&dirs::host_log_path())
-}
-
-fn open_log_at(path: &std::path::Path) -> Option<std::fs::File> {
+fn open_log(path: &std::path::Path) -> Option<std::fs::File> {
     if std::fs::metadata(path).is_ok_and(|m| m.len() >= LOG_ROTATE_BYTES) {
         let _ = std::fs::rename(path, path.with_extension("log.1"));
     }
@@ -616,15 +629,15 @@ mod tests {
 
         // Under the bound the log is appended to, so one session can read what
         // the one before it recorded.
-        open_log_at(&path).unwrap().write_all(b"first\n").unwrap();
-        open_log_at(&path).unwrap().write_all(b"second\n").unwrap();
+        open_log(&path).unwrap().write_all(b"first\n").unwrap();
+        open_log(&path).unwrap().write_all(b"second\n").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond\n");
         assert!(!rotated.exists());
 
         // At the bound the full log is renamed, never truncated: the previous
         // session's account is what a report about it needs.
         std::fs::write(&path, vec![b'x'; LOG_ROTATE_BYTES as usize]).unwrap();
-        open_log_at(&path).unwrap().write_all(b"after\n").unwrap();
+        open_log(&path).unwrap().write_all(b"after\n").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\n");
         assert_eq!(
             std::fs::metadata(&rotated).unwrap().len(),
