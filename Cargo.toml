@@ -25,7 +25,10 @@ toml = { version = "1", default-features = false, features = ["parse", "serde"] 
 # Image (screenshot processing)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 fast_image_resize = "6"
-base64 = "0.22"
+# `simd-unsafe` (on by default) ships SIMD engines as SEPARATE types; the
+# `GeneralPurpose` engine used here is untouched by it, so the default would
+# only compile `unsafe` this crate never calls.
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 
 # SHA-256 — derives the Chrome extension id from the manifest's pinned public
 # key (the same algorithm Chrome uses), so `setup` can authorise the NM host
@@ -45,7 +48,7 @@ thiserror = "2"
 similar = "3"
 
 # WebSocket (CDP)
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 
 # Unix syscalls
 libc = "0.2"
