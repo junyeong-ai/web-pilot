@@ -220,6 +220,8 @@ Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<id> ("invoice
 
 파일은 다운로드 id로 이름 지어져 WebPilot의 아티팩트 루트(`--context`별로 분리)에 저장됩니다 — 서버가 보낸 파일명이 디스크 경로가 되는 일은 없습니다. `webpilot policy set --operation download --verdict deny`는 브라우저에서 전송 자체를 거부하며, 시도는 경로 없이 그대로 보고됩니다.
 
+헤드리스 전용입니다. `--browser`에서는 사용자의 Chrome이 자기 다운로드 폴더와 규칙을 그대로 씁니다. Chrome 확장 API는 다운로드를 시작한 탭을 알려주지 않아, 보고하려면 사용자가 마침 받고 있던 파일까지 에이전트 명령 탓으로 돌리게 됩니다 — 그래서 브라우저 모드에서는 보고도 게이트도 하지 않습니다.
+
 ### 네트워크 · 콘솔 관찰
 
 모니터를 켜둔 뒤(arm) 페이지가 일으킨 활동을 읽습니다. 아래는 대시보드에서 “New task” 버튼을 눌렀을 때:

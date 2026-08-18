@@ -225,6 +225,11 @@ Files are named by their download id and land under WebPilot's artifact root
 on disk. `webpilot policy set --operation download --verdict deny` refuses the
 transfer in the browser; the attempt is still reported, without a path.
 
+Headless only. Under `--browser` the user's own Chrome keeps its own download
+folder and its own rules; Chrome's extension API reports no initiating tab for a
+download, so WebPilot would have to credit whatever the user happened to be
+downloading to the agent — it reports and gates nothing there instead.
+
 ### Network & console monitoring
 
 Arm a monitor, then read back what the page did. Here, clicking the dashboard's “New task” button:

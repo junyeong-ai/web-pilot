@@ -138,6 +138,10 @@ it. Files land under WebPilot's artifact root (per `--context`), never the OS
 download folder. `policy set --operation download --verdict deny` refuses the
 transfer in the browser; the attempt is still reported, with no path.
 
+Headless only. Under `--browser` a download goes to the user's own download
+folder and is not reported — check with them rather than assuming a click that
+downloaded did nothing.
+
 Javascript dialogs are **auto-answered** so they never block automation:
 `alert` is dismissed, `confirm` answers **true**, `prompt` returns its
 **default value** — identically in both modes. A flow that needs the

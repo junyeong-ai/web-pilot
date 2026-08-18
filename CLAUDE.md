@@ -142,6 +142,15 @@ message parsing or substring matching. External crate errors are wrapped into
   fetch / cookie_list / session_export) are advisory — page JS reproduces those
   effects. Deny `eval` first; `policy default deny` + allowlist is the
   least-privilege mode.
+- The `download` gate is headless-only. Browser mode drives the user's own
+  Chrome, where `chrome.downloads` reports no initiating tab and offers no
+  pre-transfer block: a report there could only be "some download happened while
+  the command ran", which would credit the user's own browsing to the agent and
+  leak its path, and a deny could only cancel after bytes had landed. Attaching
+  the debugger per tab would scope it, but only by leaving Chrome's debugging
+  banner up for the session. So browser-mode downloads follow the user's own
+  browser — their download folder, their rules — and WebPilot neither reports nor
+  gates them.
 - Headless CDP is a `127.0.0.1` WebSocket on a random TCP port. A same-user
   local process can reach it directly, bypassing the in-process gate. Accepted:
   Chrome's pipe alternative cannot serve the reconnect-across-processes model
