@@ -82,18 +82,29 @@ pub fn expected_extension_id() -> &'static str {
     })
 }
 
-/// Materialise an embedded `Dir` onto disk under `dest`.
+/// What a materialise does with on-disk entries the embedded tree does not
+/// carry — the difference between the two deployed artefacts.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum Leftovers {
+    /// Delete them, so the tree is a pure function of the binary version rather
+    /// than a union of every version ever installed. Right for the extension:
+    /// `self update` re-runs `setup extension` over an existing install, and a
+    /// file dropped or renamed between releases must not linger where Chrome
+    /// would still load it. Nothing there is the user's.
+    Prune,
+    /// Leave them. Right for the skill, which lives in the user's
+    /// `~/.claude/skills` alongside whatever else they keep there — WebPilot
+    /// writes the files it ships and touches nothing it did not.
+    Keep,
+}
+
+/// Materialise an embedded `Dir` onto disk under `dest`, overwriting the files
+/// it carries and treating anything else per `leftovers`.
 ///
-/// A clean replace: existing files are overwritten and anything the embedded
-/// tree no longer carries is pruned, so the result is a pure function of the
-/// binary version — never a union of every version ever installed. That matters
-/// because `self update` re-runs `setup extension` over an existing install, so
-/// a file dropped or renamed between releases must not linger in the deployed
-/// extension. A `setup` command can still be invoked repeatedly to repair a
-/// damaged install. Permissions are `0o755` on directories and `0o644` on files
-/// (Unix); Chrome needs the extension tree to be world-readable, so `0o700`
-/// would break it.
-pub fn write_dir(dir: &Dir<'_>, dest: &Path) -> io::Result<()> {
+/// A `setup` command can be invoked repeatedly to repair a damaged install.
+/// Permissions are `0o755` on directories and `0o644` on files (Unix); Chrome
+/// needs the extension tree to be world-readable, so `0o700` would break it.
+pub fn write_dir(dir: &Dir<'_>, dest: &Path, leftovers: Leftovers) -> io::Result<()> {
     std::fs::create_dir_all(dest)?;
     set_dir_mode(dest);
 
@@ -110,7 +121,7 @@ pub fn write_dir(dir: &Dir<'_>, dest: &Path) -> io::Result<()> {
                 if let Some(name) = suffix.file_name() {
                     expected.insert(name.to_owned());
                 }
-                write_dir(d, &dest.join(suffix))?;
+                write_dir(d, &dest.join(suffix), leftovers)?;
             }
             include_dir::DirEntry::File(f) => {
                 if is_excluded(f.path()) {
@@ -133,7 +144,9 @@ pub fn write_dir(dir: &Dir<'_>, dest: &Path) -> io::Result<()> {
         }
     }
 
-    prune_unexpected(dest, &expected);
+    if leftovers == Leftovers::Prune {
+        prune_unexpected(dest, &expected);
+    }
     Ok(())
 }
 
@@ -240,7 +253,7 @@ mod tests {
         // exact path `self update` now re-runs over an existing install).
         let tmp = std::env::temp_dir().join(format!("webpilot-assets-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        write_dir(&EXTENSION, &tmp).expect("first materialise");
+        write_dir(&EXTENSION, &tmp, Leftovers::Prune).expect("first materialise");
 
         let orphan_file = tmp.join("STALE_FROM_OLD_VERSION.js");
         std::fs::write(&orphan_file, b"// removed in a later release").unwrap();
@@ -248,7 +261,7 @@ mod tests {
         std::fs::create_dir_all(&orphan_dir).unwrap();
         std::fs::write(orphan_dir.join("x.js"), b"x").unwrap();
 
-        write_dir(&EXTENSION, &tmp).expect("second materialise");
+        write_dir(&EXTENSION, &tmp, Leftovers::Prune).expect("second materialise");
 
         assert!(!orphan_file.exists(), "a top-level orphan must be pruned");
         assert!(

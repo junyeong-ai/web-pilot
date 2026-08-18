@@ -55,7 +55,7 @@ pub fn run(args: ExtensionArgs) -> Result<CommandOutput> {
 pub(crate) fn install() -> Result<StepOutcome> {
     let dest = webpilot::dirs::extension_dir();
 
-    assets::write_dir(&assets::EXTENSION, &dest)
+    assets::write_dir(&assets::EXTENSION, &dest, assets::Leftovers::Prune)
         .with_context(|| format!("write extension to {}", dest.display()))?;
 
     let mut human = String::new();

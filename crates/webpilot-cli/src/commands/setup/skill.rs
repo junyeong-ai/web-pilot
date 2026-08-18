@@ -72,7 +72,7 @@ fn install_inner(yes: bool, force: bool) -> Result<StepOutcome> {
     };
 
     if action.writes() {
-        assets::write_dir(&assets::SKILL, &dest)
+        assets::write_dir(&assets::SKILL, &dest, assets::Leftovers::Keep)
             .with_context(|| format!("write skill to {}", dest.display()))?;
     }
     write_record(&digest(embedded));
