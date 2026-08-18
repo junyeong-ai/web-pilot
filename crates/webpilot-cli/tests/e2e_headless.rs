@@ -3789,6 +3789,37 @@ fn headless_behavioral_flow() {
         stdout(&stale)
     );
 
+    // `rel=noopener` strips the opener from a context that is being created; it
+    // does not force one into existence where a name already answers. Chrome
+    // navigates the named frame for it exactly as it does without the attribute,
+    // so reading the attribute as decisive would put this click back on the
+    // new-context wait it has no reason to pay.
+    let cap_disowned = fx.run(&[
+        "capture",
+        "--include",
+        "dom",
+        "--url",
+        &format!("{base}/named"),
+    ]);
+    await_frame_named(&fx, "livename");
+    let started = std::time::Instant::now();
+    let disowned = fx.run(&[
+        "action",
+        "click",
+        &index_of(&cap_disowned, "disownedtarget"),
+    ]);
+    let disowned_elapsed = started.elapsed();
+    let disowned_json: serde_json::Value = serde_json::from_str(&stdout(&disowned)).expect("json");
+    assert!(
+        disowned_json["new_tab"].is_null(),
+        "noopener does not conjure a context when the name resolves: {}",
+        stdout(&disowned)
+    );
+    assert!(
+        disowned_elapsed < std::time::Duration::from_millis(1500),
+        "a disowned link into a named frame must not wait either, took {disowned_elapsed:?}"
+    );
+
     // 8f-cap. Every other axis of a capture is bounded — page text, element text,
     //     option lists, the shadow walk — but the index itself was not, and a
     //     content-heavy page reaches four figures of links on its own. The bound

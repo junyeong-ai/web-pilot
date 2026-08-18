@@ -124,6 +124,7 @@ pub const NAMED: &str = r##"<!doctype html><html><head><title>named</title></hea
 <body>
 <a id="livetarget" href="/framed2" target="livename">into the renamed frame</a>
 <a id="staletarget" href="/framed2" target="attrname">by the stale attribute</a>
+<a id="disownedtarget" href="/framed2" target="livename" rel="noopener">the same name, disowned</a>
 <iframe src="/renamed" name="attrname"></iframe>
 </body></html>"##;
 

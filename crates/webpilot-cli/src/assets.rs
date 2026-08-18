@@ -280,6 +280,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// The counterpart of the prune test, and the one that matters for the
+    /// skill: `~/.claude/skills/webpilot` is the user's directory, so a refresh
+    /// must write what it ships and leave everything else — notes, references,
+    /// whole subdirectories — exactly where they were.
+    #[test]
+    fn write_dir_keeps_what_it_did_not_ship_when_told_to() {
+        let tmp = std::env::temp_dir().join(format!("webpilot-keep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        write_dir(&SKILL, &tmp, Leftovers::Keep).expect("first materialise");
+
+        let note = tmp.join("NOTES.md");
+        std::fs::write(&note, b"the user's own").unwrap();
+        let notes_dir = tmp.join("references");
+        std::fs::create_dir_all(&notes_dir).unwrap();
+        std::fs::write(notes_dir.join("r.md"), b"kept").unwrap();
+        std::fs::write(tmp.join("SKILL.md"), b"# an older release shipped this").unwrap();
+
+        write_dir(&SKILL, &tmp, Leftovers::Keep).expect("second materialise");
+
+        assert_eq!(
+            std::fs::read(&note).unwrap(),
+            b"the user's own",
+            "a file the user put there must survive a refresh untouched"
+        );
+        assert!(
+            notes_dir.join("r.md").exists(),
+            "a directory the user put there must survive a refresh"
+        );
+        assert_eq!(
+            std::fs::read(tmp.join("SKILL.md")).unwrap(),
+            SKILL.get_file("SKILL.md").unwrap().contents(),
+            "the shipped file is still brought up to date"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn embedded_extension_version_tracks_the_binary() {
         // The module contract ("matches the binary version exactly") and, more
