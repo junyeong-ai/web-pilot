@@ -185,8 +185,13 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
         payload["dom"] = serde_json::Value::from(dom_files);
     }
 
+    let mut human = format!("{} frames -> {}", frame_count, dir.display());
+    for d in &downloads {
+        human.push('\n');
+        human.push_str(&d.to_line());
+    }
     Ok(CommandOutput::Data {
         json: payload,
-        human: format!("{} frames -> {}", frame_count, dir.display()),
+        human,
     })
 }

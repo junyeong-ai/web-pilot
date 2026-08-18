@@ -870,6 +870,13 @@
     return null; // no reachable frame carries the name → a popup
   }
 
+  // A click that loads a document in a context this page cannot name — a
+  // `_blank`/unresolvable target. It settles nothing here, but it is the one
+  // shape where a download leaves no trace in this window: the browser opens a
+  // tab, the response turns out to be an attachment, and the tab is discarded
+  // before anything can be adopted from it.
+  const NEW_CONTEXT = "_newcontext";
+
   function navTargetKeyword(el, notCanceled) {
     if (!notCanceled) return null;
     const a = el.closest("a[href]");
@@ -878,13 +885,13 @@
       // `_blank` (always a new context) and `_unfencedTop` (fenced frames) are
       // reserved keywords — never matched against frame names, so a page that
       // names a frame after one can't trick the lookup into `_self`.
-      if (target === "_blank" || target === "_unfencedtop") return null;
-      if (target && target !== "_self" && target !== "_top" && target !== "_parent") {
+      const blank = target === "_blank" || target === "_unfencedtop";
+      if (!blank && target && target !== "_self" && target !== "_top" && target !== "_parent") {
         // Not a keyword: resolve the raw (case-sensitive) name to a frame this
-        // click would actually navigate, or bail as a popup.
-        const mapped = resolveNamedTarget((a.target || "").trim());
-        if (!mapped) return null;
-        target = mapped;
+        // click would actually navigate, or fall through as a new context.
+        target = resolveNamedTarget((a.target || "").trim()) || NEW_CONTEXT;
+      } else if (blank) {
+        target = NEW_CONTEXT;
       }
       let dest, cur;
       try {
@@ -914,13 +921,13 @@
       const raw = (btn.getAttribute("formtarget") || btn.form.getAttribute("target") || "").trim();
       let t = raw.toLowerCase();
       // `_blank` / `_unfencedTop` are reserved — never a frame-name match.
-      if (t === "_blank" || t === "_unfencedtop") return null;
-      if (t && t !== "_self" && t !== "_top" && t !== "_parent") {
+      const blank = t === "_blank" || t === "_unfencedtop";
+      if (!blank && t && t !== "_self" && t !== "_top" && t !== "_parent") {
         // Same name resolution as the link path: a form targeting an existing
-        // frame's name submits INTO that frame, not a popup.
-        const mapped = resolveNamedTarget(raw);
-        if (!mapped) return null;
-        t = mapped;
+        // frame's name submits INTO that frame, not a new context.
+        t = resolveNamedTarget(raw) || NEW_CONTEXT;
+      } else if (blank) {
+        t = NEW_CONTEXT;
       }
       return t || "_self";
     }
@@ -933,7 +940,7 @@
   // itself). A nav into an ancestor is not a current-frame load.
   function frameNavigates(el, notCanceled) {
     const t = navTargetKeyword(el, notCanceled);
-    if (t === null) return false;
+    if (t === null || t === NEW_CONTEXT) return false;
     if (t === "_self") return true;
     return window.top === window; // _top / _parent of the top frame IS the top
   }
@@ -945,7 +952,7 @@
   // not move — so this hint must fire for it, not `frameNavigates`.
   function clickNavigates(el, notCanceled) {
     const t = navTargetKeyword(el, notCanceled);
-    if (t === null) return false;
+    if (t === null || t === NEW_CONTEXT) return false;
     if (t === "_top") return true;
     if (t === "_parent") return window.parent === window.top;
     return window.top === window; // _self
@@ -975,8 +982,8 @@
     // clicks. The Navigation API fires `navigate` SYNCHRONOUSLY as this frame
     // begins either, so a listener spanning the click sequence records which one
     // it was. `downloadRequest` is the browser's own answer — a string (the
-    // suggested name, EMPTY for a bare `download` attribute, so only `null` means
-    // "not a download"). A download loads no document, so it drives no settle;
+    // suggested name, EMPTY for a bare `download` attribute, so the TYPE decides,
+    // never truthiness). A download loads no document, so it drives no settle;
     // it tells the transport a download announcement is coming and must be waited
     // for, the way `Page.navigate`'s `isDownload` does for a navigated one.
     // Otherwise only a CROSS-DOCUMENT http(s)/file start counts (`sameDocument`
@@ -989,7 +996,7 @@
     const onNavigate = (e) => {
       const d = e.destination;
       if (!d || d.sameDocument) return;
-      if (e.downloadRequest !== null) {
+      if (typeof e.downloadRequest === "string") {
         downloadStarted = true;
         return;
       }
@@ -1023,6 +1030,7 @@
       navigates: clickNavigates(el, notCanceled) || (programmaticNav && isTop),
       frameNavigates: frameNavigates(el, notCanceled) || (programmaticNav && !isTop),
       downloads: downloadStarted,
+      opensContext: navTargetKeyword(el, notCanceled) === NEW_CONTEXT,
     };
   }
 
@@ -1214,6 +1222,7 @@
             navigates: nav.navigates,
             frame_navigates: nav.frameNavigates,
             downloads: nav.downloads,
+            opens_context: nav.opensContext,
           };
         }
 

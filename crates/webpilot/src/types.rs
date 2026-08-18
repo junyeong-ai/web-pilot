@@ -331,9 +331,10 @@ pub enum DownloadOutcome {
     /// full disk, a Safe Browsing block. Whatever reached `path` is a fragment,
     /// so it is not offered as one.
     Canceled,
-    /// Still running when the command returned. `path` is where the bytes are
-    /// landing, so it can be read once it settles — but reading it now yields a
-    /// prefix.
+    /// Still running when the command returned. The bytes are landing in a
+    /// `.crdownload` file beside `path`, and Chrome renames it into place only
+    /// once the transfer finishes — so `path` does not exist yet, and its
+    /// appearance is an exact completion signal to wait on.
     InProgress { path: String },
 }
 
@@ -781,7 +782,7 @@ impl Download {
                 format!("Download failed before it finished: \"{name}\" from {from}")
             }
             DownloadOutcome::InProgress { path } => {
-                format!("Downloading (not finished): {path} (\"{name}\" from {from})")
+                format!("Downloading \"{name}\" from {from} — {path} appears when it finishes")
             }
         }
     }

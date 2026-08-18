@@ -659,11 +659,22 @@ impl LocalTransport {
     /// page or of a tab this command opened. The frame tree is fetched only once
     /// something announced, leaving the common no-download path free of the round
     /// trip.
-    pub(super) async fn credit_downloads(&self, sweep: DownloadSweep) -> Vec<Download> {
+    pub(super) async fn credit_downloads(
+        &self,
+        sweep: DownloadSweep,
+        acted_on: Option<std::collections::HashSet<String>>,
+    ) -> Vec<Download> {
         if sweep.watches.is_empty() {
             return Vec::new();
         }
-        let mut frames = self.page_frame_ids().await;
+        // `acted_on` is the frame tree of the page the command ACTED on, when
+        // that is no longer the pinned one — a click that opened a popup moves
+        // the pin, and the download may well have started in the page left
+        // behind.
+        let mut frames = match acted_on {
+            Some(frames) => frames,
+            None => self.page_frame_ids().await,
+        };
         frames.extend(sweep.opened_targets);
         // What THIS command applied, so a cancellation can be named as the
         // policy's doing. `None` means the call failed and the browser's
@@ -687,7 +698,7 @@ impl LocalTransport {
     ) -> Vec<Download> {
         let sweep =
             collect_downloads(events, &self.downloads_dir(), &self.target_id, promised).await;
-        self.credit_downloads(sweep).await
+        self.credit_downloads(sweep, None).await
     }
 
     /// Every frame id in the driven page's tree, main frame included.
@@ -1223,10 +1234,12 @@ fn apply_download_event(
 
     match method {
         "Browser.downloadWillBegin" => {
-            // Under `allowAndName` Chrome writes to `<dir>/<guid>` and never
-            // renames, so the destination is known before the first byte — which
-            // is what makes an unfinished download still worth reporting a path
-            // for. `filePath` on the completing event confirms it.
+            // Under `allowAndName` the destination is known before the first
+            // byte: Chrome streams into `<dir>/<guid>.crdownload` and renames it
+            // to `<dir>/<guid>` only on completion. So this path is worth
+            // reporting even unfinished — its appearance is what tells an agent
+            // the bytes are all there. `filePath` on the completing event
+            // confirms it.
             sweep.watches.push(DownloadWatch {
                 guid: guid.to_string(),
                 frame_id: text("frameId"),

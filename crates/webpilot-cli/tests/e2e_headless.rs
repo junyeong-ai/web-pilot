@@ -3867,10 +3867,23 @@ fn headless_behavioral_flow() {
         "a transfer that outlives the command must not be reported as finished: {}",
         stdout(&slow)
     );
+    // The path is the completion signal, not a readable prefix: Chrome streams
+    // into `<path>.crdownload` and renames only when the transfer finishes, so
+    // an agent that reads it early gets nothing at all. Asserting only that the
+    // field is a string is what let the opposite claim ship.
+    let slow_path = PathBuf::from(slow_json["downloads"][0]["path"].as_str().expect("path"));
     assert!(
-        slow_json["downloads"][0]["path"].is_string(),
-        "an unfinished download still names where its bytes are landing: {}",
-        stdout(&slow)
+        !slow_path.exists(),
+        "an unfinished download must not name a file that exists yet: {slow_path:?}"
+    );
+    assert!(
+        slow_path.with_extension("crdownload").exists(),
+        "the bytes land beside it while it transfers: {slow_path:?}"
+    );
+    assert_eq!(
+        settled_file(&slow_path).len(),
+        60_000,
+        "the path appears, complete, once the transfer finishes"
     );
 
     // 8e-dl-popup. `target="_blank"` on a download link lands the file in the

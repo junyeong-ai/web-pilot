@@ -441,6 +441,7 @@ async function dispatchActionToPage(tab, action) {
     delete result.navigates;
     delete result.frame_navigates;
     delete result.downloads;
+    delete result.opens_context;
 
     // Report the settled destination of a same-tab navigation the action
     // triggered; a non-navigating action adds no url_changed and pays no wait.

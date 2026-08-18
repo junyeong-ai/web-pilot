@@ -263,7 +263,7 @@ impl LocalTransport {
         // arrow/text behaviour), but still flows through the navigation +
         // popup detection below because Enter can submit a form. Every other
         // page-mutating action runs in the page via the bridge.
-        let (nav_hint, frame_navigates, download_hint) = match &action {
+        let (nav_hint, frame_navigates, download_hint, opens_context) = match &action {
             Action::KeyPress { key, modifiers } => {
                 self.do_key_press(key, modifiers).await?;
                 // Enter can submit a form, and that navigation is QUEUED (HTML
@@ -273,7 +273,7 @@ impl LocalTransport {
                 // so the settle waits (PROBE-bound) for the commit, exactly as a
                 // link click's `navigates` hint does. A non-submitting Enter just
                 // pays that short probe. Other keys never navigate.
-                (key == "Enter", false, false)
+                (key == "Enter", false, false, false)
             }
             _ => {
                 let action_json = serde_json::to_value(&action)?;
@@ -300,7 +300,14 @@ impl LocalTransport {
                     .get("downloads")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                (navigates, frame_navigates, downloads)
+                // The click loads a document in a context this page cannot name.
+                // It settles nothing here, but it decides whether a missing popup
+                // below means "the tab became a download".
+                let opens_context = resp
+                    .get("opens_context")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                (navigates, frame_navigates, downloads, opens_context)
             }
         };
 
@@ -350,18 +357,37 @@ impl LocalTransport {
                 .await;
         }
 
-        // Credited while the pin is still on the opener — a `target="_blank"`
-        // download is answered for by the opened-target id the sweep recorded,
-        // not by whichever page the pin ends up on.
-        let downloads = self
-            .downloads_from(&mut download_events, download_hint)
-            .await;
+        // Adoption moves the pin to the popup, so the page this command acted on
+        // has to be identified before it runs. Only a click that opens a context
+        // pays the frame-tree read; every other click keeps the lazy path, where
+        // the tree is read at all only if something announced.
+        let acted_on = self.target_id.clone();
+        let acted_on_frames = if opens_context {
+            Some(self.page_frame_ids().await)
+        } else {
+            None
+        };
 
         // Adopt a click-opened tab BEFORE the capture: the pin moves to the
         // popup (the browser-mode contract), and the agent's snapshot must
         // describe the tab it will act on next — capturing the opener would
         // hand back indices that resolve nowhere.
         let new_tab = self.adopt_click_opened_target(&mut target_events).await;
+
+        // A click that opens a new context and leaves no tab to adopt opened one
+        // Chrome then discarded — which is exactly what it does when the response
+        // turns out to be an attachment. So a download IS coming, and the drain
+        // waits for it the way `isDownload` makes a navigation wait; a popup that
+        // really is a page was adopted, and waits for nothing.
+        let vanished_context = opens_context && new_tab.is_none();
+        let sweep = super::collect_downloads(
+            &mut download_events,
+            &self.downloads_dir(),
+            &acted_on,
+            download_hint || vanished_context,
+        )
+        .await;
+        let downloads = self.credit_downloads(sweep, acted_on_frames).await;
 
         // Capture AFTER everything settled: for a navigating click that is
         // the committed-and-parsed new document, for a popup the adopted tab.

@@ -136,8 +136,10 @@ Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<guid> ("invoi
 `state` is what Chrome did, not what was asked of it:
 
 - `saved` — finished; `path` holds every byte, so `Read` it.
-- `in_progress` — still transferring; `path` is where the bytes are landing, so
-  reading it now gives a prefix. Re-check the file, or capture again later.
+- `in_progress` — still transferring. `path` does **not** exist yet: Chrome
+  streams into a `.crdownload` file beside it and renames it into place when the
+  transfer finishes, so the path appearing is an exact "it is complete" signal to
+  poll for.
 - `denied` — the `download` policy refused it. No file exists.
 - `canceled` — the transfer broke (reset connection, full disk, a browser
   block). Whatever reached disk is a fragment and no path is offered.
@@ -168,7 +170,7 @@ A broad filter is bounded like a capture's listing: `count` is the true number o
 
 `--click`/`--fill` require the filter to match **exactly one** element — an
 ambiguous filter fails loud listing the matches (narrow it, or use
-`action click N`). A bare `find` lists every match.
+`action click N`). A bare `find` lists its matches up to the same 1000-row bound, with the true `count`.
 
 ## Wait
 
