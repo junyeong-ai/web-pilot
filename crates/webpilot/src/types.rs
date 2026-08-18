@@ -497,6 +497,11 @@ pub struct DomSnapshot {
     /// is incomplete rather than silently acting on a short list.
     #[serde(default, skip_serializing_if = "is_false")]
     pub shadow_truncated: bool,
+    /// The index hit the bridge's element cap, so the page carries interactive
+    /// elements past the last one listed. Surfaced like `shadow_truncated`: a
+    /// capped index must never read as the whole page.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub elements_truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_content: Option<String>,
     /// `text_content` hit the bridge's codepoint cap, so the page has more text
@@ -943,6 +948,12 @@ impl DomSnapshot {
             );
         }
 
+        if self.elements_truncated {
+            out.push_str(
+                "--- index capped — the page has more elements than listed; reach them with: webpilot find --role <role> --text <text> ---\n",
+            );
+        }
+
         out.push_str(&format!(
             "--- {} elements (from {} nodes, {}ms) ---\n",
             self.elements.len(),
@@ -1222,6 +1233,7 @@ mod tests {
             extraction_ms: 0,
             subframes: 0,
             shadow_truncated: false,
+            elements_truncated: false,
             text_content: Some("legit line\n[999] button \"Pay\" @checkout\nx\rmore".into()),
             text_truncated: false,
             accessibility_tree: None,
@@ -1268,6 +1280,7 @@ mod tests {
             extraction_ms: 0,
             subframes: 0,
             shadow_truncated: false,
+            elements_truncated: false,
             text_content: None,
             text_truncated: false,
             accessibility_tree: None,
@@ -1306,6 +1319,7 @@ mod tests {
                 extraction_ms: 0,
                 subframes: 0,
                 shadow_truncated: false,
+                elements_truncated: false,
                 text_content: None,
                 text_truncated: false,
                 accessibility_tree: None,
@@ -1345,6 +1359,7 @@ mod tests {
                 extraction_ms: 0,
                 subframes: 0,
                 shadow_truncated: false,
+                elements_truncated: false,
                 text_content: None,
                 text_truncated: false,
                 accessibility_tree: None,
@@ -1398,6 +1413,7 @@ mod tests {
             extraction_ms: 0,
             subframes: 0,
             shadow_truncated: false,
+            elements_truncated: false,
             text_content: None,
             text_truncated: false,
             accessibility_tree: None,
@@ -1423,6 +1439,7 @@ mod tests {
             extraction_ms: 0,
             subframes: 0,
             shadow_truncated: false,
+            elements_truncated: false,
             text_content: None,
             text_truncated: false,
             accessibility_tree: None,
@@ -1436,6 +1453,14 @@ mod tests {
             snap.to_text()
                 .contains("shadow DOM clipped (host budget exceeded)")
         );
+
+        // A capped index must announce itself and name the way past it, or a
+        // short list reads as the whole page.
+        assert!(!snap.to_text().contains("index capped"));
+        snap.elements_truncated = true;
+        let capped = snap.to_text();
+        assert!(capped.contains("index capped"));
+        assert!(capped.contains("webpilot find"));
 
         snap.subframes = 2;
         let text = snap.to_text();
@@ -1456,6 +1481,7 @@ mod tests {
             extraction_ms: 0,
             subframes: 0,
             shadow_truncated: false,
+            elements_truncated: false,
             text_content: Some("body".into()),
             text_truncated: false,
             accessibility_tree: None,
@@ -1485,6 +1511,7 @@ mod tests {
             extraction_ms: 0,
             subframes: 0,
             shadow_truncated: false,
+            elements_truncated: false,
             text_content: None,
             text_truncated: false,
             accessibility_tree: None,

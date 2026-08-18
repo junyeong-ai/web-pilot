@@ -182,6 +182,22 @@ pub fn spawn_server() -> String {
                 // Resolves to a FILE, not a document: the navigation aborts and the
                 // browser downloads instead. The body is checked byte-for-byte, so
                 // the test can tell a real transfer from a placeholder.
+                // More interactive elements than the bridge's index cap, so the
+                // clip is exercised against a real extraction rather than a stub.
+                if req.starts_with("GET /many") {
+                    let mut body = String::from("<!doctype html><html><body>");
+                    for i in 0..1200 {
+                        body.push_str(&format!("<a href=\"/n{i}\">link {i}</a>"));
+                    }
+                    body.push_str("</body></html>");
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                    return;
+                }
                 if req.starts_with("GET /attachment") {
                     let _ = stream.write_all(
                         b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"invoice.pdf\"\r\nContent-Length: 12\r\nConnection: close\r\n\r\nINVOICE-BODY",

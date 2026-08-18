@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The element index is capped at 1000 per capture.** Page text, element text,
+  option lists and the shadow walk were all bounded; the index — the largest
+  part of a capture — was not, and an ordinary encyclopedia article reaches four
+  figures of links on its own, costing tens of thousands of tokens in a single
+  response. A capped capture sets `elements_truncated` and says so in the footer,
+  the indices it did emit still resolve, and `find` reaches the rest.
+
 ### Added
 
 - **Downloads are a reported command outcome, and the files are WebPilot's.** A

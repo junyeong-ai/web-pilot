@@ -3700,6 +3700,33 @@ fn headless_behavioral_flow() {
         "the recovered session must capture the navigated page"
     );
 
+    // 8f-cap. Every other axis of a capture is bounded — page text, element text,
+    //     option lists, the shadow walk — but the index itself was not, and a
+    //     content-heavy page reaches four figures of links on its own. The clip
+    //     must announce itself: a short index read as the whole page is what makes
+    //     an agent conclude a control does not exist.
+    let many = fx.run(&["capture", "--include", "dom", "--url", &format!("{base}/many")]);
+    let many_json: serde_json::Value = serde_json::from_str(&stdout(&many)).expect("json");
+    let listed = many_json["elements"].as_array().expect("elements").len();
+    assert_eq!(listed, 1000, "the index must be capped: {listed}");
+    assert_eq!(
+        many_json["elements_truncated"], true,
+        "a capped index must say so: {}",
+        stdout(&many)
+    );
+    // The indices that WERE emitted still resolve — capping the list must not
+    // desync it from the bridge's action-resolution snapshot.
+    assert_eq!(
+        code(&fx.run(&["action", "scroll-to", "1000"])),
+        0,
+        "the last emitted index must still resolve"
+    );
+    assert_eq!(
+        code(&fx.run(&["action", "scroll-to", "1001"])),
+        4,
+        "an index past the cap must be a typed not-found, never a silent hit"
+    );
+
     // 8e-dl. A navigation that resolves to an ATTACHMENT is a stay-put whose
     //     cause the agent could not previously see: the page never moves, so an
     //     unreported download reads as a command that did nothing and invites the

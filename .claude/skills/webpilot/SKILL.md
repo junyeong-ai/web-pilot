@@ -47,6 +47,7 @@ webpilot capture --include dom                                # 4. verify (check
 - `@ctx` — ARIA landmark role (`navigation` `main` `banner` `contentinfo` `complementary` `form` `search`); a `<nav>` and a `<div role="navigation">` both report `@navigation`
 - `autocomplete=…` — input semantic hint
 - text truncated at 300 chars
+- the index is capped at 1000 elements; a capped capture prints `--- index capped ---`. The listed indices still work — reach the rest with `find`, which searches the whole page server-side
 
 `capture --include dom` lists only **interactive/indexable** elements (links, buttons, inputs, …). To read plain page text (a `<p>`, a revealed value, a heading) use `dom get-text "<selector>"`, `capture --include text`, or `eval`.
 

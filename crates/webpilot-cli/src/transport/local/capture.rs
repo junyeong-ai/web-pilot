@@ -432,6 +432,7 @@ fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
         extraction_ms: 0,
         subframes: 0,
         shadow_truncated: false,
+        elements_truncated: false,
         text_content: None,
         text_truncated: false,
         accessibility_tree: None,

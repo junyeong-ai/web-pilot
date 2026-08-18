@@ -533,6 +533,12 @@
   // agent never reads the shown slice as the whole list (the same honesty as
   // `shadow_truncated` and the console/network caps).
   const OPTION_CAP = 50;
+  // The index is the largest thing a capture sends, and a content-heavy page
+  // (a long encyclopedia article) reaches four figures of links on its own. Cap
+  // it here, in the one place both modes share, so a page costs bounded tokens
+  // everywhere; `elements_truncated` tells the agent to reach past it with
+  // `find` rather than read a short index as the whole page.
+  const ELEMENT_CAP = 1000;
   function extractOptions(el, tag) {
     if (tag !== "select") return undefined;
     const all = [...el.options];
@@ -631,6 +637,7 @@
       }
       const elements = [];
       const picked = [];
+      let elementsTruncated = false;
       let idx = 1;
       const includeBounds = options.bounds || false;
       // Resolved once for the whole snapshot: `document.activeElement` names only
@@ -782,6 +789,10 @@
         }
         elements.push(entry);
         picked.push(el);
+        if (elements.length >= ELEMENT_CAP) {
+          elementsTruncated = true;
+          break;
+        }
       }
 
       state.snapshot = picked;
@@ -816,6 +827,7 @@
         // warn alone is invisible to it, and a silently short index leads to
         // index actions that can't resolve a control that was never emitted.
         shadow_truncated: shadowTruncated,
+        elements_truncated: elementsTruncated,
       };
     } catch (e) {
       // A genuine extraction failure must surface as a typed error, not a
