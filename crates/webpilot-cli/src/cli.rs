@@ -85,7 +85,7 @@ pub async fn run_cli() -> Result<()> {
 async fn run_local(command: commands::Command, mode: OutputMode) -> Result<()> {
     let out = match command {
         Cmd::Setup(args) => commands::setup::run(args).await?,
-        Cmd::SelfCmd(args) => commands::self_cmd::run(args)?,
+        Cmd::SelfCmd(args) => commands::self_cmd::run(args).await?,
         Cmd::Uninstall(args) => commands::uninstall::run(args).await?,
         Cmd::Diff(args) => commands::diff::run(args).await?,
         Cmd::Policy(args) => commands::policy::run(args)?,

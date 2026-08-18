@@ -68,10 +68,12 @@ pub enum Command {
     Context(context::ContextArgs),
     /// Install the Claude skill, Chrome extension, and NM host (post-install setup)
     Setup(setup::SetupArgs),
-    /// Self-update from the latest GitHub release
+    /// Manage this installation: update or remove it
     #[command(name = "self")]
     SelfCmd(self_cmd::SelfArgs),
-    /// Remove every artefact this binary created
+    /// Retained spelling of `self uninstall`, kept working for installed copies
+    /// of `scripts/uninstall.sh` that invoke it.
+    #[command(hide = true)]
     Uninstall(uninstall::UninstallArgs),
     /// Run as an MCP server over stdio for AI-agent hosts
     Mcp(crate::mcp::McpArgs),

@@ -472,7 +472,7 @@ webpilot self update           # self-update to the latest release (atomic, sha2
 webpilot self update --version X.Y.Z   # pin a version
 
 webpilot quit                  # stop the headless Chrome session
-webpilot uninstall             # quit Chrome + remove everything the binary created
+webpilot self uninstall        # quit Chrome + remove everything the binary created
 ```
 
 The skill and extension are embedded in the binary at compile time, so the **bundled assets always match the binary** — no post-install download. If an extension already loaded in your browser is stale after an update, the host catches it at connect time with `VersionMismatch` and prompts a reload. After setup, Claude Code activates the skill via `/webpilot` or plain natural language.

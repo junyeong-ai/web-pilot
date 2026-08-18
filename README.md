@@ -464,7 +464,7 @@ webpilot self update           # 최신 릴리스로 자가 업데이트 (atomic
 webpilot self update --version X.Y.Z   # 버전 고정
 
 webpilot quit                  # 헤드리스 Chrome 세션 종료
-webpilot uninstall             # Chrome 종료 + 바이너리가 만든 모든 흔적 제거
+webpilot self uninstall        # Chrome 종료 + 바이너리가 만든 모든 흔적 제거
 ```
 
 스킬과 확장은 컴파일 타임에 바이너리에 임베드되어 **번들 자산이 항상 바이너리와 일치**합니다(설치 후 추가 다운로드 없음). 업데이트 후 브라우저에 이미 로드된 확장이 낡았다면 호스트가 연결 시 `VersionMismatch`로 잡아 리로드를 안내합니다. setup 이후 Claude Code에서 `/webpilot` 또는 자연어로 스킬이 활성화됩니다.

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# WebPilot uninstaller — a curl-able front-end over `webpilot uninstall`.
+# WebPilot uninstaller — a curl-able front-end over `webpilot self uninstall`.
 #
 # Every WebPilot artefact belongs to the binary: the embedded Claude skill, the
 # extracted Chrome extension, the Native Messaging host manifest, and the
 # per-user cache/runtime tree are installed by `webpilot setup` and removed by
-# `webpilot uninstall` in one typed pass — using the binary's OWN path
+# `webpilot self uninstall` in one typed pass — using the binary's OWN path
 # resolution (`webpilot::dirs`, the NM host locator) as the single source of
 # truth, removing only what it created. This script's only job is to find that
 # binary and hand off to it; it never re-derives those paths in shell, which
@@ -64,8 +64,8 @@ main() {
         warn "no webpilot binary on PATH or in $install_dir — nothing to uninstall"
         say  "If artefacts remain after the binary was removed by hand, restore it"
         say  "and let it clean up after itself:"
-        say  "  curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | WEBPILOT_NO_SETUP=1 bash"
-        say  "  webpilot uninstall"
+        say  "  curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash -s -- --no-setup"
+        say  "  webpilot self uninstall"
         exit 0
     fi
 
@@ -73,11 +73,11 @@ main() {
     # NM host, cache/runtime tree, and finally the binary itself — in dependency
     # order, only what it created. `--yes` passes through; without it the binary
     # prompts, so route its stdin from the terminal when we were piped from curl.
-    say "Removing via $bin uninstall"
+    say "Removing via $bin self uninstall"
     if [ "$assume_yes" = true ]; then
-        exec "$bin" uninstall --yes
+        exec "$bin" self uninstall --yes
     elif [ -r /dev/tty ]; then
-        exec "$bin" uninstall < /dev/tty
+        exec "$bin" self uninstall < /dev/tty
     else
         die "non-interactive with no terminal to confirm at — re-run with --yes"
     fi

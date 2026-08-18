@@ -1,4 +1,5 @@
-//! `webpilot self update` — replace this binary with the latest release.
+//! `webpilot self` — this installation's own lifecycle: replace the binary
+//! with a newer release, or remove it and everything it deployed.
 //!
 //! Implementation rules (deliberately conservative):
 //!
@@ -33,6 +34,8 @@ pub struct SelfArgs {
 pub enum SelfCommand {
     /// Replace this binary with a release artefact from GitHub.
     Update(UpdateArgs),
+    /// Remove this binary and every artefact it created.
+    Uninstall(crate::commands::uninstall::UninstallArgs),
 }
 
 #[derive(Args)]
@@ -46,9 +49,10 @@ pub struct UpdateArgs {
     pub force: bool,
 }
 
-pub fn run(args: SelfArgs) -> Result<CommandOutput> {
+pub async fn run(args: SelfArgs) -> Result<CommandOutput> {
     match args.command {
         SelfCommand::Update(a) => update(a),
+        SelfCommand::Uninstall(a) => crate::commands::uninstall::run(a).await,
     }
 }
 
