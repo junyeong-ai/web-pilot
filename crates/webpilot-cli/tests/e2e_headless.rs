@@ -20,7 +20,6 @@ use common::{code, spawn_server, stdout};
 
 const BIN: &str = env!("CARGO_BIN_EXE_webpilot");
 
-/// The captured index of the element with the given DOM id, as a CLI argument.
 /// Block until the driven page carries a frame named `name`. A frame's name is
 /// the frame's own to set, so a test that turns on one waits for that frame to
 /// run — not merely for the page that hosts it.
@@ -43,6 +42,7 @@ fn await_frame_named(fx: &Fixture, name: &str) {
     }
 }
 
+/// The captured index of the element with the given DOM id, as a CLI argument.
 fn index_of(cap: &Output, id: &str) -> String {
     let v: serde_json::Value = serde_json::from_str(&stdout(cap)).expect("capture json");
     v["elements"]

@@ -58,6 +58,12 @@ jobs:
       - name: oxlint (extension)
         run: npx --yes oxlint@1.78.0 --deny-warnings extension/
 
+      # The install/uninstall scripts are the other half no Rust gate sees, and
+      # they run as the first thing on a user's machine — before any binary this
+      # workflow tests exists. shellcheck ships on the runner image.
+      - name: shellcheck (scripts)
+        run: shellcheck scripts/*.sh
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
