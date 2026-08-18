@@ -654,12 +654,14 @@ impl LocalTransport {
         if announcements.is_empty() {
             return Vec::new();
         }
-        // The behavior in force is what decides whether a file exists: Chrome
-        // announces a download before refusing it, so reporting a path under a
-        // `deny` would name a file that was never written.
+        // What Chrome was told, not what the store says now: a rule that landed
+        // after the behavior was applied has not reached the browser yet, and
+        // reading it here would report a file that WAS written as denied. Chrome
+        // announces a download before refusing it, so the distinction decides
+        // whether the reported download has a path at all.
         let behavior = self
             .download_behavior
-            .unwrap_or_else(DownloadBehavior::from_policy);
+            .expect("`send` applies the download behavior before any command runs");
         let frames = self.page_frame_ids().await;
         let dir = self.downloads_dir();
         announcements
