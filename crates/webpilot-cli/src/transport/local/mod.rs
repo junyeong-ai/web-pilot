@@ -675,6 +675,11 @@ impl LocalTransport {
             Some(frames) => frames,
             None => self.page_frame_ids().await,
         };
+        // A page target's id is its main frame's id — the identity
+        // `opened_targets` already turns on — so this restores the acted-on
+        // page's top frame for free when the pin has moved to a popup adoption
+        // did not anticipate (a `window.open()` from a handler).
+        frames.insert(sweep.acted_on);
         frames.extend(sweep.opened_targets);
         // What THIS command applied, so a cancellation can be named as the
         // policy's doing. `None` means the call failed and the browser's
@@ -1110,6 +1115,7 @@ const PROBE: std::time::Duration = std::time::Duration::from_secs(2);
 pub(super) struct DownloadSweep {
     pub(super) watches: Vec<DownloadWatch>,
     pub(super) opened_targets: std::collections::HashSet<String>,
+    pub(super) acted_on: String,
 }
 
 pub(super) struct DownloadWatch {
@@ -1157,7 +1163,10 @@ pub(super) async fn collect_downloads(
     use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
     let deadline = tokio::time::Instant::now() + PROBE;
-    let mut sweep = DownloadSweep::default();
+    let mut sweep = DownloadSweep {
+        acted_on: opener.to_string(),
+        ..DownloadSweep::default()
+    };
     let mut lagged = false;
 
     loop {
