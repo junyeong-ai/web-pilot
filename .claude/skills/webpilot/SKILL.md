@@ -389,9 +389,12 @@ webpilot status                                # connected, mode, chrome_version
 webpilot mcp                                   # serve the same engine as a stdio MCP server
                                                # (honors --browser / --context; for MCP host config, not interactive use)
 webpilot setup skill                           # refresh this skill from the binary's embedded copy
-webpilot self update                           # atomic self-update to the latest release (sha256-verified)
+webpilot self update                           # atomic self-update to the latest release (sha256-verified);
+                                               #   refreshes the deployed skill and extension too, keeping
+                                               #   a skill you edited and naming it in the report
 webpilot self update --version X.Y.Z           # pin a version (required for downgrades)
-webpilot uninstall --yes                       # quit Chrome + remove binary, skill, extension, NM host, policy store, cache
+webpilot self update --verify-attestations     # also check GitHub build provenance (needs the gh CLI)
+webpilot self uninstall --yes                  # quit Chrome + remove binary, skill, extension, NM host, policy store, cache
 ```
 
 ## Exit codes

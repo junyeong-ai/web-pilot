@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The installer asks nothing by default.** A `curl | bash` run on a terminal
+  used to stop and ask which build to take, then hand the terminal to an
+  interactive `webpilot setup` — so the one-line install was not actually one
+  line, and the only escape (`WEBPILOT_NO_SETUP=1`) skipped setup rather than
+  completing it. It now takes the prebuilt binary and finishes setup unattended,
+  where each prompt resolves to its safe answer, and every decision has a flag
+  (`--source`, `--version`, `--install-dir`, `--no-setup`, `--help`).
+  `--interactive` restores the guided prompts.
+- **Build provenance can be verified.** The release workflow has always attested
+  its artefacts, but nothing checked them: a SHA-256 sidecar travels the same
+  channel as the archive, so it proves the transfer and not the origin.
+  `webpilot self update --verify-attestations` and `install.sh
+  --verify-attestations` now tie the bytes to a run of this repository's
+  workflow via the `gh` CLI. Opt-in, and hard-failing when asked for — a
+  verification the caller requested and did not get aborts the install.
+
+### Changed
+
+- **`webpilot uninstall` is now `webpilot self uninstall`.** It removes the
+  running binary along with everything that binary deployed — the same object
+  `self update` replaces — so the two halves of one lifecycle no longer sit in
+  different namespaces. The old spelling keeps working, unlisted, so installed
+  copies of `scripts/uninstall.sh` are unaffected.
+
 ### Fixed
 
 - **A link targeting a frame by name no longer stalls the click.** A `target`
@@ -21,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attribute only seeds the name, so a frame that has since renamed itself answers
   to the new name alone and a link carrying the stale attribute still opens a
   context, exactly as the browser does it.
+- **`self update` refreshes the Claude skill.** It already re-deployed the
+  extension, whose drift the host rejects at connect time; the skill had no such
+  gate, so an updated binary was left described by its predecessor's
+  documentation and nothing said so. It could not simply be overwritten either:
+  the skill is the one deployed artefact a user may legitimately edit, and by
+  content alone a stale copy and an edited one are the same thing. Each install
+  now records the digest it wrote, so a later one can tell its own copy — which
+  it refreshes silently — from the user's, which it keeps and names in the
+  report.
 
 ## [0.8.0] - 2026-08-18
 

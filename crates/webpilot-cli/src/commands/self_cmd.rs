@@ -47,6 +47,10 @@ pub struct UpdateArgs {
     /// Reinstall even if the binary already reports the target version.
     #[arg(long)]
     pub force: bool,
+
+    /// Additionally verify GitHub build provenance with the `gh` CLI.
+    #[arg(long)]
+    pub verify_attestations: bool,
 }
 
 pub async fn run(args: SelfArgs) -> Result<CommandOutput> {
@@ -125,6 +129,9 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
         &tmp.path().join(format!("{archive}.sha256")),
     )?;
     verify_checksum(tmp.path(), &archive)?;
+    if args.verify_attestations {
+        verify_attestation(&tmp.path().join(&archive))?;
+    }
     extract(&tmp.path().join(&archive), tmp.path())?;
 
     let extracted = tmp
@@ -387,6 +394,27 @@ fn verify_checksum(dir: &Path, archive: &str) -> Result<()> {
     let status = cmd.status().with_context(|| format!("running {tool}"))?;
     if !status.success() {
         bail!("checksum verification failed");
+    }
+    Ok(())
+}
+
+/// Check the archive against the build provenance the release workflow
+/// attested. This is the one link the checksum cannot make: the sidecar travels
+/// the same channel as the archive, so it proves transport integrity but says
+/// nothing about who produced the bytes. An attestation ties them to a run of
+/// this repository's workflow. Opt-in because it needs `gh`, and hard-failing
+/// when asked for: a verification the caller requested and did not get is a
+/// failed update, never a warning.
+fn verify_attestation(archive: &Path) -> Result<()> {
+    let status = Command::new("gh")
+        .arg("attestation")
+        .arg("verify")
+        .arg(archive)
+        .args(["--repo", REPO])
+        .status()
+        .context("running `gh attestation verify` (install the gh CLI: https://cli.github.com)")?;
+    if !status.success() {
+        bail!("attestation verification failed for {}", archive.display());
     }
     Ok(())
 }

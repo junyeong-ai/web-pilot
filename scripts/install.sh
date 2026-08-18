@@ -5,26 +5,32 @@
 # Claude skill, Chrome extension, and Native Messaging host. The skill and
 # extension are embedded in the binary, so `setup` installs them with zero
 # version drift. The binary owns its lifecycle: `webpilot self update`,
-# `webpilot uninstall`.
+# `webpilot self uninstall`.
 #
 # The binary comes from one of two sources, selectable:
 #   - prebuilt   download a verified release archive (default; fast).
 #   - source     `cargo build` the current checkout (needs Rust + a checkout).
 #
+# A default run asks nothing: it takes the prebuilt binary and completes setup
+# unattended, where every prompt resolves to its safe answer — so a skill the
+# user has edited is kept, never overwritten. Each decision has a flag, and
+# --interactive restores the guided prompts (read from /dev/tty, so they work
+# even under `curl | bash`).
+#
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
-#   bash scripts/install.sh                       # from a checkout, prompts source vs prebuilt
-#   WEBPILOT_BUILD=source bash scripts/install.sh # force a source build
+#   curl -fsSL .../install.sh | bash -s -- --source --no-setup
+#   bash scripts/install.sh --interactive         # from a checkout, guided
 #
-# Uninstall (symmetric one-shot — delegates to `webpilot uninstall`):
+# Uninstall (symmetric one-shot — delegates to `webpilot self uninstall`):
 #   curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/uninstall.sh | bash
 #
-# Environment:
+# Run with --help for the flag inventory. Flags win over the environment:
 #   WEBPILOT_BUILD         "prebuilt" (default) or "source".
 #   WEBPILOT_VERSION       Pin a release tag (prebuilt only). Default: latest.
 #   WEBPILOT_INSTALL_DIR   Install path. Default: $HOME/.local/bin.
 #   WEBPILOT_REPO          Override repo (e.g. fork). Default: junyeong-ai/web-pilot.
-#   WEBPILOT_NO_SETUP=1    Skip the post-install `webpilot setup` walkthrough.
+#   WEBPILOT_NO_SETUP=1    Skip the post-install `webpilot setup`.
 #
 set -euo pipefail
 
@@ -39,6 +45,42 @@ warn() { printf '  %s!%s %s\n' "$C_YEL" "$C_RST" "$*" >&2; }
 die()  { printf '  %s✗%s %s\n' "$C_RED" "$C_RST" "$*" >&2; exit 1; }
 
 require() { command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1"; }
+
+usage() {
+    cat >&2 <<'EOF'
+  WebPilot installer
+
+  Usage: install.sh [options]
+
+    --prebuilt              Download a verified release archive (default)
+    --source                Build the current checkout with cargo
+    --version <VER>         Pin a release version (prebuilt only)
+    --install-dir <DIR>     Install path (default: $HOME/.local/bin)
+    --verify-attestations   Also check GitHub build provenance (needs the gh CLI)
+    --no-setup              Stop after installing the binary
+    --interactive           Ask before each decision instead of taking defaults
+    -h, --help              Show this message
+EOF
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --prebuilt)            BUILD="prebuilt" ;;
+            --source)              BUILD="source" ;;
+            --version)             shift; [ $# -gt 0 ] || die "--version needs a value"; VERSION="$1" ;;
+            --version=*)           VERSION="${1#*=}" ;;
+            --install-dir)         shift; [ $# -gt 0 ] || die "--install-dir needs a value"; INSTALL_DIR="$1" ;;
+            --install-dir=*)       INSTALL_DIR="${1#*=}" ;;
+            --verify-attestations) VERIFY_ATTESTATIONS=1 ;;
+            --no-setup)            NO_SETUP=1 ;;
+            --interactive)         INTERACTIVE=1 ;;
+            -h|--help)             usage; exit 0 ;;
+            *)                     die "unknown option: $1 (try --help)" ;;
+        esac
+        shift
+    done
+}
 
 # Read one line from the controlling terminal even when the script itself is
 # piped from curl (stdin is the script). Falls back to the default otherwise.
@@ -117,6 +159,17 @@ download_prebuilt() {
     elif command -v shasum    >/dev/null 2>&1; then ( cd "$tmp" && shasum -a 256 -c "$archive.sha256" >/dev/null )
     else die "no sha256 tool found (need sha256sum or shasum)"; fi
 
+    if [ "$VERIFY_ATTESTATIONS" = "1" ]; then
+        # The sidecar travels the same channel as the archive, so it proves the
+        # transfer, not the origin. The attestation ties these bytes to a run of
+        # the project's release workflow — and having been asked for it, a
+        # failure here aborts rather than warns.
+        require gh
+        say "Verifying build provenance"
+        gh attestation verify "$tmp/$archive" --repo "$REPO" >&2 \
+            || die "attestation verification failed for $archive"
+    fi
+
     tar -xzf "$tmp/$archive" -C "$tmp"
     BIN="$tmp/webpilot-${VERSION}-${target}/webpilot"
     [ -x "$BIN" ] || die "archive missing webpilot binary"
@@ -137,6 +190,10 @@ main() {
     INSTALL_DIR="${WEBPILOT_INSTALL_DIR:-$HOME/.local/bin}"
     VERSION="${WEBPILOT_VERSION:-}"
     BUILD="${WEBPILOT_BUILD:-}"
+    NO_SETUP="${WEBPILOT_NO_SETUP:-0}"
+    VERIFY_ATTESTATIONS=0
+    INTERACTIVE=0
+    parse_args "$@"
 
     # --- locate a checkout (enables source builds) ---------------------------
 
@@ -150,7 +207,7 @@ main() {
     # --- choose build method --------------------------------------------------
 
     if [ -z "$BUILD" ]; then
-        if [ -n "$CHECKOUT" ] && [ -r /dev/tty ]; then
+        if [ "$INTERACTIVE" = "1" ] && [ -n "$CHECKOUT" ] && [ -r /dev/tty ]; then
             printf '\n  Install method:\n    [1] prebuilt binary (fast)\n    [2] build from source\n\n' >&2
             case "$(ask 'Choose [1-2] (default 1):' 1)" in
                 2) BUILD="source" ;;
@@ -205,21 +262,21 @@ main() {
     esac
 
     # --- hand off to `webpilot setup` (installs the skill + extension) ---------
-    #
-    # `curl ... | bash` consumes stdin with the script content, so route the
-    # binary's stdin from /dev/tty when available so `webpilot setup` can prompt.
 
-    if [ "${WEBPILOT_NO_SETUP:-0}" = "1" ]; then
+    if [ "$NO_SETUP" = "1" ]; then
         exit 0
     fi
 
-    if [ -r /dev/tty ]; then
-        printf '\n' >&2
+    printf '\n' >&2
+    if [ "$INTERACTIVE" = "1" ] && [ -r /dev/tty ]; then
+        # `curl ... | bash` consumes stdin with the script content, so route the
+        # binary's stdin from the terminal for it to prompt on.
         "$INSTALL_DIR/webpilot" setup < /dev/tty
     else
-        # shellcheck disable=SC2016  # literal command to copy
-        printf '\n  Next: run `%s` to install the Claude skill and Chrome extension.\n' \
-            "webpilot setup" >&2
+        # Unattended: with no terminal on stdin every prompt resolves to its safe
+        # answer, so the skill, extension and NM host are deployed while a skill
+        # the user has edited is kept — and `setup` reports which.
+        "$INSTALL_DIR/webpilot" setup < /dev/null
     fi
 }
 
