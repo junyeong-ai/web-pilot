@@ -434,10 +434,11 @@ async function dispatchActionToPage(tab, action) {
     // headless transport's announcement wait and has no browser-mode counterpart,
     // since downloads there are the user's own browser's business, and
     // `opens_context`/`target_name` feed the frame-tree lookup that steers it.
-    // Read what this side uses, then drop every hint: the wire response models
-    // `downloads` as a list of files, so leaking the hint's boolean fails the
-    // host reply's typed parse and turns a click that SUCCEEDED into a transport
-    // error.
+    // Read what this side uses, then drop every hint. `downloads` MUST go: the
+    // wire response models it as a list of files, so leaking the hint's boolean
+    // fails the host reply's typed parse and turns a click that SUCCEEDED into a
+    // transport error. The others are unmodelled and would merely ride along
+    // ignored — dropped all the same, so the reply carries only its typed shape.
     const navHint = r.navigates === true;
     const frameNavigates = r.frame_navigates === true;
     delete result.navigates;
