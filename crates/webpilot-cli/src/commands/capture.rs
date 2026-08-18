@@ -111,7 +111,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
                 // The DOM snapshot already carries the page URL/title in its
                 // footer, so it identifies the captured page on its own.
                 snapshot.accessibility_tree = None;
-                Ok(CommandOutput::Dom { snapshot, extra })
+                Ok(CommandOutput::dom(snapshot, extra))
             } else {
                 // No DOM footer here, so a screenshot/PDF/AX-only capture must
                 // still say WHAT page it captured — otherwise a redirected `--url`

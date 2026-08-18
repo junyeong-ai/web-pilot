@@ -24,12 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after they are written (`[artifacts] ttl`, `WEBPILOT_ARTIFACT_TTL`), at
   session launch and under the launch lock, so the sweep never races an artifact
   a concurrent capture is writing.
-- **The element index is capped at 1000 per capture.** Page text, element text,
-  option lists and the shadow walk were all bounded; the index — the largest
-  part of a capture — was not, and an ordinary encyclopedia article reaches four
-  figures of links on its own, costing tens of thousands of tokens in a single
-  response. A capped capture sets `elements_truncated` and says so in the footer,
-  the indices it did emit still resolve, and `find` reaches the rest.
+- **A capture lists at most `[capture] max_elements` (1000) interactive
+  elements.** Page text, element text, option lists and the shadow walk were all
+  bounded; the index — the largest part of a capture — was not, and an ordinary
+  encyclopedia article reaches four figures of links on its own, costing tens of
+  thousands of tokens in a single response. The bound is on what is rendered, not
+  on what is extracted: the browser keeps the page's whole index, so an element
+  past the listing stays addressable and `find` still matches it. A shortened
+  capture sets `elements_truncated` and says so in the footer.
 
 ### Added
 

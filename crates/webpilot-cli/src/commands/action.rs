@@ -86,7 +86,7 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
                         serde_json::to_value(tab).expect("TabInfo serializes"),
                     );
                 }
-                return Ok(CommandOutput::Dom { snapshot, extra });
+                return Ok(CommandOutput::dom(snapshot, extra));
             }
 
             let mut msg = String::from("OK");

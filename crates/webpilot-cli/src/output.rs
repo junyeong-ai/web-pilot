@@ -124,6 +124,20 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
 }
 
 impl CommandOutput {
+    /// A snapshot on its way to an agent, bounded to the render cap.
+    ///
+    /// The one way to build a `Dom` output, so no surface can hand back an
+    /// unbounded index. `find` deliberately does not come through here: it
+    /// filters the whole index and renders only its matches, which is what makes
+    /// it the way to reach an element the cap left out.
+    pub(crate) fn dom(
+        mut snapshot: DomSnapshot,
+        extra: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
+        snapshot.truncate_elements(webpilot::settings::get().capture.max_elements);
+        Self::Dom { snapshot, extra }
+    }
+
     /// Flatten to one agent-facing text block — the body of an MCP tool result.
     /// Mirrors the Human render but returns the text instead of splitting it
     /// across stdout/stderr, so the MCP surface and the CLI share one set of

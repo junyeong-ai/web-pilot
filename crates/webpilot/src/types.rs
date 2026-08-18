@@ -497,9 +497,11 @@ pub struct DomSnapshot {
     /// is incomplete rather than silently acting on a short list.
     #[serde(default, skip_serializing_if = "is_false")]
     pub shadow_truncated: bool,
-    /// The index hit the bridge's element cap, so the page carries interactive
-    /// elements past the last one listed. Surfaced like `shadow_truncated`: a
-    /// capped index must never read as the whole page.
+    /// The render kept only the first `[capture] max_elements` of the page's
+    /// index. Surfaced like `shadow_truncated`, and with the same purpose: a
+    /// shortened index must never read as the whole page. The elements past it
+    /// are still extracted and still addressable — `find` matches against all of
+    /// them and reports their real indices.
     #[serde(default, skip_serializing_if = "is_false")]
     pub elements_truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -736,6 +738,21 @@ pub fn line_safe_clip(s: &str, max_chars: usize) -> String {
     }
 }
 
+impl DomSnapshot {
+    /// Keep at most `max` elements, recording that the rest were left out.
+    ///
+    /// Bounds what an agent READS, not what the page offers: the browser holds
+    /// the whole index for resolution, so an element past the cap still answers
+    /// to its index and `find` still matches it. Applied once, where a snapshot
+    /// becomes agent-facing output, so no surface can render an unbounded index.
+    pub fn truncate_elements(&mut self, max: usize) {
+        if self.elements.len() > max {
+            self.elements.truncate(max);
+            self.elements_truncated = true;
+        }
+    }
+}
+
 impl Download {
     /// One agent-facing line. The single renderer behind every surface that
     /// shows a download, so the CLI, the MCP text block and the `--capture`
@@ -950,7 +967,7 @@ impl DomSnapshot {
 
         if self.elements_truncated {
             out.push_str(
-                "--- index capped — the page has more elements than listed; reach them with: webpilot find --role <role> --text <text> ---\n",
+                "--- index shortened — the page has more elements than listed; they are still addressable: find them with `webpilot find` ---\n",
             );
         }
 
@@ -1454,18 +1471,58 @@ mod tests {
                 .contains("shadow DOM clipped (host budget exceeded)")
         );
 
-        // A capped index must announce itself and name the way past it, or a
+        // A shortened index must announce itself and name the way past it, or a
         // short list reads as the whole page.
-        assert!(!snap.to_text().contains("index capped"));
+        assert!(!snap.to_text().contains("index shortened"));
         snap.elements_truncated = true;
-        let capped = snap.to_text();
-        assert!(capped.contains("index capped"));
-        assert!(capped.contains("webpilot find"));
+        let shortened = snap.to_text();
+        assert!(shortened.contains("index shortened"));
+        assert!(shortened.contains("webpilot find"));
 
         snap.subframes = 2;
         let text = snap.to_text();
         assert!(text.contains("2 iframe(s) not shown"));
         assert!(text.contains("webpilot frame url"));
+    }
+
+    #[test]
+    fn truncate_elements_marks_only_a_snapshot_it_shortened() {
+        let el = || InteractiveElement {
+            index: 1,
+            tag: "a".into(),
+            role: None,
+            id: None,
+            text: String::new(),
+            semantics: Default::default(),
+            state: Default::default(),
+            spatial: Default::default(),
+        };
+        let mut snap = DomSnapshot {
+            elements: vec![el(), el(), el()],
+            total_nodes: 3,
+            page_url: String::new(),
+            page_title: String::new(),
+            scroll: None,
+            scroll_percent: 0,
+            extraction_ms: 0,
+            subframes: 0,
+            shadow_truncated: false,
+            elements_truncated: false,
+            text_content: None,
+            text_truncated: false,
+            accessibility_tree: None,
+        };
+
+        // A snapshot inside the bound is untouched and unflagged — flagging one
+        // that lost nothing would send an agent chasing elements that are all
+        // already listed.
+        snap.truncate_elements(3);
+        assert_eq!(snap.elements.len(), 3);
+        assert!(!snap.elements_truncated);
+
+        snap.truncate_elements(2);
+        assert_eq!(snap.elements.len(), 2);
+        assert!(snap.elements_truncated);
     }
 
     #[test]

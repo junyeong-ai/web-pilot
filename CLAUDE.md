@@ -85,11 +85,13 @@ frame (`DomSnapshot.subframes`); enter one with `frame url <pattern>` (or
 `--- shadow DOM clipped (host budget exceeded) — some controls may be omitted ---`
 appears when a shadow-component-heavy page exhausts the traversal budget
 (`DomSnapshot.shadow_truncated`), so the index may be incomplete.
-`--- index capped ---` appears when the page carries more interactive elements
-than the bridge emits (`DomSnapshot.elements_truncated`); the emitted indices
-still resolve, and `find` reaches what the cap left out. Every capture axis is
-bounded in `bridge.js` — page text, element text, option lists, the shadow walk,
-and the index — so both modes cost the same tokens on the same page.
+`--- index shortened ---` appears when the page carries more interactive
+elements than `[capture] max_elements` renders (`DomSnapshot.elements_truncated`).
+That bound is on the RENDER, applied once in `CommandOutput::dom` so no surface
+can emit an unbounded index — the browser keeps the whole index, so an element
+past it stays addressable and `find` (which renders only its matches) still
+matches it. The extraction-side caps live in `bridge.js`, the one place both
+modes share: page text, element text, option lists, and the shadow walk.
 
 ## Wire Protocol
 

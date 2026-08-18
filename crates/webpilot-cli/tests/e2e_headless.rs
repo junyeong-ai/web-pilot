@@ -3702,9 +3702,11 @@ fn headless_behavioral_flow() {
 
     // 8f-cap. Every other axis of a capture is bounded — page text, element text,
     //     option lists, the shadow walk — but the index itself was not, and a
-    //     content-heavy page reaches four figures of links on its own. The clip
-    //     must announce itself: a short index read as the whole page is what makes
-    //     an agent conclude a control does not exist.
+    //     content-heavy page reaches four figures of links on its own. The bound
+    //     is on the RENDER: the browser keeps the whole index, so an element past
+    //     the cap is still addressable and `find` still matches it. A cap that
+    //     also hid those elements from `find` would make an agent conclude a
+    //     control does not exist.
     let many = fx.run(&[
         "capture",
         "--include",
@@ -3714,24 +3716,34 @@ fn headless_behavioral_flow() {
     ]);
     let many_json: serde_json::Value = serde_json::from_str(&stdout(&many)).expect("json");
     let listed = many_json["elements"].as_array().expect("elements").len();
-    assert_eq!(listed, 1000, "the index must be capped: {listed}");
+    assert_eq!(listed, 1000, "the rendered index must be capped: {listed}");
     assert_eq!(
         many_json["elements_truncated"],
         true,
-        "a capped index must say so: {}",
+        "a shortened index must say so: {}",
         stdout(&many)
     );
-    // The indices that WERE emitted still resolve — capping the list must not
-    // desync it from the bridge's action-resolution snapshot.
     assert_eq!(
         code(&fx.run(&["action", "scroll-to", "1000"])),
         0,
-        "the last emitted index must still resolve"
+        "a listed index must resolve"
     );
+    // The escape hatch has to actually reach past the cap, or the footer that
+    // names it is a lie an agent would act on.
+    let past_cap = fx.run(&["find", "--text", "link 1150"]);
     assert_eq!(
-        code(&fx.run(&["action", "scroll-to", "1001"])),
-        4,
-        "an index past the cap must be a typed not-found, never a silent hit"
+        code(&past_cap),
+        0,
+        "find must reach an element past the render cap: {}",
+        stdout(&past_cap)
+    );
+    let found: serde_json::Value = serde_json::from_str(&stdout(&past_cap)).expect("json");
+    let idx = found["matches"][0]["index"].as_u64().expect("index");
+    assert!(idx > 1000, "the match must be past the cap, got {idx}");
+    assert_eq!(
+        code(&fx.run(&["action", "scroll-to", &idx.to_string()])),
+        0,
+        "an index past the cap must still resolve"
     );
 
     // 8e-dl. A navigation that resolves to an ATTACHMENT is a stay-put whose

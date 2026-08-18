@@ -102,6 +102,13 @@ pub struct Capture {
     /// pixels. The default (1568) is the largest size Claude's vision ingests
     /// without server-side resizing — bigger only costs tokens and latency.
     pub screenshot_max_long_edge: u32,
+    /// Upper bound on interactive elements a snapshot renders to the agent. The
+    /// index is the largest thing a capture shows, and a content-heavy page (a
+    /// long encyclopedia article) reaches four figures of links on its own —
+    /// tens of thousands of tokens in one response. Bounds the RENDER only: the
+    /// page's whole index is still extracted, so every element stays addressable
+    /// and `find` reaches the ones past the cap.
+    pub max_elements: usize,
     /// Upper bound on frames a single `record` run captures. A recording for
     /// AI analysis is a short clip, not an open-ended capture; bounding it
     /// turns a fat-fingered `--frames 4000000000` into a typed rejection
@@ -262,6 +269,7 @@ impl Settings {
                     file.capture.screenshot_max_long_edge,
                     1568,
                 ),
+                max_elements: usize_var("WEBPILOT_MAX_ELEMENTS", file.capture.max_elements, 1_000),
                 max_record_frames: u32_var(
                     "WEBPILOT_MAX_RECORD_FRAMES",
                     file.capture.max_record_frames,
@@ -384,6 +392,7 @@ struct FileCdp {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct FileCapture {
+    max_elements: Option<usize>,
     screenshot_max_long_edge: Option<u32>,
     max_record_frames: Option<u32>,
 }
@@ -505,6 +514,7 @@ mod tests {
             cdp: Cdp { event_buffer: 512 },
             capture: Capture {
                 screenshot_max_long_edge: 1568,
+                max_elements: 1_000,
                 max_record_frames: 3_600,
             },
         }
