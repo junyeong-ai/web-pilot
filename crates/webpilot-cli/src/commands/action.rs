@@ -64,12 +64,19 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
             url_changed,
             new_tab,
             capture_error,
+            downloads,
             ..
         } => {
             lift_error(success, error, ())?;
 
             if let Some(snapshot) = dom {
                 let mut extra = serde_json::Map::new();
+                if !downloads.is_empty() {
+                    extra.insert(
+                        "downloads".into(),
+                        serde_json::to_value(&downloads).expect("Download serializes"),
+                    );
+                }
                 if let Some(ref url) = url_changed {
                     extra.insert("url_changed".into(), serde_json::json!(url));
                 }
@@ -97,8 +104,16 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
                     "\nCapture failed (the action itself succeeded): {ce} — re-run `webpilot capture --include dom`"
                 ));
             }
+            for d in &downloads {
+                msg.push('\n');
+                msg.push_str(&d.to_line());
+            }
 
-            if url_changed.is_some() || new_tab.is_some() || capture_error.is_some() {
+            if url_changed.is_some()
+                || new_tab.is_some()
+                || capture_error.is_some()
+                || !downloads.is_empty()
+            {
                 let mut json = serde_json::json!({"success": true});
                 if let Some(ref url) = url_changed {
                     json["url_changed"] = serde_json::json!(url);
@@ -108,6 +123,10 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
                 }
                 if let Some(ref ce) = capture_error {
                     json["capture_error"] = serde_json::json!(ce);
+                }
+                if !downloads.is_empty() {
+                    json["downloads"] =
+                        serde_json::to_value(&downloads).expect("Download serializes");
                 }
                 Ok(CommandOutput::Data { json, human: msg })
             } else {

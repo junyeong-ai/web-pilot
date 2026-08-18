@@ -38,6 +38,7 @@ use std::sync::OnceLock;
 const RUNTIME_SUBDIR: &str = "runtime";
 const CONTEXTS_SUBDIR: &str = "contexts";
 const ARTIFACTS_SUBDIR: &str = "artifacts";
+const DOWNLOADS_SUBDIR: &str = "downloads";
 const CHROME_PROFILE_SUBDIR: &str = "chrome-profile";
 const EXTENSION_SUBDIR: &str = "extension";
 const POLICY_SUBDIR: &str = "policy";
@@ -106,6 +107,21 @@ pub fn artifact_path(prefix: &str, ext: &str) -> PathBuf {
         "{prefix}_{}_{nanos}_{seq}.{ext}",
         std::process::id()
     ))
+}
+
+/// Where Chrome deposits files it downloads, partitioned by browser context so
+/// one agent's downloads never appear in another's directory — the same
+/// isolation `--context` already gives cookies and storage. The CDP browser
+/// context id keys it (not the user's `--context` name, which is an arbitrary
+/// string and would have to be sanitised to be a path); `None` is the default
+/// context Chrome starts with.
+pub fn downloads_dir(browser_context_id: Option<&str>) -> PathBuf {
+    materialise(
+        artifacts_dir()
+            .join(DOWNLOADS_SUBDIR)
+            .join(browser_context_id.unwrap_or("default")),
+        Owner::User,
+    )
 }
 
 pub fn chrome_profile_dir() -> PathBuf {

@@ -111,6 +111,15 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
     {
         lines.push(format!("New tab: {}", line_safe_clip(url, 200)));
     }
+    // A download leaves the page exactly where it was, so the snapshot alone
+    // reads as a command that did nothing.
+    if let Some(downloads) = extra.get("downloads") {
+        for d in serde_json::from_value::<Vec<webpilot::types::Download>>(downloads.clone())
+            .unwrap_or_default()
+        {
+            lines.push(d.to_line());
+        }
+    }
     lines
 }
 

@@ -158,6 +158,14 @@ pub enum PolicyKey {
     /// A `default deny` policy must be able to forbid it. Headless-only (contexts
     /// are headless's multi-agent mechanism); enforced at the command's sink.
     ContextClose,
+    /// Writing a downloaded file to disk. A download is a side effect of a
+    /// navigation, not a command of its own — a link click, a `capture --url`
+    /// onto an attachment response, or page JS can all start one — so it is
+    /// gated at the browser rather than at a command: the verdict selects
+    /// Chrome's own download behavior (`deny` refuses the transfer outright,
+    /// `allowAndName` accepts it into WebPilot's artifact root). That makes the
+    /// deny a real block, not an after-the-fact cancellation.
+    Download,
 }
 
 impl PolicyKey {
@@ -165,7 +173,7 @@ impl PolicyKey {
     /// command builds its "valid operations" guidance from, so the help text can
     /// never drift from the enum (an added key is missing from the guidance, an
     /// removed one lingers). Kept honest by `policy_key_all_lists_every_variant`.
-    pub const ALL: [PolicyKey; 25] = [
+    pub const ALL: [PolicyKey; 26] = [
         Self::Click,
         Self::Type,
         Self::KeyPress,
@@ -191,6 +199,7 @@ impl PolicyKey {
         Self::SessionImport,
         Self::Device,
         Self::ContextClose,
+        Self::Download,
     ];
 }
 
@@ -287,6 +296,38 @@ pub struct NetworkEntry {
     pub error: Option<String>,
     pub duration_ms: f64,
     pub timestamp: u64,
+}
+
+// ── Downloads ────────────────────────────────────────────────────────────────
+
+/// A download a page started while a command ran.
+///
+/// The server's `suggested_filename` never reaches the filesystem — Chrome names
+/// the file by its download GUID (`allowAndName`) — so a hostile
+/// `Content-Disposition` cannot choose a path. The suggested name still travels
+/// as metadata: it is what the page called the file, and an agent deciding how
+/// to read the bytes needs it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Download {
+    pub url: String,
+    pub suggested_filename: String,
+    #[serde(flatten)]
+    pub outcome: DownloadOutcome,
+}
+
+/// What became of a download. Chrome announces one before it decides whether to
+/// accept it, so a refusal is reported rather than dropped — a page that tried
+/// to write a file and was stopped is exactly what a `download deny` policy
+/// exists to make visible, and silence there would leave the agent retrying a
+/// click that can never succeed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum DownloadOutcome {
+    /// Chrome accepted the transfer and is writing it to `path`. Under
+    /// `allowAndName` it never renames, so the path is final from the start.
+    Saved { path: String },
+    /// The `download` policy refused the transfer. No file exists.
+    Denied,
 }
 
 // ── DOM ──────────────────────────────────────────────────────────────────────
@@ -690,6 +731,27 @@ pub fn line_safe_clip(s: &str, max_chars: usize) -> String {
     }
 }
 
+impl Download {
+    /// One agent-facing line. The single renderer behind every surface that
+    /// shows a download, so the CLI, the MCP text block and the `--capture`
+    /// footer cannot describe the same file differently. `url` and
+    /// `suggested_filename` are server-chosen, so both pass through
+    /// `line_safe_clip` at the footer's cap — a `Content-Disposition` carrying a
+    /// newline must not be able to forge a line of its own.
+    pub fn to_line(&self) -> String {
+        let name = line_safe_clip(&self.suggested_filename, 200);
+        let from = line_safe_clip(&self.url, 200);
+        match &self.outcome {
+            DownloadOutcome::Saved { path } => {
+                format!("Downloaded: {path} (\"{name}\" from {from})")
+            }
+            DownloadOutcome::Denied => {
+                format!("Download denied by policy: \"{name}\" from {from}")
+            }
+        }
+    }
+}
+
 impl DomSnapshot {
     /// Serialize to LLM-friendly text format. Every page-controlled string
     /// passes through `line_safe`.
@@ -1031,7 +1093,8 @@ mod tests {
                 | PolicyKey::SessionExport
                 | PolicyKey::SessionImport
                 | PolicyKey::Device
-                | PolicyKey::ContextClose => {}
+                | PolicyKey::ContextClose
+                | PolicyKey::Download => {}
             }
         }
         // Every entry round-trips through Display/FromStr, with no duplicates.

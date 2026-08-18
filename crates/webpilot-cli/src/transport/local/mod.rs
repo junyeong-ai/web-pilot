@@ -37,7 +37,7 @@ use tokio::sync::Mutex;
 
 use webpilot::dirs;
 use webpilot::protocol::{Command, ResponseData};
-use webpilot::types::DomSnapshot;
+use webpilot::types::{DomSnapshot, Download, DownloadOutcome, PolicyKey};
 use webpilot::{WebPilotError, WireError};
 
 use crate::cdp::{CdpClient, CdpSession};
@@ -105,6 +105,39 @@ pub struct LocalTransport {
     /// Dropped with the transport, which frees the context to be reaped once
     /// truly idle.
     _context_lock: Option<std::fs::File>,
+    /// The download behavior last handed to Chrome, so `ensure_download_behavior`
+    /// re-sends only when the policy verdict actually changes. A CLI process
+    /// applies it once; a long-lived MCP server re-reads the store every command
+    /// and switches the browser over the moment a `policy set download` lands,
+    /// without a per-command CDP round-trip in the steady state.
+    download_behavior: Option<DownloadBehavior>,
+}
+
+/// Chrome's disposition toward a download, chosen by the `download` policy key.
+/// `Deny` refuses the transfer in the network stack, so a denied download never
+/// reaches the filesystem — the gate is the browser's, not a cancellation race
+/// after the bytes have started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadBehavior {
+    AllowAndName,
+    Deny,
+}
+
+impl DownloadBehavior {
+    fn from_policy() -> Self {
+        if crate::policy::denies(PolicyKey::Download) {
+            Self::Deny
+        } else {
+            Self::AllowAndName
+        }
+    }
+
+    fn as_cdp(self) -> &'static str {
+        match self {
+            Self::AllowAndName => "allowAndName",
+            Self::Deny => "deny",
+        }
+    }
 }
 
 impl LocalTransport {
@@ -206,6 +239,7 @@ impl LocalTransport {
             console_monitoring: Arc::new(AtomicBool::new(console_armed)),
             network_monitoring: Arc::new(AtomicBool::new(network_armed)),
             _context_lock: context_lock,
+            download_behavior: None,
         };
 
         // Re-arm armed monitors against the CURRENT document, mirroring the
@@ -577,8 +611,100 @@ impl LocalTransport {
         }
     }
 
-    pub(super) async fn navigate_reconnect(&mut self, url: &str) -> Result<()> {
+    /// Point Chrome's downloads at this context's artifact directory, or refuse
+    /// them outright when policy denies the `download` key.
+    ///
+    /// Called before every command rather than once at open: the policy store is
+    /// read from disk each time, so a long-lived transport picks up a rule change
+    /// immediately, while the cached verdict keeps the steady state free of CDP
+    /// traffic. `allowAndName` is what makes the destination WebPilot's to choose
+    /// — Chrome names each file by its download GUID, so a server-supplied
+    /// `Content-Disposition` filename never becomes a path.
+    async fn ensure_download_behavior(&mut self) -> Result<()> {
+        let desired = DownloadBehavior::from_policy();
+        if self.download_behavior == Some(desired) {
+            return Ok(());
+        }
+        let mut params = json!({
+            "behavior": desired.as_cdp(),
+            "eventsEnabled": true,
+        });
+        if let Some(ctx) = &self.browser_context_id {
+            params["browserContextId"] = json!(ctx);
+        }
+        if desired == DownloadBehavior::AllowAndName {
+            params["downloadPath"] = json!(self.downloads_dir().to_string_lossy());
+        }
+        self.browser
+            .send("Browser.setDownloadBehavior", Some(params))
+            .await?;
+        self.download_behavior = Some(desired);
+        Ok(())
+    }
+
+    /// The downloads `announcements` credits to the page this command drove.
+    ///
+    /// The subscription is browser-wide, so it also carries downloads this
+    /// command had nothing to do with — another tab's, or one Chrome started for
+    /// itself. Attributing those to the command would be a lie in the same shape
+    /// as the silence it replaced, so an announcement is kept only when it names
+    /// a frame of the driven page. The frame tree is fetched only once something
+    /// announced, leaving the common no-download path free of the round trip.
+    async fn credit_downloads(&self, announcements: Vec<DownloadAnnouncement>) -> Vec<Download> {
+        if announcements.is_empty() {
+            return Vec::new();
+        }
+        // The behavior in force is what decides whether a file exists: Chrome
+        // announces a download before refusing it, so reporting a path under a
+        // `deny` would name a file that was never written.
+        let behavior = self
+            .download_behavior
+            .unwrap_or_else(DownloadBehavior::from_policy);
+        let frames = self.page_frame_ids().await;
+        let dir = self.downloads_dir();
+        announcements
+            .into_iter()
+            .filter(|a| frames.contains(&a.frame_id))
+            .map(|a| a.into_download(behavior, &dir))
+            .collect()
+    }
+
+    /// Every frame id in the driven page's tree, main frame included.
+    async fn page_frame_ids(&self) -> std::collections::HashSet<String> {
+        fn walk(node: &Value, depth: u32, out: &mut std::collections::HashSet<String>) {
+            if depth > MAX_FRAME_DEPTH {
+                return;
+            }
+            if let Some(id) = node.pointer("/frame/id").and_then(Value::as_str) {
+                out.insert(id.to_string());
+            }
+            for kid in node
+                .get("childFrames")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                walk(kid, depth + 1, out);
+            }
+        }
+        let mut ids = std::collections::HashSet::new();
+        if let Ok(tree) = self.page.send("Page.getFrameTree", None).await
+            && let Some(root) = tree.get("frameTree")
+        {
+            walk(root, 0, &mut ids);
+        }
+        ids
+    }
+
+    fn downloads_dir(&self) -> PathBuf {
+        dirs::downloads_dir(self.browser_context_id.as_deref())
+    }
+
+    pub(super) async fn navigate_reconnect(&mut self, url: &str) -> Result<Vec<Download>> {
         let before_url = self.bound_target_url().await;
+        // Subscribed before the navigate: a download Chrome announces while the
+        // command is still in flight must not fire into a gap.
+        let mut download_events = self.browser.subscribe_events();
 
         // `Page.navigate` outcomes:
         // - `errorText` with a concrete net code (DNS, refused, CSP) → fail now.
@@ -592,6 +718,7 @@ impl LocalTransport {
         // - send `Err` → the page socket dropped mid swap; report it if the
         //   navigation never lands.
         let mut start_error = None;
+        let mut is_download = false;
         let loader_id = match self
             .page
             .send_with_timeout(
@@ -618,6 +745,10 @@ impl LocalTransport {
                     }
                     _ => {}
                 }
+                is_download = result
+                    .get("isDownload")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let loader = result
                     .get("loaderId")
                     .and_then(|v| v.as_str())
@@ -626,7 +757,11 @@ impl LocalTransport {
                 // or history change — is already complete and leaves the document
                 // and its frames intact, so the active frame stays valid.
                 if loader.is_none() && start_error.is_none() {
-                    return Ok(());
+                    return Ok(self
+                        .credit_downloads(
+                            drain_download_announcements(&mut download_events, is_download).await,
+                        )
+                        .await);
                 }
                 loader
             }
@@ -706,14 +841,23 @@ impl LocalTransport {
                         if before_url == "about:blank" {
                             self.prune_initial_blank_history().await;
                         }
-                        return Ok(());
+                        return Ok(self
+                            .credit_downloads(
+                                drain_download_announcements(&mut download_events, is_download)
+                                    .await,
+                            )
+                            .await);
                     }
                 } else if navigation_settled(&self.page, loader, &before_url).await {
                     // Same-URL navigation: necessarily same-site, so the existing
                     // session stays valid (no renderer swap). The loader match
                     // distinguishes the reloaded document from the previous one.
                     self.settle_new_document().await;
-                    return Ok(());
+                    return Ok(self
+                        .credit_downloads(
+                            drain_download_announcements(&mut download_events, is_download).await,
+                        )
+                        .await);
                 }
             }
 
@@ -740,7 +884,11 @@ impl LocalTransport {
                         continue;
                     }
                     self.settle_new_document().await;
-                    return Ok(());
+                    return Ok(self
+                        .credit_downloads(
+                            drain_download_announcements(&mut download_events, is_download).await,
+                        )
+                        .await);
                 }
                 return Err(start_error
                     .unwrap_or(WebPilotError::Timeout {
@@ -932,6 +1080,92 @@ const PROBE: std::time::Duration = std::time::Duration::from_secs(2);
 /// `before_url` (a cross-page navigation, where the loader may differ across a
 /// process swap). Parsed = `readyState` is past `loading` — DOMContentLoaded has
 /// fired — so the page is usable without waiting on slow trailing subresources.
+/// A `Browser.downloadWillBegin` announcement, still tied to the frame that
+/// started it so the caller can decide whether the command it just ran is
+/// actually responsible for the file.
+struct DownloadAnnouncement {
+    frame_id: String,
+    guid: String,
+    url: String,
+    suggested_filename: String,
+}
+
+impl DownloadAnnouncement {
+    fn parse(event: &Value) -> Option<Self> {
+        if event.get("method").and_then(Value::as_str) != Some("Browser.downloadWillBegin") {
+            return None;
+        }
+        let params = event.get("params")?;
+        let field = |k: &str| {
+            params
+                .get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        Some(Self {
+            frame_id: field("frameId"),
+            guid: params.get("guid").and_then(Value::as_str)?.to_string(),
+            url: field("url"),
+            suggested_filename: field("suggestedFilename"),
+        })
+    }
+
+    fn into_download(self, behavior: DownloadBehavior, dir: &std::path::Path) -> Download {
+        Download {
+            url: self.url,
+            suggested_filename: self.suggested_filename,
+            outcome: match behavior {
+                DownloadBehavior::AllowAndName => DownloadOutcome::Saved {
+                    path: dir.join(self.guid).to_string_lossy().into_owned(),
+                },
+                DownloadBehavior::Deny => DownloadOutcome::Denied,
+            },
+        }
+    }
+}
+
+/// Download announcements delivered on a browser subscription taken **before**
+/// the operation that could have started one, so an announcement fired between
+/// the trigger and this drain cannot slip through — the pre-subscribe discipline
+/// the click and reload paths already follow.
+///
+/// `promised` is `Page.navigate`'s `isDownload`: Chrome has already resolved the
+/// navigation into a download, so the first announcement is *awaited* rather than
+/// merely drained. Without that wait a fast return would report a navigation that
+/// downloaded as having downloaded nothing — the silent stay-put this exists to
+/// end.
+async fn drain_download_announcements(
+    events: &mut tokio::sync::broadcast::Receiver<Value>,
+    promised: bool,
+) -> Vec<DownloadAnnouncement> {
+    use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+
+    let mut found = Vec::new();
+    if promised {
+        let deadline = tokio::time::Instant::now() + PROBE;
+        while found.is_empty() {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            match tokio::time::timeout(deadline - now, events.recv()).await {
+                Ok(Ok(ev)) => found.extend(DownloadAnnouncement::parse(&ev)),
+                Ok(Err(RecvError::Lagged(_))) => continue,
+                Ok(Err(RecvError::Closed)) | Err(_) => break,
+            }
+        }
+    }
+    loop {
+        match events.try_recv() {
+            Ok(ev) => found.extend(DownloadAnnouncement::parse(&ev)),
+            Err(TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
+    found
+}
+
 async fn navigation_settled(page: &CdpSession, loader_id: Option<&str>, before_url: &str) -> bool {
     let Ok(Ok(tree)) = tokio::time::timeout(PROBE, page.send("Page.getFrameTree", None)).await
     else {
@@ -958,6 +1192,11 @@ async fn navigation_settled(page: &CdpSession, loader_id: Option<&str>, before_u
 impl Transport for LocalTransport {
     async fn send(&mut self, command: Command) -> Result<ResponseData> {
         crate::policy::enforce(&command)?;
+        // Downloads answer to the browser's own behavior setting rather than to a
+        // command gate: any navigation can resolve into one, so the disposition is
+        // established before the command runs instead of being classified per
+        // command and inevitably missing a path.
+        self.ensure_download_behavior().await?;
         // The pinned tab closed and this transport attached to a fallback
         // survivor. A command that ACTS on the active page must not SILENTLY run
         // on it — fail loud with TabNotFound, carrying the dead id, so the agent
@@ -1539,6 +1778,7 @@ pub(super) fn action_success(dom: Option<DomSnapshot>) -> ResponseData {
         url_changed: None,
         new_tab: None,
         capture_error: None,
+        downloads: Vec::new(),
     }
 }
 

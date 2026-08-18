@@ -49,6 +49,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             pdf_b64,
             page_url,
             page_title,
+            downloads,
         } => {
             // Persist accessibility tree to a file when present.
             let mut ax_path: Option<String> = None;
@@ -76,6 +77,12 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             let pdf_path = pdf_path.or(pdf_written);
 
             let mut extra = serde_json::Map::new();
+            if !downloads.is_empty() {
+                extra.insert(
+                    "downloads".into(),
+                    serde_json::to_value(&downloads).expect("Download serializes"),
+                );
+            }
             for (key, value) in [
                 ("accessibility_path", ax_path.as_deref()),
                 ("screenshot_path", screenshot_path.as_deref()),

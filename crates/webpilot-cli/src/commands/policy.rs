@@ -26,8 +26,9 @@ pub enum PolicyCommand {
     /// `cookie_list` (covers `cookie list` and `cookie get`), `cookie_set`,
     /// `cookie_delete`, `session_export`, `session_import`, `device` (emulation:
     /// viewport + user-agent spoofing), `context_close` (`context close [--all]`
-    /// disposes a context and all its tabs). `navigate` also covers `capture --url`
-    /// and `tab new URL`.
+    /// disposes a context and all its tabs), `download` (a file the page makes
+    /// the browser write — a `deny` refuses the transfer itself). `navigate` also
+    /// covers `capture --url` and `tab new URL`.
     Set {
         #[arg(long)]
         operation: String,

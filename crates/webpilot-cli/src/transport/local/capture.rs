@@ -22,9 +22,10 @@ impl LocalTransport {
                 detail: m.to_owned(),
             })?;
 
-        if let Some(url) = url {
-            self.navigate_reconnect(&url).await?;
-        }
+        let downloads = match url {
+            Some(url) => self.navigate_reconnect(&url).await?,
+            None => Vec::new(),
+        };
 
         // Annotation overlays use page-viewport coordinates, so they only line
         // up on the main frame. Refuse `--annotate` while an iframe is active
@@ -340,6 +341,7 @@ impl LocalTransport {
             pdf_b64: None,
             page_url,
             page_title,
+            downloads,
         })
     }
 

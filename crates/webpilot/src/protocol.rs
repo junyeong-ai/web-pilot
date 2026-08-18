@@ -10,7 +10,8 @@ use crate::action::Action;
 use crate::capture::{CaptureField, CaptureOpts};
 use crate::error::WebPilotError;
 use crate::types::{
-    ConsoleEntry, CookieInfo, DomSnapshot, FrameInfo, NetworkEntry, PolicyKey, SameSite, TabInfo,
+    ConsoleEntry, CookieInfo, DomSnapshot, Download, FrameInfo, NetworkEntry, PolicyKey, SameSite,
+    TabInfo,
 };
 use crate::wait::WaitCondition;
 
@@ -281,6 +282,13 @@ pub enum ResponseData {
         pdf_b64: Option<String>,
         page_url: String,
         page_title: String,
+        /// Files Chrome wrote to disk while this command ran. A navigation that
+        /// resolves to an attachment leaves the page where it was, so without
+        /// this the agent sees an unchanged snapshot and reads the command as a
+        /// no-op — then retries, downloading the file again. Empty on every
+        /// command that downloaded nothing.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        downloads: Vec<Download>,
     },
     Action {
         success: bool,
@@ -298,6 +306,13 @@ pub enum ResponseData {
         /// reported alongside the success instead.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         capture_error: Option<String>,
+        /// Files Chrome wrote to disk while this command ran. A navigation that
+        /// resolves to an attachment leaves the page where it was, so without
+        /// this the agent sees an unchanged snapshot and reads the command as a
+        /// no-op — then retries, downloading the file again. Empty on every
+        /// command that downloaded nothing.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        downloads: Vec<Download>,
     },
     Eval {
         success: bool,

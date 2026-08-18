@@ -7,6 +7,7 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 use webpilot::protocol::ResponseData;
+use webpilot::types::Download;
 use webpilot::{Action, WebPilotError};
 
 use super::LocalTransport;
@@ -143,19 +144,21 @@ impl LocalTransport {
         match &action {
             Action::Navigate { url } => {
                 let url = url.clone();
-                self.navigate_reconnect(&url).await?;
+                let downloads = self.navigate_reconnect(&url).await?;
                 // Report where the navigation actually landed (after redirects).
                 let landed = self.bound_target_url().await;
                 let url_changed = (!landed.is_empty()).then_some(landed);
-                return Ok(self.settled_action_result(capture, url_changed).await);
+                return Ok(self
+                    .settled_action_result(capture, url_changed, downloads)
+                    .await);
             }
             Action::Back => {
                 self.history_nav(HistoryNav::Back).await?;
-                return Ok(self.settled_action_result(capture, None).await);
+                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
             }
             Action::Forward => {
                 self.history_nav(HistoryNav::Forward).await?;
-                return Ok(self.settled_action_result(capture, None).await);
+                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
             }
             Action::Reload => {
                 // Subscribe BEFORE issuing the reload, so the completion event
@@ -193,7 +196,7 @@ impl LocalTransport {
                     }
                 }
                 self.settle_new_document().await;
-                return Ok(self.settled_action_result(capture, None).await);
+                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
             }
             Action::Drag {
                 source,
@@ -202,7 +205,7 @@ impl LocalTransport {
             } => {
                 self.require_main_frame("drag").await?;
                 self.do_drag(*source, *target, *steps).await?;
-                return Ok(self.settled_action_result(capture, None).await);
+                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
             }
             Action::Hover { index } => {
                 // Browser-input mouse move so CSS `:hover` actually fires.
@@ -210,7 +213,7 @@ impl LocalTransport {
                 // internal hover state.
                 self.require_main_frame("hover").await?;
                 self.do_hover(*index).await?;
-                return Ok(self.settled_action_result(capture, None).await);
+                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
             }
             Action::Upload { index, path } => {
                 // No `require_main_frame`: upload resolves the index in the ACTIVE
@@ -221,7 +224,7 @@ impl LocalTransport {
                 // mechanism doesn't need.
                 let path = path.clone();
                 self.do_upload(*index, &path).await?;
-                return Ok(self.settled_action_result(capture, None).await);
+                return Ok(self.settled_action_result(capture, None, Vec::new()).await);
             }
             _ => {}
         }
@@ -243,6 +246,7 @@ impl LocalTransport {
             None
         };
         let mut target_events = self.browser.subscribe_events();
+        let mut download_events = self.browser.subscribe_events();
         let mut page_events = self.page.subscribe_events();
 
         // `key_press` dispatches a native CDP key event (real Tab/Backspace/
@@ -329,6 +333,12 @@ impl LocalTransport {
                 .await;
         }
 
+        let downloads = self
+            .credit_downloads(
+                super::drain_download_announcements(&mut download_events, false).await,
+            )
+            .await;
+
         // Adopt a click-opened tab BEFORE the capture: the pin moves to the
         // popup (the browser-mode contract), and the agent's snapshot must
         // describe the tab it will act on next — capturing the opener would
@@ -362,6 +372,7 @@ impl LocalTransport {
             url_changed,
             new_tab,
             capture_error,
+            downloads,
         })
     }
 
@@ -391,6 +402,7 @@ impl LocalTransport {
         &self,
         capture: bool,
         url_changed: Option<String>,
+        downloads: Vec<Download>,
     ) -> ResponseData {
         let (dom, capture_error) = if capture {
             match self.capture_action_snapshot().await {
@@ -407,6 +419,7 @@ impl LocalTransport {
             url_changed,
             new_tab: None,
             capture_error,
+            downloads,
         }
     }
 

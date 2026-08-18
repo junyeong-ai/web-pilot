@@ -33,6 +33,26 @@ fn index_of(cap: &Output, id: &str) -> String {
         .to_string()
 }
 
+/// A downloaded file's contents once the transfer has landed. The report names
+/// the path the moment the download STARTS, so a read taken immediately after
+/// the command can beat the bytes — poll rather than sleep, and fail loudly on a
+/// path that never fills in.
+fn settled_file(path: &PathBuf) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if let Ok(body) = std::fs::read_to_string(path)
+            && !body.is_empty()
+        {
+            return body;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "downloaded file never landed at {path:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 struct Fixture {
     home: PathBuf,
 }
@@ -3679,6 +3699,100 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["capture", "--include", "dom"])).contains("cardwrap"),
         "the recovered session must capture the navigated page"
     );
+
+    // 8e-dl. A navigation that resolves to an ATTACHMENT is a stay-put whose
+    //     cause the agent could not previously see: the page never moves, so an
+    //     unreported download reads as a command that did nothing and invites the
+    //     retry that downloads the file again. The download must be reported, and
+    //     the file must land under WebPilot's artifact root rather than the user's
+    //     OS download directory, where nothing WebPilot owns would ever reclaim it.
+    let dl_dir = fx.home.join("artifacts/downloads/default");
+    let dl_nav = fx.run(&[
+        "capture",
+        "--include",
+        "dom",
+        "--url",
+        &format!("{base}/attachment"),
+    ]);
+    let dl_nav_json: serde_json::Value = serde_json::from_str(&stdout(&dl_nav)).expect("json");
+    let saved = &dl_nav_json["downloads"][0];
+    assert_eq!(
+        saved["state"],
+        "saved",
+        "a navigation that downloaded must report it: {}",
+        stdout(&dl_nav)
+    );
+    assert_eq!(
+        saved["suggested_filename"],
+        "invoice.pdf",
+        "the server's own name for the file must reach the agent: {}",
+        stdout(&dl_nav)
+    );
+    let saved_path = PathBuf::from(saved["path"].as_str().expect("download path"));
+    assert!(
+        saved_path.starts_with(&dl_dir),
+        "a download must land under the artifact root, not the OS download dir: {saved_path:?}"
+    );
+    assert_eq!(
+        settled_file(&saved_path),
+        "INVOICE-BODY",
+        "the reported path must name the real bytes"
+    );
+
+    // 8e-dl-click. The same for a download a CLICK starts: it never reaches
+    //     `Page.navigate`, so it is announced only as a browser event — and the
+    //     announcement stream is browser-wide, so what lands here also proves the
+    //     report is scoped to the page the click happened on.
+    let cap_dl = fx.run(&["capture", "--include", "dom", "--url", &base]);
+    let click_dl = fx.run(&["action", "click", &index_of(&cap_dl, "dlnav")]);
+    let click_json: serde_json::Value = serde_json::from_str(&stdout(&click_dl)).expect("json");
+    assert_eq!(
+        click_json["downloads"][0]["state"],
+        "saved",
+        "a click that downloaded must report it: {}",
+        stdout(&click_dl)
+    );
+    let click_path = PathBuf::from(click_json["downloads"][0]["path"].as_str().expect("path"));
+    assert_eq!(
+        settled_file(&click_path),
+        "INVOICE-BODY",
+        "the click's reported path must name the real bytes"
+    );
+
+    // 8e-dl-deny. `download deny` refuses the transfer in the browser, so nothing
+    //     is written — and the refusal is REPORTED rather than dropped, or the
+    //     agent would retry a click that can never succeed. A denied download
+    //     carries no path: naming a file that was never written would be the same
+    //     lie in the other direction.
+    let before = std::fs::read_dir(&dl_dir).expect("downloads dir").count();
+    fx.run(&[
+        "policy",
+        "set",
+        "--operation",
+        "download",
+        "--verdict",
+        "deny",
+    ]);
+    let cap_deny = fx.run(&["capture", "--include", "dom", "--url", &base]);
+    let denied = fx.run(&["action", "click", &index_of(&cap_deny, "dlnav")]);
+    let denied_json: serde_json::Value = serde_json::from_str(&stdout(&denied)).expect("json");
+    assert_eq!(
+        denied_json["downloads"][0]["state"],
+        "denied",
+        "a denied download must still be reported: {}",
+        stdout(&denied)
+    );
+    assert!(
+        denied_json["downloads"][0]["path"].is_null(),
+        "a denied download must not name a file: {}",
+        stdout(&denied)
+    );
+    assert_eq!(
+        std::fs::read_dir(&dl_dir).expect("downloads dir").count(),
+        before,
+        "a denied download must write nothing"
+    );
+    fx.run(&["policy", "clear"]);
 
     // 2a-domset-tt. `dom set-html` on a Trusted-Types page (`require-trusted-types-
     //     for 'script'`) makes `innerHTML = <string>` THROW — surface it as a typed

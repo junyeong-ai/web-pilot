@@ -44,6 +44,7 @@ pub const PAGE: &str = r#"<!doctype html><html><head><title>fixture</title></hea
 <button id="mkif" onclick="const f=document.createElement('iframe'); f.src='/latealert'; document.body.appendChild(f)">mk iframe</button>
 <div style="height:3000px"></div>
 <button id="deepbtn" onclick="document.title='deep-clicked'">deep button</button>
+<a id="dlnav" href="/attachment">download invoice</a>
 <script>
   // A DOCUMENT-level delegated click listener: it fires for a click inside the
   // shadow root only if the synthetic event is `composed` (crosses the boundary).
@@ -178,6 +179,15 @@ pub fn spawn_server() -> String {
                 // and keeps the previous document. `navigate` must return success
                 // fast on the still-live page, not spin to the navigation timeout
                 // and report a false NavigationFailed.
+                // Resolves to a FILE, not a document: the navigation aborts and the
+                // browser downloads instead. The body is checked byte-for-byte, so
+                // the test can tell a real transfer from a placeholder.
+                if req.starts_with("GET /attachment") {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"invoice.pdf\"\r\nContent-Length: 12\r\nConnection: close\r\n\r\nINVOICE-BODY",
+                    );
+                    return;
+                }
                 if req.starts_with("GET /empty204") {
                     let _ =
                         stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");

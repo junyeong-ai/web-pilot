@@ -471,6 +471,7 @@ fn response_action_carries_typed_error() {
             url_changed: None,
             new_tab: None,
             capture_error: None,
+            downloads: Vec::new(),
         },
     };
     let v = serde_json::to_value(&r).unwrap();

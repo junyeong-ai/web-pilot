@@ -5,7 +5,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use webpilot::WebPilotError;
 use webpilot::protocol::{FrameSelector, ResponseData, RunMode};
-use webpilot::types::{FrameInfo, TabInfo};
+use webpilot::types::{Download, FrameInfo, TabInfo};
 
 use super::{LocalTransport, action_success, attach_to_page, target_in_context};
 
@@ -298,10 +298,13 @@ impl LocalTransport {
         // failed open rolls back to the agent's previous tab — `navigate`'s no-leak
         // contract, now literally the same code. `navigate_reconnect` settles the
         // load and re-arms monitors on the new document itself.
-        if let Err(e) = self.navigate_reconnect(url).await {
-            self.rollback_tab_new(&target_id, &prev_target).await;
-            return Err(e);
-        }
+        let downloads: Vec<Download> = match self.navigate_reconnect(url).await {
+            Ok(downloads) => downloads,
+            Err(e) => {
+                self.rollback_tab_new(&target_id, &prev_target).await;
+                return Err(e);
+            }
+        };
         // `navigate_reconnect` re-arms monitors on every path that BUILDS a new
         // document, but a purely same-document settle (a fragment-only target such
         // as `about:blank#x`) returns without arming — and the `false` switch above
@@ -335,6 +338,7 @@ impl LocalTransport {
                 active: true,
             }),
             capture_error: None,
+            downloads,
         })
     }
 
