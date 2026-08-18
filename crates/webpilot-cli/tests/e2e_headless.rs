@@ -3820,6 +3820,19 @@ fn headless_behavioral_flow() {
         "a disowned link into a named frame must not wait either, took {disowned_elapsed:?}"
     );
 
+    // The waits above belong to a click that loads a document somewhere this
+    // command cannot see settle. A click that loads nothing must pay for none of
+    // them — twice now a bound meant for one shape has been charged to every
+    // click, and only latency could have caught it.
+    let cap_inert = fx.run(&["capture", "--include", "dom", "--url", &base]);
+    let started = std::time::Instant::now();
+    fx.run(&["action", "click", &index_of(&cap_inert, "deepbtn")]);
+    let inert_elapsed = started.elapsed();
+    assert!(
+        inert_elapsed < std::time::Duration::from_millis(1500),
+        "a click that loads no document must not wait, took {inert_elapsed:?}"
+    );
+
     // 8f-cap. Every other axis of a capture is bounded — page text, element text,
     //     option lists, the shadow walk — but the index itself was not, and a
     //     content-heavy page reaches four figures of links on its own. The bound

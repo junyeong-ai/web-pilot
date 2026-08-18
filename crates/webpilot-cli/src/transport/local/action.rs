@@ -316,10 +316,10 @@ impl LocalTransport {
                     Some(name) => self.frame_named(name).await,
                     None => None,
                 };
-                let opens_context = match resp.get("target_name") {
-                    Some(_) => named_frame.is_none(),
-                    None => opens_context,
-                };
+                // A name reaches here only alongside the bridge's own
+                // new-context verdict, so resolving it is the one thing that can
+                // withdraw that verdict.
+                let opens_context = opens_context && named_frame.is_none();
                 (
                     navigates,
                     frame_navigates,
@@ -800,10 +800,15 @@ impl LocalTransport {
             event.get("method").and_then(Value::as_str) == Some("Page.frameNavigated")
                 && event.pointer("/params/frame/id").and_then(Value::as_str) == Some(frame_id)
         };
+        let mut lagged = false;
         loop {
             match events.try_recv() {
                 Ok(event) if committed(&event) => return,
-                Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
+                Ok(_) => continue,
+                Err(TryRecvError::Lagged(_)) => {
+                    lagged = true;
+                    continue;
+                }
                 Err(_) => break,
             }
         }
@@ -811,11 +816,21 @@ impl LocalTransport {
         loop {
             let now = tokio::time::Instant::now();
             if now >= deadline {
+                if lagged {
+                    tracing::debug!(
+                        "CDP event backlog overflowed while waiting for a frame to commit; \
+                         the wait ran to its bound instead of ending at the commit"
+                    );
+                }
                 return;
             }
             match tokio::time::timeout(deadline - now, events.recv()).await {
                 Ok(Ok(event)) if committed(&event) => return,
-                Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
+                Ok(Ok(_)) => continue,
+                Ok(Err(RecvError::Lagged(_))) => {
+                    lagged = true;
+                    continue;
+                }
                 Ok(Err(RecvError::Closed)) | Err(_) => return,
             }
         }
