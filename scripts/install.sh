@@ -69,9 +69,9 @@ parse_args() {
             --prebuilt)            BUILD="prebuilt" ;;
             --source)              BUILD="source" ;;
             --version)             shift; [ $# -gt 0 ] || die "--version needs a value"; VERSION="$1" ;;
-            --version=*)           VERSION="${1#*=}" ;;
+            --version=*)           VERSION="${1#*=}"; [ -n "$VERSION" ] || die "--version needs a value" ;;
             --install-dir)         shift; [ $# -gt 0 ] || die "--install-dir needs a value"; INSTALL_DIR="$1" ;;
-            --install-dir=*)       INSTALL_DIR="${1#*=}" ;;
+            --install-dir=*)       INSTALL_DIR="${1#*=}"; [ -n "$INSTALL_DIR" ] || die "--install-dir needs a value" ;;
             --verify-attestations) VERIFY_ATTESTATIONS=1 ;;
             --no-setup)            NO_SETUP=1 ;;
             --interactive)         INTERACTIVE=1 ;;
@@ -268,15 +268,18 @@ main() {
     fi
 
     printf '\n' >&2
+    # The binary is installed and on disk either way, so a setup that cannot
+    # finish (an unwritable ~/.claude, no browser profile) is a follow-up to
+    # report — not a failed install to exit non-zero on.
     if [ "$INTERACTIVE" = "1" ] && [ -r /dev/tty ]; then
         # `curl ... | bash` consumes stdin with the script content, so route the
         # binary's stdin from the terminal for it to prompt on.
-        "$INSTALL_DIR/webpilot" setup < /dev/tty
+        "$INSTALL_DIR/webpilot" setup < /dev/tty || warn "setup did not finish — run \`webpilot setup\`"
     else
         # Unattended: with no terminal on stdin every prompt resolves to its safe
         # answer, so the skill, extension and NM host are deployed while a skill
         # the user has edited is kept — and `setup` reports which.
-        "$INSTALL_DIR/webpilot" setup < /dev/null
+        "$INSTALL_DIR/webpilot" setup < /dev/null || warn "setup did not finish — run \`webpilot setup\`"
     fi
 }
 

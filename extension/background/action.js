@@ -433,7 +433,9 @@ async function dispatchActionToPage(tab, action) {
     // `frame_navigates` drives the iframe-internal settle. `downloads` steers the
     // headless transport's announcement wait and has no browser-mode counterpart,
     // since downloads there are the user's own browser's business, and
-    // `opens_context`/`target_name` feed the frame-tree lookup that steers it.
+    // `opens_context`/`target_name` feed the headless frame-tree lookup that
+    // steers it — this side runs no such lookup, and its popup adoption is
+    // driven by `tabs.onCreated` rather than by either hint.
     // Read what this side uses, then drop every hint. `downloads` MUST go: the
     // wire response models it as a list of files, so leaking the hint's boolean
     // fails the host reply's typed parse and turns a click that SUCCEEDED into a
