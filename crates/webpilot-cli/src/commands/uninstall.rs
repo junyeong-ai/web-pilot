@@ -1,4 +1,4 @@
-//! `webpilot uninstall` — undo every artefact this binary created.
+//! `webpilot self uninstall` — undo every artefact this binary created.
 //!
 //! Inverse of `setup` plus binary removal. Idempotent: every step is a
 //! best-effort `remove_*` that succeeds even when the artefact is missing,
@@ -75,6 +75,14 @@ async fn execute(plan: Plan) -> Result<CommandOutput> {
             }
         }
     }
+
+    // The skill's provenance record is bookkeeping about an artefact already
+    // listed, not an artefact of its own, so it is cleared without being
+    // itemised — and, like the stores above, before the root purges: under a
+    // `WEBPILOT_HOME` that collapses the cache and data roots into one directory
+    // it would otherwise be the file that keeps that root alive and gets
+    // reported as "non-WebPilot files remain".
+    let _ = std::fs::remove_file(webpilot::dirs::skill_record_path());
 
     // NM host manifests across every Chrome-family browser setup registered.
     // Remove each, then reclaim the `NativeMessagingHosts` dir WebPilot created

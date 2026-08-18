@@ -203,6 +203,11 @@ never again. The **policy store**
 (`$WEBPILOT_DATA_HOME` / `~/Library/Application Support/webpilot` /
 `$XDG_DATA_HOME` / `~/.local/share/webpilot`), or under `$WEBPILOT_HOME` when set:
 a security config must survive the cache eviction the paths above are subject to.
+`skill-install.sha256` sits beside it under the same root and for the same
+reason: it records the digest `setup skill` last wrote to `~/.claude/skills`, so
+a later install can tell WebPilot's own stale copy (refresh) from one the user
+edited (keep) — losing it to eviction would strand every future refresh behind
+a prompt.
 
 Settings resolve through one layer, `webpilot::settings`: **defaults <
 `config.toml` < env var**. Tune via `config.toml` (under the cache root —

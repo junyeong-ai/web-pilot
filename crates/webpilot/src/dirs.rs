@@ -14,7 +14,7 @@
 //!   mode 0700) and memoise where the path is process-wide constant. Use
 //!   from setup/runtime code that needs the location to exist.
 //! - `*_path()` — *pure* path computation, no filesystem side effects. Use
-//!   from inspection-only code (e.g. `webpilot uninstall`) that must not
+//!   from inspection-only code (e.g. `webpilot self uninstall`) that must not
 //!   create state just by looking.
 //!
 //! Cache root resolution:
@@ -43,6 +43,7 @@ const DOWNLOADS_SUBDIR: &str = "downloads";
 const CHROME_PROFILE_SUBDIR: &str = "chrome-profile";
 const EXTENSION_SUBDIR: &str = "extension";
 const POLICY_SUBDIR: &str = "policy";
+const SKILL_RECORD_FILE: &str = "skill-install.sha256";
 
 const PID_FILENAME: &str = "headless.pid";
 const WS_URL_FILENAME: &str = "headless.ws";
@@ -212,6 +213,19 @@ pub fn extension_dir() -> PathBuf {
 /// Pure extension dir path — no filesystem side effects.
 pub fn extension_dir_path() -> PathBuf {
     data_root_path().join(EXTENSION_SUBDIR)
+}
+
+/// Digest of the Claude skill this binary last wrote to `~/.claude/skills`.
+/// The skill is the one deployed artefact a user may legitimately edit, and an
+/// edited copy is indistinguishable from an outdated one by content alone — so
+/// what WebPilot wrote is recorded, and a later install compares against it to
+/// tell its own stale copy (refresh silently) from the user's (never touch).
+/// Durable like the policy store: losing it to cache eviction would strand
+/// every future skill refresh behind a prompt.
+pub fn skill_record_path() -> PathBuf {
+    env_path("WEBPILOT_HOME")
+        .unwrap_or_else(data_root_path)
+        .join(SKILL_RECORD_FILE)
 }
 
 /// Directory holding the policy store. Policy is persistent security config, not

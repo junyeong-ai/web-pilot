@@ -134,6 +134,12 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
         );
     }
 
+    // The running build is the last one that can recognise its own deployed
+    // skill, so it claims that copy before handing over — the incoming build
+    // sees only bytes that differ from its own and could not otherwise tell a
+    // stale copy from a hand-edited one.
+    crate::commands::setup::skill::record_if_ours();
+
     // Sign the downloaded binary BEFORE swapping it in: an ad-hoc signature is
     // what lets it run under macOS Gatekeeper, so a signing failure must abort
     // the update with the old (working) binary still in place — never report a
@@ -169,6 +175,42 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
         "stale"
     };
 
+    // The skill is the agent's whole contract with WebPilot, and unlike the
+    // extension its drift is SILENT — nothing rejects a stale copy the way the
+    // host rejects a stale extension — so an unrefreshed skill would leave an
+    // updated binary described by its predecessor's documentation. Same shape as
+    // the extension: only if it was ever deployed, and through the NEW binary,
+    // which alone carries the new content. Run without `--yes` and with no stdin:
+    // a copy WebPilot wrote refreshes on its own, and one the user edited is kept
+    // and named rather than silently overwritten.
+    let skill = if crate::commands::setup::skill::installed_path().is_none() {
+        "not_installed"
+    } else {
+        Command::new(&dest)
+            .args(["setup", "skill", "--json"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
+            .and_then(|v| v["action"].as_str().map(str::to_owned))
+            .map_or("stale", |action| match action.as_str() {
+                "kept" => "kept",
+                "unchanged" => "unchanged",
+                _ => "refreshed",
+            })
+    };
+
+    let skill_note = match skill {
+        // The user owns that copy — say so, and name the one command that takes
+        // the new version, rather than quietly leaving them on old guidance.
+        "kept" => {
+            "\n  Skill: local edits kept — `webpilot setup skill --force` takes the new version."
+        }
+        "stale" => "\n  Skill: run `webpilot setup skill`.",
+        _ => "",
+    };
+
     let extension_note = match extension {
         // The disk is now coherent; the loaded copy in a running browser is not,
         // and only a reload (or a browser restart) can pick up the new version.
@@ -183,7 +225,7 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
     };
 
     let human = format!(
-        "✓ Updated v{current} → v{target_version}\n  {}{extension_note}",
+        "✓ Updated v{current} → v{target_version}\n  {}{skill_note}{extension_note}",
         dest.display()
     );
     Ok(CommandOutput::Data {
@@ -192,6 +234,7 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
             "from": current,
             "to": target_version,
             "path": dest.display().to_string(),
+            "skill": skill,
             "extension": extension,
         }),
         human,
