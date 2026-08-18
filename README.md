@@ -473,6 +473,17 @@ webpilot uninstall             # Chrome 종료 + 바이너리가 만든 모든 �
 
 ## 문제 해결
 
+### 브라우저 모드에서 뭐가 잘못됐는지 안 보일 때
+
+Native Messaging 호스트의 stdio는 Chrome이 가져갑니다. 그래서 호스트가 본 것 — 적용한 정책 판정, 확장과의 핸드셰이크, 명령이 실패한 이유 — 은 터미널에 나오지 않습니다. 대신 여기에 기록됩니다:
+
+```bash
+tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS; 그 외에는 $WEBPILOT_HOME/logs
+```
+
+옆의 `host.log.1`은 직전 로테이션입니다. 이미 끝난 세션에 대한 제보를 볼 때는 보통 이쪽이 필요합니다.
+
+
 ```bash
 webpilot status                # 연결 상태 / Chrome 버전 / 활성 탭 확인
 webpilot -v capture --include dom --url URL   # stderr 디버그 로그

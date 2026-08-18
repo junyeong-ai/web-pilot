@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The Native Messaging host writes a log.** Chrome owns that process's stdio,
+  so in browser mode the host's own account of a session reached nobody: a
+  failure there left nothing to read. It now writes `logs/host.log` under the
+  runtime root, rotating to `host.log.1` at 1 MB — renamed rather than
+  truncated, so the previous session survives. The CLI keeps stderr, where its
+  caller does capture it.
+
 ### Changed
 
 - **Artifacts expire.** Screenshots, PDFs, accessibility trees, exported

@@ -177,6 +177,9 @@ $XDG_CACHE_HOME/webpilot    Linux fallback, then ~/.cache/webpilot
 (full resolution order in `dirs.rs`)
 
 Subdirectories: `runtime/` (sockets, PIDs, locks), `contexts/` (multi-agent),
+`logs/` (`host.log` + one rotated predecessor — browser mode only: Chrome owns
+the NM host's stdio, so its account of a session reaches nobody otherwise; the
+CLI keeps stderr, which its caller does capture),
 `artifacts/` (screenshots, PDFs, sessions, plus `downloads/<browser-context>/`
 for files a page downloads), `chrome-profile/`. Artifacts are swept at session
 launch once past `[artifacts] ttl` (7d) — every one is minted under a fresh name,

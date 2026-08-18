@@ -37,6 +37,7 @@ use std::sync::OnceLock;
 
 const RUNTIME_SUBDIR: &str = "runtime";
 const CONTEXTS_SUBDIR: &str = "contexts";
+const LOGS_SUBDIR: &str = "logs";
 const ARTIFACTS_SUBDIR: &str = "artifacts";
 const DOWNLOADS_SUBDIR: &str = "downloads";
 const CHROME_PROFILE_SUBDIR: &str = "chrome-profile";
@@ -79,6 +80,15 @@ pub fn runtime_dir_path() -> PathBuf {
 
 pub fn contexts_dir() -> PathBuf {
     materialise(root().join(CONTEXTS_SUBDIR), Owner::User)
+}
+
+/// The Native Messaging host's log. Chrome owns that process's stdio, so the
+/// host's own account of a session — the policy verdicts it applied, the
+/// extension handshake, why a command failed — is otherwise unrecoverable. The
+/// rotated predecessor sits beside it as `host.log.1`, which is what a report
+/// about the *previous* session needs.
+pub fn host_log_path() -> PathBuf {
+    materialise(root().join(LOGS_SUBDIR), Owner::User).join("host.log")
 }
 
 pub fn artifacts_dir() -> PathBuf {

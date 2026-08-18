@@ -481,6 +481,20 @@ The skill and extension are embedded in the binary at compile time, so the **bun
 
 ## Troubleshooting
 
+### Browser mode leaves no clue what went wrong
+
+Chrome owns the Native Messaging host's stdio, so the host's own account of a
+session — the policy verdicts it applied, the extension handshake, why a command
+failed — is not on your terminal. It is written here instead:
+
+```bash
+tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS; $WEBPILOT_HOME/logs elsewhere
+```
+
+`host.log.1` beside it holds the previous rotation, which is usually the one a
+report about a session that has already ended needs.
+
+
 ```bash
 webpilot status                # connection state / Chrome version / active tab
 webpilot -v capture --include dom --url URL   # debug logging to stderr

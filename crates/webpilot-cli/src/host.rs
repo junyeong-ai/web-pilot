@@ -38,12 +38,59 @@ enum GateState {
 
 type VersionGate = Arc<std::sync::Mutex<GateState>>;
 
-pub async fn run_host() -> anyhow::Result<()> {
-    let _ = tracing_subscriber::fmt()
+/// Bound on the host log before it rotates. The host records session lifecycle
+/// and failures — a handful of lines per session — so this holds a long history,
+/// and two files bound the directory for good.
+const LOG_ROTATE_BYTES: u64 = 1024 * 1024;
+
+/// Send the host's tracing output to a file.
+///
+/// Chrome spawns this process and owns its stdio, so `stderr` reaches nobody:
+/// a browser-mode session that misbehaves leaves no trace of what the host saw.
+/// The CLI keeps stderr, where the caller does capture it.
+///
+/// Falls back to stderr if the file cannot be opened — a host that cannot log is
+/// still a host that must serve.
+fn init_logging() {
+    let builder = tracing_subscriber::fmt()
         .with_env_filter("info")
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .try_init();
+        .with_target(false);
+    match open_log() {
+        Some(file) => {
+            let _ = builder
+                .with_writer(Arc::new(file))
+                .with_ansi(false)
+                .try_init();
+        }
+        None => {
+            let _ = builder.with_writer(std::io::stderr).try_init();
+        }
+    }
+}
+
+/// The log to append to, rotating first when the current one is full.
+///
+/// Rotation renames rather than truncates: a host still writing to the old
+/// inode keeps landing in `host.log.1` instead of leaving a hole in the new
+/// file, and the previous session's account survives — which is the one a report
+/// about a session that has already ended needs.
+fn open_log() -> Option<std::fs::File> {
+    open_log_at(&dirs::host_log_path())
+}
+
+fn open_log_at(path: &std::path::Path) -> Option<std::fs::File> {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() >= LOG_ROTATE_BYTES) {
+        let _ = std::fs::rename(path, path.with_extension("log.1"));
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()
+}
+
+pub async fn run_host() -> anyhow::Result<()> {
+    init_logging();
 
     tracing::info!("WebPilot host starting");
 
@@ -557,6 +604,36 @@ async fn reply_error<W: AsyncWriteExt + Unpin>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_log_rotates_instead_of_being_truncated() {
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join(format!("wp-hostlog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("host.log");
+        let rotated = dir.join("host.log.1");
+
+        // Under the bound the log is appended to, so one session can read what
+        // the one before it recorded.
+        open_log_at(&path).unwrap().write_all(b"first\n").unwrap();
+        open_log_at(&path).unwrap().write_all(b"second\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond\n");
+        assert!(!rotated.exists());
+
+        // At the bound the full log is renamed, never truncated: the previous
+        // session's account is what a report about it needs.
+        std::fs::write(&path, vec![b'x'; LOG_ROTATE_BYTES as usize]).unwrap();
+        open_log_at(&path).unwrap().write_all(b"after\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\n");
+        assert_eq!(
+            std::fs::metadata(&rotated).unwrap().len(),
+            LOG_ROTATE_BYTES,
+            "the full log must survive as the rotated one"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     use super::*;
 
     /// A Ping must resolve the version gate, answer with a Pong, AND push the
