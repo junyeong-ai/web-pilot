@@ -37,6 +37,15 @@ the same `Transport`: each tool builds a typed `Command`/`Action` and runs it
 through the same handler, inheriting rendering, policy, and mode — no second
 implementation.
 
+**Two process lifetimes, one browser.** A CLI invocation is a fresh process per
+command; `webpilot mcp` and the NM host are single processes that serve every
+command for a whole session — and Chrome outlives them all. So per-process state
+is only ever right for one of the two: cache something the browser owns and the
+long-lived process believes a setting another process already cleared, while
+work hung off startup or off `LocalTransport::open` runs once and never again.
+Anything a command depends on is re-established **per command**, at the sink
+every command passes (`LocalTransport::send`, the host's request path).
+
 - `crates/webpilot/` — wire types + protocol (see that directory's `CLAUDE.md`)
 - `crates/webpilot-cli/` — the single binary (see that directory's `CLAUDE.md`)
 - `extension/` — browser-mode Chrome extension (`bridge.js` contract: `.claude/rules/extension.md`)
