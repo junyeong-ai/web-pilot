@@ -8,9 +8,14 @@ use crate::transport::{Transport, lift_error};
 
 /// One agent-facing console row: the entry's millisecond timestamp — the value
 /// an agent feeds back to `--since` for an incremental read, and the anchor for
-/// correlating entries to wall-clock events — then its level and message.
+/// correlating entries to wall-clock events — then what it is and what it said.
 fn console_row(e: &ConsoleEntry) -> String {
-    format!("[{}] [{}] {}", e.timestamp, e.level, line_safe(&e.message))
+    format!(
+        "[{}] [{}] {}",
+        e.timestamp,
+        e.label(),
+        line_safe(&e.message)
+    )
 }
 
 #[derive(Args)]
@@ -93,10 +98,12 @@ pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<C
 #[cfg(test)]
 mod tests {
     use super::*;
+    use webpilot::types::ConsoleSource;
 
     #[test]
     fn console_row_leads_with_the_timestamp() {
         let row = console_row(&ConsoleEntry {
+            source: ConsoleSource::Console,
             level: ConsoleLevel::Error,
             message: "boom".into(),
             timestamp: 1_799_000_000_123,
@@ -104,6 +111,20 @@ mod tests {
         // The ms timestamp leads the row so an agent can feed it straight back
         // to `--since` for the next incremental read.
         assert!(row.starts_with("[1799000000123] "), "{row}");
-        assert!(row.contains("boom"), "{row}");
+        assert!(row.contains("[error] boom"), "{row}");
+    }
+
+    #[test]
+    fn console_row_names_what_the_page_never_called() {
+        let row = console_row(&ConsoleEntry {
+            source: ConsoleSource::Exception,
+            level: ConsoleLevel::Error,
+            message: "Uncaught TypeError: x is not a function".into(),
+            timestamp: 1_799_000_000_123,
+        });
+        // An uncaught error and a `console.error` are both error-level; the row
+        // has to say which, or an agent reading the text cannot tell a page that
+        // logged a message from a page that broke.
+        assert!(row.contains("[exception] Uncaught TypeError"), "{row}");
     }
 }

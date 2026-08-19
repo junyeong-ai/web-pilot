@@ -2100,6 +2100,63 @@ fn headless_behavioral_flow() {
         stdout(&subframe_hook)
     );
 
+    // 3a-error. `console read` reports what the page REPORTS, not only what it
+    //     was asked to print: an exception that reached the top of the stack and
+    //     a rejection nothing handled are in the buffer, each named by its own
+    //     `source` rather than flattened into an `error` an agent would have to
+    //     tell apart by reading the message. Two things must NOT be there: the
+    //     error the page cancelled, because the browser prints nothing for it
+    //     either and inventing one would fail a healthy page, and the subresource
+    //     that failed, whose element-level event names no reason — an entry from
+    //     it could only say that something failed, in words WebPilot composed.
+    let _ = fx.run(&["console", "clear"]);
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/pageerror")])),
+        0
+    );
+    let errs = fx.run(&["console", "read"]);
+    let ej: serde_json::Value = serde_json::from_str(&stdout(&errs)).expect("console read json");
+    let entries = ej["entries"].as_array().expect("entries array");
+    let with_source = |source: &str| -> Vec<String> {
+        entries
+            .iter()
+            .filter(|e| e["source"] == source)
+            .map(|e| e["message"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    let exceptions = with_source("exception");
+    assert!(
+        exceptions
+            .iter()
+            .any(|m| m.contains("pageErrorMarker") && m.contains("/pageerror")),
+        "an uncaught exception must be captured, carrying the browser's own text \
+         and the location it names: {}",
+        stdout(&errs)
+    );
+    assert!(
+        with_source("rejection")
+            .iter()
+            .any(|m| m.contains("rejection-marker")),
+        "an unhandled rejection must be captured, typed as a rejection: {}",
+        stdout(&errs)
+    );
+    assert_eq!(
+        entries.iter().filter(|e| e["level"] != "error").count(),
+        0,
+        "an exception and a rejection are error-level, like the console shows them: {}",
+        stdout(&errs)
+    );
+    // The two exclusions, pinned by the buffer holding NOTHING else. A substring
+    // check would miss the subresource, whose event carries no message to match
+    // on — which is the very reason it is excluded.
+    assert_eq!(
+        entries.len(),
+        2,
+        "the buffer must hold the exception and the rejection and nothing more — \
+         not the error the page cancelled, and not the subresource that failed: {}",
+        stdout(&errs)
+    );
+
     // 3b. The `eval` gate covers monitor injection: a deny that lands AFTER
     //     `console start` must stop the MAIN-world hooks from reaching the next
     //     document — `ensure_monitor_hooks` re-checks the gate before every

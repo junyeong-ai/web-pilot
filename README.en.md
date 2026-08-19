@@ -243,12 +243,13 @@ webpilot network read
 ```
 ```
 [1781409477045] [log] refreshing tasks
+[1781409477121] [exception] Uncaught TypeError: t.render is not a function (https://app.example/main.js:2:9481)
 ```
 ```
 [1781409477046] fetch GET /tasks.json → 200 (1ms)
 ```
 
-> In headless the hooks enter each document **ahead of** that document's own scripts, so what a page logs and fetches while loading is captured too. Browser mode drives your real Chrome and injects once a navigation settles, so there a page's own startup output is missed. What is recorded is the `console` API and `fetch`/XHR — an uncaught exception, an unhandled rejection, or a subresource that failed to load shows in DevTools but not in `console read`. And the hooks live in the MAIN world, so an adversarial page can evade them: never treat an empty buffer as proof nothing happened.
+> `console read` reports what the page **reports**: its `console.*` calls, the exceptions that reach the top of the stack, and the rejections nothing handles — every message the browser's own text. Each entry names its `source` (`console` / `exception` / `rejection`). Two are not recorded: one the page cancels, which the browser does not print either, and a subresource that fails to load, whose page-side event names no reason (the network monitor watches `fetch`/XHR, not element loads). In headless the hooks enter each document **ahead of** that document's own scripts, so what a page logs while loading is captured too; browser mode drives your real Chrome and injects once a navigation settles, so there a page's own startup output is missed. And the hooks live in the MAIN world, so an adversarial page can evade them: never treat an empty buffer as proof nothing happened.
 
 ### Sessions · cookies · authenticated requests
 

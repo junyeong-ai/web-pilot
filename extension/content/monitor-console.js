@@ -1,11 +1,14 @@
 /**
  * WebPilot console monitor.
  *
- * Records the page's console output into `window.__webpilot_console`, the
- * buffer `console read` reads. The page is the store because it is the only one
- * that outlives a CLI process: the command that arms the monitor and the command
- * that reads it are separate processes, and the page records continuously
- * between them.
+ * Records what the page reports into `window.__webpilot_console`, the buffer
+ * `console read` reads: its `console.*` calls, plus the errors the browser
+ * reports on its behalf — the exceptions that reach the top of the stack and the
+ * promise rejections nothing handles. Every message is the browser's own text,
+ * never a description this recorder composes. The page is
+ * the store because it is the only one that outlives a CLI process: the command
+ * that arms the monitor and the command that reads it are separate processes,
+ * and the page records continuously between them.
  *
  * The one source both modes install — headless registers it per document
  * (`Page.addScriptToEvaluateOnNewDocument`, MAIN world), browser injects it into
@@ -52,6 +55,21 @@
     return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s;
   };
 
+  const text = (v) => { try { return String(v); } catch { return "[object]"; } };
+
+  const record = (entry) => {
+    const buf = window.__webpilot_console;
+    buf.push(entry);
+    // Evict the oldest past the cap and RECORD that an eviction happened: the
+    // read's `truncated` flag is driven by this, not by `length >= cap`, so a
+    // buffer sitting at exactly the cap (nothing dropped yet) isn't falsely
+    // reported truncated.
+    if (buf.length > CAP) {
+      buf.shift();
+      window.__webpilot_console_dropped = true;
+    }
+  };
+
   const orig = {
     log: console.log,
     error: console.error,
@@ -62,21 +80,66 @@
   ["log", "error", "warn", "info", "debug"].forEach((m) => {
     console[m] = (...args) => {
       try {
-        const message = clip(
-          args.map((a) => { try { return String(a); } catch { return "[object]"; } }).join(" "),
-        );
-        const buf = window.__webpilot_console;
-        buf.push({ level: m, message, timestamp: nowFn() });
-        // Evict the oldest past the cap and RECORD that an eviction happened:
-        // the read's `truncated` flag is driven by this, not by `length >= cap`,
-        // so a buffer sitting at exactly the cap (nothing dropped yet) isn't
-        // falsely reported truncated.
-        if (buf.length > CAP) {
-          buf.shift();
-          window.__webpilot_console_dropped = true;
-        }
+        record({
+          source: "console",
+          level: m,
+          message: clip(args.map(text).join(" ")),
+          timestamp: nowFn(),
+        });
       } catch {}
       orig[m].apply(console, args);
     };
+  });
+
+  // A page cancels the report of an error or a rejection by cancelling its
+  // event, and the browser then prints nothing — so recording one would put an
+  // entry in the buffer that the page's console never showed. The verdict is
+  // only final once every listener has run, and this recorder is installed
+  // before the page's own, so the entry is held until the dispatch is over and
+  // committed only if the browser reported it too.
+  //
+  // "Once the dispatch is over" has to be a task: for `unhandledrejection`,
+  // which the browser dispatches while draining microtasks, a microtask still
+  // observes the pre-cancel verdict. A port message is the task that is not a
+  // timer — timers are clamped to seconds in a backgrounded tab, which is
+  // exactly where a browser-mode agent's pinned tab sits.
+  const channel = new MessageChannel();
+  const commits = [];
+  channel.port1.onmessage = () => { const commit = commits.shift(); if (commit) commit(); };
+  const reportedBy = (event, entry) => {
+    commits.push(() => { if (!event.defaultPrevented) record(entry); });
+    channel.port2.postMessage(0);
+  };
+
+  // No capture phase, so this is exactly the window's own error report. A
+  // subresource that fails to load fires `error` at the ELEMENT and so never
+  // reaches here: that event names no reason — not the status, not even whether
+  // the request was refused or the bytes were unusable — so an entry made from
+  // it could only say that something failed, in words this recorder invented.
+  // The console shows such a failure; WebPilot does not report it anywhere yet.
+  window.addEventListener("error", (event) => {
+    try {
+      // `message` is the browser's own text ("Uncaught TypeError: …"), and is
+      // "Script error." with no location for a cross-origin script — the same
+      // sanitized report the console prints.
+      const where = event.filename ? ` (${event.filename}:${event.lineno}:${event.colno})` : "";
+      reportedBy(event, {
+        source: "exception",
+        level: "error",
+        message: clip(text(event.message) + where),
+        timestamp: nowFn(),
+      });
+    } catch {}
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    try {
+      reportedBy(event, {
+        source: "rejection",
+        level: "error",
+        message: clip(text(event.reason)),
+        timestamp: nowFn(),
+      });
+    } catch {}
   });
 })();

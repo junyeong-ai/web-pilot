@@ -284,10 +284,23 @@ The recorder is injected into the page's main frame. In headless it enters each
 document ahead of that document's own scripts, so a page's load-time console and
 fetch activity is captured; browser mode injects once a navigation settles, so
 there a page's own startup output is missed (it drives your real Chrome, where a
-document-start injection cannot be limited to the one tab the agent is on). What
-it records is the `console` API and `fetch`/XHR — an uncaught exception, an
-unhandled rejection, or a subresource that failed to load appears in DevTools but
-not in `console read`.
+document-start injection cannot be limited to the one tab the agent is on).
+
+`console read` reports what the page REPORTS, so a page that breaks without
+logging anything is still visible. Each entry carries a `source`:
+
+| `source` | what it is | `level` |
+|---|---|---|
+| `console` | a `console.log/error/warn/info/debug` call | that method |
+| `exception` | an exception that reached the top of the stack, with the browser's own text and the location it names | `error` |
+| `rejection` | a promise rejection nothing handled | `error` |
+
+So `console read --level error` is the "did this page break" question. Two
+things are not recorded: an error the page cancels (`event.preventDefault()`),
+which the browser does not print either, and a subresource that fails to load —
+its page-side event names no reason, and the network monitor watches `fetch`/XHR,
+not element loads. A page whose only symptom is a 404'd script is the case
+neither monitor sees.
 
 The entry buffer lives on the page, so a navigation wipes it — `read` what you
 need before navigating away. Recording itself stays armed across navigations in

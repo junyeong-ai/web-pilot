@@ -277,23 +277,25 @@ async function handleConsoleRead(since) {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
       world: "MAIN",
-      args: [since || 0, ["log", "warn", "error", "info", "debug"]],
+      args: [since || 0, ["log", "warn", "error", "info", "debug"], ["console", "exception", "rejection"]],
       // Filter by `timestamp >= since` (the incremental cursor) AND sanitize to
       // the same shape headless returns: drop any entry whose `level` is not a
-      // known ConsoleLevel (the MAIN-world buffer is page-reachable and only
-      // best-effort), and coerce `message` to a string — so the CLI deserializes
-      // an identical `Vec<ConsoleEntry>` in both modes and a tampered entry can't
-      // break the read or leak a wire shape headless would never emit. `truncated`
-      // is the eviction flag (older entries actually dropped), like headless.
-      func: (s, levels) => {
+      // known ConsoleLevel or whose `source` is not a known ConsoleSource (the
+      // MAIN-world buffer is page-reachable and only best-effort), and coerce
+      // `message` to a string — so the CLI deserializes an identical
+      // `Vec<ConsoleEntry>` in both modes and a tampered entry can't break the
+      // read or leak a wire shape headless would never emit. `truncated` is the
+      // eviction flag (older entries actually dropped), like headless.
+      func: (s, levels, sources) => {
         // `undefined` (no hook in THIS document — the re-arm was suppressed by
         // an eval policy deny, headless parity) is distinct from empty.
         const all = window.__webpilot_console;
         if (all === undefined) return { missing: true };
         return {
           entries: all
-            .filter((e) => e && levels.includes(e.level) && e.timestamp >= s)
+            .filter((e) => e && levels.includes(e.level) && sources.includes(e.source) && e.timestamp >= s)
             .map((e) => ({
+              source: e.source,
               level: e.level,
               message: typeof e.message === "string" ? e.message : "",
               // Coerce to 0 anything the CLI's `u64` can't carry — not just a

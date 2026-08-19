@@ -29,6 +29,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would reach every tab the user is browsing, or a debugger attach held for the
   session, which leaves Chrome's debugging banner up.
 
+### Added
+
+- **`console read` reports what the page's console shows, not only what it was
+  asked to print.** An uncaught exception and an unhandled rejection are what a
+  broken page produces instead of a log line, and neither was a `console.*` call,
+  so neither reached the buffer: a deploy whose bundle threw on load read exactly
+  like a deploy with a clean console. They are recorded now, each typed by a new
+  `source` field (`console` / `exception` / `rejection`) rather than flattened
+  into an `error` an agent would have to tell apart by reading the message —
+  `level` stays the console API's own taxonomy. An exception carries the
+  browser's own text and the location it names ("Script error." with none, for a
+  cross-origin script, exactly as the console prints it), so
+  `console read --level error` is now the "did this page break" question.
+
+  Two things are deliberately not recorded. An error the page cancels
+  (`event.preventDefault()`) is one the browser does not print either, so
+  recording it would fail a page whose console is clean. A subresource that fails
+  to load fires its event at the element and names no reason there — not the
+  status, not even whether the request was refused or the bytes were unusable —
+  so an entry made from it could only say that something failed, in words
+  WebPilot composed. The console shows such a failure and WebPilot still reports
+  it nowhere: the network monitor watches `fetch`/XHR, not element loads.
+
 ### Changed
 
 - **The `eval` gate is now re-checked against monitor injection before every

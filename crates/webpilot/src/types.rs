@@ -20,11 +20,44 @@ pub enum ConsoleLevel {
 serde_plain::derive_display_from_serialize!(ConsoleLevel);
 serde_plain::derive_fromstr_from_deserialize!(ConsoleLevel);
 
+/// What produced an entry. `Level` is the console API's own taxonomy, so an
+/// uncaught error — which the console shows but no `console.*` call made — needs
+/// its own discriminator rather than being flattened into `error` and told apart
+/// by reading the message. The browser reports each of these to its console and
+/// so does the monitor; `console` is the only one an agent can attribute to a
+/// deliberate `console.*` call.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConsoleSource {
+    Console,
+    /// An exception that reached the top of the stack.
+    Exception,
+    /// A promise rejection nothing handled.
+    Rejection,
+}
+
+serde_plain::derive_display_from_serialize!(ConsoleSource);
+serde_plain::derive_fromstr_from_deserialize!(ConsoleSource);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsoleEntry {
+    pub source: ConsoleSource,
     pub level: ConsoleLevel,
     pub message: String,
     pub timestamp: u64,
+}
+
+impl ConsoleEntry {
+    /// The row's label: the source when it names something more specific than a
+    /// `console.*` call, otherwise the level. An uncaught error and a
+    /// `console.error` are both `error`-level, and only this tells them apart in
+    /// the text an agent reads.
+    pub fn label(&self) -> String {
+        match self.source {
+            ConsoleSource::Console => self.level.to_string(),
+            other => other.to_string(),
+        }
+    }
 }
 
 // ── Cookies ──────────────────────────────────────────────────────────────────

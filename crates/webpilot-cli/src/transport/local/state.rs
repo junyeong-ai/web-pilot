@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use webpilot::WebPilotError;
 use webpilot::protocol::ResponseData;
 use webpilot::types::{
-    ConsoleEntry, ConsoleLevel, CookieInfo, NetworkEntry, PartitionKey, SameSite,
+    ConsoleEntry, ConsoleLevel, ConsoleSource, CookieInfo, NetworkEntry, PartitionKey, SameSite,
 };
 
 use crate::cdp::CdpSession;
@@ -208,17 +208,13 @@ impl LocalTransport {
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| {
-                        let level = v
-                            .get("level")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| s.parse::<ConsoleLevel>().ok())?;
-                        let message = v
-                            .get("message")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
+                        let typed = |field: &str| v.get(field).and_then(|v| v.as_str());
+                        let source = typed("source")?.parse::<ConsoleSource>().ok()?;
+                        let level = typed("level")?.parse::<ConsoleLevel>().ok()?;
+                        let message = typed("message").unwrap_or_default().to_string();
                         let timestamp = v.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0);
                         Some(ConsoleEntry {
+                            source,
                             level,
                             message,
                             timestamp,

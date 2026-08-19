@@ -169,6 +169,20 @@ pub const LOADLOG: &str = r##"<!doctype html><html><head><title>loadlog</title>
 <script>console.log('loadwindow-console-marker')</script></head>
 <body><script>fetch('/loadfetch')</script><iframe src="/loadframe"></iframe></body></html>"##;
 
+/// Everything the page's console shows that no `console.*` call produced, all of
+/// it while the document is still parsing: an exception that reaches the top of
+/// the stack, one the page CANCELS (the browser prints nothing for it, so the
+/// monitor must not either), a rejection nothing handles, and a subresource that
+/// fails — which is the network monitor's to describe, not the console's.
+pub const PAGE_ERROR: &str = r##"<!doctype html><html><head><title>pageerror</title>
+<script>window.addEventListener("error", function (e) { if (e.message.indexOf("cancelled") >= 0) e.preventDefault(); });</script>
+</head><body>
+<script>null.pageErrorMarker;</script>
+<script>throw new Error("cancelled-error-marker");</script>
+<script>Promise.reject(new Error("rejection-marker"));</script>
+<img src="/notanimage">
+</body></html>"##;
+
 /// The iframe of `/loadlog`.
 pub const LOAD_FRAME: &str = r#"<!doctype html><html><head><title>loadframe</title></head>
 <body><script>console.log('loadwindow-subframe-marker')</script></body></html>"#;
@@ -294,6 +308,8 @@ pub fn spawn_server() -> String {
                 } else if req.starts_with("GET /slow") {
                     std::thread::sleep(std::time::Duration::from_millis(800));
                     (SLOW, "")
+                } else if req.starts_with("GET /pageerror") {
+                    (PAGE_ERROR, "")
                 } else if req.starts_with("GET /loadlog") {
                     (LOADLOG, "")
                 } else if req.starts_with("GET /loadframe") {

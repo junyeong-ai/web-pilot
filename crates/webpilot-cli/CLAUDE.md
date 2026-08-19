@@ -54,7 +54,9 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       `ensure_monitor_hooks` reconciles each armed monitor's
       `addScriptToEvaluateOnNewDocument` registration before every command, so the
       hook enters a document ahead of the document's own scripts (a page's startup
-      output is captured) and an `eval` deny removes it again.
+      output is captured) and an `eval` deny removes it again. The recorders
+      themselves are `extension/content/monitor-*.js`, embedded here and injected
+      by the extension — one text for both modes.
     - `browser.rs` — tab / frame / status.
   - `local_context.rs` — per-user CDP browser-context store (multi-agent,
     `MAX_CONTEXTS`).
