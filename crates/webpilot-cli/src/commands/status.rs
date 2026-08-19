@@ -61,6 +61,32 @@ pub fn render(
     }
 }
 
+/// What a headless `status` adds when no session is running, in the two-space
+/// shape `diagnose` uses for its own hints.
+const NO_SESSION_HINT: &str = concat!(
+    "  No session is running — the next command that needs a page starts one:\n",
+    "  webpilot capture --include dom --url URL\n",
+    "  (`--browser` is a separate mode and reports its own connection.)",
+);
+
+/// Headless with nothing running: `connected: false` is the resting state, not a
+/// failure — but `status` is the command someone runs to find out why something
+/// is not working, and two bare lines there read like a broken install (they have
+/// been read that way). The JSON is untouched; the human render says what the
+/// state is and what leaves it, the same courtesy browser mode's `diagnose` pays
+/// its own not-connected paths.
+pub fn no_session(context: Option<&str>) -> CommandOutput {
+    let CommandOutput::Data { json, human } =
+        render(false, RunMode::Headless, None, None, None, None, context)
+    else {
+        unreachable!("render always produces Data")
+    };
+    CommandOutput::Data {
+        json,
+        human: format!("{human}\n{NO_SESSION_HINT}"),
+    }
+}
+
 /// Browser-mode status entry point. Produces an informative response even
 /// when the IPC connection cannot be established.
 pub async fn run() -> Result<CommandOutput> {

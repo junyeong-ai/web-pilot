@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A headless `status` with nothing running no longer reads like a broken
+  install.** `Connected: false` there is the resting state — the session is
+  started by the first command that needs a page, and `status` deliberately does
+  not start one — but the render said only that, so someone checking why a
+  command had not worked saw two bare lines and concluded the install was
+  broken (reported). Browser mode's not-connected paths have always explained
+  themselves; the headless one now does too, naming what starts a session and
+  that `--browser` reports a separate connection. The JSON is unchanged.
+
 ## [0.9.0] - 2026-08-19
 
 ### Fixed

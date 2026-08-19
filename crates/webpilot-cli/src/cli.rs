@@ -264,12 +264,10 @@ async fn dispatch_via_transport<T: Transport>(
 }
 
 async fn run_headless_status(mode: OutputMode, context: Option<&str>) -> Result<()> {
-    use webpilot::protocol::{Command, ResponseData, RunMode};
+    use webpilot::protocol::{Command, ResponseData};
 
     if crate::session::get_existing_session().is_none() {
-        let out =
-            commands::status::render(false, RunMode::Headless, None, None, None, None, context);
-        output::render(out, mode);
+        output::render(commands::status::no_session(context), mode);
         return Ok(());
     }
 
