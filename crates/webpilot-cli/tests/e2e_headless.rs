@@ -2157,6 +2157,45 @@ fn headless_behavioral_flow() {
         stdout(&errs)
     );
 
+    // 3a-order. An entry held for its cancellation verdict is stamped as it
+    //     ENTERS the buffer, not as its event fired. The timestamp is what an
+    //     agent feeds back to `--since`, so a `console.log` recorded during the
+    //     hold would otherwise sort after an exception that fired before it and
+    //     carry the cursor past it — losing the exception on the next read.
+    let _ = fx.run(&["console", "clear"]);
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/heldorder")])),
+        0
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let held = loop {
+        let read = fx.run(&["console", "read"]);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout(&read)).expect("held-order read json");
+        let entries = parsed["entries"].as_array().cloned().unwrap_or_default();
+        if entries.len() >= 2 {
+            break entries;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the held exception and the log recorded during the hold never both \
+             arrived: {}",
+            stdout(&read)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let stamps: Vec<u64> = held
+        .iter()
+        .map(|e| e["timestamp"].as_u64().unwrap_or_default())
+        .collect();
+    assert!(
+        stamps.windows(2).all(|w| w[0] <= w[1]),
+        "the buffer's timestamps must not run backwards — `--since` reads from \
+         them: {:?} in {}",
+        stamps,
+        stdout(&fx.run(&["console", "read"]))
+    );
+
     // 3b. The `eval` gate covers monitor injection: a deny that lands AFTER
     //     `console start` must stop the MAIN-world hooks from reaching the next
     //     document — `ensure_monitor_hooks` re-checks the gate before every

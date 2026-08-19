@@ -106,8 +106,16 @@
   const channel = new MessageChannel();
   const commits = [];
   channel.port1.onmessage = () => { const commit = commits.shift(); if (commit) commit(); };
-  const reportedBy = (event, entry) => {
-    commits.push(() => { if (!event.defaultPrevented) record(entry); });
+  const reportedBy = (event, source, message) => {
+    commits.push(() => {
+      if (event.defaultPrevented) return;
+      // Stamped as it enters the buffer, not as the event fired. A timestamp is
+      // what an agent feeds back to `--since` to read incrementally, which is
+      // sound only while the buffer's timestamps never go backwards — and a
+      // `console.*` call recorded while this entry was held would otherwise sort
+      // after it and carry the cursor past it.
+      record({ source, level: "error", message, timestamp: nowFn() });
+    });
     channel.port2.postMessage(0);
   };
 
@@ -123,23 +131,13 @@
       // "Script error." with no location for a cross-origin script — the same
       // sanitized report the console prints.
       const where = event.filename ? ` (${event.filename}:${event.lineno}:${event.colno})` : "";
-      reportedBy(event, {
-        source: "exception",
-        level: "error",
-        message: clip(text(event.message) + where),
-        timestamp: nowFn(),
-      });
+      reportedBy(event, "exception", clip(text(event.message) + where));
     } catch {}
   });
 
   window.addEventListener("unhandledrejection", (event) => {
     try {
-      reportedBy(event, {
-        source: "rejection",
-        level: "error",
-        message: clip(text(event.reason)),
-        timestamp: nowFn(),
-      });
+      reportedBy(event, "rejection", clip(text(event.reason)));
     } catch {}
   });
 })();

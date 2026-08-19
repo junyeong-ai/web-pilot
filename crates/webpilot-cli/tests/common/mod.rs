@@ -183,6 +183,23 @@ pub const PAGE_ERROR: &str = r##"<!doctype html><html><head><title>pageerror</ti
 <img src="/notanimage">
 </body></html>"##;
 
+/// An exception held for its cancellation verdict while a `console.log` is
+/// recorded in the meantime: the inner timer is queued before the throw unwinds,
+/// so it runs during the hold, and it burns past a millisecond boundary so the
+/// two entries cannot share a timestamp. The buffer's timestamps must still not
+/// run backwards — they are the cursor `--since` reads from.
+pub const HELD_ORDER: &str = r##"<!doctype html><html><head><title>heldorder</title></head>
+<body><script>
+setTimeout(function () {
+  setTimeout(function () {
+    var until = Date.now() + 5;
+    while (Date.now() < until) {}
+    console.log("held-order-marker");
+  }, 0);
+  null.heldOrderProbe;
+}, 0);
+</script></body></html>"##;
+
 /// The iframe of `/loadlog`.
 pub const LOAD_FRAME: &str = r#"<!doctype html><html><head><title>loadframe</title></head>
 <body><script>console.log('loadwindow-subframe-marker')</script></body></html>"#;
@@ -308,6 +325,8 @@ pub fn spawn_server() -> String {
                 } else if req.starts_with("GET /slow") {
                     std::thread::sleep(std::time::Duration::from_millis(800));
                     (SLOW, "")
+                } else if req.starts_with("GET /heldorder") {
+                    (HELD_ORDER, "")
                 } else if req.starts_with("GET /pageerror") {
                     (PAGE_ERROR, "")
                 } else if req.starts_with("GET /loadlog") {
