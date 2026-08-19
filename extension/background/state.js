@@ -291,9 +291,14 @@ async function handleConsoleRead(since) {
         // an eval policy deny, headless parity) is distinct from empty.
         const all = window.__webpilot_console;
         if (all === undefined) return { missing: true };
+        const since = all.filter((e) => e && e.timestamp >= s);
         return {
-          entries: all
-            .filter((e) => e && levels.includes(e.level) && sources.includes(e.source) && e.timestamp >= s)
+          // Entries this build cannot read must not leave through the empty
+          // list, which is the shape a quiet page gives — headless parity.
+          unreadable: since.length > 0
+            && !since.some((e) => levels.includes(e.level) && sources.includes(e.source)),
+          entries: since
+            .filter((e) => levels.includes(e.level) && sources.includes(e.source))
             .map((e) => ({
               source: e.source,
               level: e.level,
@@ -318,6 +323,12 @@ async function handleConsoleRead(since) {
       return topErr(err(
         "InvalidArgument",
         "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`",
+      ));
+    }
+    if (out.unreadable) {
+      return topErr(err(
+        "InvalidArgument",
+        "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`",
       ));
     }
     return { type: "ConsoleEntries", entries: out.entries, truncated: out.truncated };
@@ -400,27 +411,27 @@ async function handleNetworkRead(since) {
         // headless parity, see handleConsoleRead.
         const all = window.__webpilot_network;
         if (all === undefined) return { missing: true };
+        const since = all.filter((e) => e && e.timestamp >= s);
+        const readable = (e) =>
+          typeof e.type === "string" &&
+          typeof e.url === "string" &&
+          typeof e.method === "string" &&
+          // `duration_ms` decodes to `f64`: a non-FINITE number (NaN /
+          // ±Infinity) serializes to JSON `null`, which fails that decode and
+          // breaks the whole read — so require finiteness, not bare `number`.
+          Number.isFinite(e.duration_ms) &&
+          // `timestamp` decodes to `u64`: a fractional/negative `number`
+          // (`1.5` / `-1`) passes `typeof` but fails the CLI's whole-response
+          // decode as a misleading ConnectionLost, where headless's per-entry
+          // `from_value().ok()` just drops it. Match that — drop the entry.
+          Number.isInteger(e.timestamp) && e.timestamp >= 0 &&
+          (e.status == null ||
+            (Number.isInteger(e.status) && e.status >= 0 && e.status <= 0xffffffff)) &&
+          (e.error == null || typeof e.error === "string");
         return {
-          entries: all.filter(
-            (e) =>
-              e &&
-              e.timestamp >= s &&
-              typeof e.type === "string" &&
-              typeof e.url === "string" &&
-              typeof e.method === "string" &&
-              // `duration_ms` decodes to `f64`: a non-FINITE number (NaN /
-              // ±Infinity) serializes to JSON `null`, which fails that decode and
-              // breaks the whole read — so require finiteness, not bare `number`.
-              Number.isFinite(e.duration_ms) &&
-              // `timestamp` decodes to `u64`: a fractional/negative `number`
-              // (`1.5` / `-1`) passes `typeof` but fails the CLI's whole-response
-              // decode as a misleading ConnectionLost, where headless's per-entry
-              // `from_value().ok()` just drops it. Match that — drop the entry.
-              Number.isInteger(e.timestamp) && e.timestamp >= 0 &&
-              (e.status == null ||
-                (Number.isInteger(e.status) && e.status >= 0 && e.status <= 0xffffffff)) &&
-              (e.error == null || typeof e.error === "string"),
-          ),
+          // See handleConsoleRead — an unreadable buffer is not an empty one.
+          unreadable: since.length > 0 && !since.some(readable),
+          entries: since.filter(readable),
           // The eviction flag, not `length >= cap` (headless parity).
           truncated: window.__webpilot_network_dropped === true,
         };
@@ -432,6 +443,12 @@ async function handleNetworkRead(since) {
       return topErr(err(
         "InvalidArgument",
         "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`",
+      ));
+    }
+    if (out.unreadable) {
+      return topErr(err(
+        "InvalidArgument",
+        "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`",
       ));
     }
     return { type: "NetworkEntries", entries: out.entries, truncated: out.truncated };

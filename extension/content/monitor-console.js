@@ -108,13 +108,21 @@
   channel.port1.onmessage = () => { const commit = commits.shift(); if (commit) commit(); };
   const reportedBy = (event, source, message) => {
     commits.push(() => {
-      if (event.defaultPrevented) return;
-      // Stamped as it enters the buffer, not as the event fired. A timestamp is
-      // what an agent feeds back to `--since` to read incrementally, which is
-      // sound only while the buffer's timestamps never go backwards — and a
-      // `console.*` call recorded while this entry was held would otherwise sort
-      // after it and carry the cursor past it.
-      record({ source, level: "error", message, timestamp: nowFn() });
+      // Guarded like every other recording site, and here it is load-bearing
+      // rather than hygiene: this one runs from a port message, so a throw —
+      // from a buffer the page has replaced with something that cannot be
+      // pushed to — would escape as an uncaught error, which this recorder
+      // reports, which schedules another commit that throws the same way. The
+      // boundary is "may miss an entry, never breaks the page".
+      try {
+        if (event.defaultPrevented) return;
+        // Stamped as it enters the buffer, not as the event fired. A timestamp
+        // is what an agent feeds back to `--since` to read incrementally, which
+        // is sound only while the buffer's timestamps never go backwards — and a
+        // `console.*` call recorded while this entry was held would otherwise
+        // sort after it and carry the cursor past it.
+        record({ source, level: "error", message, timestamp: nowFn() });
+      } catch {}
     });
     channel.port2.postMessage(0);
   };

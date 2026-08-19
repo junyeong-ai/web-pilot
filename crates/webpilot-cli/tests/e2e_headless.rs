@@ -2196,6 +2196,47 @@ fn headless_behavioral_flow() {
         stdout(&fx.run(&["console", "read"]))
     );
 
+    // 3a-shape. A buffer whose entries this build cannot read must not leave
+    //     through the empty list — that is the shape a quiet page gives. Chrome
+    //     outlives the process that hooked a document, so an upgraded binary can
+    //     meet a recorder from an older build whose entries carry a shape it does
+    //     not know; a page can write entries of its own for the same effect. Both
+    //     answer with a typed error naming the recorder, never `entries: []`.
+    let _ = fx.run(&["console", "clear"]);
+    let _ = fx.run(&[
+        "eval",
+        "window.__webpilot_console.push({ shape: 'from another build', timestamp: Date.now() }); 'pushed'",
+    ]);
+    let unreadable = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&unreadable),
+        7,
+        "a buffer of entries this build cannot read must be a typed error, not an \
+         empty success: {}",
+        stdout(&unreadable)
+    );
+    assert!(
+        stdout(&unreadable).contains("not written by this build's recorder"),
+        "the error must name the cause: {}",
+        stdout(&unreadable)
+    );
+    // One readable entry is enough to answer: the unreadable ones are dropped as
+    // they always were, and only an ALL-unreadable buffer is the ambiguous case.
+    let _ = fx.run(&["eval", "console.log('readable-again')"]);
+    let mixed = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&mixed),
+        0,
+        "a buffer with a readable entry must still read: {}",
+        stdout(&mixed)
+    );
+    assert!(
+        stdout(&mixed).contains("readable-again"),
+        "the readable entry must come back: {}",
+        stdout(&mixed)
+    );
+    let _ = fx.run(&["console", "clear"]);
+
     // 3b. The `eval` gate covers monitor injection: a deny that lands AFTER
     //     `console start` must stop the MAIN-world hooks from reaching the next
     //     document — `ensure_monitor_hooks` re-checks the gate before every

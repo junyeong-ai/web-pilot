@@ -54,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A console or network buffer this build cannot read is a typed error, not an
+  empty list.** Chrome outlives the process that hooked a document, so an
+  upgraded binary meets recorders installed by older builds, whose entries carry
+  a shape it does not know; a page writing entries of its own has the same
+  effect. Those entries were dropped one at a time and the read answered
+  `entries: []` — the shape a quiet page gives. Only an ALL-unreadable buffer is
+  ambiguous, so one readable entry still reads; that case now names the recorder
+  and how to get a current one.
 - **The `eval` gate is now re-checked against monitor injection before every
   command, not after every navigation.** A deny that lands mid-session removes
   the registration rather than merely skipping the next re-arm, so a long-lived

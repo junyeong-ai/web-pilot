@@ -152,10 +152,15 @@ impl LocalTransport {
     // ── Console / network monitoring ─────────────────────────────────────
 
     pub(super) async fn do_console_start(&self) -> Result<ResponseData> {
+        // Install BEFORE arming: an install that fails must leave nothing behind,
+        // or the marker would arm every later process while no hook exists — and
+        // a read there passes the not-active guard and answers with the empty
+        // buffer the reconcile just created, which is the "the page was quiet"
+        // misreading every guard in this file exists to prevent.
+        self.register_monitor(Monitor::Console).await?;
         self.console_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
         super::persist_monitor_armed(Monitor::Console, self.persisted_context_key())?;
-        self.ensure_monitor_hook(Monitor::Console).await?;
         Ok(ok_command_result())
     }
 
@@ -202,27 +207,28 @@ impl LocalTransport {
             .get("truncated")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let entries: Vec<ConsoleEntry> = result
+        let raw = result
             .get("entries")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| {
-                        let typed = |field: &str| v.get(field).and_then(|v| v.as_str());
-                        let source = typed("source")?.parse::<ConsoleSource>().ok()?;
-                        let level = typed("level")?.parse::<ConsoleLevel>().ok()?;
-                        let message = typed("message").unwrap_or_default().to_string();
-                        let timestamp = v.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0);
-                        Some(ConsoleEntry {
-                            source,
-                            level,
-                            message,
-                            timestamp,
-                        })
-                    })
-                    .collect()
-            })
+            .cloned()
             .unwrap_or_default();
+        let entries: Vec<ConsoleEntry> = raw
+            .iter()
+            .filter_map(|v| {
+                let typed = |field: &str| v.get(field).and_then(|v| v.as_str());
+                let source = typed("source")?.parse::<ConsoleSource>().ok()?;
+                let level = typed("level")?.parse::<ConsoleLevel>().ok()?;
+                let message = typed("message").unwrap_or_default().to_string();
+                let timestamp = v.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0);
+                Some(ConsoleEntry {
+                    source,
+                    level,
+                    message,
+                    timestamp,
+                })
+            })
+            .collect();
+        unreadable_buffer(&raw, &entries, MONITOR_SHAPE_CONSOLE)?;
         Ok(ResponseData::ConsoleEntries { entries, truncated })
     }
 
@@ -249,10 +255,11 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_network_start(&self) -> Result<ResponseData> {
+        // Install before arming — see `do_console_start`.
+        self.register_monitor(Monitor::Network).await?;
         self.network_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
         super::persist_monitor_armed(Monitor::Network, self.persisted_context_key())?;
-        self.ensure_monitor_hook(Monitor::Network).await?;
         Ok(ok_command_result())
     }
 
@@ -269,7 +276,7 @@ impl LocalTransport {
     }
 
     /// Bring one monitor's on-new-document registration in line with what it is
-    /// currently allowed to do: registered while armed and permitted, removed
+    /// currently allowed to do: registered while armed and permitted, withdrawn
     /// otherwise. Registering — rather than injecting once a navigation settles —
     /// is what puts the hook in a document ahead of the document's own scripts,
     /// so a page's startup `console.log` / `fetch` lands in the buffer instead of
@@ -277,44 +284,60 @@ impl LocalTransport {
     ///
     /// The verdict is re-read here rather than carried from `start`: an `eval`
     /// deny that lands mid-session must stop the injection, not ride a grant the
-    /// arming command made. The record is written only after Chrome confirms, so
-    /// it never claims a registration the browser does not hold.
+    /// arming command made.
     pub(super) async fn ensure_monitor_hook(&self, kind: Monitor) -> Result<()> {
-        let (armed, install_js) = match kind {
-            Monitor::Console => (&self.console_monitoring, CONSOLE_INSTALL_JS),
-            Monitor::Network => (&self.network_monitoring, NETWORK_INSTALL_JS),
+        let armed = match kind {
+            Monitor::Console => &self.console_monitoring,
+            Monitor::Network => &self.network_monitoring,
         };
-        let wanted = armed.load(std::sync::atomic::Ordering::Acquire)
-            && crate::policy::enforce(&kind.start_command()).is_ok();
-        let mut hooks = self.monitor_hooks.lock().await;
-        match (wanted, hooks.get(&kind).cloned()) {
-            (true, None) => {
-                hooks.insert(kind, install_monitor_hook(&self.page, install_js).await?);
-            }
-            (false, Some(identifier)) => {
-                // A withdrawal that fails is the one failure here that must not
-                // pass in silence: the registration keeps entering documents the
-                // `eval` deny was supposed to stop it reaching, and no command
-                // reports that. The record is kept so every later command retries,
-                // and the agent is told which monitor is still live meanwhile.
-                self.page
-                    .send(
-                        "Page.removeScriptToEvaluateOnNewDocument",
-                        Some(json!({ "identifier": identifier })),
-                    )
-                    .await
-                    .inspect_err(|e| {
-                        tracing::warn!(
-                            "the {} monitor's injection could not be withdrawn after an \
-                             `eval` deny: {e} — it keeps entering new documents until a \
-                             later command withdraws it",
-                            kind.name()
-                        );
-                    })?;
-                hooks.remove(&kind);
-            }
-            _ => {}
+        if armed.load(std::sync::atomic::Ordering::Acquire)
+            && crate::policy::enforce(&kind.start_command()).is_ok()
+        {
+            self.register_monitor(kind).await
+        } else {
+            self.withdraw_monitor(kind).await
         }
+    }
+
+    /// Register `kind`'s recorder on this session, unless it already carries it.
+    /// `start` calls this on its own so an install that fails leaves nothing
+    /// behind — the arming that follows is what makes later processes believe a
+    /// hook exists.
+    pub(super) async fn register_monitor(&self, kind: Monitor) -> Result<()> {
+        let mut hooks = self.monitor_hooks.lock().await;
+        if hooks.contains_key(&kind) {
+            return Ok(());
+        }
+        let identifier = install_monitor_hook(&self.page, monitor_install_js(kind)).await?;
+        hooks.insert(kind, identifier);
+        Ok(())
+    }
+
+    /// Withdraw it, if this session carries it. A withdrawal that fails is the
+    /// one failure here that must not pass in silence: the registration keeps
+    /// entering documents the `eval` deny was supposed to stop it reaching, and
+    /// no command reports that. The record is kept so every later command
+    /// retries, and the agent is told which monitor is still live meanwhile.
+    async fn withdraw_monitor(&self, kind: Monitor) -> Result<()> {
+        let mut hooks = self.monitor_hooks.lock().await;
+        let Some(identifier) = hooks.get(&kind).cloned() else {
+            return Ok(());
+        };
+        self.page
+            .send(
+                "Page.removeScriptToEvaluateOnNewDocument",
+                Some(json!({ "identifier": identifier })),
+            )
+            .await
+            .inspect_err(|e| {
+                tracing::warn!(
+                    "the {} monitor's injection could not be withdrawn after an `eval` \
+                     deny: {e} — it keeps entering new documents until a later command \
+                     withdraws it",
+                    kind.name()
+                );
+            })?;
+        hooks.remove(&kind);
         Ok(())
     }
 
@@ -356,9 +379,10 @@ impl LocalTransport {
             .cloned()
             .unwrap_or_default();
         let requests: Vec<NetworkEntry> = arr
-            .into_iter()
-            .filter_map(|v| serde_json::from_value(v).ok())
+            .iter()
+            .filter_map(|v| serde_json::from_value(v.clone()).ok())
             .collect();
+        unreadable_buffer(&arr, &requests, MONITOR_SHAPE_NETWORK)?;
         Ok(ResponseData::NetworkEntries {
             entries: requests,
             truncated,
@@ -749,6 +773,14 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
 /// removed the monitor's registration, so documents built after it carry nothing.
 /// An empty success here would read as "the page was quiet" while the monitor was
 /// in fact off.
+/// The buffer holds entries but none carry the shape this build records. Its
+/// recorder is not this build's — the document was hooked by an older WebPilot
+/// and Chrome outlives the process that installed it — or the page wrote them
+/// itself. Either way the read must not answer with the empty list, which reads
+/// as "the page was quiet".
+const MONITOR_SHAPE_CONSOLE: &str = "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`";
+const MONITOR_SHAPE_NETWORK: &str = "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`";
+
 const MONITOR_NOT_INSTALLED_CONSOLE: &str = "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`";
 const MONITOR_NOT_INSTALLED_NETWORK: &str = "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`";
 
@@ -757,6 +789,26 @@ const MONITOR_NOT_INSTALLED_NETWORK: &str = "the network monitor is not installe
 /// needs no navigation). The MAIN world is where the page's own `console`/`fetch`
 /// live — the bridge's isolated world would never observe them. Returns Chrome's
 /// identifier for the registration, the handle a later policy deny removes it by.
+/// Fail a read whose buffer held entries that none of them could be read from.
+/// Dropping them and answering with the empty list is the one answer that lies:
+/// it is the same shape a quiet page gives.
+fn unreadable_buffer<T>(raw: &[Value], read: &[T], detail: &str) -> Result<()> {
+    if read.is_empty() && !raw.is_empty() {
+        return Err(WebPilotError::InvalidArgument {
+            detail: detail.into(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn monitor_install_js(kind: Monitor) -> &'static str {
+    match kind {
+        Monitor::Console => CONSOLE_INSTALL_JS,
+        Monitor::Network => NETWORK_INSTALL_JS,
+    }
+}
+
 async fn install_monitor_hook(page: &CdpSession, install_js: &str) -> Result<String> {
     let registered = page
         .send(
