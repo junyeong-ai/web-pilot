@@ -32,8 +32,7 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       auto-loads `bridge.js` into the `webpilot_bridge` world per document;
       `bridge_context_id` vs `active_context_id` route bridge calls vs page
       expressions), **navigation** (`navigate_reconnect` — a cross-site swap
-      resets document state on the surviving session, no reconnect), monitor
-      re-install after navigation.
+      resets document state on the surviving session, no reconnect).
     - `action.rs` — page-mutating (click/type/scroll/drag, `do_action`).
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
       active. `key_press` is a native CDP `Input.dispatchKeyEvent` (`do_key_press`)
@@ -51,9 +50,11 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       `count_http_subframes` → `DomSnapshot.subframes`.
     - `query.rs` — eval (`do_eval`) / wait / dom get·set / fetch.
     - `state.rs` — cookies / console·network monitors / session. Monitors set an
-      armed flag — persisted per context, so later CLI processes keep re-arming —
-      and `reinstall_monitors` re-injects after every WebPilot-driven page change,
-      re-checking policy first (an `eval` deny stops armed monitors too).
+      armed flag — persisted per context, so later CLI processes keep arming — and
+      `ensure_monitor_hooks` reconciles each armed monitor's
+      `addScriptToEvaluateOnNewDocument` registration before every command, so the
+      hook enters a document ahead of the document's own scripts (a page's startup
+      output is captured) and an `eval` deny removes it again.
     - `browser.rs` — tab / frame / status.
   - `local_context.rs` — per-user CDP browser-context store (multi-agent,
     `MAX_CONTEXTS`).
@@ -108,13 +109,13 @@ A URL change can swap the renderer cross-site, but the flat-protocol `CdpSession
 is attached to the target and survives the swap — so instead of reconnecting a
 socket, `navigate_reconnect` just resets document-scoped state (clears the active
 frame, force-re-emits the new document's execution contexts so a dropped
-`executionContextCreated` can't strand the bridge, re-arms monitors). Same URL =
+`executionContextCreated` can't strand the bridge). Same URL =
 same-site reload → the loaderId distinguishes the new document from the old. No
 loaderId and no error = a same-document (fragment) navigation → complete
 immediately (frame preserved). `net::ERR_ABORTED` is not an immediate failure but
 pending — if it later settles, Ok; if not by the deadline, `NavigationFailed`.
-After a navigation that built a new document, armed console/network monitors are
-re-installed.
+Armed monitors need no settle step: their hooks are registered per document, so a
+new one carries them from its first script.
 
 Conventions: `.claude/rules/rust-conventions.md`. For the full command-addition
 checklist and gating rules, see the root `CLAUDE.md`.

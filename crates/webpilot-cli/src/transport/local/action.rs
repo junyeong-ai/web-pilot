@@ -202,7 +202,7 @@ impl LocalTransport {
                         tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
                     }
                 }
-                self.settle_new_document().await;
+                self.clear_active_frame().await;
                 let downloads = self.downloads_from(&mut download_events, false).await;
                 return Ok(self.settled_action_result(capture, None, downloads).await);
             }
@@ -354,19 +354,15 @@ impl LocalTransport {
         }
         let has_active_frame = self.active_frame_id.lock().await.is_some();
         if frame_vanished || (!has_active_frame && url_changed.is_some()) {
-            // A new MAIN document: its `window` monitor hooks died with it. The
-            // CDP page session survives a cross-site renderer swap (the
-            // /devtools/page endpoint lives browser-side — verified against a
-            // file://→http:// process swap), so no rebind. Wait for the live parsed
-            // document FIRST: the fresh main world can briefly still be the
-            // transitional pre-commit context, and re-arming the monitors onto that
-            // would install the `window` hooks on a document about to be replaced —
-            // leaving the monitor silently dead for the new page. Await the live
-            // document, THEN re-arm onto it (and the auto-capture reads it too). (A
+            // A new MAIN document. The CDP page session survives a cross-site
+            // renderer swap (the /devtools/page endpoint lives browser-side —
+            // verified against a file://→http:// process swap), so no rebind: wait
+            // for the fresh main world to name the live parsed document, since the
+            // context can briefly still be the transitional pre-commit one and the
+            // auto-capture below would read a page about to be replaced. (A
             // top-only pushState with no switched frame lands here; await_live is a
             // no-op when the document didn't actually change.)
             self.await_live_bridge_context().await;
-            self.reinstall_monitors().await;
         } else if has_active_frame && frame_navigates {
             // A click inside the switched iframe that navigated THAT iframe built a
             // new document in it without touching the top URL — invisible to the
@@ -1124,9 +1120,7 @@ impl LocalTransport {
         // (browser mode waits the same readyState bar). The immediate readyState
         // check makes a same-document/bfcache traversal return without delay.
         self.await_document_ready(&mut events).await;
-        // A history traversal that built a new document wiped the monitor hooks;
-        // a same-document/bfcache traversal re-arms to an idempotent no-op.
-        self.settle_new_document().await;
+        self.clear_active_frame().await;
         Ok(())
     }
 

@@ -369,9 +369,9 @@ fn headless_behavioral_flow() {
     );
     // `clear` holds the same contract — and must NOT create the buffer it
     // failed to find: an unconditional `= []` would defeat the read's
-    // hook-absent guard (the `undefined` sentinel) in a document whose re-arm
-    // an `eval` deny suppressed, turning a later read into an empty success
-    // while the monitor is off.
+    // hook-absent guard (the `undefined` sentinel) in a document an `eval` deny
+    // kept the monitor out of, turning a later read into an empty success while
+    // the monitor is off.
     assert_eq!(
         code(&fx.run(&["console", "clear"])),
         7,
@@ -2063,16 +2063,49 @@ fn headless_behavioral_flow() {
         stdout(&post_clear)
     );
 
-    // 3b. The `eval` gate covers monitor re-injection: a deny that lands AFTER
-    //     `console start` must stop the MAIN-world hooks from re-arming on the
-    //     next document — `reinstall_monitors` re-checks the gate (browser mode
-    //     mirrors this via host-attached verdicts). First confirm a log IS
-    //     captured while allowed, so the deny case can't pass on a timing miss.
-    //     `navigate` awaits `reinstall_monitors`, so once it returns the armed
-    //     hook is in place; drive the log via `eval` (not a page startup timer)
-    //     so the check can't race the re-arm — a log a page fires during its own
-    //     startup, before the hook re-installs, is by design NOT captured
-    //     (extension.md), and timing that against a fixed sleep is flaky.
+    // 3a-load. A page's OWN startup output — a `console.log` from an inline
+    //     script and a `fetch` fired while the document is still parsing — is in
+    //     the buffer. Nothing injected once the navigation settles could see it:
+    //     the hooks are registered per document, so they run ahead of the page's
+    //     first script. No sleep is involved, so the assertion cannot be racing
+    //     an arrival: by the time `navigate` returns, either the hook was there
+    //     when the script ran or the entry does not exist at all.
+    let _ = fx.run(&["console", "clear"]);
+    let _ = fx.run(&["network", "clear"]);
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/loadlog")])),
+        0
+    );
+    let load_console = fx.run(&["console", "read"]);
+    assert!(
+        stdout(&load_console).contains("loadwindow-console-marker"),
+        "a log the page emits while parsing must be captured, not lost to the \
+         window before the monitor arrives: {}",
+        stdout(&load_console)
+    );
+    let load_network = fx.run(&["network", "read"]);
+    assert!(
+        stdout(&load_network).contains("/loadfetch"),
+        "a fetch the page fires while parsing must be captured: {}",
+        stdout(&load_network)
+    );
+    // The registration reaches every frame of the target, so the install script
+    // gates on the top frame: only the main frame's buffer is ever read, and
+    // patching a subframe would put the hook in a third-party document for
+    // nothing. Read the subframe's own `window` — its absence is the whole point.
+    let subframe_hook = fx.run(&["eval", "String(frames[0].__webpilot_console_patched)"]);
+    assert!(
+        stdout(&subframe_hook).contains("undefined"),
+        "the monitor must not patch a subframe — only the main frame is read: {}",
+        stdout(&subframe_hook)
+    );
+
+    // 3b. The `eval` gate covers monitor injection: a deny that lands AFTER
+    //     `console start` must stop the MAIN-world hooks from reaching the next
+    //     document — `ensure_monitor_hooks` re-checks the gate before every
+    //     command and removes the registration (browser mode mirrors this via
+    //     host-attached verdicts). First confirm a log IS captured while allowed,
+    //     so the deny case can't pass on a timing miss.
     let _ = fx.run(&["console", "clear"]);
     assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
     let _ = fx.run(&["eval", "console.log('postnav-monitor-marker')"]);
@@ -2132,11 +2165,12 @@ fn headless_behavioral_flow() {
     assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
 
     // 3c. An armed monitor must survive a navigation WebPilot did NOT drive (a
-    //     page-initiated `location.href` redirect). Between two CLI processes
-    //     nothing watches for that nav, so its document swap wipes the MAIN-world
-    //     hooks with no `reinstall_monitors` to fire — the monitor would silently
-    //     go dead. `open` re-arms an armed monitor against the current document,
-    //     so a log emitted after the out-of-band nav is still captured.
+    //     page-initiated `location.href` redirect). Between two CLI processes no
+    //     session is alive, so the registration that would have hooked the new
+    //     document is gone with the process that made it — the monitor would
+    //     silently go dead from there on. The next command re-registers, which
+    //     also arms the document already open, so a log emitted after the
+    //     out-of-band nav is still captured.
     let _ = fx.run(&["console", "start"]);
     let _ = fx.run(&["console", "clear"]);
     // A bare eval that sets location.href is an OUT-OF-BAND nav — not an `action
@@ -2274,32 +2308,26 @@ fn headless_behavioral_flow() {
     );
 
     // 6c. Armed monitors follow the pin across a tab-new MOVE, not just a
-    //     same-tab navigation. `tab new` routes through `do_tab_switch`, which
-    //     DEFERS the monitor arm (the new tab is still about:blank there and the
-    //     imminent load would wipe it) and re-arms after the document settles —
-    //     and `do_tab_new` AWAITS that re-arm before returning, so once `tab new`
-    //     returns the new tab's hooks are in place. Drive an explicit log via
-    //     `eval` (not the page's own startup timer): a startup log can fire
-    //     BEFORE the re-arm completes — `tab new` is slower than a same-tab
-    //     navigate (create + switch + settle + re-arm), so its re-arm easily
-    //     trails a +200ms timer — and such a startup log is by design not
-    //     captured (extension.md), which would make the test race the re-arm. An
-    //     eval after `tab new` returns cannot. Without the deferred re-arm the new
-    //     tab carries no hooks and the log is lost. (Browser-mode mirror: the
-    //     monitor-follow step in e2e_browser.)
+    //     same-tab navigation, and they follow it EARLY: `tab new` routes through
+    //     `do_tab_switch`, whose session is fresh (a registration is scoped to the
+    //     session that made it), so the hooks must be registered on it before the
+    //     requested URL is loaded. The new tab's own startup log is the proof —
+    //     a re-arm after that load settles could not produce it. (Browser-mode
+    //     mirror: the monitor-follow step in e2e_browser.)
     let _ = fx.run(&["console", "clear"]);
-    let mtab = fx.run(&["tab", "new", &base]);
+    let mtab = fx.run(&["tab", "new", &format!("{base}/loadlog")]);
     assert_eq!(
         code(&mtab),
         0,
         "tab new for monitor-follow failed: {}",
         stdout(&mtab)
     );
-    let _ = fx.run(&["eval", "console.log('postnav-monitor-marker')"]);
+    let mread = fx.run(&["console", "read"]);
     assert!(
-        stdout(&fx.run(&["console", "read"])).contains("postnav-monitor-marker"),
-        "an armed console monitor must follow the pin onto a new tab: {}",
-        stdout(&fx.run(&["console", "read"]))
+        stdout(&mread).contains("loadwindow-console-marker"),
+        "an armed console monitor must follow the pin onto a new tab in time for \
+         that tab's own startup log: {}",
+        stdout(&mread)
     );
     assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
 

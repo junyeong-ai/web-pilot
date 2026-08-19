@@ -504,7 +504,7 @@ async function dispatchActionToPage(tab, action) {
         // pre-capture settle then no-ops on the already-ready tab.)
         await adoptedDocumentReady(newTab.id, PROBE_MS);
         // Armed monitors follow the agent's working tab onto the adopted popup
-        // (headless re-arms on every pin move) — after it settles so the hooks
+        // (headless follows the pin the same way) — after it settles so the hooks
         // land on the real document.
         await rearmMonitors(newTab.id);
         const settled = (await chrome.tabs.get(newTab.id).catch(() => null)) || newTab;

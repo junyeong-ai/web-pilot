@@ -110,11 +110,7 @@ impl LocalTransport {
         Err(e)
     }
 
-    pub(super) async fn do_tab_switch(
-        &mut self,
-        tab_id: &str,
-        reinstall_now: bool,
-    ) -> Result<ResponseData> {
+    pub(super) async fn do_tab_switch(&mut self, tab_id: &str) -> Result<ResponseData> {
         if let Some(not_found) = self.ensure_tab_exists(tab_id).await? {
             return Ok(not_found);
         }
@@ -146,18 +142,20 @@ impl LocalTransport {
         self.frame_contexts = frame_contexts;
         self.bridge_contexts = bridge_contexts;
         self.main_frame_id = main_frame_id;
+        // A registration names an id on the session that just went away; the new
+        // page carries none until the reconcile below.
+        self.monitor_hooks.lock().await.clear();
         *self.active_frame_id.lock().await = None;
         super::clear_persisted_active_frame(self.persisted_context_key());
         super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
         self.await_live_bridge_context().await;
-        // Armed monitors follow the agent's working tab. A plain `tab switch` lands
-        // on an already-loaded page, so re-arm now. `tab new` and popup adoption
-        // pass `false`: their target is still about:blank here and the imminent
-        // document load wipes window-level hooks, so they re-arm AFTER the new
-        // document settles instead.
-        if reinstall_now {
-            self.reinstall_monitors().await;
-        }
+        // Armed monitors follow the agent's working tab, and follow it EARLY:
+        // `tab new` opens its tab blank and loads into it afterwards, so
+        // registering here — before that load — is what puts the hooks in the new
+        // document ahead of its own scripts. (A popup the PAGE opened is already
+        // loading when its target appears, so no session can precede it; the
+        // adopted document's own startup output is out of reach.)
+        self.ensure_monitor_hooks().await;
         Ok(action_success(None))
     }
 
@@ -226,7 +224,7 @@ impl LocalTransport {
         // Rebind through the same path `tab switch` uses, so frame scope,
         // persistence, and monitors stay consistent. A popup that already
         // vanished is simply not adopted.
-        match self.do_tab_switch(&id, false).await {
+        match self.do_tab_switch(&id).await {
             Ok(ResponseData::Action { success: true, .. }) => {}
             _ => return None,
         }
@@ -237,10 +235,6 @@ impl LocalTransport {
         // already left. (This settle also lets the auto-capture skip its own.)
         let mut popup_events = self.page.subscribe_events();
         self.await_adopted_document(&mut popup_events).await;
-        // Re-arm monitors now that the adopted popup has left about:blank and
-        // committed its real document — the early arm in `do_tab_switch` was
-        // skipped (`false`) because that load would have wiped it.
-        self.reinstall_monitors().await;
         let settled = self
             .browser
             .send("Target.getTargetInfo", Some(json!({ "targetId": id })))
@@ -300,7 +294,7 @@ impl LocalTransport {
         // in browser mode. Rebind through the `tab switch` path so a
         // long-lived transport (the MCP server) acts on the tab it just
         // created, not the page it was bound to before.
-        match self.do_tab_switch(&target_id, false).await? {
+        match self.do_tab_switch(&target_id).await? {
             ResponseData::Action { success: true, .. } => {}
             other => {
                 self.rollback_tab_new(&target_id, &prev_target).await;
@@ -310,8 +304,7 @@ impl LocalTransport {
         // Load the URL exactly as `navigate` does: a refused/DNS failure is a
         // typed `NavigationFailed` (fast, via `Page.navigate`'s `errorText`), and a
         // failed open rolls back to the agent's previous tab — `navigate`'s no-leak
-        // contract, now literally the same code. `navigate_reconnect` settles the
-        // load and re-arms monitors on the new document itself.
+        // contract, now literally the same code.
         let downloads: Vec<Download> = match self.navigate_reconnect(url).await {
             Ok(downloads) => downloads,
             Err(e) => {
@@ -319,14 +312,6 @@ impl LocalTransport {
                 return Err(e);
             }
         };
-        // `navigate_reconnect` re-arms monitors on every path that BUILDS a new
-        // document, but a purely same-document settle (a fragment-only target such
-        // as `about:blank#x`) returns without arming — and the `false` switch above
-        // deferred the arm. Guarantee it here so `do_tab_new`'s postcondition holds
-        // by its own code: the new tab always carries the agent's armed monitors,
-        // whichever settle path the load took. Idempotent — guarded on the install
-        // flag — so the common (new-document) case pays only a no-op probe.
-        self.reinstall_monitors().await;
         let url = self
             .eval_in_active("location.href")
             .await
@@ -371,12 +356,10 @@ impl LocalTransport {
             )
             .await;
         if prev != orphan {
-            // Restoring the agent's previous tab is a plain `tab switch` back onto
-            // an already-loaded page — re-arm its monitors now (`true`), not the
-            // `false` the forward path used for the about-to-load blank tab. This
-            // makes the rollback land the agent exactly where a `tab switch` would,
+            // Restoring the agent's previous tab is a plain `tab switch` back, so
+            // the rollback lands the agent exactly where a `tab switch` would,
             // monitors included, even if `prev` was navigated out-of-band meanwhile.
-            let _ = self.do_tab_switch(prev, true).await;
+            let _ = self.do_tab_switch(prev).await;
         }
     }
 

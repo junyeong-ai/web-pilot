@@ -522,11 +522,12 @@ async fn handle_one_cli_request(
         // The re-serialized parsed command — the validated, permitted shape, with
         // any field the strict `Command` types don't model already stripped.
         "command": serde_json::to_value(&command).expect("Command serializes (static shape)"),
-        // The service worker re-arms MAIN-world console/network hooks after every
-        // navigation but never reads the policy store (the host is the sole sink);
-        // carry the current `eval`-gate verdicts so its re-arm honours a deny that
-        // landed after the monitor started — keeping the enforce boundary identical
-        // to headless `reinstall_monitors`, which re-checks the very same gate.
+        // The service worker re-injects MAIN-world console/network hooks after
+        // every navigation but never reads the policy store (the host is the sole
+        // sink); carry the current `eval`-gate verdicts so its re-arm honours a
+        // deny that landed after the monitor started — keeping the enforce
+        // boundary identical to headless `ensure_monitor_hooks`, which re-checks
+        // the very same gate before every command.
         "monitor_policy": {
             "console": crate::policy::enforce(&webpilot::protocol::Command::ConsoleStart).is_ok(),
             "network": crate::policy::enforce(&webpilot::protocol::Command::NetworkStart).is_ok(),

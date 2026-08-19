@@ -173,8 +173,8 @@ async function handleTabSwitch(tabId) {
     setActiveTabId(target);
     // A different tab has its own frame tree — drop any frame scope.
     setActiveFrameId(0);
-    // Armed console/network monitors follow the working tab, as headless re-arms
-    // on every pin move — otherwise `console read` on the switched-to tab would
+    // Armed console/network monitors follow the working tab, as headless does on
+    // every pin move — otherwise `console read` on the switched-to tab would
     // silently miss its logs.
     await rearmMonitors(target);
     return { type: "Action", success: true };

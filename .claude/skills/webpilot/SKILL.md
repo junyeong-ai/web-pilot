@@ -280,14 +280,21 @@ webpilot console read --level error                # log | warn | info | debug |
 webpilot console clear
 ```
 
-The recorder is injected into the page and captures activity from `start`
-onward (load-time entries that fire before the hooks attach are missed). The
-entry buffer lives on the page, so a navigation wipes it — `read` what you need
-before navigating away. Recording itself stays armed across navigations in both
-modes: the hooks are re-installed automatically after every WebPilot-driven
-page change (`navigate`, `back`/`forward`, `reload`, a click that lands on a
-new page, `tab switch`/`tab new`). Re-arming re-checks the policy store, so
-denying `eval` also stops armed monitors from injecting.
+The recorder is injected into the page's main frame. In headless it enters each
+document ahead of that document's own scripts, so a page's load-time console and
+fetch activity is captured; browser mode injects once a navigation settles, so
+there a page's own startup output is missed (it drives your real Chrome, where a
+document-start injection cannot be limited to the one tab the agent is on). What
+it records is the `console` API and `fetch`/XHR — an uncaught exception, an
+unhandled rejection, or a subresource that failed to load appears in DevTools but
+not in `console read`.
+
+The entry buffer lives on the page, so a navigation wipes it — `read` what you
+need before navigating away. Recording itself stays armed across navigations in
+both modes and follows the pin onto a new or adopted tab, though a popup the page
+opened is already loading when WebPilot first sees it, so its own startup output
+is missed. Arming re-checks the policy store, so denying `eval` also stops armed
+monitors from injecting.
 
 ## Fetch with the page's session
 

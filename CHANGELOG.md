@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An armed console / network monitor no longer misses what a page does while
+  it loads (headless).** The hooks were injected once a navigation settled, so
+  everything the new document logged or fetched from its own scripts — the whole
+  parse-to-ready window, which is the entire lifetime of a page that throws on
+  load — was recorded nowhere, and `console read` answered with the same empty
+  buffer a genuinely quiet page gives. They are now registered per document
+  (`Page.addScriptToEvaluateOnNewDocument`), so they are in place before the
+  document's first script runs: a page's startup `console.log` and `fetch` land
+  in the buffer on every path a WebPilot process drives a document into being —
+  `navigate`, `reload`, history, a click that lands on a new page,
+  `capture --url`, `tab new` — and on a redirect the page fires itself while a
+  process is alive to see it, which for `webpilot mcp` is the whole session. Two
+  documents stay out of reach, both because nothing was attached when they were
+  built: one loaded between two CLI invocations, and a popup the page opened,
+  which is already loading when its target appears. Browser mode keeps injecting
+  at settle: it drives the user's own Chrome, where a document-start MAIN-world
+  injection is either a registered content script, which matches URLs and so
+  would reach every tab the user is browsing, or a debugger attach held for the
+  session, which leaves Chrome's debugging banner up.
+
+### Changed
+
+- **The `eval` gate is now re-checked against monitor injection before every
+  command, not after every navigation.** A deny that lands mid-session removes
+  the registration rather than merely skipping the next re-arm, so a long-lived
+  process (`webpilot mcp`) enforces it as promptly as a fresh CLI invocation
+  does. `console read` on a document the deny kept the monitor out of stays the
+  typed `InvalidArgument` it was, never an empty success.
+
 ## [0.8.1] - 2026-08-18
 
 ### Added

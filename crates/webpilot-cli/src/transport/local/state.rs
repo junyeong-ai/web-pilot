@@ -9,7 +9,9 @@ use webpilot::types::{
     ConsoleEntry, ConsoleLevel, CookieInfo, NetworkEntry, PartitionKey, SameSite,
 };
 
-use super::{LocalTransport, epoch_ms};
+use crate::cdp::CdpSession;
+
+use super::{LocalTransport, Monitor, epoch_ms};
 
 /// Schema version stamped into a session export and enforced on import: a file
 /// claiming a higher version may carry fields this binary can't apply, so import
@@ -150,10 +152,10 @@ impl LocalTransport {
     // ── Console / network monitoring ─────────────────────────────────────
 
     pub(super) async fn do_console_start(&self) -> Result<ResponseData> {
-        self.page.evaluate(&with_cap(CONSOLE_INSTALL_JS)).await?;
         self.console_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
-        super::persist_monitor_armed(super::Monitor::Console, self.persisted_context_key())?;
+        super::persist_monitor_armed(Monitor::Console, self.persisted_context_key())?;
+        self.ensure_monitor_hook(Monitor::Console).await?;
         Ok(ok_command_result())
     }
 
@@ -178,10 +180,10 @@ impl LocalTransport {
         // `shift()`, not by `length >= cap`: a buffer sitting at exactly the cap
         // with nothing dropped yet must not read as truncated (a false "some
         // entries are missing"). `undefined` (no hook in THIS document) is
-        // distinct from an empty buffer: the armed flag survives a navigation
-        // whose re-arm was suppressed by an `eval` policy deny, and an empty
-        // success there would read as "the page logged nothing" while the
-        // monitor was in fact off.
+        // distinct from an empty buffer: the armed flag outlives an `eval` policy
+        // deny that removed the monitor's injection, and an empty success there
+        // would read as "the page logged nothing" while the monitor was in fact
+        // off.
         let result = self
             .page
             .evaluate(&format!(
@@ -230,11 +232,11 @@ impl LocalTransport {
 
     pub(super) async fn do_console_clear(&self) -> Result<ResponseData> {
         // Sentinel-preserving: an unconditional `= []` would CREATE the buffer
-        // in a document whose hook was never installed (an `eval` deny
-        // suppressed the re-arm), and the read's hook-absent guard — which
-        // keys on `undefined` — would then report an empty success while the
-        // monitor is in fact off. Clear only what exists; absent is the same
-        // typed signal the read gives.
+        // in a document whose hook was never installed (an `eval` deny removed
+        // the injection), and the read's hook-absent guard — which keys on
+        // `undefined` — would then report an empty success while the monitor is
+        // in fact off. Clear only what exists; absent is the same typed signal
+        // the read gives.
         let result = self
             .page
             .evaluate(
@@ -251,32 +253,60 @@ impl LocalTransport {
     }
 
     pub(super) async fn do_network_start(&self) -> Result<ResponseData> {
-        self.page.evaluate(&with_cap(NETWORK_INSTALL_JS)).await?;
         self.network_monitoring
             .store(true, std::sync::atomic::Ordering::Release);
-        super::persist_monitor_armed(super::Monitor::Network, self.persisted_context_key())?;
+        super::persist_monitor_armed(Monitor::Network, self.persisted_context_key())?;
+        self.ensure_monitor_hook(Monitor::Network).await?;
         Ok(ok_command_result())
     }
 
-    /// Re-arm any active monitors after a navigation wiped their `window`
-    /// hooks. A no-op until `console start` / `network start` has run, so a
-    /// plain navigation pays nothing. Re-arming re-checks policy rather than
-    /// extending the grant made at `start` time: an `eval` deny issued after
-    /// a monitor started stops its JS from being injected ever again, instead
-    /// of riding along inside permitted navigation commands.
-    pub(super) async fn reinstall_monitors(&self) {
-        use std::sync::atomic::Ordering::Acquire;
-        use webpilot::protocol::Command;
-        if self.console_monitoring.load(Acquire)
-            && crate::policy::enforce(&Command::ConsoleStart).is_ok()
-        {
-            let _ = self.page.evaluate(&with_cap(CONSOLE_INSTALL_JS)).await;
+    /// Reconcile every monitor, best-effort: a command that has nothing to do
+    /// with monitoring must not fail because a registration could not be placed,
+    /// and the failure is not lost — the record stays unchanged so the next
+    /// command retries, and until one succeeds a read reports the hook as absent
+    /// rather than returning an empty buffer. `console start` / `network start`
+    /// reconcile their own monitor directly, where the failure IS the answer.
+    pub(super) async fn ensure_monitor_hooks(&self) {
+        for kind in [Monitor::Console, Monitor::Network] {
+            let _ = self.ensure_monitor_hook(kind).await;
         }
-        if self.network_monitoring.load(Acquire)
-            && crate::policy::enforce(&Command::NetworkStart).is_ok()
-        {
-            let _ = self.page.evaluate(&with_cap(NETWORK_INSTALL_JS)).await;
+    }
+
+    /// Bring one monitor's on-new-document registration in line with what it is
+    /// currently allowed to do: registered while armed and permitted, removed
+    /// otherwise. Registering — rather than injecting once a navigation settles —
+    /// is what puts the hook in a document ahead of the document's own scripts,
+    /// so a page's startup `console.log` / `fetch` lands in the buffer instead of
+    /// in the gap before the monitor arrives.
+    ///
+    /// The verdict is re-read here rather than carried from `start`: an `eval`
+    /// deny that lands mid-session must stop the injection, not ride a grant the
+    /// arming command made. The record is written only after Chrome confirms, so
+    /// it never claims a registration the browser does not hold.
+    pub(super) async fn ensure_monitor_hook(&self, kind: Monitor) -> Result<()> {
+        let (armed, install_js) = match kind {
+            Monitor::Console => (&self.console_monitoring, CONSOLE_INSTALL_JS),
+            Monitor::Network => (&self.network_monitoring, NETWORK_INSTALL_JS),
+        };
+        let wanted = armed.load(std::sync::atomic::Ordering::Acquire)
+            && crate::policy::enforce(&kind.start_command()).is_ok();
+        let mut hooks = self.monitor_hooks.lock().await;
+        match (wanted, hooks.get(&kind).cloned()) {
+            (true, None) => {
+                hooks.insert(kind, install_monitor_hook(&self.page, install_js).await?);
+            }
+            (false, Some(identifier)) => {
+                self.page
+                    .send(
+                        "Page.removeScriptToEvaluateOnNewDocument",
+                        Some(json!({ "identifier": identifier })),
+                    )
+                    .await?;
+                hooks.remove(&kind);
+            }
+            _ => {}
         }
+        Ok(())
     }
 
     pub(super) async fn do_network_read(&self, since: Option<u64>) -> Result<ResponseData> {
@@ -711,12 +741,12 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
 /// `truncated` at this cap — one source, so eviction and the flag cannot drift.
 const MONITOR_BUFFER_CAP: usize = 500;
 
-/// The armed flag is set but THIS document carries no hook: the re-arm after a
-/// navigation was suppressed (an `eval` policy deny stops monitor injection) or
-/// the document loaded outside WebPilot's drive. An empty success here would
-/// read as "the page was quiet" while the monitor was in fact off.
-const MONITOR_NOT_INSTALLED_CONSOLE: &str = "the console monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot console start`";
-const MONITOR_NOT_INSTALLED_NETWORK: &str = "the network monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot network start`";
+/// The armed flag is set but THIS document carries no hook: an `eval` policy deny
+/// removed the monitor's registration, so documents built after it carry nothing.
+/// An empty success here would read as "the page was quiet" while the monitor was
+/// in fact off.
+const MONITOR_NOT_INSTALLED_CONSOLE: &str = "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`";
+const MONITOR_NOT_INSTALLED_NETWORK: &str = "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`";
 
 /// Substitute the ring-buffer cap into a monitor install script. The page-side
 /// eviction (`> $CAP`) and the Rust-side `truncated` flag both derive from
@@ -726,144 +756,181 @@ fn with_cap(install_js: &str) -> String {
     install_js.replace("$CAP", &MONITOR_BUFFER_CAP.to_string())
 }
 
+/// Register a monitor's install script to run in the MAIN world of every document
+/// this page builds, the one already open included (`runImmediately`, so arming
+/// needs no navigation). The MAIN world is where the page's own `console`/`fetch`
+/// live — the bridge's isolated world would never observe them. Returns Chrome's
+/// identifier for the registration, the handle a later policy deny removes it by.
+async fn install_monitor_hook(page: &CdpSession, install_js: &str) -> Result<String> {
+    let registered = page
+        .send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            Some(json!({
+                "source": with_cap(install_js),
+                "runImmediately": true,
+            })),
+        )
+        .await?;
+    registered
+        .get("identifier")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            WebPilotError::Other {
+                detail: "Page.addScriptToEvaluateOnNewDocument returned no identifier".into(),
+            }
+            .into()
+        })
+}
+
 const CONSOLE_INSTALL_JS: &str = r#"
-// Always (re-)attach the recorder. Gating on `window.__webpilot_console`
-// alone fails after `console clear` because an empty array is truthy and
-// the patch wouldn't reinstall. A separate sentinel keeps `start` idempotent
-// without that hazard.
-if (!Array.isArray(window.__webpilot_console)) {
-    window.__webpilot_console = [];
-}
-if (!window.__webpilot_console_patched) {
-    window.__webpilot_console_patched = true;
-    // Capture Date.now at install so a page that later booby-traps it (a
-    // throwing getter) can't break the recording — and even if recording does
-    // throw, the page's OWN console call still fires (see the try below). The
-    // monitor's honest boundary is "may miss an entry", never "breaks the page".
-    const nowFn = Date.now;
-    // Clip a captured message like the DOM capture clips text: a runaway
-    // `console.log("x".repeat(5e7))` must not balloon the buffer or the read's
-    // CDP payload. CODEPOINT-safe via Array.from (like bridge.js's clip): a
-    // bare `slice` cuts by UTF-16 code unit and can split an astral pair into a
-    // lone surrogate, which breaks the entry's JSON serialization through CDP
-    // returnByValue / native messaging. The marker keeps the clip visible.
-    const MAX = 4096;
-    const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
-    const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
-    ["log", "error", "warn", "info", "debug"].forEach(m => {
-        console[m] = (...args) => {
-            try {
-                const msg = clip(args.map(a => { try { return String(a); } catch { return "[object]"; } }).join(" "));
-                const buf = window.__webpilot_console;
-                buf.push({ level: m, message: msg, timestamp: nowFn() });
-                // Evict the oldest past the cap and RECORD that an eviction
-                // happened: the read's `truncated` flag is driven by this, not
-                // by `length >= cap`, so a buffer sitting at exactly the cap
-                // (nothing dropped yet) isn't falsely reported truncated.
-                if (buf.length > $CAP) { buf.shift(); window.__webpilot_console_dropped = true; }
-            } catch (e) {}
-            orig[m].apply(console, args);
-        };
-    });
-}
-true
+(() => {
+  // The monitor is the pinned page's, and only its main frame's buffer is ever
+  // read — the gate keeps the hook out of the third-party iframes this script
+  // would otherwise reach, matching browser mode's `frameIds: [0]` injection.
+  if (window !== window.top) return;
+  // Always (re-)attach the recorder. Gating on `window.__webpilot_console`
+  // alone fails after `console clear` because an empty array is truthy and
+  // the patch wouldn't reinstall. A separate sentinel keeps `start` idempotent
+  // without that hazard.
+  if (!Array.isArray(window.__webpilot_console)) {
+      window.__webpilot_console = [];
+  }
+  if (!window.__webpilot_console_patched) {
+      window.__webpilot_console_patched = true;
+      // Capture Date.now at install so a page that later booby-traps it (a
+      // throwing getter) can't break the recording — and even if recording does
+      // throw, the page's OWN console call still fires (see the try below). The
+      // monitor's honest boundary is "may miss an entry", never "breaks the page".
+      const nowFn = Date.now;
+      // Clip a captured message like the DOM capture clips text: a runaway
+      // `console.log("x".repeat(5e7))` must not balloon the buffer or the read's
+      // CDP payload. CODEPOINT-safe via Array.from (like bridge.js's clip): a
+      // bare `slice` cuts by UTF-16 code unit and can split an astral pair into a
+      // lone surrogate, which breaks the entry's JSON serialization through CDP
+      // returnByValue / native messaging. The marker keeps the clip visible.
+      const MAX = 4096;
+      const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
+      const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
+      ["log", "error", "warn", "info", "debug"].forEach(m => {
+          console[m] = (...args) => {
+              try {
+                  const msg = clip(args.map(a => { try { return String(a); } catch { return "[object]"; } }).join(" "));
+                  const buf = window.__webpilot_console;
+                  buf.push({ level: m, message: msg, timestamp: nowFn() });
+                  // Evict the oldest past the cap and RECORD that an eviction
+                  // happened: the read's `truncated` flag is driven by this, not
+                  // by `length >= cap`, so a buffer sitting at exactly the cap
+                  // (nothing dropped yet) isn't falsely reported truncated.
+                  if (buf.length > $CAP) { buf.shift(); window.__webpilot_console_dropped = true; }
+              } catch (e) {}
+              orig[m].apply(console, args);
+          };
+      });
+  }
+})();
 "#;
 
 const NETWORK_INSTALL_JS: &str = r#"
-if (!window.__webpilot_network_active) {
-    window.__webpilot_network_active = true;
-    window.__webpilot_network = [];
-    // Intrinsics captured at install: a page that later booby-traps Date.now /
-    // performance.now (a throwing getter) can't break the recording, and the
-    // recording is wrapped so it can never break the page's OWN fetch/XHR
-    // (the monitor's honest boundary is "may miss an entry", never "breaks the
-    // page"). A captured URL is clipped like the DOM capture so a giant data:
-    // URL can't balloon the buffer or the read's CDP payload.
-    // Intrinsics captured by binding the receiver, so a page that swaps
-    // Date.now / performance.now after install can't skew the recording.
-    const nowFn = Date.now;
-    const perfObj = performance;
-    const perfNowRaw = perfObj.now;
-    const perfNow = () => { try { return perfNowRaw.call(perfObj); } catch (e) { return 0; } };
-    const MAX = 4096;
-    // CODEPOINT-safe clip (a lone surrogate from a split astral pair breaks the
-    // entry's JSON serialization — see the console hook).
-    const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
-    const origFetch = window.fetch;
-    window.fetch = function(...args) {
-        let entry = null, t0 = 0;
-        try {
-            const [resource, config] = args;
-            // A Request object carries its own url/method (a config override still
-            // wins); String(resource) on one logs "[object Request]" and drops the
-            // method.
-            const isReq = typeof Request !== "undefined" && resource instanceof Request;
-            const url = isReq ? resource.url : String(resource);
-            const method = config?.method || (isReq ? resource.method : "GET");
-            t0 = perfNow();
-            // Record in-flight immediately (no status, duration 0) so a read during
-            // a slow request sees it; fill in on completion by mutating this entry.
-            entry = { type: "fetch", url: clip(url), method, duration_ms: 0, timestamp: nowFn() };
-            const buf = window.__webpilot_network;
-            buf.push(entry);
-            if (buf.length > $CAP) { buf.shift(); window.__webpilot_network_dropped = true; }
-        } catch (e) { entry = null; }
-        // origFetch can throw SYNCHRONOUSLY (a bad argument — `fetch()` with no
-        // args is a TypeError, not a rejected promise). Stamp the recorded entry
-        // as errored instead of leaving it in-flight forever, then rethrow so the
-        // page sees the same exception.
-        let p;
-        try {
-            p = origFetch.apply(this, args);
-        } catch (e) {
-            if (entry) { try { entry.error = String(e && e.message || e); entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e2) {} }
-            throw e;
-        }
-        if (!entry) return p;
-        return p.then(response => {
-            // Re-stamp at completion so `--since` polling, which filters on
-            // timestamp, sees the resolved entry; the in-flight start time would
-            // sit before a cursor taken after the request began.
-            try { entry.status = response.status; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
-            return response;
-        }).catch(err => {
-            try { entry.error = err.message; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
-            throw err;
-        });
-    };
-    const xhrProto = XMLHttpRequest.prototype;
-    const origOpen = xhrProto.open;
-    const origSend = xhrProto.send;
-    const xhrMeta = new WeakMap();
-    xhrProto.open = function(m, u, ...a) {
-        try { xhrMeta.set(this, { method: m, url: String(u) }); } catch (e) {}
-        return origOpen.apply(this, [m, u, ...a]);
-    };
-    xhrProto.send = function(...a) {
-        let entry = null, t0 = 0;
-        try {
-            t0 = perfNow();
-            const meta = xhrMeta.get(this) || {};
-            entry = { type: "xhr", url: clip(meta.url || ""), method: meta.method || "GET", duration_ms: 0, timestamp: nowFn() };
-            const buf = window.__webpilot_network;
-            buf.push(entry);
-            if (buf.length > $CAP) { buf.shift(); window.__webpilot_network_dropped = true; }
-            // status===0 covers abort, timeout AND network/CORS failure alike, so
-            // read the actual terminal event instead of labelling every one a
-            // "Network error" — an aborted request the page itself cancelled is not
-            // a network failure.
-            let terminalError;
-            this.addEventListener("abort", () => { terminalError = "aborted"; }, { once: true });
-            this.addEventListener("timeout", () => { terminalError = "timeout"; }, { once: true });
-            this.addEventListener("error", () => { terminalError = "Network error"; }, { once: true });
-            this.addEventListener("loadend", () => {
-                try { entry.status = this.status || undefined; entry.error = terminalError; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
-            }, { once: true });
-        } catch (e) { entry = null; }
-        return origSend.apply(this, a);
-    };
-}
-true
+(() => {
+  // The monitor is the pinned page's, and only its main frame's buffer is ever
+  // read — the gate keeps the hook out of the third-party iframes this script
+  // would otherwise reach, matching browser mode's `frameIds: [0]` injection.
+  if (window !== window.top) return;
+  if (!window.__webpilot_network_active) {
+      window.__webpilot_network_active = true;
+      window.__webpilot_network = [];
+      // Intrinsics captured at install: a page that later booby-traps Date.now /
+      // performance.now (a throwing getter) can't break the recording, and the
+      // recording is wrapped so it can never break the page's OWN fetch/XHR
+      // (the monitor's honest boundary is "may miss an entry", never "breaks the
+      // page"). A captured URL is clipped like the DOM capture so a giant data:
+      // URL can't balloon the buffer or the read's CDP payload.
+      // Intrinsics captured by binding the receiver, so a page that swaps
+      // Date.now / performance.now after install can't skew the recording.
+      const nowFn = Date.now;
+      const perfObj = performance;
+      const perfNowRaw = perfObj.now;
+      const perfNow = () => { try { return perfNowRaw.call(perfObj); } catch (e) { return 0; } };
+      const MAX = 4096;
+      // CODEPOINT-safe clip (a lone surrogate from a split astral pair breaks the
+      // entry's JSON serialization — see the console hook).
+      const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
+      const origFetch = window.fetch;
+      window.fetch = function(...args) {
+          let entry = null, t0 = 0;
+          try {
+              const [resource, config] = args;
+              // A Request object carries its own url/method (a config override still
+              // wins); String(resource) on one logs "[object Request]" and drops the
+              // method.
+              const isReq = typeof Request !== "undefined" && resource instanceof Request;
+              const url = isReq ? resource.url : String(resource);
+              const method = config?.method || (isReq ? resource.method : "GET");
+              t0 = perfNow();
+              // Record in-flight immediately (no status, duration 0) so a read during
+              // a slow request sees it; fill in on completion by mutating this entry.
+              entry = { type: "fetch", url: clip(url), method, duration_ms: 0, timestamp: nowFn() };
+              const buf = window.__webpilot_network;
+              buf.push(entry);
+              if (buf.length > $CAP) { buf.shift(); window.__webpilot_network_dropped = true; }
+          } catch (e) { entry = null; }
+          // origFetch can throw SYNCHRONOUSLY (a bad argument — `fetch()` with no
+          // args is a TypeError, not a rejected promise). Stamp the recorded entry
+          // as errored instead of leaving it in-flight forever, then rethrow so the
+          // page sees the same exception.
+          let p;
+          try {
+              p = origFetch.apply(this, args);
+          } catch (e) {
+              if (entry) { try { entry.error = String(e && e.message || e); entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e2) {} }
+              throw e;
+          }
+          if (!entry) return p;
+          return p.then(response => {
+              // Re-stamp at completion so `--since` polling, which filters on
+              // timestamp, sees the resolved entry; the in-flight start time would
+              // sit before a cursor taken after the request began.
+              try { entry.status = response.status; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
+              return response;
+          }).catch(err => {
+              try { entry.error = err.message; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
+              throw err;
+          });
+      };
+      const xhrProto = XMLHttpRequest.prototype;
+      const origOpen = xhrProto.open;
+      const origSend = xhrProto.send;
+      const xhrMeta = new WeakMap();
+      xhrProto.open = function(m, u, ...a) {
+          try { xhrMeta.set(this, { method: m, url: String(u) }); } catch (e) {}
+          return origOpen.apply(this, [m, u, ...a]);
+      };
+      xhrProto.send = function(...a) {
+          let entry = null, t0 = 0;
+          try {
+              t0 = perfNow();
+              const meta = xhrMeta.get(this) || {};
+              entry = { type: "xhr", url: clip(meta.url || ""), method: meta.method || "GET", duration_ms: 0, timestamp: nowFn() };
+              const buf = window.__webpilot_network;
+              buf.push(entry);
+              if (buf.length > $CAP) { buf.shift(); window.__webpilot_network_dropped = true; }
+              // status===0 covers abort, timeout AND network/CORS failure alike, so
+              // read the actual terminal event instead of labelling every one a
+              // "Network error" — an aborted request the page itself cancelled is not
+              // a network failure.
+              let terminalError;
+              this.addEventListener("abort", () => { terminalError = "aborted"; }, { once: true });
+              this.addEventListener("timeout", () => { terminalError = "timeout"; }, { once: true });
+              this.addEventListener("error", () => { terminalError = "Network error"; }, { once: true });
+              this.addEventListener("loadend", () => {
+                  try { entry.status = this.status || undefined; entry.error = terminalError; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch (e) {}
+              }, { once: true });
+          } catch (e) { entry = null; }
+          return origSend.apply(this, a);
+      };
+  }
+})();
 "#;
 
 #[cfg(test)]

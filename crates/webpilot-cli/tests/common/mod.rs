@@ -160,6 +160,19 @@ pub const SLOW: &str = r#"<!doctype html><html><head><title>slow-final</title></
 pub const LOG: &str = r#"<!doctype html><html><head><title>log-page</title></head>
 <body><script>setTimeout(function(){console.log('postnav-monitor-marker')},200)</script></body></html>"#;
 
+/// Logs from an inline script and fetches while the document is still parsing —
+/// output no injection made after the load could ever see. It also carries an
+/// iframe that logs its own marker, which must NOT reach the buffer: only the
+/// main frame's is read, so hooking a subframe would put WebPilot's patch in a
+/// third-party document for nothing.
+pub const LOADLOG: &str = r##"<!doctype html><html><head><title>loadlog</title>
+<script>console.log('loadwindow-console-marker')</script></head>
+<body><script>fetch('/loadfetch')</script><iframe src="/loadframe"></iframe></body></html>"##;
+
+/// The iframe of `/loadlog`.
+pub const LOAD_FRAME: &str = r#"<!doctype html><html><head><title>loadframe</title></head>
+<body><script>console.log('loadwindow-subframe-marker')</script></body></html>"#;
+
 /// Fires an `alert` a beat after loading — the destination of the iframe a
 /// click handler CREATES (`#mkif`). A dialog from a frame that did not exist
 /// when the action started must still be intercepted (browser mode injects the
@@ -281,6 +294,10 @@ pub fn spawn_server() -> String {
                 } else if req.starts_with("GET /slow") {
                     std::thread::sleep(std::time::Duration::from_millis(800));
                     (SLOW, "")
+                } else if req.starts_with("GET /loadlog") {
+                    (LOADLOG, "")
+                } else if req.starts_with("GET /loadframe") {
+                    (LOAD_FRAME, "")
                 } else if req.starts_with("GET /log") {
                     (LOG, "")
                 } else if req.starts_with("GET /latealert") {

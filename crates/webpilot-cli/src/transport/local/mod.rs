@@ -90,11 +90,19 @@ pub struct LocalTransport {
     /// Active frame for evaluation. `None` means the page's main world.
     pub(crate) active_frame_id: Arc<Mutex<Option<String>>>,
     /// Whether the console / network monitors are armed. Their hooks live on
-    /// `window` and are wiped by every full-document navigation, so when armed
-    /// they are re-installed after each navigation settles — matching the
-    /// browser-mode service worker, which re-injects on `webNavigation`.
+    /// `window` and are wiped by every full-document navigation, so an armed
+    /// monitor rides on [`Self::monitor_hooks`] rather than on any one document.
     pub(crate) console_monitoring: Arc<AtomicBool>,
     pub(crate) network_monitoring: Arc<AtomicBool>,
+    /// `Page.addScriptToEvaluateOnNewDocument` identifier per armed monitor, so
+    /// its hook enters each document BEFORE the document's own scripts — a page's
+    /// startup `console.log` / `fetch` is otherwise recorded nowhere. Chrome scopes
+    /// the registration to the CDP session and drops it on disconnect, so the
+    /// record is meaningful only for `page`'s session: it is re-established per
+    /// process and cleared wherever the pinned page is swapped. Reconciled against
+    /// the `eval` gate at every command by `ensure_monitor_hooks`, so a deny that
+    /// lands mid-session stops the injection instead of riding a stale grant.
+    monitor_hooks: Mutex<HashMap<Monitor, String>>,
     /// Shared lock on the named context's liveness file, held for this
     /// transport's whole lifetime (`None` for the default context). It is the
     /// signal a concurrent `gc_expired_contexts` probes with a non-blocking
@@ -226,7 +234,7 @@ impl LocalTransport {
         // per-tab monitoring survives because the worker itself persists.
         let (console_armed, network_armed) = read_persisted_monitors(browser_context_id.as_deref());
 
-        let transport = Self {
+        Ok(Self {
             browser,
             page,
             browser_context_id,
@@ -240,25 +248,8 @@ impl LocalTransport {
             network_monitoring: Arc::new(AtomicBool::new(network_armed)),
             _context_lock: context_lock,
             download_behavior: None,
-        };
-
-        // Re-arm armed monitors against the CURRENT document, mirroring the
-        // device re-apply above. The hooks live on `window` and survive process
-        // boundaries, so restoring the flag is enough WHILE the document stays
-        // put — but a navigation WebPilot did NOT drive (a page-initiated
-        // redirect between two CLI commands) wipes them with no
-        // `reinstall_monitors` to fire, so an armed monitor would silently stop
-        // recording until the next WebPilot-driven navigation. Re-applying on
-        // open keeps an armed monitor following the page across out-of-band
-        // navigations too. The install JS is idempotent and buffer-preserving
-        // (it re-patches only an unpatched `console`/`fetch` and keeps an
-        // existing buffer), so re-arming an already-hooked document is a no-op,
-        // and it re-checks policy, so an `eval` deny still stops it.
-        if console_armed || network_armed {
-            transport.reinstall_monitors().await;
-        }
-
-        Ok(transport)
+            monitor_hooks: Mutex::new(HashMap::new()),
+        })
     }
 
     pub(crate) fn persisted_context_key(&self) -> Option<&str> {
@@ -842,9 +833,9 @@ impl LocalTransport {
                     // Cross-site or cross-page navigation: the renderer process
                     // may have swapped, but the flat session is attached to the
                     // TARGET and survives it. Only document-scoped state resets:
-                    // the active iframe scope, the bridge-context readiness gate,
-                    // the re-armed monitors. (The context listener and the
-                    // registered bridge world are session-scoped and carry over.)
+                    // the active iframe scope and the bridge-context readiness
+                    // gate. (The context listener, the registered bridge world,
+                    // and the monitor hooks are session-scoped and carry over.)
                     if navigation_settled(&self.page, loader, &before_url).await {
                         self.clear_active_frame().await;
                         // Force the new document's contexts to re-announce
@@ -864,7 +855,6 @@ impl LocalTransport {
                         // `executionContextDestroyed`.
                         reemit_execution_contexts(&self.page).await;
                         self.await_live_bridge_context().await;
-                        self.reinstall_monitors().await;
                         // A target created blank and now landing its FIRST real load:
                         // drop the synthetic `about:blank` entry `Page.navigate`
                         // appended below it, so a later `back` matches browser mode
@@ -880,7 +870,7 @@ impl LocalTransport {
                     // Same-URL navigation: necessarily same-site, so the existing
                     // session stays valid (no renderer swap). The loader match
                     // distinguishes the reloaded document from the previous one.
-                    self.settle_new_document().await;
+                    self.clear_active_frame().await;
                     return Ok(self.downloads_from(&mut download_events, is_download).await);
                 }
             }
@@ -907,7 +897,7 @@ impl LocalTransport {
                             std::time::Instant::now() + webpilot::settings::timeouts().navigation;
                         continue;
                     }
-                    self.settle_new_document().await;
+                    self.clear_active_frame().await;
                     return Ok(self.downloads_from(&mut download_events, is_download).await);
                 }
                 return Err(start_error
@@ -956,23 +946,6 @@ impl LocalTransport {
     async fn clear_active_frame(&self) {
         *self.active_frame_id.lock().await = None;
         clear_persisted_active_frame(self.persisted_context_key());
-    }
-
-    /// Settle onto a freshly-built MAIN document: drop the active iframe scope
-    /// (the page left it on a main-frame navigation) AND re-arm the
-    /// console/network monitors onto the new document. The two always go together
-    /// for a new main document — doing one without the other would either resolve
-    /// a dead frame context or leave an armed monitor silently stopped — so they
-    /// live in one named operation a settle path calls rather than re-pairing by
-    /// hand. (`reinstall_monitors` is idempotent for a same-document settle: its
-    /// install scripts guard on their `window` flags, so a history/bfcache
-    /// traversal that did not build a new document re-arms to a no-op.) A settle
-    /// that must INTERLEAVE another step — a cross-site renderer rebind, or an
-    /// await-live before re-arming onto a not-yet-committed document — keeps its
-    /// explicit `clear_active_frame`/`reinstall_monitors` calls and says why.
-    async fn settle_new_document(&self) {
-        self.clear_active_frame().await;
-        self.reinstall_monitors().await;
     }
 
     /// Whether `target_id` is absent from the live target list — the tab-gone
@@ -1311,6 +1284,12 @@ impl Transport for LocalTransport {
         // established before the command runs instead of being classified per
         // command and inevitably missing a path.
         self.ensure_download_behavior().await;
+        // Armed monitors answer to the browser's per-document injection the same
+        // way: their hooks must already be registered when a command builds a new
+        // document, and the registration must still match the `eval` verdict this
+        // command reads — so it is reconciled here rather than at arming time,
+        // which a later deny or a fresh process would leave behind.
+        self.ensure_monitor_hooks().await;
         // The pinned tab closed and this transport attached to a fallback
         // survivor. A command that ACTS on the active page must not SILENTLY run
         // on it — fail loud with TabNotFound, carrying the dead id, so the agent
@@ -1337,7 +1316,7 @@ impl Transport for LocalTransport {
             } => self.do_wait(condition, timeout_ms).await,
             Command::Status => self.do_status().await,
             Command::TabList => self.do_tab_list().await,
-            Command::TabSwitch { tab_id } => self.do_tab_switch(&tab_id, true).await,
+            Command::TabSwitch { tab_id } => self.do_tab_switch(&tab_id).await,
             Command::TabNew { url } => self.do_tab_new(&url).await,
             Command::TabClose { tab_id } => self.do_tab_close(&tab_id).await,
             Command::DomSet {
@@ -1582,7 +1561,7 @@ pub(crate) fn clear_persisted_device(browser_context_id: Option<&str>) -> std::i
 // session — nothing disarms short of `quit`, which removes the markers
 // alongside the tab/frame pins.
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub(super) enum Monitor {
     Console,
     Network,
@@ -1593,6 +1572,16 @@ impl Monitor {
         match self {
             Monitor::Console => "console",
             Monitor::Network => "network",
+        }
+    }
+
+    /// The command whose gate governs this monitor's injection — the same one
+    /// `start` is enforced against, so re-checking it per command can neither
+    /// widen nor narrow what arming was permitted to do.
+    pub(super) fn start_command(self) -> Command {
+        match self {
+            Monitor::Console => Command::ConsoleStart,
+            Monitor::Network => Command::NetworkStart,
         }
     }
 }
@@ -1615,8 +1604,9 @@ pub(super) fn persist_monitor_armed(
 ) -> std::io::Result<()> {
     // Presence is the whole signal (an empty file), so the write needs no
     // atomicity — but it must not be swallowed: this marker is what makes later
-    // CLI processes re-arm the monitor, so a failed write means `console start`
-    // didn't persist and the next process would silently run with no monitor.
+    // CLI processes re-register the monitor's hook, so a failed write means
+    // `console start` didn't persist and the next process would silently run
+    // with no monitor.
     std::fs::write(monitor_marker(kind, browser_context_id), b"")
 }
 

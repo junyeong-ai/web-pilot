@@ -809,13 +809,13 @@ fn browser_behavioral_flow() {
     // 4c. The eval gate covers monitor RE-injection in browser mode too: a deny
     //     landing after `console start` must stop the service worker re-arming the
     //     MAIN-world hooks on the next document (the host attaches the verdict;
-    //     `rearmMonitors` honours it), matching headless `reinstall_monitors`.
+    //     `rearmMonitors` honours it), matching headless `ensure_monitor_hooks`.
     //     Confirm a log IS captured while allowed first, so the deny case can't
     //     pass on a timing miss. `navigate` awaits `rearmMonitors`, so once it
     //     returns the armed hook is in place; drive the log via `eval` (not a
-    //     page startup timer) so the check can't race the re-arm — a log a page
-    //     fires during its own startup, before the hook re-installs, is by design
-    //     not captured (extension.md), and timing it against a fixed sleep is
+    //     page startup timer) so the check can't race the re-arm — browser mode
+    //     injects at settle, so a log a page fires during its own startup is not
+    //     captured here (extension.md), and timing it against a fixed sleep is
     //     flaky. Headless mirror in e2e_headless.
     let _ = fx.run(&["console", "clear"]);
     assert_eq!(code(&fx.run(&["action", "navigate", &base])), 0);
@@ -1717,7 +1717,7 @@ fn browser_behavioral_flow() {
     );
 
     // Armed monitors follow the working tab across a pin MOVE (here `tab new`),
-    // not just a same-tab navigation — headless re-arms on every pin move, so
+    // not just a same-tab navigation — headless follows the pin the same way, so
     // browser must too or `console read` on the new tab silently misses its logs.
     // The /log page self-logs on load, so a read after `tab new /log` must see
     // it. Last step in the flow, so the extra tab it leaves is harmless.

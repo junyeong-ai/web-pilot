@@ -17,8 +17,8 @@ const SESSION_SCHEMA_VERSION = 1;
 // Latest console/network policy verdicts, pushed by the host alongside every
 // command (the service worker never reads the policy store — the host is the
 // sole sink). A denied monitor is NOT re-armed after a navigation, mirroring
-// headless `reinstall_monitors`, which re-checks `enforce(ConsoleStart /
-// NetworkStart)` before re-injecting: so an `eval` deny stops the MAIN-world
+// headless `ensure_monitor_hooks`, which re-checks `enforce(ConsoleStart /
+// NetworkStart)` before every command: so an `eval` deny stops the MAIN-world
 // hooks in BOTH modes, not just headless. The armed set is kept untouched, so
 // re-allowing `eval` re-arms on the next navigation — same as the headless flag.
 //
@@ -39,20 +39,27 @@ function setMonitorPolicy(mp) {
 // ── Console / network monitoring injection ─────────────────────────────────
 
 // Re-arm any ARMED console/network hooks on `tabId`'s new main document — the
-// MAIN-world fetch/console patches, independent of the bridge. Headless calls
-// `reinstall_monitors()` the instant a navigation settles; browser must do the
-// same right after `waitNavigationSettled`, not wait for the `load`-time
+// MAIN-world fetch/console patches, independent of the bridge. Injected right
+// after `waitNavigationSettled` rather than at the `load`-time
 // `webNavigation.onCompleted`, or a fetch/console the new page emits after
-// DOMContentLoaded but before a slow `load` is lost from the buffer. The armed
-// intent is agent-level (headless parity), so this is also the whole of "the
-// monitor follows the pin": every pin move (tab switch / new / popup adoption)
-// re-arms the new working tab. A no-op unless armed, so a plain navigation
-// pays nothing.
+// DOMContentLoaded but before a slow `load` is lost from the buffer.
+//
+// The window before that — a page's own startup output — is where the two modes
+// part. Headless registers the hooks per document (`ensure_monitor_hooks`), which
+// browser mode cannot match: a document-start MAIN-world injection is either a
+// registered content script, which matches URLs and so would reach every tab the
+// USER is browsing, or a debugger attach held for the session, which leaves
+// Chrome's debugging banner up. Driving the user's own Chrome, the monitor takes
+// the narrower scope and starts at settle.
+//
+// The armed intent is agent-level, so this is also the whole of "the monitor
+// follows the pin": every pin move (tab switch / new / popup adoption) re-arms
+// the new working tab. A no-op unless armed, so a plain navigation pays nothing.
 async function rearmMonitors(tabId) {
   // `&& monitorPolicy.X`: re-injecting a MAIN-world hook is the same effect
   // `console start` / `network start` are gated on (`eval`), so a deny that
   // landed after arming must stop the re-arm too — exactly as headless
-  // `reinstall_monitors` re-checks the gate. The armed flag is left intact.
+  // `ensure_monitor_hooks` re-checks the gate. The armed flag is left intact.
   if (monitoringState.console && monitorPolicy.console) {
     try {
       await injectConsoleMonitoring(tabId);
@@ -443,7 +450,7 @@ async function handleConsoleRead(since) {
     if (out.missing) {
       return topErr(err(
         "InvalidArgument",
-        "the console monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot console start`",
+        "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`",
       ));
     }
     return { type: "ConsoleEntries", entries: out.entries, truncated: out.truncated };
@@ -477,7 +484,7 @@ async function handleConsoleClear() {
     if (hit?.result !== true) {
       return topErr(err(
         "InvalidArgument",
-        "the console monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot console start`",
+        "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`",
       ));
     }
     return { type: "CommandResult", success: true };
@@ -557,7 +564,7 @@ async function handleNetworkRead(since) {
     if (out.missing) {
       return topErr(err(
         "InvalidArgument",
-        "the network monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot network start`",
+        "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`",
       ));
     }
     return { type: "NetworkEntries", entries: out.entries, truncated: out.truncated };
@@ -584,7 +591,7 @@ async function handleNetworkClear() {
     if (hit?.result !== true) {
       return topErr(err(
         "InvalidArgument",
-        "the network monitor is not installed in this document — an `eval` policy deny suppresses re-arming after navigation; check `webpilot policy list`, then run `webpilot network start`",
+        "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`",
       ));
     }
     return { type: "CommandResult", success: true };
