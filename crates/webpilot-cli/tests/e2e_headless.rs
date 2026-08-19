@@ -2139,7 +2139,12 @@ fn headless_behavioral_flow() {
             let parsed: serde_json::Value = serde_json::from_str(&stdout(&read)).ok()?;
             let entries = parsed["entries"].as_array()?;
             let carries = |source: &str| entries.iter().any(|e| e["source"] == source);
-            (carries("exception") && carries("rejection")).then_some(read)
+            let asserted = entries.iter().any(|e| {
+                e["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("assert-marker"))
+            });
+            (carries("exception") && carries("rejection") && asserted).then_some(read)
         },
     );
     let ej: serde_json::Value = serde_json::from_str(&stdout(&errs)).expect("console read json");
@@ -2167,6 +2172,20 @@ fn headless_behavioral_flow() {
         "an unhandled rejection must be captured, typed as a rejection: {}",
         stdout(&errs)
     );
+    // A failed assertion is printed by the browser at error level; a passing one
+    // prints nothing and must record nothing.
+    assert!(
+        with_source("console")
+            .iter()
+            .any(|m| m == "Assertion failed: assert-marker"),
+        "a failed assertion must be captured with the console's own label: {}",
+        stdout(&errs)
+    );
+    assert!(
+        !stdout(&errs).contains("passing-assert-marker"),
+        "a passing assertion prints nothing and must record nothing: {}",
+        stdout(&errs)
+    );
     assert_eq!(
         entries.iter().filter(|e| e["level"] != "error").count(),
         0,
@@ -2178,9 +2197,10 @@ fn headless_behavioral_flow() {
     // on — which is the very reason it is excluded.
     assert_eq!(
         entries.len(),
-        2,
-        "the buffer must hold the exception and the rejection and nothing more — \
-         not the error the page cancelled, and not the subresource that failed: {}",
+        3,
+        "the buffer must hold the exception, the rejection and the failed \
+         assertion and nothing more — not the error the page cancelled, not the \
+         assertion that passed, and not the subresource that failed: {}",
         stdout(&errs)
     );
 

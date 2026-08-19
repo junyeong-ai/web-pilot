@@ -194,7 +194,9 @@ impl LocalTransport {
             .evaluate(&format!(
                 "(()=>{{const a=window.__webpilot_console;if(a===undefined)return null;\
                   if(window.__webpilot_console_shape!=={shape})return{{stale:true}};\
-                  return{{entries:a.filter(e=>e&&e.timestamp>={since}),truncated:window.__webpilot_console_dropped===true}};}})()",
+                  return{{entries:a.filter(e=>e&&e.timestamp>={since}).map(e=>({{source:String(e.source),\
+                  level:String(e.level),message:String(e.message),timestamp:e.timestamp}})),\
+                  truncated:window.__webpilot_console_dropped===true}};}})()",
                 since = since.unwrap_or(0),
                 shape = MONITOR_SHAPE,
             ))
@@ -329,7 +331,16 @@ impl LocalTransport {
         // it leaves the document without the hook, which the read already reports
         // as `MONITOR_NOT_INSTALLED`. A withdrawal that fails has no such reader —
         // nothing else would ever say the injection outlived its deny.
-        self.page.evaluate(install_js).await?;
+        let installed = self
+            .page
+            .evaluate(&format!(
+                "window.__webpilot_{}_patched === true",
+                kind.name()
+            ))
+            .await?;
+        if installed.as_bool() != Some(true) {
+            self.page.evaluate(install_js).await?;
+        }
         Ok(())
     }
 
@@ -380,7 +391,10 @@ impl LocalTransport {
         let js = format!(
             "(()=>{{const a=window.__webpilot_network;if(a===undefined)return null;\
               if(window.__webpilot_network_shape!=={shape})return{{stale:true}};\
-              return{{entries:a.filter(e=>e&&e.timestamp>={since}),truncated:window.__webpilot_network_dropped===true}};}})()",
+              return{{entries:a.filter(e=>e&&e.timestamp>={since}).map(e=>({{type:String(e.type),\
+              url:String(e.url),method:String(e.method),status:e.status,duration_ms:e.duration_ms,\
+              error:e.error==null?undefined:String(e.error),timestamp:e.timestamp}})),\
+              truncated:window.__webpilot_network_dropped===true}};}})()",
             since = since.unwrap_or(0),
             shape = MONITOR_SHAPE,
         );
@@ -796,16 +810,16 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
     }
 }
 
-/// This document's recorder does not write the shape this build reads: the
-/// document was hooked by an older WebPilot, and Chrome outlives the process that
-/// installed it. Its entries would be dropped one by one and the read would
-/// answer with the empty list — "the page was quiet", from a recorder that is
-/// simply the wrong one.
 /// The entry shape this build reads. The recorders stamp it on the document
 /// (`window.__webpilot_<kind>_shape`) and every read path checks it; bumping it
 /// means bumping both recorders too, which `monitor_shape_stamp_is_in_step` holds.
 const MONITOR_SHAPE: u32 = 1;
 
+/// This document's recorder does not write the shape this build reads: the
+/// document was hooked by an older WebPilot, and Chrome outlives the process that
+/// installed it. Its entries would be dropped one by one and the read would
+/// answer with the empty list — "the page was quiet", from a recorder that is
+/// simply the wrong one.
 const MONITOR_SHAPE_CONSOLE: &str = "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`";
 const MONITOR_SHAPE_NETWORK: &str = "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`";
 

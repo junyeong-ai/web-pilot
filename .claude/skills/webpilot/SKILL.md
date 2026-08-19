@@ -296,16 +296,17 @@ logging anything is still visible. Each entry carries a `source`:
 
 | `source` | what it is | `level` |
 |---|---|---|
-| `console` | a `console.log/error/warn/info/debug` call | that method |
+| `console` | a `console.log/error/warn/info/debug` call, or an assertion that failed | that method, `error` for the assertion |
 | `exception` | an exception that reached the top of the stack, with the browser's own text and the location it names | `error` |
 | `rejection` | a promise rejection nothing handled | `error` |
 
-So `console read --level error` is the "did this page break" question. Two
-things are not recorded: an error the page cancels (`event.preventDefault()`),
-which the browser does not print either, and a subresource that fails to load —
-its page-side event names no reason, and the network monitor watches `fetch`/XHR,
-not element loads. A page whose only symptom is a 404'd script is the case
-neither monitor sees.
+So `console read --level error` is the "did this page break" question. What is
+not recorded: an error the page cancels (`event.preventDefault()`), which the
+browser does not print either; `console.trace`/`table`/`dir`/`group`, which print
+structured output an entry's single string cannot carry; and a subresource that
+fails to load — its page-side event names no reason, and the network monitor
+watches `fetch`/XHR, not element loads. A page whose only symptom is a 404'd
+script is the case neither monitor sees.
 
 The entry buffer lives on the page, so a navigation wipes it — `read` what you
 need before navigating away. Recording itself stays armed across navigations in

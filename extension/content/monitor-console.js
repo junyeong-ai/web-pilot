@@ -29,8 +29,14 @@
   if (!Array.isArray(window.__webpilot_console)) {
     window.__webpilot_console = [];
   }
-  if (window.__webpilot_console_patched) return;
+  // The wrappers carry their own mark, and that — not the page-writable flag —
+  // is what says whether this document is already hooked: the reconcile re-runs
+  // this install, and clearing the flag would otherwise wrap an already-wrapped
+  // `console` a second time and report every call twice. The flag is the cheap
+  // probe that reconcile reads, so it is repaired rather than trusted.
+  const ours = console.error && console.error.__webpilot;
   window.__webpilot_console_patched = true;
+  if (ours) return;
 
   // What SHAPE this recorder writes. Chrome outlives the process that hooked a
   // document, so a later build can meet this one still running; the read checks
@@ -96,7 +102,29 @@
       } catch {}
       orig[m].apply(console, args);
     };
+    console[m].__webpilot = 1;
   });
+
+  // A failed assertion is printed by the browser at error level and is a page
+  // reporting a failure, like the five above; the label is the console spec's
+  // own, not one composed here. A passing assertion prints nothing, so it
+  // records nothing.
+  const origAssert = console.assert;
+  console.assert = (condition, ...args) => {
+    try {
+      if (!condition) {
+        const detail = args.map(text).join(" ");
+        record({
+          source: "console",
+          level: "error",
+          message: clip(detail ? "Assertion failed: " + detail : "Assertion failed"),
+          timestamp: nowFn(),
+        });
+      }
+    } catch {}
+    origAssert.call(console, condition, ...args);
+  };
+  console.assert.__webpilot = 1;
 
   // A page cancels the report of an error or a rejection by cancelling its
   // event, and the browser then prints nothing — so recording one would put an

@@ -1284,12 +1284,6 @@ impl Transport for LocalTransport {
         // established before the command runs instead of being classified per
         // command and inevitably missing a path.
         self.ensure_download_behavior().await;
-        // Armed monitors answer to the browser's per-document injection the same
-        // way: their hooks must already be registered when a command builds a new
-        // document, and the registration must still match the `eval` verdict this
-        // command reads — so it is reconciled here rather than at arming time,
-        // which a later deny or a fresh process would leave behind.
-        self.ensure_monitor_hooks().await;
         // The pinned tab closed and this transport attached to a fallback
         // survivor. A command that ACTS on the active page must not SILENTLY run
         // on it — fail loud with TabNotFound, carrying the dead id, so the agent
@@ -1306,6 +1300,16 @@ impl Transport for LocalTransport {
         {
             return Err(WebPilotError::TabNotFound { tab_id: dead }.into());
         }
+        // Armed monitors answer to the browser's per-document injection the same
+        // way the download behaviour does: their hooks must already be registered
+        // when a command builds a new document, and the registration must still
+        // match the `eval` verdict this command reads — so it is reconciled per
+        // command rather than at arming time, which a later deny or a fresh
+        // process would leave behind. AFTER the dead-pin guard above: a command
+        // that is about to be refused must not first put MAIN-world hooks on the
+        // survivor page the agent has not been told it is on.
+        self.ensure_monitor_hooks().await;
+
         match command {
             Command::Capture { include, opts, url } => self.do_capture(include, opts, url).await,
             Command::Action { action, capture } => self.do_action(action, capture).await,

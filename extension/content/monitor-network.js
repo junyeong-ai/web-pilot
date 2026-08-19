@@ -14,9 +14,21 @@
   // Main frame only — see monitor-console.js.
   if (window !== window.top) return;
 
-  if (window.__webpilot_network_active) return;
-  window.__webpilot_network_active = true;
-  window.__webpilot_network = [];
+  // The buffer and the install sentinel are separate globals — see
+  // monitor-console.js: one flag doing both jobs means clearing it wipes every
+  // entry recorded so far AND wraps `fetch`/XHR a second time.
+  if (!Array.isArray(window.__webpilot_network)) {
+    window.__webpilot_network = [];
+  }
+  // The wrappers carry their own mark, and that — not the page-writable flag —
+  // is what says whether this document is already hooked: clearing the flag must
+  // not make this install run over its own wrappers and report every request
+  // twice. The flag is the cheap probe the reconcile reads, so it is repaired
+  // rather than trusted.
+  const ours = (window.fetch && window.fetch.__webpilot)
+    || (XMLHttpRequest.prototype.send && XMLHttpRequest.prototype.send.__webpilot);
+  window.__webpilot_network_patched = true;
+  if (ours) return;
 
   // What SHAPE this recorder writes. Chrome outlives the process that hooked a
   // document, so a later build can meet this one still running; the read checks
@@ -110,7 +122,7 @@
       })
       .catch((err) => {
         try {
-          entry.error = err.message;
+          entry.error = String((err && err.message) || err);
           entry.duration_ms = Math.round(perfNow() - t0);
           entry.timestamp = nowFn();
         } catch {}
@@ -118,12 +130,14 @@
       });
   };
 
+  window.fetch.__webpilot = 1;
+
   const xhrProto = XMLHttpRequest.prototype;
   const origOpen = xhrProto.open;
   const origSend = xhrProto.send;
   const xhrMeta = new WeakMap();
   xhrProto.open = function (m, u, ...a) {
-    try { xhrMeta.set(this, { method: m, url: String(u) }); } catch {}
+    try { xhrMeta.set(this, { method: m, url: clip(String(u)) }); } catch {}
     return origOpen.apply(this, [m, u, ...a]);
   };
   xhrProto.send = function (...a) {
@@ -134,7 +148,7 @@
       const meta = xhrMeta.get(this) || {};
       entry = {
         type: "xhr",
-        url: clip(meta.url || ""),
+        url: meta.url || "",
         method: meta.method || "GET",
         duration_ms: 0,
         timestamp: nowFn(),
@@ -159,6 +173,22 @@
     } catch {
       entry = null;
     }
-    return origSend.apply(this, a);
+    // `send()` can throw SYNCHRONOUSLY — before `open`, or on a detached
+    // document — and `loadend` never fires for a request that never started, so
+    // an entry recorded above would stay in flight forever. Stamp it and rethrow,
+    // exactly as the fetch wrapper does for its own synchronous throw.
+    try {
+      return origSend.apply(this, a);
+    } catch (e) {
+      if (entry) {
+        try {
+          entry.error = String((e && e.message) || e);
+          entry.duration_ms = Math.round(perfNow() - t0);
+          entry.timestamp = nowFn();
+        } catch {}
+      }
+      throw e;
+    }
   };
+  xhrProto.send.__webpilot = 1;
 })();

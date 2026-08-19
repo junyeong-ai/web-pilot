@@ -169,17 +169,19 @@ pub const LOADLOG: &str = r##"<!doctype html><html><head><title>loadlog</title>
 <script>console.log('loadwindow-console-marker')</script></head>
 <body><script>fetch('/loadfetch')</script><iframe src="/loadframe"></iframe></body></html>"##;
 
-/// Everything the page's console shows that no `console.*` call produced, all of
-/// it while the document is still parsing: an exception that reaches the top of
+/// Everything the page's console shows while the document is still parsing that
+/// a plain `console.log` would not produce: an exception that reaches the top of
 /// the stack, one the page CANCELS (the browser prints nothing for it, so the
-/// monitor must not either), a rejection nothing handles, and a subresource that
-/// fails — which is the network monitor's to describe, not the console's.
+/// monitor must not either), a rejection nothing handles, a failed assertion —
+/// and a passing one plus a subresource that fails, neither of which the browser
+/// prints.
 pub const PAGE_ERROR: &str = r##"<!doctype html><html><head><title>pageerror</title>
 <script>window.addEventListener("error", function (e) { if (e.message.indexOf("cancelled") >= 0) e.preventDefault(); });</script>
 </head><body>
 <script>null.pageErrorMarker;</script>
 <script>throw new Error("cancelled-error-marker");</script>
 <script>Promise.reject(new Error("rejection-marker"));</script>
+<script>console.assert(true, "passing-assert-marker"); console.assert(false, "assert-marker");</script>
 <img src="/notanimage">
 </body></html>"##;
 
@@ -369,7 +371,10 @@ pub fn wait_for<T>(
             return v;
         }
         assert!(start.elapsed() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Each probe typically spawns a `webpilot` process, so the interval is
+        // the browser suite's original 250 ms rather than a tighter one — a
+        // faster poll would only add process churn to the same deadline.
+        std::thread::sleep(std::time::Duration::from_millis(250));
     }
 }
 

@@ -41,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `level` stays the console API's own taxonomy. An exception carries the
   browser's own text and the location it names ("Script error." with none, for a
   cross-origin script, exactly as the console prints it), so
-  `console read --level error` is now the "did this page break" question.
+  `console read --level error` is now the "did this page break" question. A
+  FAILED `console.assert` joins them, under the console spec's own "Assertion
+  failed" label; a passing one prints nothing and records nothing.
 
   Two things are deliberately not recorded. An error the page cancels
   (`event.preventDefault()`) is one the browser does not print either, so
