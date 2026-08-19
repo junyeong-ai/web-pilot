@@ -252,6 +252,14 @@ webpilot tab close <ID>
 webpilot tab find --url "*pattern*"
 ```
 
+Every command acts on ONE pinned tab, and the pin persists across processes.
+`tab new` / `tab switch` / `tab find` move it; a tab the page opens by click is
+adopted. If the listing marks **no** tab active, your pinned tab is gone: the next
+page command reports `TabNotFound` once and settles on a survivor, so pick one
+with `tab switch <ID>` (or `tab new URL`) rather than acting blind. Device
+emulation follows the pin — a tab you switch to or open carries the same viewport
+and user agent, and its own load does too.
+
 ## Cookies / session
 
 ```bash

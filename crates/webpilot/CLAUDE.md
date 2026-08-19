@@ -22,8 +22,8 @@ encode/write in `screenshot.rs`, and the NM/IPC framing in
   data. Includes `StaleSnapshot` and `VersionMismatch`.
 - `types.rs` — DOM / cookie / console / network / tab shapes; `PolicyKey` (the
   effect-based policy key — `ActionKind` ∪ {eval, fetch, dom_set, tab_close,
-  cookie_list, cookie_set, cookie_delete, session_export, session_import, device, context_close}, with
-  an exhaustive `From<ActionKind>`); `PolicyVerdict`. `DomSnapshot.subframes` is
+  cookie_list, cookie_set, cookie_delete, session_export, session_import, device,
+  context_close, download}, with an exhaustive `From<ActionKind>`); `PolicyVerdict`. `DomSnapshot.subframes` is
   the count of HTTP iframes outside the active frame. `DomSnapshot::to_text()`
   renders the agent-facing `[index] element` format.
 - `capture.rs` — `CaptureField` + `CaptureOpts`.
