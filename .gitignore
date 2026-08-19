@@ -1,4 +1,7 @@
 /target
+# Chrome for Testing, fetched here by `npx @puppeteer/browsers install`
+# when the e2e suites are run locally the way CI runs them.
+/chrome
 /.research
 **/*.rs.bk
 *.pdb
