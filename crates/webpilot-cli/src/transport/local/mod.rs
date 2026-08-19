@@ -1568,7 +1568,7 @@ pub(super) enum Monitor {
 }
 
 impl Monitor {
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             Monitor::Console => "console",
             Monitor::Network => "network",

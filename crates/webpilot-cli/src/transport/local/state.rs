@@ -292,12 +292,25 @@ impl LocalTransport {
                 hooks.insert(kind, install_monitor_hook(&self.page, install_js).await?);
             }
             (false, Some(identifier)) => {
+                // A withdrawal that fails is the one failure here that must not
+                // pass in silence: the registration keeps entering documents the
+                // `eval` deny was supposed to stop it reaching, and no command
+                // reports that. The record is kept so every later command retries,
+                // and the agent is told which monitor is still live meanwhile.
                 self.page
                     .send(
                         "Page.removeScriptToEvaluateOnNewDocument",
                         Some(json!({ "identifier": identifier })),
                     )
-                    .await?;
+                    .await
+                    .inspect_err(|e| {
+                        tracing::warn!(
+                            "the {} monitor's injection could not be withdrawn after an \
+                             `eval` deny: {e} — it keeps entering new documents until a \
+                             later command withdraws it",
+                            kind.name()
+                        );
+                    })?;
                 hooks.remove(&kind);
             }
             _ => {}

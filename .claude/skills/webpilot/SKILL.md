@@ -280,6 +280,11 @@ webpilot console read --level error                # log | warn | info | debug |
 webpilot console clear
 ```
 
+The buffer is a page global: a cooperative page is reported faithfully, but a
+hostile one can both hide from the recorder and write entries into it — including
+an `exception` it never threw. Treat neither an empty buffer as proof the page was
+quiet nor a filled one as proof it was not.
+
 The recorder is injected into the page's main frame. In headless it enters each
 document ahead of that document's own scripts, so a page's load-time console and
 fetch activity is captured; browser mode injects once a navigation settles, so
