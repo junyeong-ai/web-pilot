@@ -734,6 +734,46 @@ fn browser_behavioral_flow() {
         stdout(&logs)
     );
 
+    // 4b-error. The exception and rejection sources reach the agent through
+    //           browser mode's OWN read projection, which drops any entry whose
+    //           `source` is not one it knows — a value missing from that list
+    //           would make every such entry vanish silently, and the
+    //           `console.log` marker above would not notice. Scheduled rather
+    //           than thrown inline: an `eval` exception is returned to the
+    //           caller, never dispatched as the page's own uncaught error.
+    let _ = fx.run(&["console", "clear"]);
+    let scheduled = fx.run(&[
+        "eval",
+        "setTimeout(function () { null.browserExceptionMarker; }, 0); \
+         setTimeout(function () { Promise.reject(new Error('browser-rejection-marker')); }, 0); \
+         'scheduled'",
+    ]);
+    assert_eq!(
+        code(&scheduled),
+        0,
+        "scheduling the page error failed: {}",
+        stdout(&scheduled)
+    );
+    let reported = wait_for(
+        Duration::from_secs(10),
+        "the page's uncaught error and rejection to reach the console buffer",
+        || {
+            let read = fx.run(&["console", "read"]);
+            let parsed: serde_json::Value = serde_json::from_str(&stdout(&read)).ok()?;
+            let entries = parsed["entries"].as_array()?;
+            let carries = |source: &str| entries.iter().any(|e| e["source"] == source);
+            (carries("exception") && carries("rejection")).then(|| stdout(&read))
+        },
+    );
+    assert!(
+        reported.contains("browserExceptionMarker"),
+        "the exception must carry the browser's own text: {reported}"
+    );
+    assert!(
+        reported.contains("browser-rejection-marker"),
+        "the rejection must carry its reason: {reported}"
+    );
+
     // 4b-clip. A runaway log is clipped (headless parity): a 10000-char arg comes
     //          back capped with a marker, never stored/shipped whole.
     let _ = fx.run(&["console", "clear"]);
