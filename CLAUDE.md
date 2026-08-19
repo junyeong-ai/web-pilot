@@ -48,7 +48,10 @@ every command passes (`LocalTransport::send`, the host's request path).
 
 - `crates/webpilot/` — wire types + protocol (see that directory's `CLAUDE.md`)
 - `crates/webpilot-cli/` — the single binary (see that directory's `CLAUDE.md`)
-- `extension/` — browser-mode Chrome extension (`bridge.js` contract: `.claude/rules/extension.md`)
+- `extension/` — browser-mode Chrome extension, and the page-side scripts both
+  modes share: `content/bridge.js` (isolated world) and `content/monitor-*.js`
+  (MAIN-world recorders), each embedded by the Rust crate and injected by the
+  extension (`bridge.js` contract: `.claude/rules/extension.md`)
 - Rust conventions: `.claude/rules/rust-conventions.md`
 
 **Adding a command** (both modes at once) — the Rust edits are all **exhaustive
@@ -99,8 +102,8 @@ elements than `[capture] max_elements` renders (`DomSnapshot.elements_truncated`
 That bound is on the RENDER, applied once in `CommandOutput::dom` so no surface
 can emit an unbounded index — the browser keeps the whole index, so an element
 past it stays addressable and `find` (which renders only its matches) still
-matches it. The extraction-side caps live in `bridge.js`, the one place both
-modes share: page text, element text, option lists, and the shadow walk.
+matches it. The extraction-side caps live in `bridge.js`, which both modes share:
+page text, element text, option lists, and the shadow walk.
 
 ## Wire Protocol
 

@@ -225,6 +225,15 @@ mod tests {
     }
 
     #[test]
+    fn extension_ships_the_monitor_recorders_it_injects_by_path() {
+        // Headless embeds these at compile time, so a rename breaks the build;
+        // the extension names them as strings and would instead fail at inject
+        // time, on the one command an agent runs to start recording.
+        assert!(EXTENSION.get_file("content/monitor-console.js").is_some());
+        assert!(EXTENSION.get_file("content/monitor-network.js").is_some());
+    }
+
+    #[test]
     fn extension_id_is_derived_from_the_pinned_manifest_key() {
         let id = expected_extension_id();
         // The Chrome unpacked-extension id alphabet: 32 chars in [a-p].

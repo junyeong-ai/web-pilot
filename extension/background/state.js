@@ -5,10 +5,11 @@ import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
 import { activeFrameId, monitoringState, resolveActiveTab, saveMonitoringState } from "./session.js";
 import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
 
-// Max entries each MAIN-world monitor ring buffer keeps; the install scripts
-// below evict the oldest past this, and a read reports `truncated` when the
-// buffer is at this cap, so the literal `500` in those scripts must match.
-const MONITOR_BUFFER_CAP = 500;
+// The recorders, injected from this extension's own package — the same files
+// headless embeds, so what a monitor records cannot change in one mode and not
+// the other.
+const CONSOLE_MONITOR = "content/monitor-console.js";
+const NETWORK_MONITOR = "content/monitor-network.js";
 
 // Session export schema version, enforced on import (a higher version is rejected
 // rather than half-applied). Mirrors headless SESSION_SCHEMA_VERSION.
@@ -62,161 +63,25 @@ async function rearmMonitors(tabId) {
   // `ensure_monitor_hooks` re-checks the gate. The armed flag is left intact.
   if (monitoringState.console && monitorPolicy.console) {
     try {
-      await injectConsoleMonitoring(tabId);
+      await injectMonitor(tabId, CONSOLE_MONITOR);
     } catch {}
   }
   if (monitoringState.network && monitorPolicy.network) {
     try {
-      await injectNetworkMonitoring(tabId);
+      await injectMonitor(tabId, NETWORK_MONITOR);
     } catch {}
   }
 }
 
-async function injectConsoleMonitoring(tabId) {
+// MAIN world because the hooks must see the PAGE's own `console`/`fetch`, and
+// `frameIds: [0]` because only the main frame's buffer is ever read.
+async function injectMonitor(tabId, file) {
   await chrome.scripting.executeScript({
     target: { tabId, frameIds: [0] },
     world: "MAIN",
-    args: [MONITOR_BUFFER_CAP],
-    func: (cap) => {
-      // Gating on `__webpilot_console` alone fails after `console clear` (an
-      // empty array is truthy, so the patch wouldn't reinstall) and double-wraps
-      // if the buffer is cleared out of band. A separate sentinel keeps `start`
-      // idempotent without that hazard — the headless CONSOLE_INSTALL_JS design.
-      if (!Array.isArray(window.__webpilot_console)) window.__webpilot_console = [];
-      if (window.__webpilot_console_patched) return;
-      window.__webpilot_console_patched = true;
-      // Capture Date.now at install (a page that booby-traps it later can't
-      // break the recording) and clip a captured message like the DOM capture;
-      // the recording is wrapped so it can never break the page's own console
-      // call. Headless CONSOLE_INSTALL_JS parity.
-      const nowFn = Date.now;
-      const MAX = 4096;
-      // CODEPOINT-safe clip via Array.from (a bare slice can split an astral
-      // pair into a lone surrogate that breaks the entry's serialization) —
-      // headless CONSOLE_INSTALL_JS parity, same bar as bridge.js's clip.
-      const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
-      const orig = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug };
-      ["log", "error", "warn", "info", "debug"].forEach((m) => {
-        console[m] = (...args) => {
-          try {
-            const msg = clip(args.map((a) => { try { return String(a); } catch { return "[object]"; } }).join(" "));
-            const buf = window.__webpilot_console;
-            buf.push({ level: m, message: msg, timestamp: nowFn() });
-            // `truncated` is driven by this eviction flag, not `length >= cap`.
-            if (buf.length > cap) { buf.shift(); window.__webpilot_console_dropped = true; }
-          } catch {}
-          orig[m].apply(console, args);
-        };
-      });
-    },
+    files: [file],
   });
 }
-
-async function injectNetworkMonitoring(tabId) {
-  await chrome.scripting.executeScript({
-    target: { tabId, frameIds: [0] },
-    world: "MAIN",
-    args: [MONITOR_BUFFER_CAP],
-    func: (cap) => {
-      if (window.__webpilot_network_active) return;
-      window.__webpilot_network_active = true;
-      window.__webpilot_network = [];
-      // Intrinsics captured at install (a page that booby-traps Date.now /
-      // performance.now later can't break the recording), a clip like the DOM
-      // capture (a giant data: URL must not balloon the buffer/payload), and
-      // every recording wrapped so it can never break the page's own fetch/XHR.
-      // Headless NETWORK_INSTALL_JS parity.
-      const nowFn = Date.now;
-      const perfObj = performance;
-      const perfNowRaw = perfObj.now;
-      const perfNow = () => { try { return perfNowRaw.call(perfObj); } catch { return 0; } };
-      const MAX = 4096;
-      // CODEPOINT-safe clip (a lone surrogate breaks serialization — see console).
-      const clip = (s) => { if (s.length <= MAX) return s; const cps = Array.from(s); return cps.length > MAX ? cps.slice(0, MAX).join("") + "…[" + cps.length + " chars]" : s; };
-      const origFetch = window.fetch;
-      window.fetch = function (...args) {
-        let entry = null, t0 = 0;
-        try {
-          const [resource, config] = args;
-          // `fetch` accepts a string/URL or a Request object. A Request carries its
-          // own url and method, which a `config` override can still trump. Reading
-          // `String(resource)` would log "[object Request]" and lose the method.
-          const isReq = typeof Request !== "undefined" && resource instanceof Request;
-          const url = isReq ? resource.url : String(resource);
-          const method = config?.method || (isReq ? resource.method : "GET");
-          t0 = perfNow();
-          // Record the request in-flight immediately (no status, duration 0) so a
-          // read DURING a slow request sees it instead of an empty buffer; fill in
-          // status/error/duration on completion by mutating this same entry.
-          entry = { type: "fetch", url: clip(url), method, duration_ms: 0, timestamp: nowFn() };
-          const buf = window.__webpilot_network;
-          buf.push(entry);
-          if (buf.length > cap) { buf.shift(); window.__webpilot_network_dropped = true; }
-        } catch { entry = null; }
-        // origFetch can throw SYNCHRONOUSLY (`fetch()` with no args is a
-        // TypeError, not a rejected promise). Stamp the entry errored instead of
-        // leaving it in-flight forever, then rethrow so the page sees it.
-        let p;
-        try {
-          p = origFetch.apply(this, args);
-        } catch (e) {
-          if (entry) { try { entry.error = String(e && e.message || e); entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch {} }
-          throw e;
-        }
-        if (!entry) return p;
-        return p.then((response) => {
-          // Re-stamp at completion: `--since` polling filters on timestamp, and the
-          // start time the entry carried while in-flight sits before a cursor taken
-          // after the request began, which would hide the resolved entry from a
-          // poller. A plain read (no `since`) shows it either way.
-          try { entry.status = response.status; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch {}
-          return response;
-        }).catch((err) => {
-          try { entry.error = err.message; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch {}
-          throw err;
-        });
-      };
-      // Patch the prototype in place: keeps XMLHttpRequest's static constants
-      // (UNSENT…DONE) intact, and a once-listener per send records each request
-      // exactly once even when an instance is reused.
-      const xhrProto = XMLHttpRequest.prototype;
-      const origOpen = xhrProto.open;
-      const origSend = xhrProto.send;
-      const xhrMeta = new WeakMap();
-      xhrProto.open = function (m, u, ...a) {
-        try { xhrMeta.set(this, { method: m, url: String(u) }); } catch {}
-        return origOpen.apply(this, [m, u, ...a]);
-      };
-      xhrProto.send = function (...a) {
-        let entry = null, t0 = 0;
-        try {
-          t0 = perfNow();
-          const meta = xhrMeta.get(this) || {};
-          // Record in-flight at send (no status, duration 0), updated on loadend —
-          // so an in-flight XHR is visible to a read, like fetch.
-          entry = { type: "xhr", url: clip(meta.url || ""), method: meta.method || "GET", duration_ms: 0, timestamp: nowFn() };
-          const buf = window.__webpilot_network;
-          buf.push(entry);
-          if (buf.length > cap) { buf.shift(); window.__webpilot_network_dropped = true; }
-          // status===0 covers abort, timeout AND network/CORS failure alike, so
-          // read the actual terminal event rather than labelling every one a
-          // "Network error" — a request the page itself cancelled is not one.
-          let terminalError;
-          this.addEventListener("abort", () => { terminalError = "aborted"; }, { once: true });
-          this.addEventListener("timeout", () => { terminalError = "timeout"; }, { once: true });
-          this.addEventListener("error", () => { terminalError = "Network error"; }, { once: true });
-          this.addEventListener("loadend", () => {
-            try { entry.status = this.status || undefined; entry.error = terminalError; entry.duration_ms = Math.round(perfNow() - t0); entry.timestamp = nowFn(); } catch {}
-          }, { once: true });
-        } catch { entry = null; }
-        return origSend.apply(this, a);
-      };
-    },
-  });
-}
-
-// ── Cookies ────────────────────────────────────────────────────────────────
-
 async function handleCookieList(url) {
   // Same guard as `handleCookieSet`: a malformed URL must be the typed
   // InvalidArgument (exit 7) headless CDP returns, not the `Other` (exit 1) a
@@ -387,7 +252,7 @@ async function handleConsoleStart() {
   const tab = await resolveActiveTab();
   if (!tab) return { type: "CommandResult", success: false, error: noPageErr() };
   try {
-    await injectConsoleMonitoring(tab.id);
+    await injectMonitor(tab.id, CONSOLE_MONITOR);
     monitoringState.console = true;
     saveMonitoringState();
     return { type: "CommandResult", success: true };
@@ -497,7 +362,7 @@ async function handleNetworkStart() {
   const tab = await resolveActiveTab();
   if (!tab) return { type: "CommandResult", success: false, error: noPageErr() };
   try {
-    await injectNetworkMonitoring(tab.id);
+    await injectMonitor(tab.id, NETWORK_MONITOR);
     monitoringState.network = true;
     saveMonitoringState();
     return { type: "CommandResult", success: true };
