@@ -398,6 +398,17 @@ pub enum ResponseData {
         /// true whenever the buffer is at capacity, false otherwise.
         #[serde(default)]
         truncated: bool,
+        /// Whether the recorder was in place before this document's first script,
+        /// which is what decides whether an empty buffer means "the page reported
+        /// nothing" or "nothing was watching". False for a document built while no
+        /// WebPilot process was attached — one loaded between two CLI invocations,
+        /// or a popup, which is already loading when its target appears — and
+        /// always false in browser mode, which injects at navigation settle. The
+        /// recorder stamps it from the null `documentElement` only a document-start
+        /// injection sees; a missing field reads as false, so a peer that cannot
+        /// answer never claims coverage it has not got.
+        #[serde(default)]
+        covers_load: bool,
     },
     NetworkEntries {
         entries: Vec<NetworkEntry>,
@@ -405,6 +416,11 @@ pub enum ResponseData {
         /// older requests may have been evicted from this read.
         #[serde(default)]
         truncated: bool,
+        /// As `ConsoleEntries::covers_load`: whether the recorder was in place
+        /// before this document's first script, so a buffer with no requests in it
+        /// is the page's silence rather than the recorder's absence.
+        #[serde(default)]
+        covers_load: bool,
     },
     SessionExport {
         path: String,

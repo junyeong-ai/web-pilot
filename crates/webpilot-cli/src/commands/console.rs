@@ -52,7 +52,11 @@ pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<C
     let result = transport.send(cmd).await?;
 
     match result {
-        ResponseData::ConsoleEntries { entries, truncated } => {
+        ResponseData::ConsoleEntries {
+            entries,
+            truncated,
+            covers_load,
+        } => {
             let filtered: Vec<_> = match &args.command {
                 ConsoleCommand::Read {
                     level: Some(lvl), ..
@@ -72,18 +76,26 @@ pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<C
                 .map(console_row)
                 .collect::<Vec<_>>()
                 .join("\n");
-            // `truncated` rides in both the JSON and the human text so neither an
-            // MCP nor a CLI agent reads a full-looking buffer as the whole story.
+            // Both limits ride in the JSON and the human text so neither an MCP nor
+            // a CLI agent reads a buffer as the whole story: `truncated` for what
+            // the cap dropped, `covers_load` for the window before the recorder
+            // existed — an empty read there is the recorder's absence, not the
+            // page's silence.
             if truncated {
-                if !human.is_empty() {
-                    human.push('\n');
-                }
-                human.push_str(
+                crate::output::push_note(
+                    &mut human,
                     "--- console buffer at capacity — older entries may have been dropped ---",
                 );
             }
+            if !covers_load {
+                crate::output::push_note(&mut human, crate::output::MONITOR_PARTIAL_NOTE);
+            }
             Ok(CommandOutput::Data {
-                json: serde_json::json!({ "entries": filtered, "truncated": truncated }),
+                json: serde_json::json!({
+                    "entries": filtered,
+                    "truncated": truncated,
+                    "covers_load": covers_load,
+                }),
                 human,
             })
         }

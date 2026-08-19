@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An empty `console read` / `network read` no longer means two different things
+  (both modes).** A buffer with nothing in it read identically whether the page had
+  reported nothing or nothing had been watching when it did — which is exactly how
+  a "console errors" check passes a deploy whose bundle threw on load. Some
+  documents are genuinely out of reach: one built while no WebPilot process was
+  attached (the page navigated itself between two commands, or opened a popup,
+  already loading when its target appears), and every document in browser mode,
+  which injects at navigation settle because a document-start MAIN-world injection
+  in the user's own Chrome is either a content script matching every tab they
+  browse or a session-long debugger banner. That cannot be closed by attaching
+  harder, so the reads now SAY it: each carries `covers_load`, stamped by the
+  recorder from the null `documentElement` that only a document-start injection
+  sees, and the human render adds `--- recorder installed after this document
+  started — anything reported before then is not in this buffer ---`. Silence now
+  means coverage. In headless, re-driving the load (`action reload`) closes the
+  gap and the next read says so.
+
 - **A session served by one transport (`webpilot mcp`, the NM host) no longer
   drifts from the browser it drives (headless).** Which page a command acts on was
   resolved once, when the transport opened, so a tab that closed between two

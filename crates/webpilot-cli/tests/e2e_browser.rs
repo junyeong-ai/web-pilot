@@ -722,6 +722,19 @@ fn browser_behavioral_flow() {
         "console monitor must record entries: {}",
         stdout(&logs)
     );
+    // Browser mode injects the recorder at navigation settle — it drives the
+    // user's own Chrome, where a document-start MAIN-world injection is either a
+    // registered content script reaching every tab they browse or a debugger
+    // attach that leaves Chrome's banner up for the session. So it cannot cover a
+    // document's load window, and every read must SAY that rather than letting an
+    // empty buffer read as a quiet page. This is the mode difference stated as a
+    // value, so it cannot drift into silence.
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout(&logs)).expect("console read json")["covers_load"],
+        serde_json::Value::Bool(false),
+        "browser mode injects at settle, so a read must not claim it covered the load: {}",
+        stdout(&logs)
+    );
 
     // 4b-error. The exception and rejection sources reach the agent through
     //           browser mode's OWN read projection, which drops any entry whose

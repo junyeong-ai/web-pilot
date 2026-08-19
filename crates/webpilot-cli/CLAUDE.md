@@ -62,7 +62,14 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       hook enters a document ahead of the document's own scripts (a page's startup
       output is captured) and an `eval` deny removes it again. The recorders
       themselves are `extension/content/monitor-*.js`, embedded here and injected
-      by the extension — one text for both modes.
+      by the extension — one text for both modes. Each read reports what it could
+      not cover: `truncated` for what the cap evicted, `covers_load` for whether
+      the recorder was in place before the document's first script (stamped by the
+      recorder from the null `documentElement` only a document-start injection
+      sees), so an empty buffer is never ambiguous. `MONITOR_SHAPE` is the whole
+      recorder contract — entries AND the globals a read expects — and
+      `monitor_shape_stamp_is_in_step` fails the build if the six stamp sites
+      disagree.
     - `browser.rs` — tab / frame / status. The **active-tab pin**
       (`runtime/active_tab_<key>.json`) is the session's page identity: every
       target `pick_active_target` binds is written there, so separate CLI

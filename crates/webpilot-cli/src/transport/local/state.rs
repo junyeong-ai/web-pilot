@@ -196,7 +196,8 @@ impl LocalTransport {
                   if(window.__webpilot_console_shape!=={shape})return{{stale:true}};\
                   return{{entries:a.filter(e=>e&&e.timestamp>={since}).map(e=>({{source:String(e.source),\
                   level:String(e.level),message:String(e.message),timestamp:e.timestamp}})),\
-                  truncated:window.__webpilot_console_dropped===true}};}})()",
+                  truncated:window.__webpilot_console_dropped===true,\
+                  covers_load:window.__webpilot_console_from_start===true}};}})()",
                 since = since.unwrap_or(0),
                 shape = MONITOR_SHAPE,
             ))
@@ -215,6 +216,10 @@ impl LocalTransport {
         }
         let truncated = result
             .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let covers_load = result
+            .get("covers_load")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let entries: Vec<ConsoleEntry> = result
@@ -237,7 +242,11 @@ impl LocalTransport {
                 })
             })
             .collect();
-        Ok(ResponseData::ConsoleEntries { entries, truncated })
+        Ok(ResponseData::ConsoleEntries {
+            entries,
+            truncated,
+            covers_load,
+        })
     }
 
     pub(super) async fn do_console_clear(&self) -> Result<ResponseData> {
@@ -394,7 +403,8 @@ impl LocalTransport {
               return{{entries:a.filter(e=>e&&e.timestamp>={since}).map(e=>({{type:String(e.type),\
               url:String(e.url),method:String(e.method),status:e.status,duration_ms:e.duration_ms,\
               error:e.error==null?undefined:String(e.error),timestamp:e.timestamp}})),\
-              truncated:window.__webpilot_network_dropped===true}};}})()",
+              truncated:window.__webpilot_network_dropped===true,\
+              covers_load:window.__webpilot_network_from_start===true}};}})()",
             since = since.unwrap_or(0),
             shape = MONITOR_SHAPE,
         );
@@ -415,6 +425,10 @@ impl LocalTransport {
             .get("truncated")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let covers_load = result
+            .get("covers_load")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let arr = result
             .get("entries")
             .and_then(|v| v.as_array())
@@ -427,6 +441,7 @@ impl LocalTransport {
         Ok(ResponseData::NetworkEntries {
             entries: requests,
             truncated,
+            covers_load,
         })
     }
 
@@ -810,10 +825,11 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
     }
 }
 
-/// The entry shape this build reads. The recorders stamp it on the document
+/// The recorder contract this build reads — the shape of the entries AND the
+/// globals a read expects beside them. The recorders stamp it on the document
 /// (`window.__webpilot_<kind>_shape`) and every read path checks it; bumping it
 /// means bumping both recorders too, which `monitor_shape_stamp_is_in_step` holds.
-const MONITOR_SHAPE: u32 = 1;
+const MONITOR_SHAPE: u32 = 2;
 
 /// This document's recorder does not write the shape this build reads: the
 /// document was hooked by an older WebPilot, and Chrome outlives the process that

@@ -296,7 +296,7 @@ async function handleConsoleRead(since) {
         // The recorder stamps the shape it writes; a document hooked by another
         // build carries a different one, and its entries would otherwise be
         // dropped one by one into the empty list a quiet page gives.
-        if (window.__webpilot_console_shape !== 1) return { stale: true };
+        if (window.__webpilot_console_shape !== 2) return { stale: true };
         return {
           entries: all
             .filter((e) => e && levels.includes(e.level) && sources.includes(e.source) && e.timestamp >= s)
@@ -316,10 +316,15 @@ async function handleConsoleRead(since) {
           // Driven by the eviction flag, not `length >= cap` (headless parity):
           // a buffer at exactly the cap with nothing dropped isn't truncated.
           truncated: window.__webpilot_console_dropped === true,
+          // Whether the recorder was in place before this document's first script.
+          // Browser mode injects at navigation settle, so this is false here and
+          // the read says so rather than letting an empty buffer read as a quiet
+          // page — the same field headless answers true for a document it drove.
+          covers_load: window.__webpilot_console_from_start === true,
         };
       },
     });
-    const out = r?.[0]?.result || { entries: [], truncated: false };
+    const out = r?.[0]?.result || { entries: [], truncated: false, covers_load: false };
     if (out.missing) {
       return topErr(err(
         "InvalidArgument",
@@ -332,7 +337,12 @@ async function handleConsoleRead(since) {
         "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`",
       ));
     }
-    return { type: "ConsoleEntries", entries: out.entries, truncated: out.truncated };
+    return {
+      type: "ConsoleEntries",
+      entries: out.entries,
+      truncated: out.truncated,
+      covers_load: out.covers_load === true,
+    };
   } catch (e) {
     // A scripting failure means we could not read the buffer — surface it
     // typed instead of reporting an empty (but successful) read, which would
@@ -414,7 +424,7 @@ async function handleNetworkRead(since) {
         if (all === undefined) return { missing: true };
         // See handleConsoleRead — a recorder from another build is named, not
         // inferred from the entries it left.
-        if (window.__webpilot_network_shape !== 1) return { stale: true };
+        if (window.__webpilot_network_shape !== 2) return { stale: true };
         const readable = (e) =>
           e &&
           e.timestamp >= s &&
@@ -437,11 +447,14 @@ async function handleNetworkRead(since) {
           entries: all.filter(readable),
           // The eviction flag, not `length >= cap` (headless parity).
           truncated: window.__webpilot_network_dropped === true,
+          // See the console read: browser mode injects at navigation settle, so no
+          // request the document made before then is in this buffer.
+          covers_load: window.__webpilot_network_from_start === true,
         };
       },
       args: [since || 0],
     });
-    const out = r?.[0]?.result || { entries: [], truncated: false };
+    const out = r?.[0]?.result || { entries: [], truncated: false, covers_load: false };
     if (out.missing) {
       return topErr(err(
         "InvalidArgument",
@@ -454,7 +467,12 @@ async function handleNetworkRead(since) {
         "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`",
       ));
     }
-    return { type: "NetworkEntries", entries: out.entries, truncated: out.truncated };
+    return {
+      type: "NetworkEntries",
+      entries: out.entries,
+      truncated: out.truncated,
+      covers_load: out.covers_load === true,
+    };
   } catch (e) {
     return topErr(exceptionErr(e));
   }

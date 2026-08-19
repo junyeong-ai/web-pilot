@@ -41,9 +41,18 @@
   // What SHAPE this recorder writes. Chrome outlives the process that hooked a
   // document, so a later build can meet this one still running; the read checks
   // this rather than inferring from the entries, which cannot tell a recorder
-  // from another build apart from a page writing entries of its own. Bump it
-  // whenever the entry shape changes.
-  window.__webpilot_console_shape = 1;
+  // from another build apart from a page writing entries of its own. It covers
+  // the whole contract — the entries AND the globals beside them a read expects
+  // — so bump it whenever either changes.
+  window.__webpilot_console_shape = 2;
+
+  // Whether this recorder was in place before the document's first script,
+  // which is the only thing that makes an empty buffer mean "the page reported
+  // nothing" rather than "nothing was watching". A document-start injection
+  // runs before the parser has built the root element, so a null
+  // `documentElement` IS that fact — not an inference from it. The read hands
+  // it on so a quiet buffer can never be mistaken for a quiet page.
+  window.__webpilot_console_from_start = document.documentElement === null;
 
   // Max entries kept in the ring buffer. The read reports `truncated` from the
   // eviction flag set below, never from this number, so the cap lives only here.

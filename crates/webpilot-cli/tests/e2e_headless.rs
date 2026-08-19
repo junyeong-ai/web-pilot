@@ -2089,6 +2089,17 @@ fn headless_behavioral_flow() {
         "a fetch the page fires while parsing must be captured: {}",
         stdout(&load_network)
     );
+    // And each read SAYS it covered the load, which is what makes an empty buffer
+    // on some other page mean "the page reported nothing" rather than "nothing was
+    // watching".
+    for (what, out) in [("console", &load_console), ("network", &load_network)] {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&stdout(out)).expect("read json")["covers_load"],
+            serde_json::Value::Bool(true),
+            "a {what} read of a document WebPilot drove must report that it covered the load: {}",
+            stdout(out)
+        );
+    }
     // The registration reaches every frame of the target, so the install script
     // gates on the top frame: only the main frame's buffer is ever read, and
     // patching a subframe would put the hook in a third-party document for
@@ -2112,6 +2123,64 @@ fn headless_behavioral_flow() {
         "true",
         "the monitor must not patch a subframe — only the main frame is read: {}",
         stdout(&subframe_hook)
+    );
+
+    // 3a-coverage. The one document a WebPilot process cannot reach: the page
+    //     navigates itself once the process that drove it there has exited, so the
+    //     document it lands on is built with nothing attached and its startup
+    //     output is recorded nowhere. That is unfixable — no process is there to
+    //     register anything — so the read must SAY so instead of answering with
+    //     the same empty buffer a quiet page gives, which is exactly how a
+    //     "console errors" check passes a broken deploy. Re-driving the load
+    //     closes it, and the read then claims the coverage it has.
+    let _ = fx.run(&["console", "clear"]);
+    let _ = fx.run(&["network", "clear"]);
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/selfnav")])),
+        0,
+        "navigate to the self-navigating page failed"
+    );
+    // Past the page's own redirect with NO command in flight — a process attached
+    // when the new document is built would register into it and cover the load,
+    // which is the opposite of what this asserts. The fixture's delay is far
+    // longer than the navigate above takes to return, so the gap is real, not a
+    // race: an overlap would make `covers_load` true and fail loudly here.
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    let uncovered = fx.run(&["console", "read"]);
+    let uncovered_json: serde_json::Value =
+        serde_json::from_str(&stdout(&uncovered)).expect("console read json");
+    assert_eq!(
+        uncovered_json["covers_load"],
+        serde_json::Value::Bool(false),
+        "a document built while no process was attached must not be reported as covered: {}",
+        stdout(&uncovered)
+    );
+    assert!(
+        !stdout(&uncovered).contains("loadwindow-console-marker"),
+        "the landed document's startup log is genuinely out of reach — if it is \
+         here, coverage is being under-reported: {}",
+        stdout(&uncovered)
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout(&fx.run(&["network", "read"])))
+            .expect("network read json")["covers_load"],
+        serde_json::Value::Bool(false),
+        "the network read of the same document must report the same gap"
+    );
+    // Re-driving the load puts the recorder in ahead of the document's first
+    // script, so the same page now reads as covered — with its startup output.
+    assert_eq!(code(&fx.run(&["action", "reload"])), 0, "reload failed");
+    let covered = fx.run(&["console", "read"]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout(&covered)).expect("console read json")["covers_load"],
+        serde_json::Value::Bool(true),
+        "a load WebPilot drove must read as covered: {}",
+        stdout(&covered)
+    );
+    assert!(
+        stdout(&covered).contains("loadwindow-console-marker"),
+        "and it must carry the startup output the uncovered read was missing: {}",
+        stdout(&covered)
     );
 
     // 3a-error. `console read` reports what the page REPORTS, not only what it

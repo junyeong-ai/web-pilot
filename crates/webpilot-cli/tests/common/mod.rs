@@ -207,6 +207,14 @@ setTimeout(function () {
 }, 0);
 </script></body></html>"##;
 
+/// Navigates ITSELF, long enough after loading that the process which drove it
+/// there has exited: the document it lands on is built with nothing attached, so
+/// no recorder can be in it from the start. The one document a WebPilot process
+/// cannot cover, and the reason a read reports whether it covered the load — an
+/// empty buffer here is the recorder's absence, not the page's silence.
+pub const SELF_NAV: &str = r##"<!doctype html><html><head><title>selfnav</title></head>
+<body><script>setTimeout(function () { location.href = "/loadlog"; }, 1500);</script></body></html>"##;
+
 /// The iframe of `/loadlog`.
 pub const LOAD_FRAME: &str = r#"<!doctype html><html><head><title>loadframe</title></head>
 <body><script>console.log('loadwindow-subframe-marker')</script></body></html>"#;
@@ -338,6 +346,8 @@ pub fn spawn_server() -> String {
                     (PAGE_ERROR, "")
                 } else if req.starts_with("GET /loadlog") {
                     (LOADLOG, "")
+                } else if req.starts_with("GET /selfnav") {
+                    (SELF_NAV, "")
                 } else if req.starts_with("GET /loadframe") {
                     (LOAD_FRAME, "")
                 } else if req.starts_with("GET /log") {

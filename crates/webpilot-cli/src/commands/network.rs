@@ -61,24 +61,32 @@ pub async fn run<T: Transport>(transport: &mut T, args: NetworkArgs) -> Result<C
         ResponseData::NetworkEntries {
             entries: requests,
             truncated,
+            covers_load,
         } => {
             let mut human: String = requests
                 .iter()
                 .map(network_row)
                 .collect::<Vec<_>>()
                 .join("\n");
-            // `truncated` rides in both the JSON and the human text so neither an
-            // MCP nor a CLI agent reads a full-looking buffer as the whole story.
+            // Both limits ride in the JSON and the human text — see `console read`:
+            // `truncated` for what the cap dropped, `covers_load` for the window
+            // before the recorder existed, where no requests means nothing was
+            // watching rather than a page that made none.
             if truncated {
-                if !human.is_empty() {
-                    human.push('\n');
-                }
-                human.push_str(
+                crate::output::push_note(
+                    &mut human,
                     "--- network buffer at capacity — older requests may have been dropped ---",
                 );
             }
+            if !covers_load {
+                crate::output::push_note(&mut human, crate::output::MONITOR_PARTIAL_NOTE);
+            }
             Ok(CommandOutput::Data {
-                json: serde_json::json!({ "entries": requests, "truncated": truncated }),
+                json: serde_json::json!({
+                    "entries": requests,
+                    "truncated": truncated,
+                    "covers_load": covers_load,
+                }),
                 human,
             })
         }

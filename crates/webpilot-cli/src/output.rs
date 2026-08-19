@@ -66,6 +66,25 @@ const DOM_EXTRA_LABELS: [(&str, &str); 6] = [
     ("accessibility_path", "Accessibility tree"),
 ];
 
+/// Append a note under a read's rows, in the `--- … ---` shape the DOM render
+/// uses for what a snapshot could not cover.
+pub(crate) fn push_note(human: &mut String, note: &str) {
+    if !human.is_empty() {
+        human.push('\n');
+    }
+    human.push_str(note);
+}
+
+/// The note a monitor read carries when its recorder was not in place before the
+/// document's first script: an empty buffer then means nothing was watching, not
+/// that the page was quiet — the one reading a validator can otherwise get wrong
+/// in the direction of a clean bill of health. Shared by both reads because the
+/// fact is about the recorder, not about what it records, and it names no remedy:
+/// in headless a load WebPilot drives carries the recorder from the start, while
+/// browser mode injects at navigation settle and cannot, so any one command in
+/// the text would be wrong in one of the two modes.
+pub(crate) const MONITOR_PARTIAL_NOTE: &str = "--- recorder installed after this document started — anything reported before then is not in this buffer ---";
+
 /// One `Label: value` line per present capture artefact, in a stable order.
 /// The single source for the CLI renderer, the MCP text block, and the capture
 /// handler's no-DOM path. Every value passes through `line_safe_clip`:

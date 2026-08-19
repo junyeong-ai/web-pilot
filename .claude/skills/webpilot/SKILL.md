@@ -291,6 +291,17 @@ fetch activity is captured; browser mode injects once a navigation settles, so
 there a page's own startup output is missed (it drives your real Chrome, where a
 document-start injection cannot be limited to the one tab the agent is on).
 
+**Every read tells you which you got.** `covers_load: false` in the JSON — or the
+`--- recorder installed after this document started … ---` line in the text —
+means the recorder went in after the document had already started, so nothing it
+reported before then is in the buffer. An empty read there says nothing about the
+page. It happens for a document built while no WebPilot process was attached (the
+page navigated itself between two of your commands, or it opened a popup) and for
+every browser-mode read. In headless, drive the load yourself to close it:
+`action reload` (or `action navigate URL`) puts the recorder in ahead of the
+first script, and the next read reports `covers_load: true`. In browser mode it
+cannot be closed — read it as "load-time output unknown", never as "clean".
+
 `console read` reports what the page REPORTS, so a page that breaks without
 logging anything is still visible. Each entry carries a `source`:
 
@@ -465,6 +476,7 @@ Errors carry typed data: `ElementNotFound { requested, available }`, `StaleSnaps
 | `StaleSnapshot` (4) | the page changed since the last capture (or there was none) — re-run `capture --include dom`, then act |
 | `SelectorNotFound` (4) | valid selector but no match — **or you're on the wrong page/tab**: `webpilot tab` to check the active page, then `action navigate URL` (or `tab switch`) to re-pin |
 | `TabNotFound` (4) | the tab you were pinned to is gone (the error names it) — `webpilot tab` lists the survivors, `tab switch <ID>` / `tab new URL` re-pins. Headless already moved the pin onto the tab the error announced, so a plain retry runs there |
+| _(no error)_ `covers_load: false` | not a failure — the recorder went in after the document started, so an empty console/network read proves nothing. Headless: `action reload`, then read again. Browser mode: load-time output is out of reach |
 | `NoPage` (8) | call `capture --include dom --url URL` first |
 | `Timeout` (5) | raise with `--timeout`, or run `network read` to see what's pending |
 | `BridgeUnavailable` / `ConnectionLost` (3) | `webpilot quit` then retry; check `webpilot status` |
