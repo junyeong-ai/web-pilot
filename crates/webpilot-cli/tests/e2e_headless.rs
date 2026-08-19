@@ -4405,6 +4405,34 @@ fn headless_behavioral_flow() {
         stdout(&pair)
     );
 
+    // 8e-dl-deferred. The same click, with the second export a beat behind the
+    //     first — the ordering a loaded machine produces on its own, and the one
+    //     that used to lose a file: the first transfer settles before the second
+    //     is announced, so a watch that ended on "everything I have heard of has
+    //     finished" returned with one download while the other was still coming.
+    //     The window belongs to the command, so both are reported.
+    let cap_deferred = fx.run(&[
+        "capture",
+        "--include",
+        "dom",
+        "--url",
+        &format!("{base}/dldeferred"),
+    ]);
+    let deferred = fx.run(&["action", "click", &index_of(&cap_deferred, "dldeferred")]);
+    let deferred_json: serde_json::Value = serde_json::from_str(&stdout(&deferred)).expect("json");
+    let deferred_names: Vec<&str> = deferred_json["downloads"]
+        .as_array()
+        .expect("downloads")
+        .iter()
+        .filter_map(|d| d["suggested_filename"].as_str())
+        .collect();
+    assert!(
+        deferred_names.contains(&"now.csv") && deferred_names.contains(&"later.csv"),
+        "a download this click started while the command was still running must be \
+         reported, whether or not the first had already finished: {}",
+        stdout(&deferred)
+    );
+
     // 8e-dl-slow. The outcome is Chrome's, not WebPilot's configuration: a
     //     transfer still running when the command returns must say so, or the
     //     agent reads the prefix of a file the response called Downloaded.

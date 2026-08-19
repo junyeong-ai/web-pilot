@@ -207,6 +207,25 @@ setTimeout(function () {
 }, 0);
 </script></body></html>"##;
 
+/// One click, two files — the second started a beat LATER, from a timer the
+/// handler set. The first transfer is a tiny blob, so it finishes before the
+/// second even begins: the ordering that makes "everything I have heard of has
+/// finished" true while a file this click causes is still to come.
+pub const DEFERRED_DOWNLOAD: &str = r##"<!doctype html><html><head><title>deferred</title></head>
+<body><script>
+function exp(name) {
+  const blob = new Blob(["a,b\n1,2\n"], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = window.URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+</script>
+<button id="dldeferred" onclick="exp('now.csv'); setTimeout(function () { exp('later.csv'); }, 300)">deferred pair</button>
+</body></html>"##;
+
 /// Navigates ITSELF, long enough after loading that the process which drove it
 /// there has exited: the document it lands on is built with nothing attached, so
 /// no recorder can be in it from the start. The one document a WebPilot process
@@ -348,6 +367,8 @@ pub fn spawn_server() -> String {
                     (LOADLOG, "")
                 } else if req.starts_with("GET /selfnav") {
                     (SELF_NAV, "")
+                } else if req.starts_with("GET /dldeferred") {
+                    (DEFERRED_DOWNLOAD, "")
                 } else if req.starts_with("GET /loadframe") {
                     (LOAD_FRAME, "")
                 } else if req.starts_with("GET /log") {

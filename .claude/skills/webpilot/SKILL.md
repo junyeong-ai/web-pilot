@@ -167,6 +167,11 @@ The file is named by its download id, so a page cannot pick a path on your disk;
 `suggested_filename` is what the server called it. Files land under WebPilot's
 artifact root (per `--context`), never the OS download folder.
 
+A command that starts a download **waits out a short window (~2s) before
+returning**, so one click that writes several files reports all of them — an
+export button that fires a second one a beat later is the common shape. The wait
+is only on commands that actually download; everything else returns at once.
+
 Headless only. Under `--browser` a download goes to the user's own download
 folder and is not reported — check with them rather than assuming a click that
 downloaded did nothing.

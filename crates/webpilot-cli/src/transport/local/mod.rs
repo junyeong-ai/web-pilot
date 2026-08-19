@@ -1230,11 +1230,18 @@ pub(super) async fn collect_downloads(
                 Err(_) => break,
             }
         }
-        let awaiting = if sweep.watches.is_empty() {
-            promised
-        } else {
-            sweep.watches.iter().any(|w| w.settled.is_none())
-        };
+        // The window belongs to the COMMAND, not to the transfers it has already
+        // heard about. `settled` says a transfer finished; it never says the
+        // command is done starting them, and one act can start several — a click
+        // handler that exports two files, or schedules the second on a timer.
+        // Ending on "everything I know of has finished" reads the absence of an
+        // announcement as the absence of a download, so a file whose announcement
+        // was still coming is dropped for having no record of its own (measured:
+        // a second export 300 ms behind the first was missed every time, the
+        // command answering with one download at 55 ms). A command that neither
+        // expects nor has seen one still returns at once — the no-download path,
+        // which is nearly every command, pays nothing.
+        let awaiting = promised || !sweep.watches.is_empty();
         let now = tokio::time::Instant::now();
         if !awaiting || now >= deadline {
             break;

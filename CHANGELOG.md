@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A click that starts several downloads no longer reports only the first
+  (headless).** The watch ended when every transfer it had already heard about
+  finished — but `settled` says a transfer is done, never that the command is
+  done starting them, so the absence of an announcement was read as the absence
+  of a download. One click that exports two files, or exports one and schedules
+  another a beat later, returned naming one: measured, a second export 300 ms
+  behind the first was missed on every run, the command answering at 55 ms. The
+  action response is the only record a download ever gets — there is no
+  after-the-fact listing — so the file was invisible, in a directory named by
+  GUIDs. The window now belongs to the command: one that has started a download
+  (or was told one is coming) watches out its budget before returning, and only
+  then reports. Commands that download nothing are unchanged and pay nothing; a
+  command that does now takes that budget (~2s) to answer.
+
 ## [0.9.1] - 2026-08-19
 
 ### Fixed
