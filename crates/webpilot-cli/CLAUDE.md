@@ -57,7 +57,19 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       output is captured) and an `eval` deny removes it again. The recorders
       themselves are `extension/content/monitor-*.js`, embedded here and injected
       by the extension — one text for both modes.
-    - `browser.rs` — tab / frame / status.
+    - `browser.rs` — tab / frame / status. The **active-tab pin**
+      (`runtime/active_tab_<key>.json`) is the session's page identity: every
+      target `pick_active_target` binds is written there, so separate CLI
+      processes agree instead of each re-deriving from `Target.getTargets`
+      (Chrome orders it by target GUID, so a re-derivation can land elsewhere).
+      A pin whose tab closed STAYS on disk until the command that REPORTS it —
+      `send`'s one loud `TabNotFound` — moves it onto the fallback, so a
+      pin-independent command (`tab` list, the browser-global cookie/session
+      ops) can never consume the signal silently; `tab list` marks no tab active
+      meanwhile, and an explicit `tab switch`/`tab new` answers the dead pin
+      instead. Browser mode's pin is sticky in the same way but never
+      auto-moves: it drives the user's own Chrome, where the fallback would be a
+      tab the user is browsing.
   - `local_context.rs` — per-user CDP browser-context store (multi-agent,
     `MAX_CONTEXTS`).
 - `cdp.rs` — `CdpClient` (one tokio-tungstenite WebSocket to the browser

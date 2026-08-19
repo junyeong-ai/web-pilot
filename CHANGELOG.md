@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The tab a headless session acts on no longer changes without the agent
+  asking (headless).** The active-tab pin was written only by `tab switch` /
+  `tab new` / `tab close`, so any command that had to DERIVE a page — a fresh
+  attach, or the recovery after the pinned tab closed — picked one from
+  `Target.getTargets` and left nothing behind: the next CLI process, being a
+  fresh process, picked again from a list Chrome orders by its own map over
+  random target GUIDs, so two consecutive commands could act on different tabs.
+  Worse, the dead-pin signal was consumed by whichever command RESOLVED it
+  first, including commands that never report it — after a `tab` list or a
+  `cookie list`, the page command that followed ran on an arbitrary survivor and
+  returned success, the silent retarget the pin exists to prevent. Every derived
+  target is now pinned where it is chosen, so separate processes agree; the dead
+  pin stays on disk until the one loud `TabNotFound` announces it, and that
+  report is what moves the pin onto the fallback. A `tab` list marks no tab
+  active while the pin is dead, and an explicit `tab switch` / `tab new` answers
+  a dead pin instead of leaving a long-lived session (`webpilot mcp`) reporting
+  the tab the agent already left.
+
 - **An armed console / network monitor no longer misses what a page does while
   it loads (headless).** The hooks were injected once a navigation settled, so
   everything the new document logged or fetched from its own scripts — the whole

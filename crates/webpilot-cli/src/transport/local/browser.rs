@@ -67,8 +67,12 @@ impl LocalTransport {
                 // `attached` flag is true for ANY debugger client on the target,
                 // so an open DevTools window or a second tool would mark a tab
                 // (or several) active that the agent never pinned. The pin is
-                // `self.target_id`, the one this transport acts on.
-                active: t.get("targetId").and_then(|v| v.as_str()) == Some(self.target_id.as_str()),
+                // `self.target_id`, the one this transport acts on — and while it
+                // is dead this transport sits on a fallback no page command may
+                // touch, so NO tab is the agent's: marking the fallback would point
+                // the recovery at a tab whose very next capture is a TabNotFound.
+                active: self.pin_vanished.is_none()
+                    && t.get("targetId").and_then(|v| v.as_str()) == Some(self.target_id.as_str()),
             })
             .collect();
         Ok(ResponseData::Tabs { tabs })
@@ -148,6 +152,9 @@ impl LocalTransport {
         *self.active_frame_id.lock().await = None;
         super::clear_persisted_active_frame(self.persisted_context_key());
         super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
+        // An explicit re-pin answers a dead pin: the agent has chosen this tab, so
+        // a long-lived transport must not keep reporting the tab it left behind.
+        self.pin_vanished = None;
         self.await_live_bridge_context().await;
         // Armed monitors follow the agent's working tab, and follow it EARLY:
         // `tab new` opens its tab blank and loads into it afterwards, so
@@ -368,18 +375,10 @@ impl LocalTransport {
             return Ok(not_found);
         }
 
-        // Closing the tab this session is bound to: record it as the active pin
-        // FIRST, so the next command sees a DEAD pin — including the fresh-session
-        // case where no pin was persisted yet and the active tab is just the
-        // implicit `target_id`. `pick_active_target` then drops the dead pin and
-        // attaches to a fallback survivor, marking the transport `pin_vanished`:
-        // a page ACTION fails loud (`send` → TabNotFound) rather than silently
-        // running on the survivor, while `tab` list/switch and `status` proceed so
-        // the agent can re-pin. Browser mode gets the same effect from its sticky
-        // pin.
-        if self.target_id.as_str() == tab_id {
-            super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
-        }
+        // Closing the tab this session is bound to needs no pin bookkeeping: the
+        // pin already names it (`pick_active_target` writes every target it binds),
+        // so the close leaves a DEAD pin and the next page command reports the one
+        // loud TabNotFound. Browser mode gets the same effect from its sticky pin.
         if let Err(e) = self
             .browser
             .send("Target.closeTarget", Some(json!({"targetId": tab_id})))

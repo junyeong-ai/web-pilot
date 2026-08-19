@@ -1286,18 +1286,20 @@ impl Transport for LocalTransport {
         self.ensure_download_behavior().await;
         // The pinned tab closed and this transport attached to a fallback
         // survivor. A command that ACTS on the active page must not SILENTLY run
-        // on it — fail loud with TabNotFound, carrying the dead id, so the agent
-        // re-pins. Tab management and status only need the browser connection, so
-        // they proceed and let the recovery happen. The flag is CONSUMED by that
-        // one loud failure: the persisted pin is already dropped, so for a CLI
-        // process the next invocation re-resolves onto the fallback anyway — and
-        // a long-lived transport (the MCP server) must behave identically, not
-        // repeat TabNotFound forever on a flag no later command can clear (which
-        // blocked even `navigate`, leaving the session unrecoverable). One loud
-        // signal, then the fallback is the active page — announced, not silent.
+        // on it — fail loud with TabNotFound, carrying the dead id. Tab management,
+        // status and the browser-global cookie/session ops only need the browser
+        // connection, so they proceed and let the agent re-pin. This one loud
+        // failure is what CONSUMES the signal, and consuming it IS the pin move:
+        // the fallback becomes the active page on disk as well as in memory, so
+        // the next process acts on the same page rather than deriving its own, and
+        // a long-lived transport (the MCP server) does not repeat TabNotFound
+        // forever on a flag no later command can clear. One loud signal, then the
+        // fallback is the active page — announced, not silent, and the same
+        // whichever command arrives first.
         if command_needs_active_page(&command)
             && let Some(dead) = self.pin_vanished.take()
         {
+            write_persisted_active_tab(self.persisted_context_key(), &self.target_id)?;
             return Err(WebPilotError::TabNotFound { tab_id: dead }.into());
         }
         // Armed monitors answer to the browser's per-document injection the same
@@ -1729,13 +1731,27 @@ fn command_needs_active_page(command: &Command) -> bool {
     }
 }
 
-/// Returns `(target_id, vanished_pin)`. `vanished_pin` is `Some(dead_id)` when the
-/// persisted pin had closed: the transport still attaches to a fallback survivor
-/// so pin-independent commands (tab list/new/switch/close, status) keep working,
-/// while `send` turns `vanished_pin` into a typed `TabNotFound` for any command
-/// that would ACT on the now-gone active page — so the never-silently-retarget
-/// contract holds without blocking the agent's recovery. (Browser mode's
-/// persistent worker reads `activeTabId` directly and never trips this.)
+/// Returns `(target_id, vanished_pin)`.
+///
+/// The persisted pin (`runtime/active_tab_<key>.json`) is the session's page
+/// IDENTITY and names the bound target at all times, so a DERIVED target is
+/// written here — the one place a choice is made. A CLI invocation is a fresh
+/// process, so without that write every command would re-derive, and the
+/// derivation picks from `Target.getTargets`, which orders pages by Chrome's own
+/// map over random target GUIDs (measured: creating a third tab moved it to the
+/// front). Two consecutive commands could bind different pages. Browser mode
+/// persists the tab it derives for the same reason (`resolveActiveTab`'s
+/// `setActiveTabId`).
+///
+/// `vanished_pin` is `Some(dead_id)` when the pin's page has since closed. The
+/// transport still attaches to a fallback survivor so pin-independent commands
+/// (tab list/new/switch/close, status, the browser-global cookie and session
+/// ops) keep working, while `send` turns `vanished_pin` into a typed
+/// `TabNotFound` for any command that would ACT on the now-gone active page. The
+/// dead pin is LEFT on disk for that one report to consume: resolving it away
+/// here would let whichever command runs first — a `tab` list, a `cookie list` —
+/// destroy the signal, leaving the agent's next page action running on a survivor
+/// it was never told about, the silent retarget the pin exists to prevent.
 async fn pick_active_target(
     browser: &CdpClient,
     browser_context_id: Option<&str>,
@@ -1754,48 +1770,52 @@ async fn pick_active_target(
         if alive(&persisted) {
             return Ok((persisted, None));
         }
-        // The pinned tab closed. Drop the dead pin and remember it: a list/switch
-        // can still resolve a fallback below, but a page action must not silently
-        // run on it — `send` raises TabNotFound for those, carrying this id.
-        clear_persisted_active_tab(browser_context_id);
         vanished = Some(persisted);
     }
 
-    if let Some(anchor) = context_anchor
-        && alive(anchor)
-    {
-        return Ok((anchor.to_string(), vanished));
-    }
-
-    // A fresh attach: take the first page in scope. The created-context list is
-    // read only here — the persisted-pin and anchor fast paths never need it — and
-    // fails closed: a read error aborts rather than widen scope to every context.
-    let created = browser.get_browser_contexts().await?;
-    let target = targets
-        .iter()
-        .find(|t| is_page(t) && target_in_context(t, browser_context_id, &created))
-        .and_then(|t| {
-            t.get("targetId")
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        });
-    match target {
-        Some(target) => Ok((target, vanished)),
-        // Zero pages in scope — the last tab was closed. Failing NoPage here
-        // would wedge the session permanently: every command (including the
-        // `tab new` and `navigate` that would fix it) needs this attach first,
-        // and the NoPage guidance ("navigate") would point at a command that
-        // fails the same way. Create a blank page to attach to instead — the
-        // exact state a fresh browser starts in — so the recovery commands
-        // work; the dead-pin signal still fires its one loud TabNotFound for a
-        // page action, so nothing acts on the blank silently.
+    let derived = match context_anchor.filter(|anchor| alive(anchor)) {
+        Some(anchor) => anchor.to_string(),
         None => {
-            let target = browser
-                .create_target("about:blank", browser_context_id)
-                .await?;
-            Ok((target, vanished))
+            // A fresh attach: take the first page in scope. The created-context
+            // list is read only here — the persisted-pin and anchor fast paths
+            // never need it — and fails closed: a read error aborts rather than
+            // widen scope to every context.
+            let created = browser.get_browser_contexts().await?;
+            let first = targets
+                .iter()
+                .find(|t| is_page(t) && target_in_context(t, browser_context_id, &created))
+                .and_then(|t| {
+                    t.get("targetId")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                });
+            match first {
+                Some(target) => target,
+                // Zero pages in scope — the last tab was closed. Failing NoPage
+                // here would wedge the session permanently: every command
+                // (including the `tab new` and `navigate` that would fix it) needs
+                // this attach first, and the NoPage guidance ("navigate") would
+                // point at a command that fails the same way. Create a blank page
+                // to attach to instead — the exact state a fresh browser starts in
+                // — so the recovery commands work; the dead-pin signal still fires
+                // its one loud TabNotFound for a page action, so nothing acts on
+                // the blank silently.
+                None => {
+                    browser
+                        .create_target("about:blank", browser_context_id)
+                        .await?
+                }
+            }
         }
+    };
+
+    // Pin what was derived, so every later process binds this same page instead
+    // of re-deriving — unless a dead pin is still owed its report, whose id must
+    // survive until `send` announces it.
+    if vanished.is_none() {
+        write_persisted_active_tab(browser_context_id, &derived)?;
     }
+    Ok((derived, vanished))
 }
 
 pub(super) async fn attach_to_page(conn: &Arc<CdpClient>, target_id: &str) -> Result<CdpSession> {

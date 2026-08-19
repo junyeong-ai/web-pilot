@@ -464,6 +464,7 @@ Errors carry typed data: `ElementNotFound { requested, available }`, `StaleSnaps
 | `ElementNotFound` (4) | index out of range for the current snapshot — re-run `capture --include dom` |
 | `StaleSnapshot` (4) | the page changed since the last capture (or there was none) — re-run `capture --include dom`, then act |
 | `SelectorNotFound` (4) | valid selector but no match — **or you're on the wrong page/tab**: `webpilot tab` to check the active page, then `action navigate URL` (or `tab switch`) to re-pin |
+| `TabNotFound` (4) | the tab you were pinned to is gone (the error names it) — `webpilot tab` lists the survivors, `tab switch <ID>` / `tab new URL` re-pins. Headless already moved the pin onto the tab the error announced, so a plain retry runs there |
 | `NoPage` (8) | call `capture --include dom --url URL` first |
 | `Timeout` (5) | raise with `--timeout`, or run `network read` to see what's pending |
 | `BridgeUnavailable` / `ConnectionLost` (3) | `webpilot quit` then retry; check `webpilot status` |

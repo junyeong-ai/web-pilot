@@ -3785,11 +3785,36 @@ fn headless_behavioral_flow() {
         0,
         "closing the active tab failed"
     );
+    let dead_pin_list = fx.run(&["tab"]);
     assert_eq!(
-        code(&fx.run(&["tab"])),
+        code(&dead_pin_list),
         0,
         "tab list after closing the active tab must work (pin-independent), not TabNotFound: {}",
-        stdout(&fx.run(&["tab"]))
+        stdout(&dead_pin_list)
+    );
+    // ...and it must mark NO tab active: the pin names a tab that is gone, so
+    // every survivor is a tab the agent never chose. Marking the fallback would
+    // point the recovery at a tab whose very next page command is a TabNotFound.
+    assert!(
+        !serde_json::from_str::<serde_json::Value>(&stdout(&dead_pin_list))
+            .expect("tab list json")
+            .as_array()
+            .expect("tab list array")
+            .iter()
+            .any(|t| t["active"] == serde_json::Value::Bool(true)),
+        "a dead pin must leave no tab marked active: {}",
+        stdout(&dead_pin_list)
+    );
+    // The list is pin-INDEPENDENT, so it must not CONSUME the dead-pin signal
+    // either: an agent that only listed has not been told its tab is gone, and
+    // the next page command must still be the one loud TabNotFound rather than a
+    // silent success on whichever survivor the target list happened to head.
+    let after_list = fx.run(&["eval", "1"]);
+    assert_eq!(
+        code(&after_list),
+        4,
+        "a `tab` list must not swallow the dead-pin signal — the next page command still reports it: {}",
+        stdout(&after_list)
     );
 
     assert_eq!(
@@ -3855,12 +3880,22 @@ fn headless_behavioral_flow() {
         0,
         "closing the active tab failed"
     );
-    let dead_pin_list = fx.run(&["cookie", "list", &base]);
+    let dead_pin_cookies = fx.run(&["cookie", "list", &base]);
     assert_eq!(
-        code(&dead_pin_list),
+        code(&dead_pin_cookies),
         0,
         "cookie list as the first command on a dead pin must succeed (the jar is browser-global): {}",
-        stdout(&dead_pin_list)
+        stdout(&dead_pin_cookies)
+    );
+    // Those browser-global commands never touched the page, so the signal is
+    // still owed: the PAGE command that follows is the one that reports it, and
+    // only that report moves the pin onto the fallback.
+    let after_globals = fx.run(&["eval", "1"]);
+    assert_eq!(
+        code(&after_globals),
+        4,
+        "the browser-global commands must leave the dead-pin signal for the next page command: {}",
+        stdout(&after_globals)
     );
 
     // 9b. `tab find --url` is strict about ambiguity, like `frame url`: one
@@ -3920,6 +3955,68 @@ fn headless_behavioral_flow() {
         stdout(&ambiguous_find)
     );
 
+    // 9b-pin. The active page is an IDENTITY the session persists, not a choice
+    //     each process re-derives. `Target.getTargets` orders pages by Chrome's
+    //     own map over random target GUIDs, so a re-derivation could land on a
+    //     different tab from one command to the next. Closing the pinned tab with
+    //     several others open is where that would show: the report names the dead
+    //     tab once, and from then on every process must bind the SAME survivor.
+    assert_eq!(
+        code(&fx.run(&["tab", "close", &active_id(&fx.run(&["tab"]))])),
+        0,
+        "closing the pinned tab (identity setup) failed"
+    );
+    let pin_report = fx.run(&["eval", "location.href"]);
+    assert_eq!(
+        code(&pin_report),
+        4,
+        "the page command after the pinned tab closed must report it: {}",
+        stdout(&pin_report)
+    );
+    let repinned = fx.run(&["tab"]);
+    let repinned_urls: Vec<String> = serde_json::from_str::<serde_json::Value>(&stdout(&repinned))
+        .expect("tab list json")
+        .as_array()
+        .expect("tab list array")
+        .iter()
+        .filter(|t| t["active"] == serde_json::Value::Bool(true))
+        .filter_map(|t| t["url"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        repinned_urls.len(),
+        1,
+        "the report must settle the session on exactly one tab: {}",
+        stdout(&repinned)
+    );
+    // `eval` renders its value as JSON TEXT, so the string result arrives quoted
+    // inside the `result` field — decode it back to the bare href.
+    let href = |out: &Output| -> String {
+        serde_json::from_str::<serde_json::Value>(&stdout(out))
+            .ok()
+            .and_then(|v| v["result"].as_str().map(str::to_owned))
+            .and_then(|r| serde_json::from_str::<String>(&r).ok())
+            .unwrap_or_else(|| stdout(out))
+    };
+    let first_bind = fx.run(&["eval", "location.href"]);
+    let second_bind = fx.run(&["eval", "location.href"]);
+    assert_eq!(
+        code(&first_bind),
+        0,
+        "the announced fallback is the active page: {}",
+        stdout(&first_bind)
+    );
+    assert_eq!(
+        href(&first_bind),
+        repinned_urls[0],
+        "the page a command binds must be the tab the list marks active: {}",
+        stdout(&first_bind)
+    );
+    assert_eq!(
+        href(&first_bind),
+        href(&second_bind),
+        "consecutive processes must bind the same page, never re-derive one from the target list"
+    );
+
     // 9c. Closing the LAST tab must not wedge the session: the attach creates a
     //     blank page to bind to (the state a fresh browser starts in), so `tab`
     //     still lists, the dead pin still fires its one loud TabNotFound on the
@@ -3956,6 +4053,21 @@ fn headless_behavioral_flow() {
     assert!(
         stdout(&fx.run(&["capture", "--include", "dom"])).contains("cardwrap"),
         "the recovered session must capture the navigated page"
+    );
+    // The recovery PINNED the page it created, so the session is settled on it:
+    // the list marks that one tab active, and it is the page just captured.
+    let recovered = fx.run(&["tab"]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout(&recovered))
+            .expect("tab list json")
+            .as_array()
+            .expect("tab list array")
+            .iter()
+            .filter(|t| t["active"] == serde_json::Value::Bool(true))
+            .count(),
+        1,
+        "the recovered session must pin the page it navigated: {}",
+        stdout(&recovered)
     );
 
     // 8g-target. A non-keyword `target` names a browsing context. The clicking
