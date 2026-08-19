@@ -858,6 +858,25 @@ fn browser_behavioral_flow() {
         stdout(&nread)
     );
 
+    // …and a recorder from another build is named rather than emptied, the same
+    // way the console read names it — one mechanism, both buffers, both modes.
+    let _ = fx.run(&["eval", "window.__webpilot_network_shape = 0; 'aged'"]);
+    let stale_net = fx.run(&["network", "read"]);
+    assert_eq!(
+        code(&stale_net),
+        7,
+        "a network buffer from another build's recorder must be a typed error in \
+         browser mode too: {}",
+        stdout(&stale_net)
+    );
+    assert!(
+        stdout(&stale_net).contains("not written by this build's recorder"),
+        "the error must name the cause: {}",
+        stdout(&stale_net)
+    );
+    let _ = fx.run(&["action", "reload"]);
+    let _ = fx.run(&["network", "clear"]);
+
     // 4c. The eval gate covers monitor RE-injection in browser mode too: a deny
     //     landing after `console start` must stop the service worker re-arming the
     //     MAIN-world hooks on the next document (the host attaches the verdict;

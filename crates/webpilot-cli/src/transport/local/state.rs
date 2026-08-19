@@ -193,9 +193,10 @@ impl LocalTransport {
             .page
             .evaluate(&format!(
                 "(()=>{{const a=window.__webpilot_console;if(a===undefined)return null;\
-                  if(window.__webpilot_console_shape!==1)return{{stale:true}};\
-                  return{{entries:a.filter(e=>e&&e.timestamp>={}),truncated:window.__webpilot_console_dropped===true}};}})()",
-                since.unwrap_or(0),
+                  if(window.__webpilot_console_shape!=={shape})return{{stale:true}};\
+                  return{{entries:a.filter(e=>e&&e.timestamp>={since}),truncated:window.__webpilot_console_dropped===true}};}})()",
+                since = since.unwrap_or(0),
+                shape = MONITOR_SHAPE,
             ))
             .await?;
         if result.is_null() {
@@ -323,6 +324,11 @@ impl LocalTransport {
         // before the registration and was never covered by it. Run the install
         // against whatever is open — its own sentinel makes that a no-op on a
         // document that already carries the hook.
+        //
+        // Unlike a failed withdrawal, a failure here needs no warning of its own:
+        // it leaves the document without the hook, which the read already reports
+        // as `MONITOR_NOT_INSTALLED`. A withdrawal that fails has no such reader —
+        // nothing else would ever say the injection outlived its deny.
         self.page.evaluate(install_js).await?;
         Ok(())
     }
@@ -373,9 +379,10 @@ impl LocalTransport {
         // `length >= cap` (also see `do_console_read`).
         let js = format!(
             "(()=>{{const a=window.__webpilot_network;if(a===undefined)return null;\
-              if(window.__webpilot_network_shape!==1)return{{stale:true}};\
-              return{{entries:a.filter(e=>e&&e.timestamp>={}),truncated:window.__webpilot_network_dropped===true}};}})()",
-            since.unwrap_or(0),
+              if(window.__webpilot_network_shape!=={shape})return{{stale:true}};\
+              return{{entries:a.filter(e=>e&&e.timestamp>={since}),truncated:window.__webpilot_network_dropped===true}};}})()",
+            since = since.unwrap_or(0),
+            shape = MONITOR_SHAPE,
         );
         let result = self.page.evaluate(&js).await?;
         if result.is_null() {
@@ -420,12 +427,6 @@ impl LocalTransport {
         if result.is_null() {
             return Err(WebPilotError::InvalidArgument {
                 detail: MONITOR_NOT_INSTALLED_NETWORK.into(),
-            }
-            .into());
-        }
-        if result.get("stale").and_then(|v| v.as_bool()) == Some(true) {
-            return Err(WebPilotError::InvalidArgument {
-                detail: MONITOR_SHAPE_NETWORK.into(),
             }
             .into());
         }
@@ -800,6 +801,11 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
 /// installed it. Its entries would be dropped one by one and the read would
 /// answer with the empty list — "the page was quiet", from a recorder that is
 /// simply the wrong one.
+/// The entry shape this build reads. The recorders stamp it on the document
+/// (`window.__webpilot_<kind>_shape`) and every read path checks it; bumping it
+/// means bumping both recorders too, which `monitor_shape_stamp_is_in_step` holds.
+const MONITOR_SHAPE: u32 = 1;
+
 const MONITOR_SHAPE_CONSOLE: &str = "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`";
 const MONITOR_SHAPE_NETWORK: &str = "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`";
 
@@ -855,6 +861,36 @@ const NETWORK_INSTALL_JS: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_shape_stamp_is_in_step() {
+        // The stamp is written by the recorders and checked by four read paths —
+        // two here, two in the service worker. A build that bumped one and not
+        // the others would read EVERY document as another build's, including the
+        // ones it hooked itself, so the value is pinned here and every site is
+        // held against it.
+        for (kind, install_js) in [
+            ("console", CONSOLE_INSTALL_JS),
+            ("network", NETWORK_INSTALL_JS),
+        ] {
+            let written = format!("window.__webpilot_{kind}_shape = {MONITOR_SHAPE};");
+            assert!(
+                install_js.contains(&written),
+                "monitor-{kind}.js must stamp `{written}`"
+            );
+        }
+        let worker = crate::assets::EXTENSION
+            .get_file("background/state.js")
+            .and_then(|f| f.contents_utf8())
+            .expect("the packaged extension carries background/state.js");
+        for kind in ["console", "network"] {
+            let checked = format!("window.__webpilot_{kind}_shape !== {MONITOR_SHAPE}");
+            assert!(
+                worker.contains(&checked),
+                "the service worker's {kind} read must check `{checked}`"
+            );
+        }
+    }
 
     fn base() -> CookieInfo {
         CookieInfo {

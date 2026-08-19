@@ -2268,8 +2268,25 @@ fn headless_behavioral_flow() {
         "the verdict is about the recorder, not the window: {}",
         stdout(&stale_since)
     );
+    // The network monitor carries the same stamp and the same verdict — it is
+    // the same mechanism, and only a test naming it keeps the two read paths
+    // from drifting.
+    let _ = fx.run(&["eval", "window.__webpilot_network_shape = 0; 'aged'"]);
+    let stale_net = fx.run(&["network", "read"]);
+    assert_eq!(
+        code(&stale_net),
+        7,
+        "a network buffer from another build's recorder must be a typed error: {}",
+        stdout(&stale_net)
+    );
+    assert!(
+        stdout(&stale_net).contains("not written by this build's recorder"),
+        "the error must name the cause: {}",
+        stdout(&stale_net)
+    );
     let _ = fx.run(&["action", "reload"]);
     let _ = fx.run(&["console", "clear"]);
+    let _ = fx.run(&["network", "clear"]);
 
     // 3b. The `eval` gate covers monitor injection: a deny that lands AFTER
     //     `console start` must stop the MAIN-world hooks from reaching the next
