@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`[timeouts] download_window` (`WEBPILOT_DOWNLOAD_WINDOW_MS`, default 2s).**
+  How long a command that started a download keeps watching for the ones it
+  started. It was a hard-coded constant — and not even its own: the drain
+  borrowed `PROBE`, whose job is bounding a single readiness probe, so one number
+  stood for two unrelated things. Now that the watch runs its budget out rather
+  than ending on the transfers already announced, that budget decides both how
+  soon such a command answers and how deferred an export can be and still be
+  reported — a trade only the caller can make. Zero is refused like the other
+  deadlines: a command that downloaded would answer with nothing. Commands that
+  download nothing are untouched.
+
 ## [0.9.2] - 2026-08-19
 
 ### Fixed

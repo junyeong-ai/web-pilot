@@ -1199,8 +1199,10 @@ impl DownloadWatch {
 }
 
 /// Downloads Chrome announced on a browser subscription taken **before** the
-/// operation that could have started one, followed until each reaches a terminal
-/// state or the budget runs out.
+/// operation that could have started one, followed until the command's download
+/// budget (`[timeouts] download_window`) runs out. The budget, not the
+/// settlement of what has already been announced, is what ends the watch — see
+/// the `awaiting` predicate below.
 ///
 /// `promised` is the browser's own word that a download is coming — `isDownload`
 /// from `Page.navigate`, or the Navigation API's `downloadRequest` relayed by the
@@ -1215,7 +1217,7 @@ pub(super) async fn collect_downloads(
 ) -> DownloadSweep {
     use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
-    let deadline = tokio::time::Instant::now() + PROBE;
+    let deadline = tokio::time::Instant::now() + webpilot::settings::timeouts().download_window;
     let mut sweep = DownloadSweep {
         acted_on: opener.to_string(),
         ..DownloadSweep::default()

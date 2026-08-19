@@ -136,6 +136,9 @@ fn headless_behavioral_flow() {
     for var in [
         "WEBPILOT_IPC_TIMEOUT_MS",
         "WEBPILOT_CHROME_LAUNCH_TIMEOUT_MS",
+        // A zero download window would let a command that downloaded answer
+        // with nothing — the empty success the watch exists to prevent.
+        "WEBPILOT_DOWNLOAD_WINDOW_MS",
     ] {
         let bad = fx.run_env(&["status"], &[(var, "0")]);
         assert_eq!(
@@ -4431,6 +4434,27 @@ fn headless_behavioral_flow() {
         "a download this click started while the command was still running must be \
          reported, whether or not the first had already finished: {}",
         stdout(&deferred)
+    );
+    // And the budget is what governs that watch, not the transfers' settlement:
+    // a window shorter than the page's own deferral answers before the second
+    // export begins. Asserting the trade in both directions is what keeps
+    // `[timeouts] download_window` wired to the loop.
+    let narrow = fx.run_env(
+        &["action", "click", &index_of(&cap_deferred, "dldeferred")],
+        &[("WEBPILOT_DOWNLOAD_WINDOW_MS", "100")],
+    );
+    let narrow_names: Vec<String> = serde_json::from_str::<serde_json::Value>(&stdout(&narrow))
+        .expect("json")["downloads"]
+        .as_array()
+        .expect("downloads")
+        .iter()
+        .filter_map(|d| d["suggested_filename"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        narrow_names,
+        vec!["now.csv".to_string()],
+        "a window shorter than the deferral must answer before the second export: {}",
+        stdout(&narrow)
     );
 
     // 8e-dl-slow. The outcome is Chrome's, not WebPilot's configuration: a

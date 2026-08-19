@@ -57,6 +57,15 @@ pub struct Timeouts {
     /// Ping before failing a command closed. The Ping lands in milliseconds in
     /// practice; a loaded machine may want longer.
     pub version_handshake: Duration,
+    /// How long a command that has started a download keeps watching for the
+    /// ones it started. Chrome announces each download as it begins and never
+    /// says how many are coming, so this budget — not the settlement of the
+    /// transfers already announced — is what decides when the command answers:
+    /// one act can write several files, and the action response is the only
+    /// record any of them gets. Longer catches an export a page defers further
+    /// behind its click; shorter answers sooner and risks reporting fewer files
+    /// than were written. Paid only by commands that actually download.
+    pub download_window: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -165,8 +174,9 @@ fn validate(settings: &Settings) -> std::result::Result<(), String> {
     // still bounded ABOVE, since an astronomical sleep overflows the same math.)
     const MAX_TIMEOUT_MS: u128 = i32::MAX as u128;
     let t = &settings.timeouts;
-    let checks: [(&str, std::time::Duration, bool); 10] = [
+    let checks: [(&str, std::time::Duration, bool); 11] = [
         ("timeouts.navigation_ms", t.navigation, false),
+        ("timeouts.download_window_ms", t.download_window, false),
         ("timeouts.cdp_send_ms", t.cdp_send, false),
         ("timeouts.reload_wait_ms", t.reload_wait, false),
         ("timeouts.back_forward_ms", t.back_forward, false),
@@ -231,6 +241,7 @@ impl Settings {
                     15_000,
                 ),
                 heartbeat: ms("WEBPILOT_HEARTBEAT_INTERVAL_MS", t.heartbeat_ms, 10_000),
+                download_window: ms("WEBPILOT_DOWNLOAD_WINDOW_MS", t.download_window_ms, 2_000),
                 version_handshake: ms(
                     "WEBPILOT_VERSION_HANDSHAKE_TIMEOUT_MS",
                     t.version_handshake_ms,
@@ -360,6 +371,7 @@ struct FileTimeouts {
     chrome_launch_ms: Option<u64>,
     heartbeat_ms: Option<u64>,
     version_handshake_ms: Option<u64>,
+    download_window_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -498,6 +510,7 @@ mod tests {
                 chrome_launch: Duration::from_millis(15_000),
                 heartbeat: Duration::from_millis(10_000),
                 version_handshake: Duration::from_millis(2_000),
+                download_window: Duration::from_millis(2_000),
             },
             chrome: Chrome {
                 binary: None,

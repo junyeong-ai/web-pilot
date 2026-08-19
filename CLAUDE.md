@@ -227,5 +227,8 @@ Settings resolve through one layer, `webpilot::settings`: **defaults <
 `config.toml` < env var**. Tune via `config.toml` (under the cache root —
 `dirs::config_file_path()` — override the path with `WEBPILOT_CONFIG`) sections
 `[timeouts]`/`[chrome]`/`[context]`/`[artifacts]`/`[cdp]`/`[capture]`, or `WEBPILOT_*` env vars
-(e.g. `WEBPILOT_NAVIGATION_TIMEOUT_MS`).
+(e.g. `WEBPILOT_NAVIGATION_TIMEOUT_MS`). `[timeouts] download_window` is the one a
+caller trades directly: it is how long a command that started a download keeps
+watching for the ones it started, so it sets both the answer time of such a
+command and how deferred an export can be and still be reported.
 Only path resolution is env/platform-specific (`dirs`, to avoid cycles).
