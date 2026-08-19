@@ -14,6 +14,11 @@ cargo build --workspace --release
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 
+# The behavioural suites launch a real Chrome, so they are opt-in (CI runs all three):
+WEBPILOT_E2E=1 cargo test -p webpilot-cli --test e2e_headless   # …and --test e2e_mcp
+WEBPILOT_E2E_BROWSER=1 WEBPILOT_CHROME=<Chrome for Testing> \
+  cargo test -p webpilot-cli --test e2e_browser
+
 webpilot capture --include dom --url "https://example.com"   # headless (default)
 webpilot --browser capture --include dom                     # browser mode (SSO Chrome)
 webpilot --context agent-1 capture --include dom             # multi-agent isolation
@@ -120,9 +125,9 @@ page text, element text, option lists, and the shadow walk.
 | Monitor read | `{"entries": [...], "truncated": false, "covers_load": true}` — the two ways a read can be less than the whole story, both stated rather than left to be inferred from an empty list: `truncated` is the eviction flag (the 500-entry cap dropped something), `covers_load` is whether the recorder was in place before the document's first script. False for a document built while nothing was attached (one loaded between two CLI invocations, or a popup, already loading when its target appears) and always false in browser mode, which injects at navigation settle. The recorders stamp it from the null `documentElement` only a document-start injection sees; the render adds `--- recorder installed after this document started … ---` |
 | Wait | `Wait { condition, timeout_ms }`; `condition` is the `until`-tagged `WaitCondition` — `{"until": "selector", "value": ".loading"}`, one of `selector`/`text`/`navigation`/`idle` |
 | Capture | `{"include": ["dom","screenshot"], "opts": {...}}` |
-| Status | `{connected, mode: "headless"\|"browser", chrome_version, extension_version}` — per-mode semantics |
+| Status | `{connected, mode: "headless"\|"browser", tab_url, tab_title, chrome_version, extension_version}` — every field but the first two is optional and omitted when absent (`extension_version` is browser-mode only; the tab pair is the PINNED tab, absent when its page is gone) |
 | Errors | `{"code": "ElementNotFound", "message": "...", "requested": 5, "available": 3}` |
-| FrameSelector | `{"by": "url", "pattern": "/auth/"}` — headless supports Name/Url/Predicate too (execution-context routing) |
+| FrameSelector | `{"by": "url", "pattern": "/auth/"}` — `main` / `name` / `url` / `predicate`, all four in BOTH modes (a predicate is caller JS, so it rides the `eval` gate). Only the curated MCP surface narrows it: `browser_frame` takes name or URL, and `frame find` stays CLI-only |
 | DomProperty | `{"kind": "html"}` or `{"kind": "attr", "name": "href"}` |
 
 Display/FromStr for single snake_case enums are derived via `serde_plain` — no

@@ -52,7 +52,7 @@ Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`
 - `ensure_session()` uses `libc::flock` to serialize concurrent Chrome launches.
 
 ## Paths
-- All persistent state under `webpilot::dirs::root()` (per-user, mode 0700). Subdirs: `runtime/`, `contexts/`, `artifacts/`, `chrome-profile/`. **Never** hard-code a `/tmp/...` path — always resolve through `webpilot::dirs`.
+- Two per-user roots, both mode 0700: `dirs::root()` is the evictable cache (`runtime/`, `contexts/`, `logs/`, `artifacts/`, `chrome-profile/`) and `dirs::data_root()` is durable (the unpacked extension, `policy/policies.json`, `skill-install.sha256`) — a security config or an extension Chrome has loaded must not vanish with a cache sweep. Each path has a materialising accessor and a pure `*_path()` twin; inspection-only code takes the latter so looking never creates state. **Never** hard-code a `/tmp/...` path — always resolve through `webpilot::dirs`.
 
 ## Bridge calls
 - `self.invoke_bridge(&Value)` (a `LocalTransport` method) — pass a `Value`, not a string. It targets the bridge's isolated-world context, not the page.

@@ -30,12 +30,14 @@ encode/write in `screenshot.rs`, and the NM/IPC framing in
 - `wait.rs` — `WaitCondition` (selector / text / navigation / idle), tagged by
   `until`.
 - `settings.rs` — single settings layer (defaults < `config.toml` < env). The
-  one source for every tunable env read; `Settings::{timeouts,chrome,context,cdp,capture}`.
+  one source for every tunable env read; `Settings::{timeouts,chrome,context,cdp,capture,artifacts}`.
   `cdp.event_buffer` defaults to 512: one connection's ring carries the browser
   domain plus every flat-protocol page session's events.
-- `dirs.rs` — per-user runtime / contexts / artifacts directories (mode 0700);
-  pure vs materializing accessors; `config_file_path()`. Paths are env/platform
-  only (not settings-driven).
+- `dirs.rs` — the two per-user roots (mode 0700): the evictable cache
+  (`root()` — runtime / contexts / logs / artifacts / chrome-profile) and the
+  durable data root (`data_root()` — the unpacked extension, the policy store,
+  `skill-install.sha256`); pure vs materializing accessors; `config_file_path()`.
+  Paths are env/platform only (not settings-driven).
 - `ipc.rs` / `native_messaging.rs` — Unix socket; Chrome NM 4-byte-LE framing.
 - `screenshot.rs` — base64 → resize → PNG.
 
