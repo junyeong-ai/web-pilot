@@ -23,9 +23,9 @@ mod common;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{code, spawn_server, stdout};
+use common::{code, spawn_server, stdout, wait_for};
 
 const BIN: &str = env!("CARGO_BIN_EXE_webpilot");
 
@@ -130,17 +130,6 @@ fn http_get(port: u16, path: &str) -> String {
     raw.split_once("\r\n\r\n")
         .map(|(_, b)| b.to_string())
         .unwrap_or_default()
-}
-
-fn wait_for<T>(deadline: Duration, what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
-    let start = Instant::now();
-    loop {
-        if let Some(v) = probe() {
-            return v;
-        }
-        assert!(start.elapsed() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(250));
-    }
 }
 
 fn spawn_chrome(chrome: &Path, home: &Path, user_data_dir: &Path, extension_dir: &Path) -> Child {
@@ -780,31 +769,21 @@ fn browser_behavioral_flow() {
     //           unreadable entries one at a time on its way to the CLI. Headless
     //           mirror in e2e_headless.
     let _ = fx.run(&["console", "clear"]);
-    let _ = fx.run(&[
-        "eval",
-        "window.__webpilot_console.push({ shape: 'from another build', timestamp: Date.now() }); 'pushed'",
-    ]);
-    let unreadable = fx.run(&["console", "read"]);
+    let _ = fx.run(&["eval", "window.__webpilot_console_shape = 0; 'aged'"]);
+    let stale = fx.run(&["console", "read"]);
     assert_eq!(
-        code(&unreadable),
+        code(&stale),
         7,
-        "a buffer of entries this build cannot read must be a typed error in browser \
-         mode too, not an empty success: {}",
-        stdout(&unreadable)
+        "a document whose recorder writes another shape must be a typed error in \
+         browser mode too, not an empty success: {}",
+        stdout(&stale)
     );
     assert!(
-        stdout(&unreadable).contains("not written by this build's recorder"),
+        stdout(&stale).contains("not written by this build's recorder"),
         "the error must name the cause: {}",
-        stdout(&unreadable)
+        stdout(&stale)
     );
-    let _ = fx.run(&["eval", "console.log('readable-again')"]);
-    let mixed = fx.run(&["console", "read"]);
-    assert_eq!(
-        code(&mixed),
-        0,
-        "a buffer with a readable entry must still read: {}",
-        stdout(&mixed)
-    );
+    let _ = fx.run(&["action", "reload"]);
     let _ = fx.run(&["console", "clear"]);
 
     // 4b-clip. A runaway log is clipped (headless parity): a 10000-char arg comes

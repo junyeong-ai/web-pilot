@@ -355,6 +355,24 @@ pub fn spawn_server() -> String {
     format!("http://127.0.0.1:{port}")
 }
 
+/// Poll `probe` until it yields, or fail naming what never arrived. Browser and
+/// page state settles on the browser's clock, not the test's, so a bare read can
+/// only ever be a race; every wait in both suites goes through this.
+pub fn wait_for<T>(
+    deadline: std::time::Duration,
+    what: &str,
+    mut probe: impl FnMut() -> Option<T>,
+) -> T {
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(v) = probe() {
+            return v;
+        }
+        assert!(start.elapsed() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 pub fn code(out: &Output) -> i32 {
     out.status.code().unwrap_or(-1)
 }

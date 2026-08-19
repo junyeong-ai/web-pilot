@@ -16,7 +16,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-use common::{code, spawn_server, stdout};
+use common::{code, spawn_server, stdout, wait_for};
 
 const BIN: &str = env!("CARGO_BIN_EXE_webpilot");
 
@@ -2093,9 +2093,23 @@ fn headless_behavioral_flow() {
     // gates on the top frame: only the main frame's buffer is ever read, and
     // patching a subframe would put the hook in a third-party document for
     // nothing. Read the subframe's own `window` — its absence is the whole point.
-    let subframe_hook = fx.run(&["eval", "String(frames[0].__webpilot_console_patched)"]);
-    assert!(
-        stdout(&subframe_hook).contains("undefined"),
+    // A boolean, not `String(...)`: `eval` renders its value as JSON text, so a
+    // probe answering with the word "undefined" is indistinguishable from an eval
+    // ERROR whose message contains it — which is what a subframe that has not
+    // attached produces, and it would pass a substring check without ever
+    // reaching the subframe.
+    let subframe_hook = fx.run(&["eval", "frames[0].__webpilot_console_patched === undefined"]);
+    assert_eq!(
+        code(&subframe_hook),
+        0,
+        "the subframe probe must RUN, or it asserts nothing: {}",
+        stdout(&subframe_hook)
+    );
+    let probed: serde_json::Value =
+        serde_json::from_str(&stdout(&subframe_hook)).expect("subframe probe json");
+    assert_eq!(
+        probed["result"],
+        "true",
         "the monitor must not patch a subframe — only the main frame is read: {}",
         stdout(&subframe_hook)
     );
@@ -2114,7 +2128,20 @@ fn headless_behavioral_flow() {
         code(&fx.run(&["action", "navigate", &format!("{base}/pageerror")])),
         0
     );
-    let errs = fx.run(&["console", "read"]);
+    // Both entries are at least a task behind the scripts that raised them — the
+    // dispatch, then the commit the recorder holds them for — and `navigate`
+    // returns at `readyState: interactive`. Wait for them rather than racing.
+    let errs = wait_for(
+        std::time::Duration::from_secs(10),
+        "the page's exception and rejection to reach the console buffer",
+        || {
+            let read = fx.run(&["console", "read"]);
+            let parsed: serde_json::Value = serde_json::from_str(&stdout(&read)).ok()?;
+            let entries = parsed["entries"].as_array()?;
+            let carries = |source: &str| entries.iter().any(|e| e["source"] == source);
+            (carries("exception") && carries("rejection")).then_some(read)
+        },
+    );
     let ej: serde_json::Value = serde_json::from_str(&stdout(&errs)).expect("console read json");
     let entries = ej["entries"].as_array().expect("entries array");
     let with_source = |source: &str| -> Vec<String> {
@@ -2167,23 +2194,16 @@ fn headless_behavioral_flow() {
         code(&fx.run(&["action", "navigate", &format!("{base}/heldorder")])),
         0
     );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let held = loop {
-        let read = fx.run(&["console", "read"]);
-        let parsed: serde_json::Value =
-            serde_json::from_str(&stdout(&read)).expect("held-order read json");
-        let entries = parsed["entries"].as_array().cloned().unwrap_or_default();
-        if entries.len() >= 2 {
-            break entries;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the held exception and the log recorded during the hold never both \
-             arrived: {}",
-            stdout(&read)
-        );
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    };
+    let held = wait_for(
+        std::time::Duration::from_secs(10),
+        "the held exception and the log recorded during the hold",
+        || {
+            let read = fx.run(&["console", "read"]);
+            let parsed: serde_json::Value = serde_json::from_str(&stdout(&read)).ok()?;
+            let entries = parsed["entries"].as_array().cloned().unwrap_or_default();
+            (entries.len() >= 2).then_some(entries)
+        },
+    );
     let stamps: Vec<u64> = held
         .iter()
         .map(|e| e["timestamp"].as_u64().unwrap_or_default())
@@ -2203,38 +2223,52 @@ fn headless_behavioral_flow() {
     //     not know; a page can write entries of its own for the same effect. Both
     //     answer with a typed error naming the recorder, never `entries: []`.
     let _ = fx.run(&["console", "clear"]);
+    // A page writing entries of its own does NOT make the recorder the wrong one:
+    // the junk is dropped, as it always was, and the real entries still read.
     let _ = fx.run(&[
         "eval",
-        "window.__webpilot_console.push({ shape: 'from another build', timestamp: Date.now() }); 'pushed'",
+        "window.__webpilot_console.push({ shape: 'junk', timestamp: Date.now() }); \
+         console.log('still-readable'); 'pushed'",
     ]);
-    let unreadable = fx.run(&["console", "read"]);
+    let with_junk = fx.run(&["console", "read"]);
     assert_eq!(
-        code(&unreadable),
-        7,
-        "a buffer of entries this build cannot read must be a typed error, not an \
-         empty success: {}",
-        stdout(&unreadable)
-    );
-    assert!(
-        stdout(&unreadable).contains("not written by this build's recorder"),
-        "the error must name the cause: {}",
-        stdout(&unreadable)
-    );
-    // One readable entry is enough to answer: the unreadable ones are dropped as
-    // they always were, and only an ALL-unreadable buffer is the ambiguous case.
-    let _ = fx.run(&["eval", "console.log('readable-again')"]);
-    let mixed = fx.run(&["console", "read"]);
-    assert_eq!(
-        code(&mixed),
+        code(&with_junk),
         0,
-        "a buffer with a readable entry must still read: {}",
-        stdout(&mixed)
+        "an entry the page wrote must be dropped, not fail the read: {}",
+        stdout(&with_junk)
     );
     assert!(
-        stdout(&mixed).contains("readable-again"),
-        "the readable entry must come back: {}",
-        stdout(&mixed)
+        stdout(&with_junk).contains("still-readable"),
+        "the real entry must still come back: {}",
+        stdout(&with_junk)
     );
+    // The recorder's own shape stamp is what names a recorder from another build
+    // — the entries cannot, and inferring from them would call a page's junk an
+    // upgrade and a timestamp-less entry nothing at all.
+    let _ = fx.run(&["eval", "window.__webpilot_console_shape = 0; 'aged'"]);
+    let stale = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&stale),
+        7,
+        "a document whose recorder writes another shape must be a typed error, not \
+         an empty success: {}",
+        stdout(&stale)
+    );
+    assert!(
+        stdout(&stale).contains("not written by this build's recorder"),
+        "the error must name the cause: {}",
+        stdout(&stale)
+    );
+    // …and it does not depend on the `--since` window: the recorder is wrong
+    // whatever slice of the buffer is being asked for.
+    let stale_since = fx.run(&["console", "read", "--since", "1"]);
+    assert_eq!(
+        code(&stale_since),
+        7,
+        "the verdict is about the recorder, not the window: {}",
+        stdout(&stale_since)
+    );
+    let _ = fx.run(&["action", "reload"]);
     let _ = fx.run(&["console", "clear"]);
 
     // 3b. The `eval` gate covers monitor injection: a deny that lands AFTER
