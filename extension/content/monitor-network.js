@@ -18,6 +18,13 @@
   window.__webpilot_network_active = true;
   window.__webpilot_network = [];
 
+  // What SHAPE this recorder writes. Chrome outlives the process that hooked a
+  // document, so a later build can meet this one still running; the read checks
+  // this rather than inferring from the entries, which cannot tell a recorder
+  // from another build apart from a page writing entries of its own. Bump it
+  // whenever the entry shape changes.
+  window.__webpilot_network_shape = 1;
+
   // Max entries kept in the ring buffer — see monitor-console.js.
   const CAP = 500;
 

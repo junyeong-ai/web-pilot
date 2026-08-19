@@ -193,7 +193,8 @@ impl LocalTransport {
             .page
             .evaluate(&format!(
                 "(()=>{{const a=window.__webpilot_console;if(a===undefined)return null;\
-                  return{{entries:a.filter(e=>e.timestamp>={}),truncated:window.__webpilot_console_dropped===true}};}})()",
+                  if(window.__webpilot_console_shape!==1)return{{stale:true}};\
+                  return{{entries:a.filter(e=>e&&e.timestamp>={}),truncated:window.__webpilot_console_dropped===true}};}})()",
                 since.unwrap_or(0),
             ))
             .await?;
@@ -203,16 +204,21 @@ impl LocalTransport {
             }
             .into());
         }
+        if result.get("stale").and_then(|v| v.as_bool()) == Some(true) {
+            return Err(WebPilotError::InvalidArgument {
+                detail: MONITOR_SHAPE_CONSOLE.into(),
+            }
+            .into());
+        }
         let truncated = result
             .get("truncated")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let raw = result
+        let entries: Vec<ConsoleEntry> = result
             .get("entries")
             .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let entries: Vec<ConsoleEntry> = raw
+            .map(Vec::as_slice)
+            .unwrap_or_default()
             .iter()
             .filter_map(|v| {
                 let typed = |field: &str| v.get(field).and_then(|v| v.as_str());
@@ -228,7 +234,6 @@ impl LocalTransport {
                 })
             })
             .collect();
-        unreadable_buffer(&raw, &entries, MONITOR_SHAPE_CONSOLE)?;
         Ok(ResponseData::ConsoleEntries { entries, truncated })
     }
 
@@ -304,12 +309,21 @@ impl LocalTransport {
     /// behind — the arming that follows is what makes later processes believe a
     /// hook exists.
     pub(super) async fn register_monitor(&self, kind: Monitor) -> Result<()> {
+        use std::collections::hash_map::Entry;
+        let install_js = monitor_install_js(kind);
         let mut hooks = self.monitor_hooks.lock().await;
-        if hooks.contains_key(&kind) {
+        if let Entry::Vacant(slot) = hooks.entry(kind) {
+            slot.insert(install_monitor_hook(&self.page, install_js).await?);
+            // `runImmediately` already ran it against the document that is open.
             return Ok(());
         }
-        let identifier = install_monitor_hook(&self.page, monitor_install_js(kind)).await?;
-        hooks.insert(kind, identifier);
+        // A registration reaches documents BUILT after it, and the open document
+        // is not always one of those: a history traversal can restore a document
+        // from the back/forward cache, which makes current a page that existed
+        // before the registration and was never covered by it. Run the install
+        // against whatever is open — its own sentinel makes that a no-op on a
+        // document that already carries the hook.
+        self.page.evaluate(install_js).await?;
         Ok(())
     }
 
@@ -359,13 +373,20 @@ impl LocalTransport {
         // `length >= cap` (also see `do_console_read`).
         let js = format!(
             "(()=>{{const a=window.__webpilot_network;if(a===undefined)return null;\
-              return{{entries:a.filter(e=>e.timestamp>={}),truncated:window.__webpilot_network_dropped===true}};}})()",
+              if(window.__webpilot_network_shape!==1)return{{stale:true}};\
+              return{{entries:a.filter(e=>e&&e.timestamp>={}),truncated:window.__webpilot_network_dropped===true}};}})()",
             since.unwrap_or(0),
         );
         let result = self.page.evaluate(&js).await?;
         if result.is_null() {
             return Err(WebPilotError::InvalidArgument {
                 detail: MONITOR_NOT_INSTALLED_NETWORK.into(),
+            }
+            .into());
+        }
+        if result.get("stale").and_then(|v| v.as_bool()) == Some(true) {
+            return Err(WebPilotError::InvalidArgument {
+                detail: MONITOR_SHAPE_NETWORK.into(),
             }
             .into());
         }
@@ -379,10 +400,9 @@ impl LocalTransport {
             .cloned()
             .unwrap_or_default();
         let requests: Vec<NetworkEntry> = arr
-            .iter()
-            .filter_map(|v| serde_json::from_value(v.clone()).ok())
+            .into_iter()
+            .filter_map(|v| serde_json::from_value(v).ok())
             .collect();
-        unreadable_buffer(&arr, &requests, MONITOR_SHAPE_NETWORK)?;
         Ok(ResponseData::NetworkEntries {
             entries: requests,
             truncated,
@@ -400,6 +420,12 @@ impl LocalTransport {
         if result.is_null() {
             return Err(WebPilotError::InvalidArgument {
                 detail: MONITOR_NOT_INSTALLED_NETWORK.into(),
+            }
+            .into());
+        }
+        if result.get("stale").and_then(|v| v.as_bool()) == Some(true) {
+            return Err(WebPilotError::InvalidArgument {
+                detail: MONITOR_SHAPE_NETWORK.into(),
             }
             .into());
         }
@@ -769,38 +795,20 @@ fn parse_cdp_cookie(c: Value) -> CookieInfo {
     }
 }
 
+/// This document's recorder does not write the shape this build reads: the
+/// document was hooked by an older WebPilot, and Chrome outlives the process that
+/// installed it. Its entries would be dropped one by one and the read would
+/// answer with the empty list — "the page was quiet", from a recorder that is
+/// simply the wrong one.
+const MONITOR_SHAPE_CONSOLE: &str = "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`";
+const MONITOR_SHAPE_NETWORK: &str = "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`";
+
 /// The armed flag is set but THIS document carries no hook: an `eval` policy deny
 /// removed the monitor's registration, so documents built after it carry nothing.
 /// An empty success here would read as "the page was quiet" while the monitor was
 /// in fact off.
-/// The buffer holds entries but none carry the shape this build records. Its
-/// recorder is not this build's — the document was hooked by an older WebPilot
-/// and Chrome outlives the process that installed it — or the page wrote them
-/// itself. Either way the read must not answer with the empty list, which reads
-/// as "the page was quiet".
-const MONITOR_SHAPE_CONSOLE: &str = "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`";
-const MONITOR_SHAPE_NETWORK: &str = "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`";
-
 const MONITOR_NOT_INSTALLED_CONSOLE: &str = "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`";
 const MONITOR_NOT_INSTALLED_NETWORK: &str = "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`";
-
-/// Register a monitor's install script to run in the MAIN world of every document
-/// this page builds, the one already open included (`runImmediately`, so arming
-/// needs no navigation). The MAIN world is where the page's own `console`/`fetch`
-/// live — the bridge's isolated world would never observe them. Returns Chrome's
-/// identifier for the registration, the handle a later policy deny removes it by.
-/// Fail a read whose buffer held entries that none of them could be read from.
-/// Dropping them and answering with the empty list is the one answer that lies:
-/// it is the same shape a quiet page gives.
-fn unreadable_buffer<T>(raw: &[Value], read: &[T], detail: &str) -> Result<()> {
-    if read.is_empty() && !raw.is_empty() {
-        return Err(WebPilotError::InvalidArgument {
-            detail: detail.into(),
-        }
-        .into());
-    }
-    Ok(())
-}
 
 fn monitor_install_js(kind: Monitor) -> &'static str {
     match kind {
@@ -809,6 +817,11 @@ fn monitor_install_js(kind: Monitor) -> &'static str {
     }
 }
 
+/// Register a monitor's install script to run in the MAIN world of every document
+/// this page builds, the one already open included (`runImmediately`, so arming
+/// needs no navigation). The MAIN world is where the page's own `console`/`fetch`
+/// live — the bridge's isolated world would never observe them. Returns Chrome's
+/// identifier for the registration, the handle a later policy deny removes it by.
 async fn install_monitor_hook(page: &CdpSession, install_js: &str) -> Result<String> {
     let registered = page
         .send(

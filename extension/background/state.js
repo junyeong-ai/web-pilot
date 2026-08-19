@@ -82,6 +82,8 @@ async function injectMonitor(tabId, file) {
     files: [file],
   });
 }
+// ── Cookies ────────────────────────────────────────────────────────────────
+
 async function handleCookieList(url) {
   // Same guard as `handleCookieSet`: a malformed URL must be the typed
   // InvalidArgument (exit 7) headless CDP returns, not the `Other` (exit 1) a
@@ -291,14 +293,13 @@ async function handleConsoleRead(since) {
         // an eval policy deny, headless parity) is distinct from empty.
         const all = window.__webpilot_console;
         if (all === undefined) return { missing: true };
-        const since = all.filter((e) => e && e.timestamp >= s);
+        // The recorder stamps the shape it writes; a document hooked by another
+        // build carries a different one, and its entries would otherwise be
+        // dropped one by one into the empty list a quiet page gives.
+        if (window.__webpilot_console_shape !== 1) return { stale: true };
         return {
-          // Entries this build cannot read must not leave through the empty
-          // list, which is the shape a quiet page gives — headless parity.
-          unreadable: since.length > 0
-            && !since.some((e) => levels.includes(e.level) && sources.includes(e.source)),
-          entries: since
-            .filter((e) => levels.includes(e.level) && sources.includes(e.source))
+          entries: all
+            .filter((e) => e && levels.includes(e.level) && sources.includes(e.source) && e.timestamp >= s)
             .map((e) => ({
               source: e.source,
               level: e.level,
@@ -325,7 +326,7 @@ async function handleConsoleRead(since) {
         "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`",
       ));
     }
-    if (out.unreadable) {
+    if (out.stale) {
       return topErr(err(
         "InvalidArgument",
         "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`",
@@ -411,8 +412,12 @@ async function handleNetworkRead(since) {
         // headless parity, see handleConsoleRead.
         const all = window.__webpilot_network;
         if (all === undefined) return { missing: true };
-        const since = all.filter((e) => e && e.timestamp >= s);
+        // See handleConsoleRead — a recorder from another build is named, not
+        // inferred from the entries it left.
+        if (window.__webpilot_network_shape !== 1) return { stale: true };
         const readable = (e) =>
+          e &&
+          e.timestamp >= s &&
           typeof e.type === "string" &&
           typeof e.url === "string" &&
           typeof e.method === "string" &&
@@ -429,9 +434,7 @@ async function handleNetworkRead(since) {
             (Number.isInteger(e.status) && e.status >= 0 && e.status <= 0xffffffff)) &&
           (e.error == null || typeof e.error === "string");
         return {
-          // See handleConsoleRead — an unreadable buffer is not an empty one.
-          unreadable: since.length > 0 && !since.some(readable),
-          entries: since.filter(readable),
+          entries: all.filter(readable),
           // The eviction flag, not `length >= cap` (headless parity).
           truncated: window.__webpilot_network_dropped === true,
         };
@@ -445,7 +448,7 @@ async function handleNetworkRead(since) {
         "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`",
       ));
     }
-    if (out.unreadable) {
+    if (out.stale) {
       return topErr(err(
         "InvalidArgument",
         "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`",

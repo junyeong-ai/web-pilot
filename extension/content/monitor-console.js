@@ -32,6 +32,13 @@
   if (window.__webpilot_console_patched) return;
   window.__webpilot_console_patched = true;
 
+  // What SHAPE this recorder writes. Chrome outlives the process that hooked a
+  // document, so a later build can meet this one still running; the read checks
+  // this rather than inferring from the entries, which cannot tell a recorder
+  // from another build apart from a page writing entries of its own. Bump it
+  // whenever the entry shape changes.
+  window.__webpilot_console_shape = 1;
+
   // Max entries kept in the ring buffer. The read reports `truncated` from the
   // eviction flag set below, never from this number, so the cap lives only here.
   const CAP = 500;
