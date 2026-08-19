@@ -774,6 +774,39 @@ fn browser_behavioral_flow() {
         "the rejection must carry its reason: {reported}"
     );
 
+    // 4b-shape. A buffer whose entries this build cannot read must not leave
+    //           through browser mode's own projection as the empty list either —
+    //           that is the shape a quiet page gives, and the projection drops
+    //           unreadable entries one at a time on its way to the CLI. Headless
+    //           mirror in e2e_headless.
+    let _ = fx.run(&["console", "clear"]);
+    let _ = fx.run(&[
+        "eval",
+        "window.__webpilot_console.push({ shape: 'from another build', timestamp: Date.now() }); 'pushed'",
+    ]);
+    let unreadable = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&unreadable),
+        7,
+        "a buffer of entries this build cannot read must be a typed error in browser \
+         mode too, not an empty success: {}",
+        stdout(&unreadable)
+    );
+    assert!(
+        stdout(&unreadable).contains("not written by this build's recorder"),
+        "the error must name the cause: {}",
+        stdout(&unreadable)
+    );
+    let _ = fx.run(&["eval", "console.log('readable-again')"]);
+    let mixed = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&mixed),
+        0,
+        "a buffer with a readable entry must still read: {}",
+        stdout(&mixed)
+    );
+    let _ = fx.run(&["console", "clear"]);
+
     // 4b-clip. A runaway log is clipped (headless parity): a 10000-char arg comes
     //          back capped with a marker, never stored/shipped whole.
     let _ = fx.run(&["console", "clear"]);
