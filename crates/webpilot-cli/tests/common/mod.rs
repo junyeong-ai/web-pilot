@@ -1,6 +1,11 @@
 //! Shared end-to-end fixtures: the test page, a minimal HTTP server, and
-//! process-output helpers. Used by both the headless and the browser-mode
-//! behavioral suites so the two modes are asserted against the same page.
+//! process-output helpers. Used by the headless, browser-mode and MCP behavioral
+//! suites so every surface is asserted against the same page.
+//!
+//! Each suite links its own copy and uses the subset it needs — a fixture only
+//! one of them reaches for is not dead, so the module carries the allow rather
+//! than every suite carrying an artificial reference to keep it quiet.
+#![allow(dead_code)]
 
 use std::io::{Read, Write};
 use std::net::TcpListener;

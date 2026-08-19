@@ -67,11 +67,14 @@ pub struct LocalTransport {
     pub(crate) page: CdpSession,
     pub(crate) browser_context_id: Option<String>,
     pub(crate) target_id: String,
-    /// `Some(dead_id)` when this transport opened onto a fallback survivor because
-    /// the persisted pin had closed. `send` then refuses any command that would
-    /// ACT on the active page (TabNotFound), so a page action never silently runs
-    /// on the retargeted tab; tab management and status proceed so the agent can
-    /// re-pin. Cleared on the next process (the dead pin was already dropped).
+    /// `Some(dead_id)` when the persisted pin named a page that has closed, so
+    /// this transport is bound to a fallback survivor instead. `send` then refuses
+    /// any command that would ACT on the active page (TabNotFound), so a page
+    /// action never silently runs on the retargeted tab, while tab management,
+    /// status and the browser-global ops proceed so the agent can re-pin. A
+    /// reading of the pin rather than a verdict held across commands:
+    /// `reconcile_binding` recomputes it per command, and the report that consumes
+    /// it moves the pin onto the fallback.
     pub(crate) pin_vanished: Option<String>,
     /// Top frame id (CDP string). Refreshed on every page swap (`prime_page`, on
     /// open and tab switch), so it always names the bound tab's main frame.
@@ -89,6 +92,11 @@ pub struct LocalTransport {
     pub(crate) bridge_contexts: Arc<Mutex<HashMap<String, String>>>,
     /// Active frame for evaluation. `None` means the page's main world.
     pub(crate) active_frame_id: Arc<Mutex<Option<String>>>,
+    /// The device emulation this transport has put on the page it is bound to, so
+    /// [`Self::ensure_device_emulation`] can tell an unchanged device (no CDP work)
+    /// from one another process has changed under it. A cache, not authority: the
+    /// persisted record decides, and a stale entry costs one idempotent re-apply.
+    device_applied: Option<DeviceState>,
     /// Whether the console / network monitors are armed. Their hooks live on
     /// `window` and are wiped by every full-document navigation, so an armed
     /// monitor rides on [`Self::monitor_hooks`] rather than on any one document.
@@ -192,29 +200,6 @@ impl LocalTransport {
         // inside `prime_page` repopulates the maps for every existing context.
         let (frame_contexts, bridge_contexts, main_frame_id) = prime_page(&mut page).await?;
 
-        // Re-apply device emulation across CLI invocations: a UA override does
-        // not survive the prior process's CDP disconnect, so without this the
-        // `device set --user-agent` an agent issued would be silently gone. But
-        // honor the policy gate the `device` command itself respects: under
-        // `default deny` a previously-set emulation (UA spoof especially) must NOT
-        // be restored into a locked-down process — the persisted state stays on
-        // disk for when `device` is re-allowed.
-        if !crate::policy::denies(webpilot::types::PolicyKey::Device)
-            && let Some(dev) = read_persisted_device(browser_context_id.as_deref())
-            && let Err(e) = dev.apply(&page).await
-        {
-            // Re-apply failing must not be SILENT: the agent set this emulation
-            // (UA/viewport — identity-shaping) and a session quietly running
-            // without it would lie about what the page sees. But it must not
-            // fail the open either — that would block every command including
-            // the `device reset` that recovers. Warn (stderr) and continue.
-            tracing::warn!(
-                "device emulation could not be re-applied: {e} — the page sees the REAL \
-                 user agent/viewport; run `webpilot device set …` again or `webpilot \
-                 device reset` to clear the persisted emulation"
-            );
-        }
-
         // Restore the active frame across CLI invocations VERBATIM. CLI calls are
         // separate processes, so without persistence `frame switch` would be a
         // no-op — the next `eval` would lose the active frame and silently fall
@@ -234,7 +219,7 @@ impl LocalTransport {
         // per-tab monitoring survives because the worker itself persists.
         let (console_armed, network_armed) = read_persisted_monitors(browser_context_id.as_deref());
 
-        Ok(Self {
+        let mut transport = Self {
             browser,
             page,
             browser_context_id,
@@ -244,12 +229,18 @@ impl LocalTransport {
             frame_contexts,
             bridge_contexts,
             active_frame_id: Arc::new(Mutex::new(restored_active)),
+            device_applied: None,
             console_monitoring: Arc::new(AtomicBool::new(console_armed)),
             network_monitoring: Arc::new(AtomicBool::new(network_armed)),
             _context_lock: context_lock,
             download_behavior: None,
             monitor_hooks: Mutex::new(HashMap::new()),
-        })
+        };
+        // The emulation an agent set is put on the page here rather than waiting
+        // for the first command's reconcile: the headless-only commands that reach
+        // `page()` directly never pass through `send`.
+        transport.ensure_device_emulation().await;
+        Ok(transport)
     }
 
     pub(crate) fn persisted_context_key(&self) -> Option<&str> {
@@ -602,6 +593,53 @@ impl LocalTransport {
         }
     }
 
+    /// Put the persisted device emulation on the bound page, per command.
+    ///
+    /// The emulation is one record with two lifetimes: `Emulation.setDeviceMetricsOverride`
+    /// outlives the CDP client that set it while `Emulation.setUserAgentOverride`
+    /// reverts the moment that client disconnects. So a session that established
+    /// it once and never looked again drifts — a `device set` from another process
+    /// lands its viewport on the page and not its user agent, leaving a mobile
+    /// viewport behind a desktop identity that WebPilot itself created and reports
+    /// nowhere, and a `device reset` elsewhere cannot reach the UA override this
+    /// session owns. Reconciling here, at the sink every command passes, is what
+    /// makes the whole device answer to the persisted record.
+    ///
+    /// The applied record is a cache, never authority: it only decides whether
+    /// there is CDP work to do, so an unchanged device costs one small file read
+    /// and nothing else, and a stale cache costs one idempotent re-apply.
+    ///
+    /// A `device` deny stops the restore, not the emulation already live: refusing
+    /// to establish an identity is the gate's job, while clearing one mid-session
+    /// would be an effect of its own. The persisted state stays on disk for when
+    /// `device` is re-allowed.
+    async fn ensure_device_emulation(&mut self) {
+        if crate::policy::denies(webpilot::types::PolicyKey::Device) {
+            return;
+        }
+        let desired = read_persisted_device(self.persisted_context_key());
+        if desired == self.device_applied {
+            return;
+        }
+        let applied = match &desired {
+            Some(dev) => dev.apply(&self.page).await,
+            None => DeviceState::clear(&self.page).await,
+        };
+        // Failing must not be SILENT — the agent set this emulation (UA/viewport
+        // are identity-shaping) and a session quietly running without it would lie
+        // about what the page sees — and must not fail the command either, which
+        // would block the `device reset` that recovers. Warn, and leave the record
+        // untouched so the next command tries again.
+        match applied {
+            Ok(()) => self.device_applied = desired,
+            Err(e) => tracing::warn!(
+                "device emulation could not be applied: {e} — the page sees the REAL \
+                 user agent/viewport; run `webpilot device set …` again or `webpilot \
+                 device reset` to clear the persisted emulation"
+            ),
+        }
+    }
+
     /// Point Chrome's downloads at this context's artifact directory, or refuse
     /// them outright when policy denies the `download` key.
     ///
@@ -939,6 +977,48 @@ impl LocalTransport {
         if at_first_real {
             let _ = self.page.send("Page.resetNavigationHistory", None).await;
         }
+    }
+
+    /// Attach to `target_id`, prime it, and make it the page this transport acts
+    /// on. The swap happens only once priming has succeeded, so a target that
+    /// dies mid-bind leaves the current page untouched. Monitor registrations are
+    /// dropped with the old page: they name ids on the session that just went
+    /// away.
+    async fn bind_target(&mut self, target_id: &str) -> Result<()> {
+        let mut page = attach_to_page(&self.browser, target_id).await?;
+        let (frame_contexts, bridge_contexts, main_frame_id) = prime_page(&mut page).await?;
+        self.page = page;
+        self.target_id = target_id.to_string();
+        self.frame_contexts = frame_contexts;
+        self.bridge_contexts = bridge_contexts;
+        self.main_frame_id = main_frame_id;
+        self.monitor_hooks.lock().await.clear();
+        // A new session carries none of the old one's emulation overrides, so the
+        // record of what is applied goes with the page it described. The reconcile
+        // then puts the persisted device on this page — before `tab new`'s own load
+        // runs, so that load carries the emulated identity rather than the real one.
+        self.device_applied = None;
+        self.ensure_device_emulation().await;
+        Ok(())
+    }
+
+    /// Resolve the page this transport acts on, and bind it when it is not the
+    /// page already held — `open`'s resolution, run per command. A long-lived
+    /// transport is left in the state a fresh CLI process would find: bound to
+    /// the pin, or to a fallback with the dead pin's id held for `send` to report
+    /// once. The active frame is deliberately KEPT across a rebind, exactly as
+    /// `open` keeps it — a scoped command then resolves it as `FrameNotFound`
+    /// rather than silently running in the main frame. The context anchor is not
+    /// needed here: it only breaks the tie on a context's first command, which
+    /// leaves a pin behind for every command after it.
+    async fn reconcile_binding(&mut self) -> Result<()> {
+        let (target_id, vanished) =
+            pick_active_target(&self.browser, self.browser_context_id.as_deref(), None).await?;
+        if target_id != self.target_id {
+            self.bind_target(&target_id).await?;
+        }
+        self.pin_vanished = vanished;
+        Ok(())
     }
 
     /// Drop the active frame after a navigation, in memory and on disk, so the
@@ -1279,11 +1359,25 @@ impl Transport for LocalTransport {
     async fn send(&mut self, command: Command) -> Result<ResponseData> {
         crate::policy::enforce(&command)?;
         session::sweep_expired_artifacts();
+        // Which page this command acts on is per-command state, like the download
+        // behaviour and the monitor hooks below: Chrome outlives every WebPilot
+        // process, so between two commands of a session served by ONE transport
+        // (`webpilot mcp`, the NM host) the bound tab can close — this session's
+        // own `tab close`, another process's, the page's own `window.close()` —
+        // and another process can move the pin onto a different tab. Chrome does
+        // announce a close, but the announcement arrives after the
+        // `Target.closeTarget` that caused it (measured), so a transport reading
+        // an event would still serve one command against a tab that is gone.
+        // Resolving the pin is the answer, and it is the same resolve `open`
+        // runs — which also makes `pin_vanished` a reading of the pin rather than
+        // a verdict captured once per process.
+        self.reconcile_binding().await?;
         // Downloads answer to the browser's own behavior setting rather than to a
         // command gate: any navigation can resolve into one, so the disposition is
         // established before the command runs instead of being classified per
         // command and inevitably missing a path.
         self.ensure_download_behavior().await;
+        self.ensure_device_emulation().await;
         // The pinned tab closed and this transport attached to a fallback
         // survivor. A command that ACTS on the active page must not SILENTLY run
         // on it — fail loud with TabNotFound, carrying the dead id. Tab management,
@@ -1441,11 +1535,13 @@ pub(super) fn clear_persisted_active_tab(browser_context_id: Option<&str>) {
 // client that set it disconnects. Since every WebPilot CLI invocation is a fresh
 // client that re-attaches to the one persistent Chrome, a UA override set in one
 // process would silently vanish for the next — the asymmetry a field report
-// surfaced. So the full emulation record is persisted per context and re-applied
-// on every `open`, exactly like the armed monitors and the active frame: the
-// emulation an agent set in one command holds across the next, metrics AND UA.
+// surfaced. So the full emulation record is persisted per context, and the record
+// — never one half of it — is what the bound page answers to:
+// `ensure_device_emulation` reconciles against it per command, so the emulation an
+// agent set holds across processes, across the tabs a session binds, and across a
+// change another process makes under a live one, metrics AND UA together.
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub(crate) struct DeviceState {
     pub width: u32,
     pub height: u32,
@@ -1521,6 +1617,45 @@ impl DeviceState {
                 .await;
             return Err(e);
         }
+        Ok(())
+    }
+
+    /// Return a page session to no emulation at all — the counterpart of `apply`,
+    /// and the single definition of it: `device reset` and the per-command
+    /// reconcile must leave exactly the same state, or one of them would clear
+    /// half a device.
+    pub(crate) async fn clear(page: &CdpSession) -> Result<()> {
+        // Chrome's `clearDeviceMetricsOverride` removes the override flag but does
+        // not trigger a layout pass on its own, so the page can stay at the
+        // previously emulated dimensions. Snap the viewport back to the launch size
+        // first; the subsequent clear leaves the page in a "no override" state with
+        // the natural layout in place.
+        let (vw, vh) = crate::session::headless_viewport();
+        page.send(
+            "Emulation.setDeviceMetricsOverride",
+            Some(json!({
+                "width": vw,
+                "height": vh,
+                "deviceScaleFactor": 1.0,
+                "mobile": false,
+            })),
+        )
+        .await?;
+        page.send("Emulation.clearDeviceMetricsOverride", None)
+            .await?;
+        page.send(
+            "Emulation.setUserAgentOverride",
+            Some(json!({"userAgent": ""})),
+        )
+        .await?;
+        // Touch is a separate override; clearing the metrics alone would leave a
+        // previously-applied mobile preset's touch emulation on, so a desktop page
+        // would still report `maxTouchPoints > 0`.
+        page.send(
+            "Emulation.setTouchEmulationEnabled",
+            Some(json!({"enabled": false})),
+        )
+        .await?;
         Ok(())
     }
 }

@@ -123,38 +123,7 @@ pub async fn run(local: &mut LocalTransport, args: DeviceArgs) -> Result<Command
             })
         }
         DeviceCommand::Reset => {
-            let cdp = local.page();
-            // Chrome's `clearDeviceMetricsOverride` removes the override flag
-            // but does not trigger a layout pass on its own, so the page can
-            // stay at the previously emulated dimensions. Snap the viewport
-            // back to the launch size first; the subsequent clear leaves the
-            // page in a "no override" state with the natural layout in place.
-            let (vw, vh) = crate::session::headless_viewport();
-            cdp.send(
-                "Emulation.setDeviceMetricsOverride",
-                Some(serde_json::json!({
-                    "width": vw,
-                    "height": vh,
-                    "deviceScaleFactor": 1.0,
-                    "mobile": false,
-                })),
-            )
-            .await?;
-            cdp.send("Emulation.clearDeviceMetricsOverride", None)
-                .await?;
-            cdp.send(
-                "Emulation.setUserAgentOverride",
-                Some(serde_json::json!({"userAgent": ""})),
-            )
-            .await?;
-            // Touch is a separate override; clearing the metrics alone would leave
-            // a previously-applied mobile preset's touch emulation on, so a desktop
-            // page after `device reset` would still report `maxTouchPoints > 0`.
-            cdp.send(
-                "Emulation.setTouchEmulationEnabled",
-                Some(serde_json::json!({"enabled": false})),
-            )
-            .await?;
+            DeviceState::clear(local.page()).await?;
             // Drop the persisted emulation so a later `open` doesn't re-apply it.
             // The live overrides are already cleared above; if the persisted file
             // can't be removed, say so loudly — leaving it would silently re-apply

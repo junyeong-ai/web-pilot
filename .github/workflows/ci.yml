@@ -183,6 +183,16 @@ jobs:
           WEBPILOT_CHROME_NO_SANDBOX: "1"
         run: cargo test -p webpilot-cli --locked --test e2e_headless -- --nocapture
 
+      # The long-lived transport: `webpilot mcp` serves a whole session over one
+      # transport while Chrome outlives it, so state a CLI process re-establishes
+      # at every launch can go stale under it.
+      - name: cargo test --test e2e_mcp
+        env:
+          WEBPILOT_E2E: "1"
+          WEBPILOT_CHROME: ${{ steps.chrome.outputs.path }}
+          WEBPILOT_CHROME_NO_SANDBOX: "1"
+        run: cargo test -p webpilot-cli --locked --test e2e_mcp -- --nocapture
+
       - name: cargo test --test e2e_browser
         env:
           WEBPILOT_E2E_BROWSER: "1"

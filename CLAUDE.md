@@ -44,7 +44,11 @@ is only ever right for one of the two: cache something the browser owns and the
 long-lived process believes a setting another process already cleared, while
 work hung off startup or off `LocalTransport::open` runs once and never again.
 Anything a command depends on is re-established **per command**, at the sink
-every command passes (`LocalTransport::send`, the host's request path).
+every command passes (`LocalTransport::send`, the host's request path): which page
+is bound, the download disposition, the device emulation, the monitor hooks — each
+read from what the browser and the persisted record actually say, never from what
+this process set up at launch. `tests/e2e_mcp.rs` drives `webpilot mcp` over its
+stdio JSON-RPC to hold that half of the contract.
 
 - `crates/webpilot/` — wire types + protocol (see that directory's `CLAUDE.md`)
 - `crates/webpilot-cli/` — the single binary (see that directory's `CLAUDE.md`)

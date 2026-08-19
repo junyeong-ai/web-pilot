@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session served by one transport (`webpilot mcp`, the NM host) no longer
+  drifts from the browser it drives (headless).** Which page a command acts on was
+  resolved once, when the transport opened, so a tab that closed between two
+  commands of the same session — the session's own `tab close`, another process's,
+  the page's own `window.close()` — left every later command running against a
+  dead CDP session and answering an infra `ConnectionLost` where the truth was a
+  typed `TabNotFound`; the MCP server then threw the whole transport away and
+  reopened, losing the frame scope and the monitor registrations with it. Device
+  emulation had the same shape with a worse symptom: it was applied only at open,
+  and its two halves have different lifetimes — the metrics override outlives the
+  CDP client that set it while the user-agent override reverts with it — so a
+  `device set` from another process landed a mobile viewport on a live session
+  behind an unchanged desktop user agent, a spliced identity WebPilot created and
+  reported nowhere, and binding another tab (`tab new`, `tab switch`, an adopted
+  popup) dropped the emulation entirely, in the CLI too: the new tab's own load
+  carried the real user agent and viewport. The page binding and the emulation are
+  now re-established per command at the sink every command passes, next to the
+  download disposition and the monitor hooks that already were — read from the pin
+  and the persisted record rather than from what the process set up at launch, with
+  CDP work only when something actually changed. `tests/e2e_mcp.rs` drives the real
+  stdio JSON-RPC surface to hold it.
+
 - **The tab a headless session acts on no longer changes without the agent
   asking (headless).** The active-tab pin was written only by `tab switch` /
   `tab new` / `tab close`, so any command that had to DERIVE a page — a fresh

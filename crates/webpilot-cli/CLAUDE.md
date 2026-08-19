@@ -33,6 +33,12 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       `bridge_context_id` vs `active_context_id` route bridge calls vs page
       expressions), **navigation** (`navigate_reconnect` — a cross-site swap
       resets document state on the surviving session, no reconnect).
+      `send` re-establishes per command what a transport must not have captured
+      once — `reconcile_binding` (which page, resolved from the pin; `bind_target`
+      is the single "make this page the bound one" step, shared with `tab switch`),
+      `ensure_download_behavior`, `ensure_device_emulation`, `ensure_monitor_hooks`
+      — because Chrome outlives every process and a session served by ONE transport
+      (`webpilot mcp`, the NM host) would otherwise drift from it.
     - `action.rs` — page-mutating (click/type/scroll/drag, `do_action`).
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
       active. `key_press` is a native CDP `Input.dispatchKeyEvent` (`do_key_press`)

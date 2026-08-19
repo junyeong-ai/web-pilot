@@ -7,7 +7,7 @@ use webpilot::WebPilotError;
 use webpilot::protocol::{FrameSelector, ResponseData, RunMode};
 use webpilot::types::{Download, FrameInfo, TabInfo};
 
-use super::{LocalTransport, action_success, attach_to_page, target_in_context};
+use super::{LocalTransport, action_success, target_in_context};
 
 /// A frame selector that matched more than one frame is ambiguous: switching
 /// into whichever came first in document order would silently scope every
@@ -126,29 +126,17 @@ impl LocalTransport {
         {
             return self.tab_gone_or(e, tab_id).await;
         }
-        let mut new_page = match attach_to_page(&self.browser, tab_id).await {
-            Ok(p) => p,
-            Err(e) => return self.tab_gone_or(e, tab_id).await,
-        };
-        // Prime the new page BEFORE moving the pin, so the pin move is atomic: a
-        // priming failure (the tab closed mid-switch) drops `new_page` and leaves
-        // the current pin untouched, rather than retargeting to a page with no
-        // bridge world. Popup adoption relies on this — it treats a failed switch
-        // as "not adopted" and keeps the pin on the opener, so the switch must not
-        // half-commit the pin before it can fail.
-        let (frame_contexts, bridge_contexts, main_frame_id) =
-            match super::prime_page(&mut new_page).await {
-                Ok(primed) => primed,
-                Err(e) => return self.tab_gone_or(e, tab_id).await,
-            };
-        self.page = new_page;
-        self.target_id = tab_id.to_string();
-        self.frame_contexts = frame_contexts;
-        self.bridge_contexts = bridge_contexts;
-        self.main_frame_id = main_frame_id;
-        // A registration names an id on the session that just went away; the new
-        // page carries none until the reconcile below.
-        self.monitor_hooks.lock().await.clear();
+        // The bind primes the new page before it swaps, so the pin move is atomic:
+        // a tab that dies mid-switch leaves the current pin untouched rather than
+        // retargeting to a page with no bridge world. Popup adoption relies on
+        // this — it treats a failed switch as "not adopted" and keeps the pin on
+        // the opener, so the switch must not half-commit the pin before it can
+        // fail.
+        if let Err(e) = self.bind_target(tab_id).await {
+            return self.tab_gone_or(e, tab_id).await;
+        }
+        // An explicit tab move resets the frame scope: the frame the agent was in
+        // belonged to the page it just left.
         *self.active_frame_id.lock().await = None;
         super::clear_persisted_active_frame(self.persisted_context_key());
         super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
