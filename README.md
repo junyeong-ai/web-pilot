@@ -25,7 +25,7 @@
 **여기 나오는 모든 출력은 실제 캡처 결과입니다.**
 
 ```bash
-# 1. 설치 (바이너리 다운로드 + 체크섬 검증 + 대화형 setup)
+# 1. 설치 (바이너리 다운로드 + 체크섬 검증 + 자동 setup)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
 ```
 
@@ -87,7 +87,7 @@ webpilot action click 5 --capture
 
 로그인에 성공해 **대시보드**로 넘어왔고, 인덱스가 새 페이지 기준으로 다시 매겨졌습니다.
 
-> **인덱스는 항상 “마지막 capture” 기준입니다.** `[3]`은 방금 캡처한 대시보드의 “New task” 버튼을 가리킵니다. 페이지가 바뀐 뒤 옛 인덱스를 쓰면 라이브 DOM에 다시 맞추는 게 아니라 `StaleSnapshot` 에러(종료 코드 4)로 명확히 실패합니다 — 잘못된 요소를 건드리는 사고가 구조적으로 차단됩니다.
+> **인덱스는 항상 “마지막 capture” 기준입니다.** `[3]`은 방금 캡처한 대시보드의 “New task” 버튼을 가리킵니다. 인덱스는 캡처한 노드 자체를 가리키며 라이브 DOM에서 다시 검색하지 않습니다. 스냅샷이 없거나 노드가 제거·숨김 처리되면 `StaleSnapshot` 에러(종료 코드 4)가 납니다. 같은 문서의 URL·내용이 바뀌어도 노드가 유지되면 유효하므로, 화면 전환 후에는 다시 캡처해 현재 상태를 확인하세요.
 
 이 흐름을 그림으로 보면:
 
@@ -203,7 +203,7 @@ webpilot action upload 4 ./resume.pdf                # 파일 업로드
 (1 matches)
 ```
 
-`key-press`·`hover`·`click`은 합성 이벤트가 아니라 네이티브 CDP 입력으로 들어가, Tab은 실제로 포커스를 옮기고 Enter는 폼을 제출합니다.
+`key-press`와 `hover`는 네이티브 CDP 입력을 사용합니다. Tab은 포커스를 옮기고 Enter는 폼을 제출합니다. `click`은 페이지에 합성 마우스 이벤트를 전달하므로 사용자 활성화가 필요한 기능은 실행되지 않을 수 있습니다. 그런 버튼은 `action focus N` 후 `action key-press Enter`로 실행하고 결과를 확인하세요.
 
 ### 다운로드
 
@@ -247,11 +247,13 @@ webpilot network read
 
 ```bash
 webpilot cookie list "http://localhost:8700/"                    # 쿠키 읽기
-webpilot session export --output session.json                    # 쿠키 + localStorage 저장
+webpilot session export --output session.json                    # 쿠키 + localStorage + sessionStorage 저장
 webpilot session import session.json                             # 세션 복원
 webpilot fetch "http://localhost:8700/api/me" \
   --method POST --header content-type:application/json --body '{}'  # 세션 쿠키로 인증 요청
 ```
+
+저장소 데이터는 내보낸 페이지의 origin에 속하며, 가져오기는 해당 origin에서 수행해야 합니다. 쿠키는 활성 컨텍스트 전체, localStorage·sessionStorage는 활성 페이지/프레임 범위입니다.
 
 ### 자바스크립트 평가
 
@@ -412,7 +414,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `network <start\|read\|clear>` | 네트워크 요청 모니터 |
 | `console <start\|read\|clear>` | 콘솔 출력 캡처 |
 | `cookie <list\|get\|set\|delete>` | 쿠키 관리 |
-| `session <export\|import>` | 세션(쿠키+localStorage) 내보내기/가져오기 |
+| `session <export\|import>` | 세션(쿠키+localStorage+sessionStorage) 내보내기/가져오기 |
 | `device <set\|preset\|reset>` | 기기 뷰포트·UA 에뮬레이션 (헤드리스) |
 | `record [--frames N \| --duration N] [--dom]` | 연속 프레임 기록 (AI 분석용, 헤드리스) |
 | `profile --duration <초>` | CPU 성능 프로파일링 (헤드리스) |
@@ -469,6 +471,23 @@ webpilot self uninstall        # Chrome 종료 + 바이너리가 만든 모든 �
 ```
 
 스킬과 확장은 컴파일 타임에 바이너리에 임베드되어 **번들 자산이 항상 바이너리와 일치**합니다(설치 후 추가 다운로드 없음). 업데이트 후 브라우저에 이미 로드된 확장이 낡았다면 호스트가 연결 시 `VersionMismatch`로 잡아 리로드를 안내합니다. setup 이후 Claude Code에서 `/webpilot` 또는 자연어로 스킬이 활성화됩니다.
+
+---
+
+## 실행 설정
+
+[설정 예제](docs/config.example.toml)를 복사하고 `WEBPILOT_CONFIG`로 경로를 지정하세요.
+기본 위치는 WebPilot 캐시 루트의 `config.toml`입니다.
+
+```bash
+WEBPILOT_CONFIG=/absolute/path/config.toml webpilot status
+```
+
+우선순위는 기본값 < 설정 파일 < `WEBPILOT_*` 환경변수입니다.
+시간 키는 `_ms`(밀리초), TTL은 `_secs`(초)를 사용합니다.
+알 수 없는 키·잘못된 설정 파일은 오류로 처리합니다. 형식이 잘못된 환경변수는
+설정 파일 또는 기본값으로 내려갑니다. MCP 서버와 Native Messaging 호스트는
+시작할 때 설정을 읽으므로 변경 후 해당 프로세스를 다시 시작하세요.
 
 ---
 

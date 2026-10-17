@@ -25,7 +25,7 @@ The examples below target a hypothetical internal task-tracker, **“Acme Tasks�
 **Every output shown here is a real capture.**
 
 ```bash
-# 1. Install (binary download + checksum verification + interactive setup)
+# 1. Install (binary download + checksum verification + unattended setup)
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
 ```
 
@@ -87,7 +87,7 @@ webpilot action click 5 --capture
 
 The login succeeded, we're on the **dashboard**, and the indices have been renumbered for the new page.
 
-> **Indices are always bound to the *last* capture.** `[3]` points at the dashboard's “New task” button you just captured. Using an old index after the page changed doesn't silently re-resolve against the live DOM — it fails cleanly with a `StaleSnapshot` error (exit code 4). Acting on the wrong element is ruled out by construction.
+> **Indices are always bound to the *last* capture.** `[3]` points at the dashboard's “New task” button you just captured. An index refers to the captured node itself, never a fresh DOM query. A missing snapshot or a removed/hidden node produces `StaleSnapshot` (exit code 4). Same-document URL or content changes preserve indices while their nodes remain live and visible; capture again after a page transition to inspect its current state.
 
 The same flow as a diagram:
 
@@ -203,7 +203,7 @@ webpilot action upload 4 ./resume.pdf                # upload a file
 (1 matches)
 ```
 
-`key-press`, `hover`, and `click` go in as native CDP input rather than synthetic events, so Tab actually moves focus and Enter submits a form.
+`key-press` and `hover` use native CDP input: Tab moves focus and Enter submits a form. `click` dispatches synthetic mouse events, so features requiring user activation may not run. For such buttons, use `action focus N` followed by `action key-press Enter`, then verify the result.
 
 ### Downloads
 
@@ -255,11 +255,13 @@ webpilot network read
 
 ```bash
 webpilot cookie list "http://localhost:8700/"                    # read cookies
-webpilot session export --output session.json                    # save cookies + localStorage
+webpilot session export --output session.json                    # save cookies + localStorage + sessionStorage
 webpilot session import session.json                             # restore a session
 webpilot fetch "http://localhost:8700/api/me" \
   --method POST --header content-type:application/json --body '{}'  # request with session cookies
 ```
+
+Storage belongs to the exported page's origin; import it while on that origin. Cookies cover the active context, while localStorage and sessionStorage cover the active page/frame.
 
 ### Evaluate JavaScript
 
@@ -420,7 +422,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `network <start\|read\|clear>` | Network request monitor |
 | `console <start\|read\|clear>` | Console output capture |
 | `cookie <list\|get\|set\|delete>` | Cookie management |
-| `session <export\|import>` | Export/import session (cookies + localStorage) |
+| `session <export\|import>` | Export/import session (cookies + localStorage + sessionStorage) |
 | `device <set\|preset\|reset>` | Device viewport / UA emulation (headless) |
 | `record [--frames N \| --duration N] [--dom]` | Record sequential frames for AI analysis (headless) |
 | `profile --duration <secs>` | CPU performance profiling (headless) |
@@ -477,6 +479,23 @@ webpilot self uninstall        # quit Chrome + remove everything the binary crea
 ```
 
 The skill and extension are embedded in the binary at compile time, so the **bundled assets always match the binary** — no post-install download. If an extension already loaded in your browser is stale after an update, the host catches it at connect time with `VersionMismatch` and prompts a reload. After setup, Claude Code activates the skill via `/webpilot` or plain natural language.
+
+---
+
+## Runtime settings
+
+Copy the [configuration example](docs/config.example.toml) and set `WEBPILOT_CONFIG`
+to its absolute path. The default location is `config.toml` in WebPilot's cache root.
+
+```bash
+WEBPILOT_CONFIG=/absolute/path/config.toml webpilot status
+```
+
+Precedence is defaults < configuration file < `WEBPILOT_*` environment variables.
+Time keys use `_ms` (milliseconds); TTL keys use `_secs` (seconds).
+Unknown keys and invalid configuration files fail explicitly. Malformed environment
+values fall through to the configuration file or defaults. MCP servers and Native
+Messaging hosts read settings at startup; restart those processes after changes.
 
 ---
 

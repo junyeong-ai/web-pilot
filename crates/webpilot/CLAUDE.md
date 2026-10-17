@@ -4,8 +4,7 @@ The **wire types + protocol** library shared by the CLI, host, and extension:
 wire types + serialization, plus a handful of leaf I/O utilities (path
 materialization in `dirs.rs`, config-file read in `settings.rs`, screenshot
 encode/write in `screenshot.rs`, and the NM/IPC framing in
-`native_messaging.rs`/`ipc.rs`). No async runtime, no browser — that lives in
-`webpilot-cli`.
+`native_messaging.rs`/`ipc.rs`). IPC uses Tokio async I/O; browser lifecycle and CDP live in `webpilot-cli`.
 
 - `action.rs` — the `Action` enum, deriving `clap::Subcommand` and `serde`
   together (the CLI surface *is* the wire shape). `ActionKind` is the action

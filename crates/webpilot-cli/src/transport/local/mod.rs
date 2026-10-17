@@ -1200,7 +1200,7 @@ impl DownloadWatch {
 
 /// Downloads Chrome announced on a browser subscription taken **before** the
 /// operation that could have started one, followed until the command's download
-/// budget (`[timeouts] download_window`) runs out. The budget, not the
+/// budget (`[timeouts] download_window_ms`) runs out. The budget, not the
 /// settlement of what has already been announced, is what ends the watch — see
 /// the `awaiting` predicate below.
 ///

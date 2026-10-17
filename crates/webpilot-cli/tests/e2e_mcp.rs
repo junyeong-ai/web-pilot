@@ -8,10 +8,10 @@
 //! both: state captured at open — which page is bound, whether its tab is still
 //! there — goes stale under them. That is the half this suite covers.
 //!
-//! These launch a real Chrome, so they are opt-in: set `WEBPILOT_E2E=1` to run
+//! These launch a real Chrome, so they are opt-in: pass `-- --ignored` to run
 //! them, the same flag the headless suite uses.
 //!
-//!   WEBPILOT_E2E=1 cargo test -p webpilot-cli --test e2e_mcp -- --nocapture
+//!   cargo test -p webpilot-cli --test e2e_mcp -- --ignored --nocapture
 
 mod common;
 
@@ -195,12 +195,8 @@ impl Tool {
 }
 
 #[test]
+#[ignore = "requires Chrome for Testing; run with --ignored"]
 fn mcp_long_lived_transport_flow() {
-    if std::env::var("WEBPILOT_E2E").is_err() {
-        eprintln!("skipping e2e (set WEBPILOT_E2E=1 to run)");
-        return;
-    }
-
     let base = spawn_server();
     let session = Session {
         home: std::env::temp_dir().join(format!("webpilot-e2e-mcp-{}", std::process::id())),

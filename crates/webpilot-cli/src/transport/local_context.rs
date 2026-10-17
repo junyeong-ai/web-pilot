@@ -175,10 +175,7 @@ pub(crate) async fn resolve_context_target(
                 {
                     if created {
                         let _ = browser
-                            .send(
-                                "Target.closeTarget",
-                                Some(serde_json::json!({ "targetId": tid })),
-                            )
+                            .close_target(&tid, webpilot::settings::timeouts().cdp_send)
                             .await;
                     }
                     return Err(e.into());

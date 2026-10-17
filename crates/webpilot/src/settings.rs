@@ -496,6 +496,14 @@ mod tests {
         assert!(toml::from_str::<FileSettings>(text).is_err());
     }
 
+    #[test]
+    fn documented_config_is_accepted() {
+        let text = include_str!("../../../docs/config.example.toml");
+        let file: FileSettings = toml::from_str(text).expect("documented settings must parse");
+        assert_eq!(file.timeouts.download_window_ms, Some(2_000));
+        assert_eq!(file.chrome.no_sandbox, Some(false));
+    }
+
     fn valid_settings() -> Settings {
         use std::time::Duration;
         Settings {

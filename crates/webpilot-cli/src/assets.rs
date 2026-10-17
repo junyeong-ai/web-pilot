@@ -8,7 +8,7 @@
 //! Layout:
 //! - `SKILL` — the project's `.claude/skills/webpilot/` tree.
 //! - `EXTENSION` — the Chrome extension's `extension/` tree (manifest.json,
-//!   bridge.js, service worker, popup, sidepanel, icons).
+//!   bridge.js, service worker, popup, icons).
 //!
 //! `is_excluded` skips two things at materialisation time: macOS `.DS_Store`
 //! cruft (it can reappear in the source tree between builds) and the extension's

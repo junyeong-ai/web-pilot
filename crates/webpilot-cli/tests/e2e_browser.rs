@@ -4,7 +4,7 @@
 //! and output. The same fixture page as the headless suite, so the two modes
 //! are held to the same behavior.
 //!
-//! Opt-in: set `WEBPILOT_E2E_BROWSER=1`. Requires a **Chrome for Testing**
+//! Opt-in: pass `-- --ignored`. Requires a **Chrome for Testing**
 //! binary (`WEBPILOT_CHROME`, or the agent-browser layout that `find_chrome`
 //! prefers): branded Chrome silently ignores `--load-extension` (removed in
 //! 137), which this harness detects by the missing extension target and
@@ -216,12 +216,8 @@ fn launch(home: &Path, user_data_dir: &Path, extension_dir: &Path) -> Child {
 }
 
 #[test]
+#[ignore = "requires Chrome for Testing; run with --ignored"]
 fn browser_behavioral_flow() {
-    if std::env::var("WEBPILOT_E2E_BROWSER").is_err() {
-        eprintln!("skipping browser e2e (set WEBPILOT_E2E_BROWSER=1 to run)");
-        return;
-    }
-
     let base = spawn_server();
     // PID + nanos: a recycled PID must never resurrect a crashed run's profile
     // (a stale DevToolsActivePort would mis-route the discovery probe).

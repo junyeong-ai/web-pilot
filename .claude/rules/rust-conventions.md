@@ -8,7 +8,7 @@ paths:
 ## Single source of truth
 - `Action` (in `webpilot::action`) derives both `clap::Subcommand` and `serde::{Serialize,Deserialize}`. The same enum is the CLI surface and the wire protocol — no parallel `BrowserAction` / `ActionCommand` / `to_browser_action` mapping.
 - `WebPilotError` (in `webpilot::error`) is variant-rich and carries the data needed to render guidance via `Display`. There is **no message-string parsing anywhere**. Wire error: `{code, message, ...data}` round-trips through `WireError`.
-- `WaitCondition`, `CaptureField`, `CaptureOpts`, `FrameSelector`, `DomProperty` are typed enums, not boolean flag bags or stringly-typed fields.
+- Use the shared `WaitCondition`, `CaptureField`, `CaptureOpts`, `FrameSelector`, and `DomProperty` definitions for command inputs instead of parallel untyped representations.
 
 ## Naming
 - Subcommand enums: singular `XCommand` (e.g., `TabCommand`, `FrameCommand`).
@@ -18,7 +18,7 @@ paths:
 - String parsing: `impl FromStr` — never bespoke `parse(s)` / `from_str_lossy(s)` helpers.
 
 ## Error handling
-- All errors that escape command handlers are `WebPilotError`. External crate errors wrap into `WebPilotError::Other` at the boundary in `main.rs::into_webpilot_error`.
+- Preserve `WebPilotError` through command handlers' `anyhow::Result` so callers retain typed fields and exit codes. External crate errors wrap into `WebPilotError::Other` at the boundary in `main.rs::into_webpilot_error`.
 - Exit codes from `WebPilotError::exit_code()` — never inferred from message substrings.
 - Structured fields per variant: `ElementNotFound { requested, available }`, `Timeout { kind, elapsed_ms }`, etc.
 

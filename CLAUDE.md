@@ -9,15 +9,15 @@ command handlers.
 
 ```bash
 cargo fmt --all -- --check     # CI gates on this — run it in every local pass too
-npx oxlint@1.78.0 --deny-warnings extension/   # the extension's gate (.oxlintrc.json)
-cargo build --workspace --release
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+npm ci && npm run lint       # locked extension tooling; Node version in .node-version
+cargo build --workspace --release --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # The behavioural suites launch a real Chrome, so they are opt-in (CI runs all three):
-WEBPILOT_E2E=1 cargo test -p webpilot-cli --test e2e_headless   # …and --test e2e_mcp
-WEBPILOT_E2E_BROWSER=1 WEBPILOT_CHROME=<Chrome for Testing> \
-  cargo test -p webpilot-cli --test e2e_browser
+WEBPILOT_CHROME="/path/to/Chrome for Testing" \
+  cargo test -p webpilot-cli --locked --test e2e_headless -- --ignored
+# The same invocation applies to --test e2e_mcp and --test e2e_browser.
 
 webpilot capture --include dom --url "https://example.com"   # headless (default)
 webpilot --browser capture --include dom                     # browser mode (SSO Chrome)
@@ -227,7 +227,7 @@ Settings resolve through one layer, `webpilot::settings`: **defaults <
 `config.toml` < env var**. Tune via `config.toml` (under the cache root —
 `dirs::config_file_path()` — override the path with `WEBPILOT_CONFIG`) sections
 `[timeouts]`/`[chrome]`/`[context]`/`[artifacts]`/`[cdp]`/`[capture]`, or `WEBPILOT_*` env vars
-(e.g. `WEBPILOT_NAVIGATION_TIMEOUT_MS`). `[timeouts] download_window` is the one a
+(e.g. `WEBPILOT_NAVIGATION_TIMEOUT_MS`). `[timeouts] download_window_ms` is the one a
 caller trades directly: it is how long a command that started a download keeps
 watching for the ones it started, so it sets both the answer time of such a
 command and how deferred an export can be and still be reported.

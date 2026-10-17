@@ -528,6 +528,42 @@ impl CdpClient {
         Ok(require_array(&result, "targetInfos", "Target.getTargets")?.clone())
     }
 
+    /// Complete a close only after Chrome no longer lists the target. The close
+    /// response acknowledges the request before the target has finished closing.
+    pub async fn close_target(&self, target_id: &str, timeout: std::time::Duration) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        self.send_on(
+            None,
+            None,
+            "Target.closeTarget",
+            Some(serde_json::json!({"targetId": target_id})),
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+        )
+        .await?;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(WebPilotError::Timeout {
+                    kind: "tab close".into(),
+                    elapsed_ms: timeout.as_millis() as u64,
+                }
+                .into());
+            }
+            let result = self
+                .send_on(None, None, "Target.getTargets", None, deadline - now)
+                .await?;
+            let targets = require_array(&result, "targetInfos", "Target.getTargets")?;
+            if !targets
+                .iter()
+                .any(|target| target["targetId"].as_str() == Some(target_id))
+            {
+                return Ok(());
+            }
+            let next = tokio::time::Instant::now() + webpilot::settings::timeouts().poll_interval;
+            tokio::time::sleep_until(next.min(deadline)).await;
+        }
+    }
+
     pub async fn get_browser_contexts(&self) -> Result<Vec<String>> {
         let result = self.send("Target.getBrowserContexts", None).await?;
         Ok(
@@ -1025,6 +1061,76 @@ mod tests {
     fn webpilot_err(err: &anyhow::Error) -> &WebPilotError {
         err.downcast_ref::<WebPilotError>()
             .expect("a typed WebPilotError")
+    }
+
+    #[tokio::test]
+    async fn close_target_waits_for_the_requested_target_to_disappear() {
+        let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = probes.clone();
+        let url = mock_cdp(move |req| match req["method"].as_str() {
+            Some("Target.closeTarget") => {
+                assert_eq!(req["params"]["targetId"], "closing");
+                Reply::Send(ok(req, serde_json::json!({"success": true})))
+            }
+            Some("Target.getTargets") => {
+                let mut targets = vec![serde_json::json!({"targetId": "survivor"})];
+                if seen.fetch_add(1, Ordering::SeqCst) < 2 {
+                    targets.push(serde_json::json!({"targetId": "closing"}));
+                }
+                Reply::Send(ok(req, serde_json::json!({"targetInfos": targets})))
+            }
+            _ => Reply::Silent,
+        })
+        .await;
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        cdp.close_target("closing", std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(probes.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn close_target_bounds_the_entire_operation_and_cleans_pending_requests() {
+        for acknowledge_close in [false, true] {
+            let url = mock_cdp(move |req| {
+                if acknowledge_close && req["method"] == "Target.closeTarget" {
+                    Reply::Send(ok(req, serde_json::json!({"success": true})))
+                } else {
+                    Reply::Silent
+                }
+            })
+            .await;
+            let cdp = CdpClient::connect(&url).await.unwrap();
+            let error = cdp
+                .close_target("closing", std::time::Duration::from_millis(30))
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                webpilot_err(&error),
+                WebPilotError::Timeout { .. }
+            ));
+            assert!(cdp.pending.lock().await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn close_target_does_not_treat_a_failed_query_as_absence() {
+        let url = mock_cdp(|req| match req["method"].as_str() {
+            Some("Target.closeTarget") => {
+                Reply::Send(ok(req, serde_json::json!({"success": true})))
+            }
+            _ => Reply::Close,
+        })
+        .await;
+        let cdp = CdpClient::connect(&url).await.unwrap();
+        let error = cdp
+            .close_target("closing", std::time::Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            webpilot_err(&error),
+            WebPilotError::ConnectionLost { .. }
+        ));
     }
 
     #[tokio::test]

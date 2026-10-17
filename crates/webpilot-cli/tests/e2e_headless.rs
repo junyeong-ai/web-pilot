@@ -1,12 +1,11 @@
 //! Behavioral end-to-end tests: drive the real `webpilot` binary against a
 //! local fixture server in headless mode, asserting on exit codes and output.
 //!
-//! These launch a real Chrome, so they are opt-in: set `WEBPILOT_E2E=1` to run
-//! them. CI's `e2e` job provisions Chrome (via `WEBPILOT_CHROME`) and sets the
-//! flag; a plain `cargo test` skips them so it stays green on machines without
-//! a browser.
+//! These launch a real Chrome, so they are opt-in: pass `-- --ignored` to run
+//! them. CI's `e2e` job provisions Chrome (via `WEBPILOT_CHROME`) and runs the
+//! ignored tests; a plain `cargo test` reports them as ignored.
 //!
-//!   WEBPILOT_E2E=1 cargo test -p webpilot-cli --test e2e_headless -- --nocapture
+//!   cargo test -p webpilot-cli --test e2e_headless -- --ignored --nocapture
 //!
 //! The whole flow runs as one test because it owns a single headless session
 //! (keyed by an isolated `WEBPILOT_HOME`) and tears it down at the end.
@@ -110,12 +109,8 @@ impl Fixture {
 }
 
 #[test]
+#[ignore = "requires Chrome for Testing; run with --ignored"]
 fn headless_behavioral_flow() {
-    if std::env::var("WEBPILOT_E2E").is_err() {
-        eprintln!("skipping e2e (set WEBPILOT_E2E=1 to run)");
-        return;
-    }
-
     let base = spawn_server();
     let home = std::env::temp_dir().join(format!("webpilot-e2e-{}", std::process::id()));
     let fx = Fixture { home: home.clone() };
@@ -4438,7 +4433,7 @@ fn headless_behavioral_flow() {
     // And the budget is what governs that watch, not the transfers' settlement:
     // a window shorter than the page's own deferral answers before the second
     // export begins. Asserting the trade in both directions is what keeps
-    // `[timeouts] download_window` wired to the loop.
+    // `[timeouts] download_window_ms` wired to the loop.
     let narrow = fx.run_env(
         &["action", "click", &index_of(&cap_deferred, "dldeferred")],
         &[("WEBPILOT_DOWNLOAD_WINDOW_MS", "100")],

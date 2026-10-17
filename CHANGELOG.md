@@ -7,9 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-17
+
+### Changed
+
+- Build with Rust 1.99.1 and Cargo resolver 3, retaining Rust 1.98.0 compatibility.
+- Refresh direct and transitive dependencies and remove unused tracing macros.
+- Lock extension lint tooling and Node.js, pin Chrome for Testing, and update
+  SHA-pinned GitHub Actions. Run dependency audits together instead of repeating
+  the same Cargo graph in four jobs.
+- Run browser E2E suites with `-- --ignored`; default test runs report them as
+  ignored instead of counting unexecuted browser tests as passed.
+
+### Fixed
+
+- Wait for a closed headless tab to disappear from Chrome's target list before
+  returning, so the next MCP command reports `TabNotFound` rather than racing
+  the closing session and returning `ConnectionLost`.
+- Align READMEs, the bundled skill, and developer guidance with synthetic clicks,
+  iframe uploads, snapshot identity, navigation waits, session storage, and
+  configuration units. Include a configuration example checked by the parser.
+
 ### Added
 
-- **`[timeouts] download_window` (`WEBPILOT_DOWNLOAD_WINDOW_MS`, default 2s).**
+- **`[timeouts] download_window_ms` (`WEBPILOT_DOWNLOAD_WINDOW_MS`, default 2000ms).**
   How long a command that started a download keeps watching for the ones it
   started. It was a hard-coded constant — and not even its own: the drain
   borrowed `PROBE`, whose job is bounding a single readiness probe, so one number

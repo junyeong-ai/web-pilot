@@ -1,8 +1,7 @@
 # CDP flat-session migration
 
-Status: **Phase 1 shipped; Phase 2–3 planned.** The headless e2e suite is the
-gate for every phase (`WEBPILOT_E2E=1 cargo test -p webpilot-cli --test
-e2e_headless`).
+Status: **Flat sessions shipped; OOPIF adoption rejected for the tested configuration.** The headless e2e suite is the
+gate for every phase (`cargo test -p webpilot-cli --test e2e_headless -- --ignored`).
 
 ## Why
 

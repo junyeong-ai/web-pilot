@@ -345,10 +345,7 @@ impl LocalTransport {
     async fn rollback_tab_new(&mut self, orphan: &str, prev: &str) {
         let _ = self
             .browser
-            .send(
-                "Target.closeTarget",
-                Some(serde_json::json!({ "targetId": orphan })),
-            )
+            .close_target(orphan, webpilot::settings::timeouts().cdp_send)
             .await;
         if prev != orphan {
             // Restoring the agent's previous tab is a plain `tab switch` back, so
@@ -369,7 +366,7 @@ impl LocalTransport {
         // loud TabNotFound. Browser mode gets the same effect from its sticky pin.
         if let Err(e) = self
             .browser
-            .send("Target.closeTarget", Some(json!({"targetId": tab_id})))
+            .close_target(tab_id, webpilot::settings::timeouts().cdp_send)
             .await
         {
             return self.tab_gone_or(e, tab_id).await;

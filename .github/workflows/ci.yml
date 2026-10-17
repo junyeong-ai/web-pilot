@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
@@ -47,16 +47,19 @@ jobs:
           ref: ${{ inputs.ref || '' }}
           persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           cache-key: lint
 
-      # The extension is the half of the engine the Rust gates cannot see: the
-      # DOM index, the click settle and the monitors are all authored here, and
-      # `browser_parity` only asserts that a router case exists, never that its
-      # handler holds together. Pinned like the actions are.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - run: npm ci
+
       - name: oxlint (extension)
-        run: npx --yes oxlint@1.78.0 --deny-warnings extension/
+        run: npm run lint
 
       # The install/uninstall scripts are the other half no Rust gate sees, and
       # they run as the first thing on a user's machine — before any binary this
@@ -84,7 +87,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
@@ -93,7 +96,7 @@ jobs:
           ref: ${{ inputs.ref || '' }}
           persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           cache-key: test-${{ matrix.os }}
 
@@ -108,7 +111,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
@@ -134,7 +137,7 @@ jobs:
           fi
           echo "version=${declared}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
           cache-key: msrv
@@ -146,7 +149,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
@@ -155,47 +158,35 @@ jobs:
           ref: ${{ inputs.ref || '' }}
           persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           cache-key: e2e
 
-      # WebPilot targets Chrome for Testing: the browser-mode e2e loads the
-      # unpacked extension, which branded Chrome no longer allows. setup-chrome
-      # pulls in the system libraries Chrome needs on a headless runner; the
-      # @puppeteer/browsers install then fetches the matching Chrome for Testing
-      # binary the tests run against.
       - uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
-
-      - name: Install Chrome for Testing
         id: chrome
-        run: |
-          set -euo pipefail
-          out="$(npx --yes @puppeteer/browsers install chrome@stable)"
-          # `install` prints "chrome@<version> <path>"; take the path.
-          echo "path=${out##* }" >> "$GITHUB_OUTPUT"
+        with:
+          chrome-version: 155.0.8059.84
+          install-dependencies: true
 
       - name: cargo test --test e2e_headless
         env:
-          WEBPILOT_E2E: "1"
-          WEBPILOT_CHROME: ${{ steps.chrome.outputs.path }}
+          WEBPILOT_CHROME: ${{ steps.chrome.outputs.chrome-path }}
           # The runner is an unprivileged container — Chrome's setuid sandbox
           # can't initialise there, so opt into --no-sandbox for CI only.
           WEBPILOT_CHROME_NO_SANDBOX: "1"
-        run: cargo test -p webpilot-cli --locked --test e2e_headless -- --nocapture
+        run: cargo test -p webpilot-cli --locked --test e2e_headless -- --ignored --nocapture
 
       # The long-lived transport: `webpilot mcp` serves a whole session over one
       # transport while Chrome outlives it, so state a CLI process re-establishes
       # at every launch can go stale under it.
       - name: cargo test --test e2e_mcp
         env:
-          WEBPILOT_E2E: "1"
-          WEBPILOT_CHROME: ${{ steps.chrome.outputs.path }}
+          WEBPILOT_CHROME: ${{ steps.chrome.outputs.chrome-path }}
           WEBPILOT_CHROME_NO_SANDBOX: "1"
-        run: cargo test -p webpilot-cli --locked --test e2e_mcp -- --nocapture
+        run: cargo test -p webpilot-cli --locked --test e2e_mcp -- --ignored --nocapture
 
       - name: cargo test --test e2e_browser
         env:
-          WEBPILOT_E2E_BROWSER: "1"
-          WEBPILOT_CHROME: ${{ steps.chrome.outputs.path }}
+          WEBPILOT_CHROME: ${{ steps.chrome.outputs.chrome-path }}
           WEBPILOT_CHROME_NO_SANDBOX: "1"
-        run: cargo test -p webpilot-cli --locked --test e2e_browser -- --nocapture
+        run: cargo test -p webpilot-cli --locked --test e2e_browser -- --ignored --nocapture

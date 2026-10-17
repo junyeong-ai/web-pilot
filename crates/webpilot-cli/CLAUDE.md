@@ -43,7 +43,8 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
       active. `key_press` is a native CDP `Input.dispatchKeyEvent` (`do_key_press`)
       — real Tab/Backspace/arrow/text/Enter-submit behaviour a synthetic event
-      can't produce — while every other page action runs via the bridge; both
+      can't produce. Click/type/scroll/focus/select run via the bridge;
+      navigation, hover, drag, and upload have dedicated CDP paths. Input actions
       bracket a navigation + popup watch (events subscribed *before* the action
       runs): `settled_action_url` reports `url_changed` (bounded commit wait
       only when a main-frame load started and has not already stopped),

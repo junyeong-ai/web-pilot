@@ -1,0 +1,18 @@
+[timeouts]
+navigation_ms = 30000
+download_window_ms = 2000
+
+[chrome]
+viewport_width = 1280
+viewport_height = 720
+no_sandbox = false
+
+[capture]
+max_elements = 1000
+screenshot_max_long_edge = 1568
+
+[cdp]
+event_buffer = 512
+
+[artifacts]
+ttl_secs = 604800
