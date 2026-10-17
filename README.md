@@ -95,6 +95,8 @@ webpilot action click 5 --capture --snapshot-id ID_B
 
 로그인에 성공해 **대시보드**로 넘어왔고, 인덱스가 새 페이지 기준으로 다시 매겨졌습니다.
 
+액션은 실행됐지만 후속 캡처만 실패하면 `capture_error`가 반환됩니다. 이때 액션을 반복하지 말고 `capture`로 결과를 다시 관찰하세요.
+
 > 인덱스 액션에는 관찰한 캡처 또는 `find` 결과의 `--snapshot-id ID`가 필요합니다. 다른 캡처·문서의 인덱스, 제거·숨김 처리된 요소, 접근성 이름·역할·링크 목적지·입력 타입이 바뀐 요소는 `StaleSnapshot`(종료 코드 4)으로 거절됩니다. 다시 캡처한 상태에서 다음 액션을 선택하세요.
 
 검사는 노드와 관찰한 의미 정보의 일치를 확인합니다. 같은 이름의 버튼이 어떤 업무 항목을 처리하는지까지 보장하지 않으므로, 삭제·결제 같은 작업은 주변 문맥과 결과도 확인하세요.
@@ -234,6 +236,8 @@ Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<id> ("invoice
 
 파일은 다운로드 id로 이름 지어져 WebPilot의 아티팩트 루트(`--context`별로 분리)에 저장됩니다 — 서버가 보낸 파일명이 디스크 경로가 되는 일은 없습니다. `webpilot policy set --operation download --verdict deny`는 브라우저에서 전송 자체를 거부하며, 시도는 경로 없이 그대로 보고됩니다.
 
+`downloads`의 `saved`는 저장 완료, `in_progress`는 진행 중입니다. 진행 중인 파일은 반환된 `path`가 실제로 생긴 뒤 읽으세요. `denied`·`canceled`에는 사용 가능한 경로가 없습니다. 명령은 `[timeouts] download_window_ms`(기본 2000ms) 동안 추가 다운로드를 관찰하며, 더 늦게 시작된 다운로드는 결과에 포함되지 않을 수 있습니다.
+
 헤드리스 전용입니다. `--browser`에서는 사용자의 Chrome이 자기 다운로드 폴더와 규칙을 그대로 씁니다. Chrome 확장 API는 다운로드를 시작한 탭을 알려주지 않아, 보고하려면 사용자가 마침 받고 있던 파일까지 에이전트 명령 탓으로 돌리게 됩니다 — 그래서 브라우저 모드에서는 보고도 게이트도 하지 않습니다.
 
 ### 네트워크 · 콘솔 관찰
@@ -255,7 +259,9 @@ webpilot network read
 [1781409477046] fetch GET /tasks.json → 200 (1ms)
 ```
 
-> `console read` 는 페이지가 **보고하는 것**을 그대로 보고합니다 — `console.*` 호출과 실패한 `console.assert` 뿐 아니라 스택 끝까지 올라간 예외와 아무도 처리하지 않은 rejection 까지, 메시지는 모두 브라우저 자신의 문구입니다. 각 항목은 `source`(`console`/`exception`/`rejection`)로 구분됩니다. 기록하지 않는 둘: 페이지가 이벤트를 취소해 브라우저 자신도 출력하지 않은 에러, 그리고 로드에 실패한 서브리소스 — 후자의 페이지 쪽 이벤트는 이유를 담지 않고 네트워크 모니터는 `fetch`/XHR 만 봅니다. 헤드리스에서는 훅이 문서마다 그 문서의 첫 스크립트보다 **먼저** 설치되므로 로드 중 출력도 잡히지만, 브라우저 모드는 사용자의 실제 Chrome 을 몰기 때문에 내비게이션이 정착한 뒤 주입하며 그 페이지 자신의 시작 시점 출력은 잡지 않습니다. 어느 쪽이었는지는 읽기 결과가 직접 알려줍니다 — `covers_load` 가 `false` 면 (문서가 만들어질 때 아무것도 붙어 있지 않았거나 브라우저 모드) 그 이전 출력은 버퍼에 없다는 뜻이고, 사람이 읽는 출력에는 `--- recorder installed after this document started … ---` 줄이 붙습니다. 헤드리스라면 그 로드를 WebPilot 으로 다시 몰면(`action reload`) 처음부터 기록됩니다. 버퍼는 페이지의 전역이라 적대적 페이지는 우회할 수도, 직접 항목을 써넣을 수도 있습니다(던진 적 없는 `exception` 포함). 빈 버퍼를 “아무 일도 없었다”는 증거로도, 채워진 버퍼를 “정말 그랬다”는 증거로도 삼지 마세요.
+`console read`는 `console.*` 호출, 처리되지 않은 예외와 rejection을 `source`(`console`/`exception`/`rejection`)로 구분합니다. 취소된 오류, 구조화된 콘솔 메서드(`table`·`dir` 등), 서브리소스 로드 실패는 기록하지 않습니다. 네트워크 모니터는 `fetch`/XHR을 기록합니다.
+
+헤드리스는 로드 전에 연결되어 있을 때 문서 시작부터 기록할 수 있고, 브라우저 모드는 내비게이션 정착 후 기록을 시작합니다. `covers_load: false`는 시작 시점 출력이 누락됐음을, `truncated: true`는 이전 항목이 버퍼에서 제거됐음을 뜻합니다. 기록이 켜진 헤드리스에서 `action reload`하면 다음 로드를 처음부터 관찰할 수 있습니다. 훅과 버퍼는 페이지의 MAIN 월드에 있으므로 적대적 페이지가 우회하거나 조작할 수 있습니다. 버퍼 내용은 실제 발생 여부를 인증하지 않습니다.
 
 ### 세션 · 쿠키 · 인증 요청
 
@@ -468,7 +474,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `8` | 네비게이션 (`NavigationFailed` · `NoPage`) |
 | `9` | `OutcomeUnknown`: 이미 실행됐을 수 있으므로 재시도 전에 상태 관찰 필요 |
 
-에러는 가이드 텍스트와 함께 출력되며, JSON 모드에서는 `{"code": "...", "message": "...", ...}` 구조로 나옵니다 — 문자열 파싱 없이 `code`로 분기할 수 있습니다.
+에러는 가이드 텍스트와 함께 출력되며, JSON 모드에서는 `{"success": false, "error": {"code": "...", "message": "...", ...}}` 구조로 나옵니다 — 문자열 파싱 없이 `error.code`로 분기할 수 있습니다.
 
 ---
 
@@ -524,7 +530,7 @@ tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS 기본값; WEBPILOT_HO
 ```bash
 webpilot status                # 연결 상태 / Chrome 버전 / 활성 탭 확인
 webpilot -v capture --include dom --url URL   # stderr 디버그 로그
-webpilot quit && webpilot status              # 세션이 꼬였을 때 재시작
+webpilot quit                  # 헤드리스 세션 종료; 다음 페이지 명령이 Chrome을 시작
 ```
 
 - **`VersionMismatch` (코드 3)** — 설치된 확장 버전이 번들 버전과 다름. `webpilot setup extension` 후 확장을 리로드하세요.

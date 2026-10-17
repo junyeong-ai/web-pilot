@@ -67,7 +67,9 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       not cover: `truncated` for what the cap evicted, `covers_load` for whether
       the recorder was in place before the document's first script (stamped by the
       recorder from the null `documentElement` only a document-start injection
-      sees), so an empty buffer is never ambiguous. `MONITOR_SHAPE` is the whole
+      sees). These fields report coverage and eviction; an empty buffer is not
+      proof of silence because MAIN-world hooks can be bypassed or modified.
+      `MONITOR_SHAPE` is the whole
       recorder contract — entries AND the globals a read expects — and
       `monitor_shape_stamp_is_in_step` fails the build if the six stamp sites
       disagree.

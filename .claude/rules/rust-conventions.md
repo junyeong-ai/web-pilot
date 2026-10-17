@@ -7,7 +7,7 @@ paths:
 
 ## Single source of truth
 - `Action` (in `webpilot::action`) derives both `clap::Subcommand` and `serde::{Serialize,Deserialize}`. The same enum is the CLI surface and the wire protocol — no parallel `BrowserAction` / `ActionCommand` / `to_browser_action` mapping.
-- `WebPilotError` (in `webpilot::error`) is variant-rich and carries the data needed to render guidance via `Display`. There is **no message-string parsing anywhere**. Wire error: `{code, message, ...data}` round-trips through `WireError`.
+- `WebPilotError` (in `webpilot::error`) carries typed fields for guidance via `Display` and exit-code selection. Wire error: `{code, message, ...data}` round-trips through `WireError`. Classify external protocol errors at their adapter boundary; downstream code uses the resulting types, not message substrings.
 - Use the shared `WaitCondition`, `CaptureField`, `CaptureOpts`, `FrameSelector`, and `DomProperty` definitions for command inputs instead of parallel untyped representations.
 
 ## Naming
@@ -33,7 +33,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: FooArgs) -> Result<Comma
 ```
 Headless-only commands (`profile`, `record`, `device`, `context`) take `&mut LocalTransport` directly so they can reach the underlying CDP via `local.page()` / `local.browser()`. Pure-local commands (`policy`, `setup`, `diff`, `uninstall`, `self`) take no transport at all — resolved in `run_cli` before any session opens.
 
-Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`, `Content { stdout, json }`, `List { items, human_lines, summary }`.
+Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`, `Content { stdout, json, note }`, `List { items, human_lines, summary }`. `note` carries context such as an HTTP status alongside human content and MCP text without altering stdout content.
 
 ## Transport
 - `Transport` trait — sole boundary between command logic and I/O. `send(Command) -> ResponseData`.

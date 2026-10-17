@@ -96,6 +96,8 @@ webpilot action click 5 --capture --snapshot-id ID_B
 
 The login succeeded, we're on the **dashboard**, and the indices have been renumbered for the new page.
 
+If the action runs but its follow-up capture fails, `capture_error` reports that observation failure. Capture again to inspect the result; do not repeat the action.
+
 > Indexed actions require `--snapshot-id ID` from the observed capture or `find` result. Indices belong to that snapshot and document. A newer capture, a removed/hidden node, or a changed accessible name, role, link destination or input type produces `StaleSnapshot` (exit 4). Capture again before choosing a new action.
 
 Validation checks the node and its observed semantic properties. It does not establish which business record a same-named button affects; verify surrounding context and results for actions such as deletion or payment.
@@ -240,6 +242,8 @@ Files are named by their download id and land under WebPilot's artifact root
 on disk. `webpilot policy set --operation download --verdict deny` refuses the
 transfer in the browser; the attempt is still reported, without a path.
 
+In `downloads`, `saved` means complete and `in_progress` means the transfer is still running. Wait for the returned `path` to exist before reading an in-progress file. `denied` and `canceled` provide no usable path. Commands watch for additional downloads for `[timeouts] download_window_ms` (default 2000ms); downloads starting later may be absent from the result.
+
 Headless only. Under `--browser` the user's own Chrome keeps its own download
 folder and its own rules; Chrome's extension API reports no initiating tab for a
 download, so WebPilot would have to credit whatever the user happened to be
@@ -264,7 +268,9 @@ webpilot network read
 [1781409477046] fetch GET /tasks.json → 200 (1ms)
 ```
 
-> `console read` reports what the page **reports**: its `console.*` calls and failed assertions, the exceptions that reach the top of the stack, and the rejections nothing handles — every message the browser's own text. Each entry names its `source` (`console` / `exception` / `rejection`). Two are not recorded: one the page cancels, which the browser does not print either, and a subresource that fails to load, whose page-side event names no reason (the network monitor watches `fetch`/XHR, not element loads). In headless the hooks enter each document **ahead of** that document's own scripts, so what a page logs while loading is captured too; browser mode drives your real Chrome and injects once a navigation settles, so there a page's own startup output is missed. Every read says which it got: `covers_load: false` means the recorder went in after the document had started — a document built while nothing was attached, or any browser-mode read — so output from before then is not in the buffer, and the human render adds `--- recorder installed after this document started … ---`. In headless, re-driving that load (`action reload`) captures it from the first script. And the buffer is a page global, so an adversarial page can both evade the recorder and write entries into it — including an `exception` it never threw. Treat neither an empty buffer as proof nothing happened nor a filled one as proof it did.
+`console read` distinguishes `console.*` calls, unhandled exceptions and rejections through `source` (`console`/`exception`/`rejection`). Canceled errors, structured console methods such as `table` and `dir`, and failed subresource loads are not recorded. The network monitor records `fetch`/XHR.
+
+Headless can record from document start when connected before the load; browser mode begins after navigation settles. `covers_load: false` marks missing startup coverage, and `truncated: true` marks evicted entries. With recording armed in headless mode, `action reload` can capture the next load from the start. Hooks and buffers live in the page's MAIN world, where an adversarial page can bypass or modify them. Buffer contents do not authenticate what happened.
 
 ### Sessions · cookies · authenticated requests
 
@@ -477,7 +483,7 @@ See `webpilot <command> --help` for the full options of each.
 | `8` | Navigation (`NavigationFailed` · `NoPage`) |
 | `9` | `OutcomeUnknown`: the operation may already have run; observe before retrying |
 
-Errors print with guidance text, and in JSON mode come out as `{"code": "...", "message": "...", ...}` — you can branch on `code` without parsing strings.
+Errors print with guidance text, and in JSON mode come out as `{"success": false, "error": {"code": "...", "message": "...", ...}}` — you can branch on `error.code` without parsing strings.
 
 ---
 
@@ -536,7 +542,7 @@ report about a session that has already ended needs.
 ```bash
 webpilot status                # connection state / Chrome version / active tab
 webpilot -v capture --include dom --url URL   # debug logging to stderr
-webpilot quit && webpilot status              # restart when a session gets stuck
+webpilot quit                  # stop headless; the next page command starts Chrome
 ```
 
 - **`VersionMismatch` (code 3)** — the installed extension version differs from the bundled one. Run `webpilot setup extension`, then reload the extension.

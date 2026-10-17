@@ -24,7 +24,8 @@ webpilot capture --include dom --url "https://example.com"   # headless (default
 webpilot --browser capture --include dom                     # browser mode (SSO Chrome)
 webpilot --context agent-1 capture --include dom             # multi-agent isolation
 webpilot mcp            # MCP server (stdio); honors --browser / --context
-webpilot status / webpilot quit
+webpilot status
+webpilot quit
 ```
 
 ## Architecture
@@ -80,6 +81,9 @@ needed. Gate a command by adding an arm to `protocol::Command::policy_key()` —
 that match is exhaustive too, so a new command **must declare its gate** and
 cannot leak ungated (enforcement runs automatically at each privileged sink).
 MCP exposes a curated subset of commands — adding a command is not an MCP change.
+Also classify the command in `Command::unconfirmed_operation()`: when an IPC
+reply is lost after dispatch, effects become `OutcomeUnknown` while reads retain
+the connection error. This exhaustive classification is separate from policy.
 
 ## DOM Output Format
 

@@ -52,7 +52,8 @@ target site is not. The runtime keeps these invariants:
   host manifest restricts `allowed_origins` to the one extension ID.
 - Native messaging frames use 4-byte LE length prefixing — no
   message parsing is done on free text.
-- Errors are typed (`WebPilotError` variants), never substring-matched.
+- Internal errors and exit codes use typed `WebPilotError` variants. External
+  CDP errors are normalized at the adapter boundary before downstream handling.
 - Policies are enforced at the process that reaches a browser (headless:
   `LocalTransport::send`; browser: the Native Messaging host), on the
   typed `PolicyKey` derived from `Command::policy_key()` — not on
