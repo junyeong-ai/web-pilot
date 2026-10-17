@@ -535,11 +535,12 @@ impl LocalTransport {
         let object_id = self.eval_object_id("(()=>{const t=window.__webpilot_state.pointerTarget;return t&&t.isConnected?t:null;})()")
             .await?.ok_or(WebPilotError::StaleSnapshot { index })?;
         let outcome = async {
+            let fragment = prep["fragment_index"].as_u64().ok_or_else(|| WebPilotError::Other { detail:"Click preparation omitted its layout fragment".into() })? as usize;
             let deadline = tokio::time::Instant::now() + webpilot::settings::timeouts().navigation;
             let mut previous = Value::Null;
             let quad = loop {
                 let geometry = self.page.send("DOM.getContentQuads", Some(json!({"objectId":object_id}))).await?;
-                let quad = geometry["quads"].as_array().and_then(|quads| quads.first()).cloned()
+                let quad = geometry["quads"].as_array().and_then(|quads| quads.get(fragment)).cloned()
                     .ok_or_else(|| WebPilotError::InvalidArgument { detail: "Click target has no content quad".into() })?;
                 if quad == previous { break quad; }
                 if tokio::time::Instant::now() >= deadline {
@@ -549,6 +550,9 @@ impl LocalTransport {
                 tokio::time::sleep(std::time::Duration::from_millis(16)).await;
             };
             let ready = Self::parse_bridge_response(self.invoke_bridge(&json!({"type":"prepareClick", "index":index, "snapshot_id":snapshot_id, "watch":true})).await?)?;
+            if ready["fragment_index"] != prep["fragment_index"] {
+                return Err(WebPilotError::InvalidArgument { detail:"Click target layout changed during preparation; capture again".into() }.into());
+            }
             let fx = coord(&ready, "x_fraction")?;
             let fy = coord(&ready, "y_fraction")?;
             let q: Vec<f64> = serde_json::from_value(quad)?;
@@ -559,8 +563,8 @@ impl LocalTransport {
             self.page.send("Input.dispatchMouseEvent", Some(json!({"type":"mouseMoved", "x":x, "y":y, "modifiers":modifier_mask(modifiers)}))).await?;
             let verified = Self::parse_bridge_response(self.invoke_bridge(&json!({"type":"prepareClick", "index":index, "snapshot_id":snapshot_id})).await?)?;
             let geometry = self.page.send("DOM.getContentQuads", Some(json!({"objectId":object_id}))).await?;
-            let current_quad: Vec<f64> = serde_json::from_value(geometry["quads"][0].clone()).map_err(|_| WebPilotError::InvalidArgument { detail:"Click target has no content quad after pointer positioning".into() })?;
-            if current_quad != q || coord(&verified, "x_fraction")? != fx || coord(&verified, "y_fraction")? != fy {
+            let current_quad: Vec<f64> = serde_json::from_value(geometry["quads"][fragment].clone()).map_err(|_| WebPilotError::InvalidArgument { detail:"Click target has no content quad after pointer positioning".into() })?;
+            if current_quad != q || verified["fragment_index"] != ready["fragment_index"] || coord(&verified, "x_fraction")? != fx || coord(&verified, "y_fraction")? != fy {
                 return Err(WebPilotError::InvalidArgument { detail:"Click target moved after pointer positioning; capture again".into() }.into());
             }
             let metrics = self.page.send("Page.getLayoutMetrics", None).await?;

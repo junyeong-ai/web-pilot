@@ -388,7 +388,7 @@ async function dispatchClick(tabId, action, snapshot_id) {
         let quad;
         for (;;) {
           const geometry = await cdpSend(tid, "DOM.getContentQuads", { objectId });
-          quad = geometry.quads?.[0];
+          quad = geometry.quads?.[prep.fragment_index];
           if (!quad || quad.length !== 8) return { success: false, error: err("InvalidArgument", "Click target has no content quad") };
           if (previous && quad.every((value, i) => value === previous[i])) break;
           if (Date.now() >= deadline) return { success: false, error: err("Timeout", "Click target did not become stable", { kind: "click target stability", elapsed_ms: navigationTimeoutMs() }) };
@@ -397,6 +397,7 @@ async function dispatchClick(tabId, action, snapshot_id) {
         }
         const ready = await prepare(true);
         if (ready.success === false) return ready;
+        if (ready.fragment_index !== prep.fragment_index) return { success: false, error: err("InvalidArgument", "Click target layout changed during preparation; capture again") };
         const x = quad[0] + (quad[2] - quad[0]) * ready.x_fraction + (quad[6] - quad[0]) * ready.y_fraction;
         const y = quad[1] + (quad[3] - quad[1]) * ready.x_fraction + (quad[7] - quad[1]) * ready.y_fraction;
         const m = action.modifiers || {};
@@ -406,7 +407,8 @@ async function dispatchClick(tabId, action, snapshot_id) {
         const verified = await prepare();
         if (verified.success === false) return verified;
         const geometry = await cdpSend(tid, "DOM.getContentQuads", { objectId });
-        if (!geometry.quads?.[0] || geometry.quads[0].length !== quad.length || !quad.every((value, i) => value === geometry.quads[0][i]) || verified.x_fraction !== ready.x_fraction || verified.y_fraction !== ready.y_fraction) {
+        const currentQuad = geometry.quads?.[prep.fragment_index];
+        if (!currentQuad || currentQuad.length !== quad.length || !quad.every((value, i) => value === currentQuad[i]) || verified.fragment_index !== ready.fragment_index || verified.x_fraction !== ready.x_fraction || verified.y_fraction !== ready.y_fraction) {
           return { success: false, error: err("InvalidArgument", "Click target moved after pointer positioning; capture again") };
         }
         const metrics = await cdpSend(tid, "Page.getLayoutMetrics");

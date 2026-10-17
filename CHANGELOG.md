@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Retain live iframe execution contexts while their documents finish parsing.
+- Target matching rendered fragments for wrapped inline links, including when
+  another fragment is covered.
 - Revalidate click targets after pointer movement, so hover-triggered movement
   cannot redirect a click onto another control.
 - Preserve uncertain native key, drag and upload outcomes in browser mode;

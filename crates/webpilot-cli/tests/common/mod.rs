@@ -593,6 +593,30 @@ pub fn assert_observation_contract(run: impl Fn(&[&str]) -> Output, base: &str) 
         "eval",
         "document.getElementById('hoverProof').remove();'removed'",
     ]);
+    read(&[
+        "eval",
+        "window.wrappedClicks=0;document.body.insertAdjacentHTML('beforeend',`<div id=wrappedProof style=\"position:fixed;left:8px;top:350px;width:120px;font:16px/40px monospace;z-index:30\"><span style=\"display:inline-block;width:90px\"></span><a id=wrapped href=#ok onclick=\"event.preventDefault();window.wrappedClicks++\">one two three</a></div>`);'ready'",
+    ]);
+    let wrapped = read(&["capture"]);
+    let target = wrapped["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|el| el["id"] == "wrapped")
+        .unwrap()["index"]
+        .to_string();
+    read(&["action", "click", &target]);
+    assert_eq!(read(&["eval", "window.wrappedClicks"])["result"], "1");
+    read(&[
+        "eval",
+        "const r=document.getElementById('wrapped').getClientRects()[0];const cover=document.createElement('div');cover.id='fragmentCover';Object.assign(cover.style,{position:'fixed',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',zIndex:40});document.body.appendChild(cover);'covered'",
+    ]);
+    read(&["action", "click", &target]);
+    assert_eq!(read(&["eval", "window.wrappedClicks"])["result"], "2");
+    read(&[
+        "eval",
+        "document.getElementById('wrappedProof').remove();document.getElementById('fragmentCover').remove();'removed'",
+    ]);
     let text = read(&["capture", "--include", "text"]);
     assert!(text["text_content"].as_str().unwrap().contains("12345 KRW"));
     read(&[

@@ -963,19 +963,25 @@
     const el = r.el;
     if (isDisabled(el)) return err("InvalidArgument", "Cannot click a disabled element");
     el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-    const rect = el.getBoundingClientRect();
-    const left = Math.max(0, rect.left);
-    const right = Math.min(innerWidth, rect.right);
-    const top = Math.max(0, rect.top);
-    const bottom = Math.min(innerHeight, rect.bottom);
-    if (right <= left || bottom <= top) return err("InvalidArgument", "Click target is outside the viewport");
-    const x = (left + right) / 2;
-    const y = (top + bottom) / 2;
-    let hit = deepElementFromPoint(x, y);
-    while (hit && hit !== el) hit = flatTreeHop(hit);
-    if (hit !== el) {
-      return err("InvalidArgument", "Click target does not receive pointer events at its action point");
+    let point = null;
+    let inViewport = false;
+    for (const [fragment_index, rect] of Array.from(el.getClientRects()).entries()) {
+      const left = Math.max(0, rect.left);
+      const right = Math.min(innerWidth, rect.right);
+      const top = Math.max(0, rect.top);
+      const bottom = Math.min(innerHeight, rect.bottom);
+      if (right <= left || bottom <= top) continue;
+      inViewport = true;
+      const x = (left + right) / 2;
+      const y = (top + bottom) / 2;
+      let hit = deepElementFromPoint(x, y);
+      while (hit && hit !== el) hit = flatTreeHop(hit);
+      if (hit === el) {
+        point = { fragment_index, x_fraction: (x - rect.left) / rect.width, y_fraction: (y - rect.top) / rect.height };
+        break;
+      }
     }
+    if (!point) return err("InvalidArgument", inViewport ? "Click target does not receive pointer events at its action point" : "Click target is outside the viewport");
     if (msg.watch) {
       finishClick();
       const effects = { event: null, navigates: false, frame_navigates: false, downloads: false };
@@ -997,8 +1003,7 @@
     const dest = navTarget(el, true);
     return {
       success: true,
-      x_fraction: (x - rect.left) / rect.width,
-      y_fraction: (y - rect.top) / rect.height,
+      ...point,
       navigates: clickNavigates(dest.target),
       frame_navigates: frameNavigates(dest.target),
       opens_context: dest.target === NEW_CONTEXT,
