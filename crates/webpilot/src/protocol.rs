@@ -50,6 +50,8 @@ pub enum Command {
     },
     Action {
         action: Action,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        snapshot_id: Option<String>,
         #[serde(default)]
         capture: bool,
     },
@@ -57,9 +59,14 @@ pub enum Command {
         code: String,
     },
     Wait {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
         condition: WaitCondition,
         #[serde(default = "default_wait_timeout_ms")]
         timeout_ms: u64,
+    },
+    WaitCancel {
+        request_id: String,
     },
     Status,
     TabList,
@@ -146,6 +153,54 @@ pub enum Command {
 }
 
 impl Command {
+    /// Operation whose effects must be observed if its transport reply is lost.
+    /// This classifies execution effects independently of permission gates.
+    pub fn unconfirmed_operation(&self) -> Option<String> {
+        let operation = match self {
+            Self::Action { action, .. } => return Some(action.kind().to_string()),
+            Self::Capture { url: Some(_), .. } => "navigate",
+            Self::Eval { .. } => "eval",
+            Self::Fetch { .. } => "fetch",
+            Self::DomSet { .. } => "dom_set",
+            Self::TabNew { .. } => "tab_new",
+            Self::TabClose { .. } => "tab_close",
+            Self::TabSwitch { .. } => "tab_switch",
+            Self::FrameSwitch { .. } => "frame_switch",
+            Self::CookieSet { .. } => "cookie_set",
+            Self::CookieDelete { .. } => "cookie_delete",
+            Self::SessionImport { .. } => "session_import",
+            Self::ConsoleStart => "console_start",
+            Self::ConsoleClear => "console_clear",
+            Self::NetworkStart => "network_start",
+            Self::NetworkClear => "network_clear",
+            Self::Capture { url: None, .. }
+            | Self::DomGet { .. }
+            | Self::Wait { .. }
+            | Self::WaitCancel { .. }
+            | Self::Status
+            | Self::TabList
+            | Self::FrameList
+            | Self::CookieList { .. }
+            | Self::ConsoleRead { .. }
+            | Self::NetworkRead { .. }
+            | Self::SessionExport
+            | Self::Ping => return None,
+        };
+        Some(operation.into())
+    }
+
+    pub fn validate(&self) -> Result<(), crate::WebPilotError> {
+        if let Self::Action {
+            action,
+            snapshot_id,
+            ..
+        } = self
+        {
+            action.validate_snapshot(snapshot_id.as_deref())?;
+        }
+        Ok(())
+    }
+
     /// The policy key this command is gated by, if any. Drives the single
     /// enforcement point at the transport boundary. Read-only observation
     /// (capture, status, list/read commands) returns `None` — only operations
@@ -201,6 +256,7 @@ impl Command {
             Command::Capture { url: None, .. }
             | Command::FrameSwitch { .. }
             | Command::Wait { .. }
+            | Command::WaitCancel { .. }
             | Command::Status
             | Command::TabList
             | Command::TabSwitch { .. }

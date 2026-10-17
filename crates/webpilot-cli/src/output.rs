@@ -141,6 +141,31 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
 }
 
 impl CommandOutput {
+    pub(crate) fn structured_content(&self) -> serde_json::Value {
+        let value = self.to_json();
+        if value.is_object() {
+            value
+        } else {
+            serde_json::json!({"value": value})
+        }
+    }
+
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Ok(message) => serde_json::json!({ "success": true, "message": message }),
+            Self::Data { json, .. } | Self::Content { json, .. } => json.clone(),
+            Self::List { items, .. } => items.clone(),
+            Self::Dom { snapshot, extra } => {
+                let mut value = serde_json::to_value(snapshot).expect("DomSnapshot serializes");
+                value
+                    .as_object_mut()
+                    .expect("DomSnapshot is an object")
+                    .extend(extra.clone());
+                value
+            }
+        }
+    }
+
     /// A snapshot on its way to an agent, bounded to the render cap.
     ///
     /// The one way to build a `Dom` output, so no surface can hand back an
@@ -195,76 +220,39 @@ impl CommandOutput {
 }
 
 pub fn render(result: CommandOutput, mode: OutputMode) {
-    match (result, mode) {
-        (CommandOutput::Ok(msg), OutputMode::Human) => eprintln!("{msg}"),
-        // Carry the message into JSON too — the human and MCP renders both emit
-        // it (`to_agent_text`), and an agent on the piped JSON path would
-        // otherwise lose actionable detail like `context close --all`'s
-        // "N kept (failed to dispose)", reading a bare `success:true` as a clean
-        // sweep.
-        (CommandOutput::Ok(msg), OutputMode::Json) => {
-            emit_json(&serde_json::json!({"success": true, "message": msg}))
-        }
-
-        (CommandOutput::Data { human, .. }, OutputMode::Human) => eprintln!("{human}"),
-        (CommandOutput::Data { json, .. }, OutputMode::Json) => emit_json(&json),
-
-        (CommandOutput::Dom { snapshot, extra }, OutputMode::Human) => {
-            // Always render the snapshot text, even with zero interactive
-            // elements: the `--- Page / Scroll / iframe ---` footer carries the
-            // URL, title, and scroll context an agent needs to orient, and the
-            // MCP path emits it unconditionally — human mode must not diverge.
+    if matches!(mode, OutputMode::Json) {
+        emit_json(&result.to_json());
+        return;
+    }
+    match result {
+        CommandOutput::Ok(msg) => eprintln!("{msg}"),
+        CommandOutput::Data { human, .. } => eprintln!("{human}"),
+        CommandOutput::Dom { snapshot, extra } => {
             print!("{}", snapshot.to_text());
             for line in dom_extra_lines(&extra) {
                 eprintln!("{line}");
             }
         }
-        (CommandOutput::Dom { snapshot, extra }, OutputMode::Json) => {
-            let mut value =
-                serde_json::to_value(&snapshot).expect("DomSnapshot serializes (static shape)");
-            if let Some(map) = value.as_object_mut() {
-                for (k, v) in extra {
-                    map.insert(k, v);
-                }
+        CommandOutput::Content { stdout, note, .. } => {
+            if let Some(note) = note {
+                eprintln!("{note}");
             }
-            emit_json(&value);
-        }
-
-        (CommandOutput::Content { stdout, note, .. }, OutputMode::Human) => {
-            // The note goes to stderr so it reaches a human/agent reading the
-            // terminal without contaminating the stdout a shell may pipe (a
-            // `fetch` body, an `eval` result). The JSON path carries the same
-            // fact structurally, so it deliberately ignores the note.
-            if let Some(n) = note {
-                eprintln!("{n}");
-            }
-            // Suppress the trailing newline for empty content: a `fetch URL >
-            // body.html` on a 204 (status now on the note) must produce an
-            // EMPTY file, not a one-byte `\n` that a `[ -z ]` test reads as
-            // non-empty; a `dom get` of an absent/empty value likewise pipes
-            // nothing rather than a blank line.
             if !stdout.is_empty() {
                 println!("{stdout}");
             }
         }
-        (CommandOutput::Content { json, .. }, OutputMode::Json) => emit_json(&json),
-
-        (
-            CommandOutput::List {
-                human_lines,
-                summary,
-                ..
-            },
-            OutputMode::Human,
-        ) => {
-            for line in &human_lines {
+        CommandOutput::List {
+            human_lines,
+            summary,
+            ..
+        } => {
+            for line in human_lines {
                 eprintln!("{line}");
             }
             if !summary.is_empty() {
                 eprintln!("{summary}");
             }
         }
-        (CommandOutput::List { items, .. }, OutputMode::Json) => emit_json(&items),
     }
 }
 

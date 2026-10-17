@@ -46,7 +46,11 @@ use crate::session;
 use super::Transport;
 use super::local_context;
 
-const BRIDGE_JS: &str = include_str!("../../../../../extension/content/bridge.js");
+const BRIDGE_JS: &str = concat!(
+    include_str!("../../../../../extension/vendor/semantics.js"),
+    "\n",
+    include_str!("../../../../../extension/content/bridge.js"),
+);
 
 /// Name of the CDP isolated world the bridge runs in — the headless mirror of
 /// the browser-mode content-script world. DOM-manipulating bridge calls execute
@@ -512,15 +516,7 @@ impl LocalTransport {
 
     // ── Navigation (with cross-origin renderer swap handling) ────────────
 
-    /// Block until the main frame's bridge-world context names the COMMITTED,
-    /// PARSED document. Right after a navigation the `executionContextCreated`
-    /// for the new document's bridge world can land a poll-cycle after the
-    /// transitional pre-commit context, and `await_context` returns whichever is
-    /// mapped first — so a snapshot fired the instant a navigation settles can run
-    /// against the empty pre-load document and come back blank. Resolve the bridge
-    /// context, verify its OWN `location.href` matches the live frame and its
-    /// document has parsed, and drop any context that does not so the resolver
-    /// re-waits for the real one. Bounded by the navigation budget.
+    /// Wait for the bound document to match the committed URL and finish parsing.
     async fn await_live_bridge_context(&self) {
         // The URL the bridge must agree it is live ON must carry the fragment, the
         // way `location.href` does. `Page.getFrameTree`'s `Frame.url` STRIPS the
@@ -555,7 +551,6 @@ impl LocalTransport {
                 if live {
                     return;
                 }
-                self.bridge_contexts.lock().await.retain(|_, v| *v != cid);
             }
             tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
         }
@@ -585,9 +580,6 @@ impl LocalTransport {
                 if parsed {
                     return;
                 }
-                // A transitional context that hasn't parsed — drop it so the next
-                // poll re-resolves once the listener records the committed one.
-                self.bridge_contexts.lock().await.retain(|_, v| *v != cid);
             }
             tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
         }
@@ -1367,6 +1359,7 @@ async fn navigation_settled(page: &CdpSession, loader_id: Option<&str>, before_u
 impl Transport for LocalTransport {
     async fn send(&mut self, command: Command) -> Result<ResponseData> {
         crate::policy::enforce(&command)?;
+        command.validate()?;
         session::sweep_expired_artifacts();
         // Which page this command acts on is per-command state, like the download
         // behaviour and the monitor hooks below: Chrome outlives every WebPilot
@@ -1417,12 +1410,33 @@ impl Transport for LocalTransport {
 
         match command {
             Command::Capture { include, opts, url } => self.do_capture(include, opts, url).await,
-            Command::Action { action, capture } => self.do_action(action, capture).await,
+            Command::Action {
+                action,
+                capture,
+                snapshot_id,
+            } => {
+                self.do_action(action, capture, snapshot_id.as_deref())
+                    .await
+            }
             Command::Eval { code } => self.do_eval(&code).await,
             Command::Wait {
                 condition,
                 timeout_ms,
-            } => self.do_wait(condition, timeout_ms).await,
+                request_id,
+            } => {
+                self.do_wait(condition, timeout_ms, request_id.as_deref())
+                    .await
+            }
+            Command::WaitCancel { request_id } => {
+                Self::parse_bridge_response(
+                    self.invoke_bridge(&json!({"type":"cancelWait", "request_id":request_id}))
+                        .await?,
+                )?;
+                Ok(ResponseData::Wait {
+                    success: true,
+                    error: None,
+                })
+            }
             Command::Status => self.do_status().await,
             Command::TabList => self.do_tab_list().await,
             Command::TabSwitch { tab_id } => self.do_tab_switch(&tab_id).await,
@@ -1860,6 +1874,7 @@ fn command_needs_active_page(command: &Command) -> bool {
         | Command::Action { .. }
         | Command::Eval { .. }
         | Command::Wait { .. }
+        | Command::WaitCancel { .. }
         | Command::DomSet { .. }
         | Command::DomGet { .. }
         | Command::Fetch { .. }
@@ -1965,10 +1980,7 @@ async fn pick_active_target(
 pub(super) async fn attach_to_page(conn: &Arc<CdpClient>, target_id: &str) -> Result<CdpSession> {
     let mut cdp = conn.attach(target_id).await?;
     cdp.send("Page.enable", None).await?;
-    // With Page enabled, Chrome stops auto-dismissing javascript dialogs and
-    // waits for an answer — an unanswered alert() would wedge the renderer.
-    // Accept-with-default mirrors the browser-mode dialog override, so a page
-    // branching on confirm()/prompt() behaves identically in both modes.
+    // Page.enable makes dialog responses the attached client's responsibility.
     cdp.spawn_dialog_responder();
     // Clear Chrome's native console buffer BEFORE enabling Runtime: `Runtime.enable`
     // REPLAYS the buffer, and Chrome keeps every console argument UNCLIPPED and

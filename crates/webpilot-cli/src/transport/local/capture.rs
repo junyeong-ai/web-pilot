@@ -423,6 +423,7 @@ impl LocalTransport {
 
 fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
     DomSnapshot {
+        snapshot_id: None,
         elements: Vec::new(),
         total_nodes: 0,
         page_url: page_url.to_string(),

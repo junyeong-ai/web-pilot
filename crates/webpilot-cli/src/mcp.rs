@@ -31,6 +31,8 @@ use crate::transport::{IpcTransport, LocalTransport, Transport};
 /// whether to continue. Both listed revisions describe this tools-only stdio
 /// server identically; older revisions differ on the wire (they allow JSON-RPC
 /// batching, which this server rejects), so they are not claimed.
+const MAX_PENDING_REQUESTS: usize = 32;
+
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = ["2025-11-25", "2025-06-18"];
 
 #[derive(clap::Args)]
@@ -56,40 +58,172 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    // Bound each request line: a JSON-RPC message from the host is small, so a
-    // line that grows past this cap — or never terminates — is malformed input,
-    // not a request.
-    const MAX_LINE_BYTES: u64 = 8 * 1024 * 1024;
-    let mut transport: Option<T> = None;
-    // MCP lifecycle: a `tools/*` call before `initialize` is rejected (-32002),
-    // per the spec's initialize-then-operate order. Flipped true once an
-    // `initialize` request is handled.
+    run_io(
+        connect,
+        BufReader::new(tokio::io::stdin()),
+        tokio::io::stdout(),
+    )
+    .await
+}
+
+async fn write_reply<W: tokio::io::AsyncWrite + Unpin>(
+    output: &mut W,
+    reply: &Value,
+) -> Result<()> {
+    let mut bytes = serde_json::to_vec(reply).expect("JSON-RPC response serializes");
+    bytes.push(b'\n');
+    output.write_all(&bytes).await?;
+    output.flush().await?;
+    Ok(())
+}
+
+async fn run_io<T, F, Fut, R, W>(connect: F, mut reader: R, mut output: W) -> Result<()>
+where
+    T: Transport,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T>>,
+    R: AsyncBufRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let (input_tx, input_rx) = tokio::sync::mpsc::channel(MAX_PENDING_REQUESTS);
+    let input_task = tokio::spawn(async move {
+        loop {
+            let frame = read_frame(&mut reader, 8 * 1024 * 1024).await;
+            let done = matches!(frame, Ok(Frame::Eof) | Err(_));
+            if input_tx.send(frame).await.is_err() || done {
+                break;
+            }
+        }
+    });
+    let result = run_requests(connect, input_rx, &mut output).await;
+    input_task.abort();
+    result
+}
+
+async fn run_requests<T, F, Fut, W>(
+    connect: F,
+    mut input_rx: tokio::sync::mpsc::Receiver<Result<Frame>>,
+    mut output: W,
+) -> Result<()>
+where
+    T: Transport,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T>>,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut transport = None;
     let mut initialized = false;
-    let mut reader = BufReader::new(tokio::io::stdin());
-    let mut stdout = tokio::io::stdout();
+    let mut pending = std::collections::VecDeque::new();
+    let mut cancelled = std::collections::HashSet::new();
+    let mut eof = false;
+    let session = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    );
     loop {
-        let reply = match read_frame(&mut reader, MAX_LINE_BYTES).await? {
-            Frame::Eof => break,
+        let frame = match pending.pop_front() {
+            Some(frame) => frame,
+            None if eof => break,
+            None => match input_rx.recv().await {
+                Some(frame) => frame?,
+                None => break,
+            },
+        };
+        let line = match frame {
+            Frame::Eof => {
+                eof = true;
+                continue;
+            }
+            Frame::OverCap => {
+                write_reply(
+                    &mut output,
+                    &error_reply(Value::Null, -32700, "request exceeds size limit"),
+                )
+                .await?;
+                continue;
+            }
+            Frame::InvalidUtf8 => {
+                write_reply(
+                    &mut output,
+                    &error_reply(Value::Null, -32700, "invalid UTF-8"),
+                )
+                .await?;
+                continue;
+            }
             Frame::Line(line) if line.trim().is_empty() => continue,
-            // The release profile builds with `panic = "abort"`, so a
-            // `catch_unwind` here would be dead weight — an unwind never
-            // happens to catch. Robustness comes instead from removing the
-            // reachable panic paths at the root (e.g. the `do_wait` timeout
-            // clamp that stops a pathological `timeout_ms` from overflowing an
-            // `Instant`), not from a guard the build strips to a no-op.
-            Frame::Line(line) => {
-                match handle_line(&connect, &mut transport, &mut initialized, &line).await {
-                    Some(reply) => reply,
-                    None => continue, // a notification — no response
+            Frame::Line(line) => line,
+        };
+        let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+        let id = message.get("id").cloned();
+        if id
+            .as_ref()
+            .is_some_and(|id| cancelled.remove(&id.to_string()))
+        {
+            continue;
+        }
+        let request_id = id.as_ref().map(|id| format!("{session}:{}", id));
+        let is_wait =
+            message["method"] == "tools/call" && message["params"]["name"] == "browser_wait";
+        let mut cancel_wait = false;
+        let mut suppress_reply = false;
+        let reply = {
+            let work = handle_line_with_request_id(
+                &connect,
+                &mut transport,
+                &mut initialized,
+                &line,
+                request_id.clone(),
+            );
+            tokio::pin!(work);
+            loop {
+                tokio::select! {
+                    result = &mut work => break result,
+                    incoming = input_rx.recv(), if !eof => {
+                        let frame = match incoming { Some(frame) => frame?, None => { eof = true; continue; } };
+                        if matches!(frame, Frame::Eof) { eof = true; continue; }
+                        if let Frame::Line(control) = &frame
+                            && let Ok(control) = serde_json::from_str::<Value>(control) {
+                                if control["jsonrpc"] == "2.0" && control["method"] == "ping" {
+                                    if let Some(id) = control.get("id") {
+                                        write_reply(&mut output, &ok_reply(id.clone(), json!({}))).await?;
+                                    }
+                                    continue;
+                                }
+                                if control["jsonrpc"] == "2.0" && control["method"] == "notifications/cancelled" && control.get("id").is_none() {
+                                    if let Some(target) = control["params"].get("requestId") {
+                                        if id.as_ref() == Some(target) {
+                                            suppress_reply = true;
+                                            if is_wait { cancel_wait = true; break None; }
+                                        } else if pending.iter().any(|frame| matches!(frame, Frame::Line(line) if serde_json::from_str::<Value>(line).ok().is_some_and(|request| request.get("id") == Some(target)))) {
+                                            cancelled.insert(target.to_string());
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if pending.len() >= MAX_PENDING_REQUESTS {
+                                    if let Some(id) = control.get("id") {
+                                        write_reply(&mut output, &error_reply(id.clone(), -32000, "request queue is full; request was not started")).await?;
+                                    }
+                                    continue;
+                                }
+                            }
+                        if pending.len() < MAX_PENDING_REQUESTS { pending.push_back(frame); }
+                    }
                 }
             }
-            Frame::OverCap => error_reply(Value::Null, -32700, "request exceeds size limit"),
-            Frame::InvalidUtf8 => error_reply(Value::Null, -32700, "parse error: invalid UTF-8"),
         };
-        let mut out = serde_json::to_string(&reply).expect("JSON-RPC reply serializes");
-        out.push('\n');
-        stdout.write_all(out.as_bytes()).await?;
-        stdout.flush().await?;
+        if cancel_wait && let (Some(transport), Some(request_id)) = (transport.as_mut(), request_id)
+        {
+            let _ = transport
+                .send(webpilot::protocol::Command::WaitCancel { request_id })
+                .await;
+        }
+        if !suppress_reply && let Some(reply) = reply {
+            write_reply(&mut output, &reply).await?;
+        }
     }
     Ok(())
 }
@@ -153,11 +287,27 @@ async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R, max: u64) -> Result
 /// Route one JSON-RPC message. Returns `None` only for a notification — a
 /// request with NO `id` member at all. An explicit `id: null` is a request and
 /// is answered (with a null id), distinct from an absent id.
+#[cfg(test)]
 async fn handle_line<T, F, Fut>(
     connect: &F,
     transport: &mut Option<T>,
     initialized: &mut bool,
     line: &str,
+) -> Option<Value>
+where
+    T: Transport,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    handle_line_with_request_id(connect, transport, initialized, line, None).await
+}
+
+async fn handle_line_with_request_id<T, F, Fut>(
+    connect: &F,
+    transport: &mut Option<T>,
+    initialized: &mut bool,
+    line: &str,
+    request_id: Option<String>,
 ) -> Option<Value>
 where
     T: Transport,
@@ -225,7 +375,7 @@ where
             "server not initialized — send `initialize` first",
         )),
         "tools/list" => Some(ok_reply(id, json!({ "tools": tool_specs() }))),
-        "tools/call" => Some(tool_call_reply(connect, transport, id, &params).await),
+        "tools/call" => Some(tool_call_reply(connect, transport, id, &params, request_id).await),
         other => Some(error_reply(
             id,
             -32601,
@@ -281,6 +431,34 @@ fn tool_exists(name: &str) -> bool {
         .any(|t| t.get("name").and_then(Value::as_str) == Some(name))
 }
 
+fn validate_tool_arguments(name: &str, args: &Value) -> std::result::Result<(), WebPilotError> {
+    static VALIDATORS: std::sync::OnceLock<
+        std::collections::HashMap<String, jsonschema::Validator>,
+    > = std::sync::OnceLock::new();
+    let validators = VALIDATORS.get_or_init(|| {
+        tool_specs()
+            .as_array()
+            .expect("tool list")
+            .iter()
+            .map(|tool| {
+                (
+                    tool["name"].as_str().expect("tool name").to_owned(),
+                    jsonschema::validator_for(&tool["inputSchema"]).expect("valid tool schema"),
+                )
+            })
+            .collect()
+    });
+    validators[name]
+        .validate(args)
+        .map_err(|error| WebPilotError::InvalidArgument {
+            detail: format!(
+                "invalid argument for {name} at {} (schema {})",
+                error.instance_path(),
+                error.schema_path()
+            ),
+        })
+}
+
 /// A tool failure is reported as a successful JSON-RPC response carrying
 /// `isError: true`, so the model sees the message and can react, per the MCP
 /// tool-call contract. Malformed requests and unknown tool names use
@@ -290,6 +468,7 @@ async fn tool_call_reply<T, F, Fut>(
     transport: &mut Option<T>,
     id: Value,
     params: &Value,
+    request_id: Option<String>,
 ) -> Value
 where
     T: Transport,
@@ -320,11 +499,24 @@ where
         .cloned()
         .unwrap_or_else(|| json!({}));
 
+    if let Err(error) = validate_tool_arguments(name, &args) {
+        return ok_reply(
+            id,
+            json!({"content":[{"type":"text", "text":error.to_string()}], "isError":true, "structuredContent":error.to_wire()}),
+        );
+    }
+
     let outcome = async {
         if transport.is_none() {
             *transport = Some(connect().await.map_err(crate::into_webpilot_error)?);
         }
-        call_tool(transport.as_mut().expect("just connected"), name, &args).await
+        call_tool(
+            transport.as_mut().expect("just connected"),
+            name,
+            &args,
+            request_id,
+        )
+        .await
     }
     .await;
 
@@ -332,12 +524,15 @@ where
     // of a long-lived MCP session: drop it on an infra-level failure (exit 3 —
     // ConnectionLost / BridgeUnavailable / VersionMismatch) so the next tool
     // call reopens a fresh one. Re-detecting a version mismatch is harmless.
-    if outcome.as_ref().is_err_and(|e| e.exit_code() == 3) {
+    if outcome
+        .as_ref()
+        .is_err_and(|e| e.exit_code() == 3 || matches!(e, WebPilotError::OutcomeUnknown { .. }))
+    {
         *transport = None;
     }
 
     let result = match outcome {
-        Ok(content) => json!({ "content": content, "isError": false }),
+        Ok(result) => result,
         // The text block carries the agent-facing guidance (parity with the CLI's
         // human output); `structuredContent` carries the typed `{code, ...data}`
         // wire error (parity with the CLI's `--json`), so a client can branch on
@@ -357,7 +552,8 @@ async fn call_tool<T: Transport>(
     transport: &mut T,
     name: &str,
     args: &Value,
-) -> std::result::Result<Vec<Value>, WebPilotError> {
+    request_id: Option<String>,
+) -> std::result::Result<Value, WebPilotError> {
     let output = match name {
         "browser_navigate" => {
             capture::run(
@@ -371,10 +567,27 @@ async fn call_tool<T: Transport>(
             .await
         }
         "browser_snapshot" => {
+            let include = args
+                .get("include")
+                .map(|value| serde_json::from_value::<Vec<CaptureField>>(value.clone()))
+                .transpose()
+                .map_err(|e| WebPilotError::InvalidArgument {
+                    detail: e.to_string(),
+                })?
+                .unwrap_or_else(|| vec![CaptureField::Dom]);
+            if include.is_empty()
+                || include
+                    .iter()
+                    .any(|field| !matches!(field, CaptureField::Dom | CaptureField::Text))
+            {
+                return Err(WebPilotError::InvalidArgument {
+                    detail: "snapshot include must contain dom or text".into(),
+                });
+            }
             capture::run(
                 transport,
                 capture::CaptureArgs {
-                    include: vec![CaptureField::Dom],
+                    include,
                     url: None,
                     opts: CaptureOpts::default(),
                 },
@@ -397,7 +610,9 @@ async fn call_tool<T: Transport>(
             )
             .await
             .map_err(crate::into_webpilot_error)?;
-            return screenshot_content(&output);
+            return Ok(
+                json!({"content": screenshot_content(&output)?, "structuredContent": output.structured_content(), "isError": false}),
+            );
         }
         "browser_click" | "browser_type" | "browser_press_key" | "browser_scroll"
         | "browser_scroll_to" | "browser_hover" | "browser_focus" | "browser_select"
@@ -408,7 +623,15 @@ async fn call_tool<T: Transport>(
                 transport,
                 action::ActionArgs {
                     action,
-                    capture: true,
+                    capture: args
+                        .get("capture")
+                        .map(|_| bool_arg(args, "capture"))
+                        .transpose()?
+                        .unwrap_or(true),
+                    snapshot_id: args
+                        .get("snapshot_id")
+                        .map(|_| str_arg(args, "snapshot_id"))
+                        .transpose()?,
                 },
             )
             .await
@@ -484,7 +707,7 @@ async fn call_tool<T: Transport>(
             // not specify.
             let timeout_ms =
                 match args.get("timeout_ms") {
-                    None | Some(Value::Null) => 10_000,
+                    None => 10_000,
                     Some(v) => v.as_u64().filter(|&n| n > 0).ok_or_else(|| {
                         WebPilotError::InvalidArgument {
                             detail: "timeout_ms must be a positive integer (milliseconds)".into(),
@@ -508,7 +731,7 @@ async fn call_tool<T: Transport>(
             // Pass the millisecond timeout straight through — routing it through
             // the seconds-based `WaitArgs` would round a sub-second request up to
             // a whole second.
-            wait::dispatch(transport, condition, timeout_ms).await
+            wait::dispatch(transport, condition, timeout_ms, request_id).await
         }
         other => {
             return Err(WebPilotError::InvalidArgument {
@@ -517,9 +740,11 @@ async fn call_tool<T: Transport>(
         }
     };
     let output = output.map_err(crate::into_webpilot_error)?;
-    Ok(vec![
-        json!({ "type": "text", "text": output.to_agent_text() }),
-    ])
+    Ok(json!({
+        "content": [{ "type": "text", "text": output.to_agent_text() }],
+        "structuredContent": output.structured_content(),
+        "isError": false,
+    }))
 }
 
 /// Build a typed `Action` from a tool's arguments by injecting the wire `kind`
@@ -544,6 +769,8 @@ fn build_action(tool: &str, args: &Value) -> std::result::Result<Action, WebPilo
         _ => unreachable!("build_action only called for action tools"),
     };
     let mut obj = args.as_object().cloned().unwrap_or_default();
+    obj.remove("snapshot_id");
+    obj.remove("capture");
     obj.insert("kind".into(), json!(kind));
     serde_json::from_value(Value::Object(obj)).map_err(|e| WebPilotError::InvalidArgument {
         detail: format!("invalid arguments for {tool}: {e}"),
@@ -600,7 +827,7 @@ fn str_arg(args: &Value, key: &str) -> std::result::Result<String, WebPilotError
 /// caller set must not be dropped.
 fn bool_arg(args: &Value, key: &str) -> std::result::Result<bool, WebPilotError> {
     match args.get(key) {
-        None | Some(Value::Null) => Ok(false),
+        None => Ok(false),
         Some(v) => v.as_bool().ok_or_else(|| WebPilotError::InvalidArgument {
             detail: format!("{key} must be a boolean"),
         }),
@@ -619,7 +846,12 @@ fn bool_arg(args: &Value, key: &str) -> std::result::Result<bool, WebPilotError>
 /// openWorldHint=true). On the open web any page handler may commit changes,
 /// so interacting tools keep the conservative defaults; only viewport/routing
 /// tools (scroll, hover, focus, frame) are marked non-destructive.
-fn tool_specs() -> Value {
+fn tool_specs() -> &'static Value {
+    static SPECS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    SPECS.get_or_init(build_tool_specs)
+}
+
+fn build_tool_specs() -> Value {
     let index = json!({
         "type": "integer",
         "minimum": 1,
@@ -636,7 +868,7 @@ fn tool_specs() -> Value {
         },
         "additionalProperties": false,
     });
-    json!([
+    let mut specs = json!([
         {
             "name": "browser_navigate",
             "title": "Navigate to URL",
@@ -651,7 +883,7 @@ fn tool_specs() -> Value {
         {
             "name": "browser_snapshot",
             "title": "Page snapshot",
-            "description": "Re-capture the current page's interactive-element snapshot (the [N]-indexed list used to address elements).",
+            "description": "Capture interactive elements (dom), visible text, or both. DOM results include the snapshot_id required by indexed actions.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
             "annotations": { "readOnlyHint": true },
         },
@@ -672,7 +904,7 @@ fn tool_specs() -> Value {
         {
             "name": "browser_click",
             "title": "Click element",
-            "description": "Click the element at the given snapshot index, then return the updated snapshot. Modifier flags reach the page's own handlers; browser-level open-in-new-tab does not apply to a synthetic click — browser_navigate to the link's URL instead.",
+            "description": "Click the observed element using native pointer input. Requires its snapshot_id. Browser and platform modifier behavior applies.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -903,12 +1135,191 @@ fn tool_specs() -> Value {
             },
             "annotations": { "readOnlyHint": true },
         },
-    ])
+    ]);
+    for tool in specs.as_array_mut().expect("tool list") {
+        let name = tool["name"].as_str().expect("tool name").to_owned();
+        let properties = tool["inputSchema"]["properties"]
+            .as_object_mut()
+            .expect("tool properties");
+        if name == "browser_snapshot" {
+            properties.insert("include".into(), json!({"type":"array", "items":{"type":"string", "enum":["dom","text"]}, "minItems":1, "default":["dom"]}));
+        }
+        if name.starts_with("browser_")
+            && matches!(
+                name.as_str(),
+                "browser_click"
+                    | "browser_type"
+                    | "browser_press_key"
+                    | "browser_scroll"
+                    | "browser_scroll_to"
+                    | "browser_hover"
+                    | "browser_focus"
+                    | "browser_select"
+                    | "browser_upload"
+                    | "browser_drag"
+                    | "browser_back"
+                    | "browser_forward"
+                    | "browser_reload"
+            )
+        {
+            let indexed = properties.contains_key("index") || properties.contains_key("source");
+            properties.insert("capture".into(), json!({"type":"boolean", "default":true, "description":"Return a new DOM snapshot after the action."}));
+            if indexed {
+                properties.insert("snapshot_id".into(), json!({"type":"string", "description":"Snapshot identifier returned with the observed elements."}));
+                tool["inputSchema"]["required"]
+                    .as_array_mut()
+                    .expect("indexed tool requirements")
+                    .push(json!("snapshot_id"));
+            }
+        }
+    }
+    specs
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn control_messages_remain_responsive_and_cancel_waits() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use webpilot::protocol::{Command, ResponseData};
+        struct WaitingTransport {
+            started: Arc<tokio::sync::Notify>,
+            cancelled: Arc<AtomicUsize>,
+            release: Arc<tokio::sync::Notify>,
+            finished: Arc<AtomicUsize>,
+        }
+        impl Transport for WaitingTransport {
+            async fn send(&mut self, command: Command) -> Result<ResponseData> {
+                match command {
+                    Command::Wait { .. } => {
+                        self.started.notify_one();
+                        std::future::pending().await
+                    }
+                    Command::WaitCancel { .. } => {
+                        self.cancelled.fetch_add(1, Ordering::SeqCst);
+                        Ok(ResponseData::Wait {
+                            success: true,
+                            error: None,
+                        })
+                    }
+                    Command::Eval { .. } => {
+                        self.started.notify_one();
+                        self.release.notified().await;
+                        self.finished.fetch_add(1, Ordering::SeqCst);
+                        Ok(ResponseData::Eval {
+                            success: true,
+                            result: Some("1".into()),
+                            error: None,
+                        })
+                    }
+                    Command::TabList => Ok(ResponseData::Tabs { tabs: vec![] }),
+                    _ => panic!("unexpected browser operation"),
+                }
+            }
+        }
+        let started = Arc::new(tokio::sync::Notify::new());
+        let cancelled = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let finished = Arc::new(AtomicUsize::new(0));
+        let (client, server) = tokio::io::duplex(8192);
+        let (reader, mut writer) = tokio::io::split(server);
+        let started_server = started.clone();
+        let cancelled_server = cancelled.clone();
+        let release_server = release.clone();
+        let finished_server = finished.clone();
+        let server = tokio::spawn(async move {
+            run_io(
+                move || {
+                    let started = started_server.clone();
+                    let cancelled = cancelled_server.clone();
+                    let release = release_server.clone();
+                    let finished = finished_server.clone();
+                    async move {
+                        Ok(WaitingTransport {
+                            started,
+                            cancelled,
+                            release,
+                            finished,
+                        })
+                    }
+                },
+                BufReader::new(reader),
+                &mut writer,
+            )
+            .await
+        });
+        let (reader, mut writer) = tokio::io::split(client);
+        let mut reader = BufReader::new(reader);
+        async fn reply(reader: &mut (impl AsyncBufRead + Unpin)) -> Value {
+            let mut line = String::new();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                reader.read_line(&mut line),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            serde_json::from_str(&line).unwrap()
+        }
+        write_reply(
+            &mut writer,
+            &json!({"jsonrpc":"2.0", "id":0,"method":"initialize"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply(&mut reader).await["id"], 0);
+        write_reply(&mut writer, &json!({"jsonrpc":"2.0", "id":1,"method":"tools/call", "params":{"name":"browser_wait","arguments":{"until":"idle"}}})).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        write_reply(
+            &mut writer,
+            &json!({"jsonrpc":"2.0", "id":2,"method":"ping"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply(&mut reader).await["id"], 2);
+        write_reply(
+            &mut writer,
+            &json!({"jsonrpc":"2.0", "method":"notifications/cancelled","params":{"requestId":1}}),
+        )
+        .await
+        .unwrap();
+        write_reply(&mut writer, &json!({"jsonrpc":"2.0", "id":3,"method":"tools/call","params":{"name":"browser_tabs","arguments":{"action":"list"}}})).await.unwrap();
+        let response = reply(&mut reader).await;
+        assert_eq!(response["id"], 3);
+        assert_eq!(response["result"]["structuredContent"]["value"], json!([]));
+        assert_eq!(cancelled.load(Ordering::SeqCst), 1);
+        write_reply(&mut writer, &json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"browser_eval","arguments":{"code":"1"}}})).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        write_reply(
+            &mut writer,
+            &json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":4}}),
+        )
+        .await
+        .unwrap();
+        write_reply(&mut writer, &json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"browser_tabs","arguments":{"action":"list"}}})).await.unwrap();
+        write_reply(
+            &mut writer,
+            &json!({"jsonrpc":"2.0","id":6,"method":"ping"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply(&mut reader).await["id"], 6);
+        assert_eq!(finished.load(Ordering::SeqCst), 0);
+        release.notify_one();
+        assert_eq!(reply(&mut reader).await["id"], 5);
+        assert_eq!(finished.load(Ordering::SeqCst), 1);
+        writer.shutdown().await.unwrap();
+        server.await.unwrap().unwrap();
+    }
 
     #[test]
     fn initialize_negotiates_the_protocol_version() {
@@ -1029,32 +1440,14 @@ mod tests {
     }
 
     #[test]
-    fn no_input_tool_schemas_forbid_unknown_properties() {
-        // A tool that takes NO arguments must also advertise `additionalProperties:
-        // false`. Its handler ignores `arguments` entirely, so the schema is the
-        // only contract: without this, a client that guesses at an unsupported
-        // option (a `hard` on `browser_reload`) has it silently dropped and gets
-        // a different result than it asked for, with no error.
-        let specs = tool_specs();
-        let arr = specs.as_array().unwrap();
-        for name in [
-            "browser_snapshot",
-            "browser_back",
-            "browser_forward",
-            "browser_reload",
-        ] {
-            let tool = arr.iter().find(|t| t["name"] == name).unwrap();
-            assert_eq!(
-                tool["inputSchema"]["properties"],
-                json!({}),
-                "{name} takes no arguments"
-            );
-            assert_eq!(
-                tool["inputSchema"]["additionalProperties"],
-                json!(false),
-                "{name} schema must forbid unknown properties"
-            );
-        }
+    fn argument_validation_rejects_unknown_and_missing_fields() {
+        assert!(validate_tool_arguments("browser_snapshot", &json!({"hard": true})).is_err());
+        assert!(validate_tool_arguments("browser_click", &json!({"index": 1})).is_err());
+        assert!(
+            validate_tool_arguments("browser_click", &json!({"index": 1, "snapshot_id": "s"}))
+                .is_ok()
+        );
+        assert!(validate_tool_arguments("browser_snapshot", &json!({"include":["text"]})).is_ok());
     }
 
     #[tokio::test]

@@ -169,10 +169,14 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
     };
     let mut items = serde_json::json!({
         "matches": listed,
+        "snapshot_id": snapshot.snapshot_id,
         "count": total,
         "matches_truncated": listed.len() < total,
     });
     let mut human_lines = human_lines;
+    if let Some(id) = &snapshot.snapshot_id {
+        human_lines.push(format!("Snapshot: {}", line_safe(id)));
+    }
 
     // The strict-selector contract (`frame url` v0.4.152, `tab find` v0.4.169):
     // a chained action on an ambiguous filter would silently act on whichever
@@ -207,6 +211,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
                 index: first_index,
                 modifiers: Default::default(),
             },
+            snapshot.snapshot_id.clone(),
         )
         .await?
     } else if let Some(text) = args.fill {
@@ -217,6 +222,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
                 text,
                 clear: true,
             },
+            snapshot.snapshot_id.clone(),
         )
         .await?
     } else {
@@ -289,10 +295,15 @@ struct ChainEffect {
     downloads: Vec<webpilot::types::Download>,
 }
 
-async fn chain_action<T: Transport>(transport: &mut T, action: Action) -> Result<ChainEffect> {
+async fn chain_action<T: Transport>(
+    transport: &mut T,
+    action: Action,
+    snapshot_id: Option<String>,
+) -> Result<ChainEffect> {
     let result = transport
         .send(Command::Action {
             action,
+            snapshot_id,
             capture: false,
         })
         .await?;

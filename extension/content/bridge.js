@@ -12,18 +12,12 @@
 
 (() => {
   // ── Per-document state ────────────────────────────────────────────────────
-  // `snapshot` — the exact element references the last `extractDom` emitted,
-  // in index order. Index-addressed actions resolve against this list, so an
-  // index always targets the element the agent actually saw. A null snapshot
-  // (no capture in this document yet) or an element that has left the DOM /
-  // become invisible is a typed `StaleSnapshot` error — never a silent
-  // re-resolution against the live DOM. The same list is the new-element
-  // baseline: an element is "new" when its node identity was absent from the
-  // previous snapshot (see `extractDom`), so detection needs no separate
-  // bookkeeping and cannot drift from what the agent actually saw.
   if (!window.__webpilot_state) {
     window.__webpilot_state = {
       snapshot: null,
+      snapshotId: null,
+      snapshotSemantics: null,
+      waits: new Map(),
     };
   }
   const state = window.__webpilot_state;
@@ -385,25 +379,6 @@
     return true;
   }
 
-  // Resolve an element index against the stored snapshot.
-  //
-  // The snapshot holds *direct element references*, so an index can never
-  // silently resolve to a different node than the one captured — a reference is
-  // stable identity. Revalidation therefore only confirms the captured node is
-  // still live (`isConnected`) and visible; that is the complete, correct, and
-  // false-positive-free staleness signal:
-  //   - a full navigation builds a new document with a fresh `window`, so this
-  //     whole state object is gone and `snapshot` is null → StaleSnapshot;
-  //   - an SPA navigation that unmounts the old DOM detaches the captured nodes
-  //     → `isConnected === false` → StaleSnapshot;
-  //   - a same-document change that keeps the node (hash change, content update,
-  //     re-render that preserves the element) leaves it connected → still valid,
-  //     which is correct: it is the exact element the agent saw.
-  // We deliberately do NOT invalidate on `location.href` change: that would
-  // falsely reject a valid index after a hash/anchor navigation or for an
-  // element that persists across an SPA route — exactly the kind of heuristic
-  // false positive this design exists to avoid. The agent re-captures after an
-  // action it knows changed the page (the documented capture→act→capture loop).
   function resolveIndex(index, { requireVisible = true } = {}) {
     if (index == null) {
       return { error: err("InvalidArgument", "Missing index") };
@@ -423,7 +398,33 @@
     if (!el.isConnected || (requireVisible && !isVisible(el))) {
       return { error: staleSnapshot(index) };
     }
+    const observed = state.snapshotSemantics?.[index - 1];
+    if (observed && (observed.role !== semanticRole(el) ||
+        observed.name !== accessibleName(el) || observed.href !== linkDestination(el) ||
+        observed.inputType !== (el.tagName === "INPUT" ? el.type : null))) {
+      return { error: staleSnapshot(index) };
+    }
     return { el };
+  }
+
+  function linkDestination(el) {
+    return typeof el.href === "string" ? el.href : el.getAttribute("href");
+  }
+
+  function accessibleName(el) {
+    return clip(WebPilotSemantics.computeAccessibleName(el, { computedStyleSupportsPseudoElements: true }), 300);
+  }
+
+  function semanticRole(el) {
+    const tokens = (el.getAttribute("role") || "").split(/[ \t\n\r\f]+/);
+    const explicit = tokens.find((role) => WebPilotSemantics.concreteRoles.has(role));
+    if (explicit && explicit !== "none" && explicit !== "presentation") return explicit;
+    if (!explicit && el.hasAttribute("role")) {
+      const native = el.cloneNode(false);
+      native.removeAttribute("role");
+      return WebPilotSemantics.getRole(native);
+    }
+    return WebPilotSemantics.getRole(el);
   }
 
   function resolveLabel(el) {
@@ -686,10 +687,10 @@
           index: idx++,
           tag,
           id: elemId,
-          role: clip(el.getAttribute("role") || "", 32) || undefined,
+          role: semanticRole(el) || undefined,
           text,
-          name: clip(el.getAttribute("aria-label") || el.getAttribute("title") || "", 80) || undefined,
-          value: (el.value != null && el.value !== "")
+          name: accessibleName(el) || undefined,
+          value: (el.type !== "password" && el.value != null && el.value !== "")
             ? clip(String(el.value), 100)
             : undefined,
           placeholder: el.placeholder ? clip(el.placeholder, 80) : undefined,
@@ -785,6 +786,13 @@
       }
 
       state.snapshot = picked;
+      state.snapshotId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+      state.snapshotSemantics = picked.map((el, i) => ({
+        role: elements[i].role ?? null,
+        name: elements[i].name ?? "",
+        href: linkDestination(el),
+        inputType: el.tagName === "INPUT" ? el.type : null,
+      }));
 
       const sh = document.documentElement.scrollHeight;
       const vh = innerHeight;
@@ -792,6 +800,7 @@
 
       return {
         elements,
+        snapshot_id: state.snapshotId,
         total_nodes: totalNodes,
         // Clip the two snapshot-level page strings at the SOURCE, like every
         // per-element field: `location.href` can be a multi-MB `data:`/`blob:`
@@ -948,82 +957,68 @@
     return window.top === window; // _self
   }
 
-  function reliableClick(el, mods = {}) {
-    el.scrollIntoView({ block: "center", behavior: "instant" });
+  function prepareClick(msg) {
+    const r = resolveIndex(msg.index);
+    if (r.error) return r.error;
+    const el = r.el;
+    if (isDisabled(el)) return err("InvalidArgument", "Cannot click a disabled element");
+    el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     const rect = el.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    const opts = {
-      // `composed: true` so the event crosses shadow boundaries: capture indexes
-      // controls inside open shadow roots (queryAllDeep), and a non-composed event
-      // dispatched on one stops at its shadow root — a host/document delegated
-      // click listener would never fire, making the click a silent no-op.
-      bubbles: true, composed: true, cancelable: true, clientX: x, clientY: y, button: 0, view: window,
-      // Modifier flags reach the PAGE'S handlers (an app-level ctrl
-      // multi-select, a shift range-select) on every event of the sequence.
-      // Browser-level defaults — open-in-new-tab — do not apply to a synthetic
-      // event; reaching a new tab is `tab new URL`.
-      ctrlKey: mods.ctrl === true, shiftKey: mods.shift === true,
-      altKey: mods.alt === true, metaKey: mods.meta === true,
-    };
-    // A click can start a navigation — or a download — that static link/form
-    // analysis cannot predict: a `location.href` / `form.submit()` run by an
-    // onclick handler, or the hidden `<a download>` an export button builds and
-    // clicks. The Navigation API fires `navigate` SYNCHRONOUSLY as this frame
-    // begins either, so a listener spanning the click sequence records which one
-    // it was. `downloadRequest` is the browser's own answer — a string (the
-    // suggested name, EMPTY for a bare `download` attribute, so the TYPE decides,
-    // never truthiness). A download loads no document, so it drives no settle;
-    // it tells the transport a download announcement is coming and must be waited
-    // for, the way `Page.navigate`'s `isDownload` does for a navigated one.
-    // Otherwise only a CROSS-DOCUMENT http(s)/file start counts (`sameDocument`
-    // false): a same-document hash/pushState loads no new document, and hinting it
-    // would burn the settle's whole commit-wait.
-    // Removed right after the sequence so it never catches a later, unrelated nav.
-    let programmaticNav = false;
-    let downloadStarted = false;
-    const nav = window.navigation;
-    const onNavigate = (e) => {
-      const d = e.destination;
-      if (!d || d.sameDocument) return;
-      if (typeof e.downloadRequest === "string") {
-        downloadStarted = true;
-        return;
-      }
-      try {
-        const proto = new URL(d.url).protocol;
-        if (proto === "http:" || proto === "https:" || proto === "file:") programmaticNav = true;
-      } catch { /* opaque destination — not a document load this settle waits on */ }
-    };
-    if (nav) nav.addEventListener("navigate", onNavigate);
-    el.dispatchEvent(new PointerEvent("pointerdown", opts));
-    const mousedownLive = el.dispatchEvent(new MouseEvent("mousedown", opts));
-    // A real click focuses the target as mousedown's default action — unless the
-    // page cancels mousedown (the toolbar pattern that deliberately prevents
-    // focus theft) — firing focus/focusin and, crucially, making the element the
-    // browser-focus target a following native key_press lands on (the documented
-    // click-then-type contract). A synthetic dispatch does not trigger that
-    // default action, so focus explicitly; focus() no-ops on a non-focusable
-    // element. The element is already scroll-centered above, so no extra scroll.
-    if (mousedownLive) el.focus();
-    el.dispatchEvent(new PointerEvent("pointerup", opts));
-    el.dispatchEvent(new MouseEvent("mouseup", opts));
-    const notCanceled = el.dispatchEvent(new MouseEvent("click", opts));
-    if (nav) nav.removeEventListener("navigate", onNavigate);
-    // Static analysis catches `<a href>` / form-submit (including cross-frame
-    // targets); the navigate event catches a programmatic navigation a handler
-    // started. A programmatic nav loads the TOP document when this frame IS the
-    // top (drives `navigates`/`url_changed`), otherwise it loads the current
-    // active frame (drives `frame_navigates`).
-    const isTop = window.top === window;
-    const dest = navTarget(el, notCanceled);
+    const left = Math.max(0, rect.left);
+    const right = Math.min(innerWidth, rect.right);
+    const top = Math.max(0, rect.top);
+    const bottom = Math.min(innerHeight, rect.bottom);
+    if (right <= left || bottom <= top) return err("InvalidArgument", "Click target is outside the viewport");
+    const x = (left + right) / 2;
+    const y = (top + bottom) / 2;
+    let hit = deepElementFromPoint(x, y);
+    while (hit && hit !== el) hit = flatTreeHop(hit);
+    if (hit !== el) {
+      return err("InvalidArgument", "Click target does not receive pointer events at its action point");
+    }
+    if (msg.watch) {
+      finishClick();
+      const effects = { event: null, navigates: false, frame_navigates: false, downloads: false };
+      effects.onClick = (event) => {
+        if (event.composedPath().includes(el)) effects.event = event;
+      };
+      effects.onNavigate = (event) => {
+        if (typeof event.downloadRequest === "string") effects.downloads = true;
+        else if (event.destination && !event.destination.sameDocument && ["http:", "https:", "file:"].includes(new URL(event.destination.url).protocol)) {
+          if (window === window.top) effects.navigates = true;
+          else effects.frame_navigates = true;
+        }
+      };
+      window.addEventListener("click", effects.onClick, true);
+      window.navigation?.addEventListener("navigate", effects.onNavigate);
+      state.pointerEffects = effects;
+    }
+    state.pointerTarget = el;
+    const dest = navTarget(el, true);
     return {
-      navigates: clickNavigates(dest.target) || (programmaticNav && isTop),
-      frameNavigates: frameNavigates(dest.target) || (programmaticNav && !isTop),
-      downloads: downloadStarted,
-      opensContext: dest.target === NEW_CONTEXT,
-      targetName: dest.name,
+      success: true,
+      x_fraction: (x - rect.left) / rect.width,
+      y_fraction: (y - rect.top) / rect.height,
+      navigates: clickNavigates(dest.target),
+      frame_navigates: frameNavigates(dest.target),
+      opens_context: dest.target === NEW_CONTEXT,
+      target_name: dest.name,
     };
+  }
+
+  function finishClick() {
+    const effects = state.pointerEffects;
+    if (!effects) return {};
+    if (effects.result) return effects.result;
+    window.removeEventListener("click", effects.onClick, true);
+    window.navigation?.removeEventListener("navigate", effects.onNavigate);
+    effects.result = {
+      click_cancelled: effects.event?.defaultPrevented === true,
+      navigates: effects.navigates,
+      frame_navigates: effects.frame_navigates,
+      downloads: effects.downloads,
+    };
+    return effects.result;
   }
 
   function reliableType(el, text, clear) {
@@ -1191,33 +1186,8 @@
   function executeAction(action) {
     try {
       switch (action.kind) {
-        case "click": {
-          const r = resolveTarget(action);
-          if (r.error) return r.error;
-          // A disabled control can't be activated by a real user, but the
-          // synthetic click below would fire its handlers anyway — reject rather
-          // than report a success the page would never produce.
-          if (isDisabled(r.target)) {
-            return err(
-              "InvalidArgument",
-              "Cannot click a disabled element — a real user can't activate it",
-            );
-          }
-          // `navigates` tells the settle layer a TOP-level navigation is coming
-          // (drives `url_changed`); `frame_navigates` tells it the CURRENT frame
-          // will load a new document — the only signal for an iframe-internal
-          // navigation under a switched frame — even before the queued
-          // frameStartedLoading is observable.
-          const nav = reliableClick(r.target, action.modifiers || {});
-          return {
-            success: true,
-            navigates: nav.navigates,
-            frame_navigates: nav.frameNavigates,
-            downloads: nav.downloads,
-            opens_context: nav.opensContext,
-            target_name: nav.targetName,
-          };
-        }
+        case "click":
+          return err("InvalidArgument", "click requires native browser input");
 
         case "type": {
           const r = resolveTarget(action);
@@ -1430,6 +1400,7 @@
       if (idleTimer) clearTimeout(idleTimer);
       if (pollTimer) clearInterval(pollTimer);
       clearTimeout(timer);
+      if (msg.request_id != null) state.waits.delete(msg.request_id);
       resolve(result);
     };
 
@@ -1444,6 +1415,7 @@
       finish(err("Timeout", `${condDesc} timed out`, { kind: condDesc, elapsed_ms: timeout }));
     }, timeout);
 
+    if (msg.request_id != null) state.waits.set(msg.request_id, () => finish(err("Other", "Wait cancelled")));
     const root = document.body || document.documentElement;
 
     switch (cond.until) {
@@ -1811,6 +1783,9 @@
   // ── Dispatcher ───────────────────────────────────────────────────────────
 
   function handle(msg) {
+    if (msg.snapshot_id != null && msg.snapshot_id !== state.snapshotId) {
+      return staleSnapshot(msg.action?.index ?? msg.index ?? msg.source ?? 0);
+    }
     switch (msg.type) {
       case "extractDom":
         return extractDom(msg.options || {});
@@ -1828,8 +1803,20 @@
           title: document.title,
         };
       }
+      case "prepareClick":
+        return prepareClick(msg);
+      case "finishClick":
+        return finishClick();
+      case "clearPointer":
+        finishClick();
+        state.pointerEffects = null;
+        state.pointerTarget = null;
+        return { success: true };
       case "executeAction":
         return executeAction(msg.action);
+      case "cancelWait":
+        state.waits.get(msg.request_id)?.();
+        return { success: true };
       case "wait":
         return new Promise((resolve) => handleWait(msg, resolve));
       case "prepareUpload": {

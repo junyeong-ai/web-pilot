@@ -84,7 +84,7 @@ impl LocalTransport {
                 // Keep a typed error typed (e.g. FrameNotFound from a vanished
                 // switched frame → exit 4); only wrap genuinely unknown ones.
                 let error = match e.downcast::<WebPilotError>() {
-                    Ok(typed) => typed,
+                    Ok(typed) => typed.with_unknown_outcome("eval"),
                     Err(e) => WebPilotError::Other {
                         detail: e.to_string(),
                     },
@@ -123,6 +123,7 @@ impl LocalTransport {
         &self,
         condition: WaitCondition,
         timeout_ms: u64,
+        request_id: Option<&str>,
     ) -> Result<ResponseData> {
         // Clamp at the in-page timer ceiling: `setTimeout`/`setInterval` in the
         // bridge silently overflow past `i32::MAX` ms (~24.8 days) and fire
@@ -188,6 +189,7 @@ impl LocalTransport {
                 .invoke_bridge_with_timeout(
                     &json!({
                         "type": "wait",
+                        "request_id": request_id,
                         "condition": &condition,
                         "timeout_ms": remaining.as_millis() as u64,
                     }),
@@ -297,7 +299,10 @@ impl LocalTransport {
                 json!({"type": "setAttr", "selector": selector, "attr": name, "value": value})
             }
         };
-        let raw = self.invoke_bridge(&msg).await?;
+        let raw = self
+            .invoke_bridge(&msg)
+            .await
+            .map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("dom_set"))?;
         let _ = Self::parse_bridge_response(raw)?;
         Ok(ResponseData::CommandResult {
             success: true,
@@ -358,7 +363,11 @@ impl LocalTransport {
             headers = serde_json::to_string(headers)?,
             max = FETCH_MAX_BODY_BYTES,
         );
-        let result = self.page.evaluate(&js).await?;
+        let result = self
+            .page
+            .evaluate(&js)
+            .await
+            .map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("fetch"))?;
         // A network-level failure (refused/unresolved host, blocked request, CORS
         // denial) caught inside the IIFE. Surface the browser's opaque reason
         // sanitized — never the raw V8 message-with-stack the bare rejection would

@@ -43,7 +43,7 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
       active. `key_press` is a native CDP `Input.dispatchKeyEvent` (`do_key_press`)
       — real Tab/Backspace/arrow/text/Enter-submit behaviour a synthetic event
-      can't produce. Click/type/scroll/focus/select run via the bridge;
+      can't produce. Type/scroll/focus/select run via the bridge; click uses native CDP pointer input with a bridge-resolved node and actionability checks;
       navigation, hover, drag, and upload have dedicated CDP paths. Input actions
       bracket a navigation + popup watch (events subscribed *before* the action
       runs): `settled_action_url` reports `url_changed` (bounded commit wait
@@ -106,14 +106,14 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   The host's lifetime is Chrome's: stdin EOF (Chrome gone) exits the process —
   a graceful teardown is unreachable (the blocking writer ends only when every
   channel sender drops, and detached per-connection tasks hold them).
-- `output.rs` — `CommandOutput` → human/json `render()`. `to_agent_text()` reuses
-  the same renderers to build MCP tool results.
+- `output.rs` — `CommandOutput` → human/json `render()`. `to_json()` supplies
+  CLI JSON and MCP structured output; `to_agent_text()` reuses human renderers.
 - `mcp.rs` — `webpilot mcp`: a stdio JSON-RPC (MCP) server, hand-rolled with no
   protocol dependency (same philosophy as native messaging / CDP / IPC).
   `initialize` negotiates the protocol revision (`SUPPORTED_PROTOCOL_VERSIONS`,
   newest wins when the client's is unknown). Each tool builds a typed
   `Command`/`Action` and runs it through the existing handler over the shared
-  `Transport`, inheriting mode, policy, and rendering. Action tools inject the
+  `Transport`, inheriting mode, policy, and rendering. The input reader stays active during a serialized command so ping and cancellation remain responsive; cancellation interrupts waits and lets mutations finish cleanup. Schemas validate inputs before opening a transport. Successes carry structured output alongside text. Action tools inject the
   wire `kind` to reuse `Action`'s deserialization and defaults; `browser_find`
   deserializes the CLI's own `FindArgs`. The surface is curated to page
   interaction (act/observe/orient/wait + `eval`) — environment management

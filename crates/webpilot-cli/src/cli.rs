@@ -44,6 +44,9 @@ pub async fn run_cli() -> Result<()> {
         .try_init();
 
     let mode = output::detect_output_mode(cli.json);
+    if let Cmd::Action(args) = &cli.command {
+        args.action.validate_snapshot(args.snapshot_id.as_deref())?;
+    }
 
     if cli.browser && cli.context.is_some() {
         return Err(invalid_arg(

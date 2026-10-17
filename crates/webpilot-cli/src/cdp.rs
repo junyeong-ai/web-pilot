@@ -708,20 +708,7 @@ impl CdpSession {
         }
     }
 
-    /// Auto-answer page javascript dialogs (alert/confirm/prompt/beforeunload).
-    ///
-    /// With `Page` enabled on a session, Chrome STOPS its headless auto-dismiss
-    /// and waits for `Page.handleJavaScriptDialog` — an unanswered `alert()`
-    /// would wedge the renderer, timing out every later command on the page.
-    /// Accept with the prompt's default, matching the browser-mode dialog
-    /// override (confirm → true, prompt → its default stringified), so page
-    /// flows branching on a dialog proceed identically in both modes.
-    ///
-    /// The answer is fire-and-forget (`send_on` with a short deadline, result
-    /// ignored): a failed send means the session or connection is dead anyway.
-    /// The task's handle is retained so `Drop` reaps it — it holds an
-    /// `Arc<CdpClient>` and so cannot be relied on to exit by itself once Chrome
-    /// is dead (see the `background` field).
+    /// Answer dialogs using the configured acceptance policy.
     pub fn spawn_dialog_responder(&mut self) {
         let mut events = self.subscribe_events();
         let conn = self.conn.clone();
@@ -745,7 +732,7 @@ impl CdpSession {
                                 None,
                                 "Page.handleJavaScriptDialog",
                                 Some(serde_json::json!({
-                                    "accept": true,
+                                    "accept": webpilot::settings::get().chrome.accept_dialogs,
                                     "promptText": prompt_text,
                                 })),
                                 std::time::Duration::from_secs(HEARTBEAT_TIMEOUT_S),

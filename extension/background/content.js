@@ -3,33 +3,28 @@
 // transport/local/mod.rs — here the manifest content script is the bridge's
 // isolated world; ensureBridge just guarantees it is injected.
 
-import { sleep } from "./session.js";
+import { acceptDialogs, sleep } from "./session.js";
 import { err } from "./errors.js";
 
-// The MAIN-world dialog override: a native alert/confirm/prompt modal blocks
-// the page thread until a human clicks — under automation that wedges every
-// later command on the tab. Accept-with-default semantics mirror the headless
-// dialog responder (Page.handleJavaScriptDialog accept:true), so a page
-// branching on a dialog behaves identically in both modes. Idempotent
-// (sentinel-guarded), so re-installing is a no-op. Scoped to the agent's
-// pinned tab only — the user's other tabs keep their native dialogs.
 async function installDialogOverride(tabId, target) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId, ...target },
       world: "MAIN",
-      func: () => {
+      func: (accept) => {
+        window.__webpilot_accept_dialogs = accept;
         if (!window.__webpilot_dialogs) {
           window.__webpilot_dialogs = [];
           window.alert = (msg) => { window.__webpilot_dialogs.push({ type: "alert", message: String(msg) }); };
-          window.confirm = (msg) => { window.__webpilot_dialogs.push({ type: "confirm", message: String(msg) }); return true; };
+          window.confirm = (msg) => { window.__webpilot_dialogs.push({ type: "confirm", message: String(msg) }); return window.__webpilot_accept_dialogs; };
           // A real `prompt` returns the DEFAULT stringified when accepted —
           // `prompt(msg, 0)` yields "0" and `prompt(msg, null)` yields
           // "null" (WebIDL DOMString coercion, like alert(null)); only a
           // MISSING argument (undefined) takes the parameter default "".
-          window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return def === undefined ? "" : String(def); };
+          window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return window.__webpilot_accept_dialogs ? (def === undefined ? "" : String(def)) : null; };
         }
       },
+      args: [acceptDialogs()],
     });
   } catch {}
 }
@@ -69,7 +64,7 @@ async function ensureBridge(tabId, frameId = 0) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await Promise.race([
-        chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["content/bridge.js"] }),
+        chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["vendor/semantics.js", "content/bridge.js"] }),
         new Promise((_, r) => setTimeout(() => r(new Error("inject timeout")), 3000)),
       ]);
     } catch {}
@@ -117,7 +112,7 @@ async function ensureBridge(tabId, frameId = 0) {
 async function injectBridgeOnly(tabId, frameId = 0) {
   try {
     await Promise.race([
-      chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["content/bridge.js"] }),
+      chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["vendor/semantics.js", "content/bridge.js"] }),
       new Promise((_, r) => setTimeout(() => r(new Error("inject timeout")), 3000)),
     ]);
   } catch {}
@@ -142,12 +137,13 @@ async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
   try {
     return await sendOnce();
   } catch (firstError) {
-    // The only recovery for ANY first failure is the same: re-inject the
-    // bridge and try once more. So attempt it unconditionally rather than
-    // matching Chrome's "Receiving end does not exist" message string — if
-    // re-injection doesn't help (tab gone, eval refused), the retry throws and
-    // the real error surfaces. Substring-matching a localized Chrome message
-    // is exactly the message-parsing the typed-error convention forbids.
+    const replaySafe = new Set(["ping", "extractDom", "extractText", "prepareClick", "finishClick", "prepareUpload", "getElementCoords", "wait", "getHtml", "getText", "getAttr", "getValue", "exportStorage"]);
+    if (!replaySafe.has(message.type)) {
+      const operation = message.action?.kind || message.type;
+      throw Object.assign(new Error(`Execution outcome unknown for ${operation}; observe before retrying`), {
+        code: "OutcomeUnknown", data: { operation, reason: String(firstError) },
+      });
+    }
     try {
       await ensureBridge(tabId, frameId);
     } catch (e) {

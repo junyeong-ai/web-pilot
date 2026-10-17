@@ -3,7 +3,7 @@
 
 import { err, exceptionErr, lineSafeClip, noPageErr, otherErr, timeoutErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, navigationTimeoutMs, resolveActiveTab, sleep } from "./session.js";
-import { cdpSend, cdpEnableRuntime, cdpReemitContexts, withCdp } from "./cdp.js";
+import { cdpSend, cdpSendEffect, cdpEnableRuntime, cdpReemitContexts, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, sendToContent, sendToContentOnce } from "./content.js";
 
 // ── Eval ───────────────────────────────────────────────────────────────────
@@ -118,13 +118,13 @@ const EVAL_DEADLINE_REACHED = Symbol("eval-deadline-reached");
 // `new Promise(()=>{})`) would otherwise hang inside `withCdp` forever — wedging
 // the per-tab CDP lock and, through the global command queue, every later
 // command. On deadline `withCdp` returns normally, so its `finally` detaches and
-// frees the lock; the abandoned evaluate is cancelled by that detach and its late
-// settle is swallowed here. Headless bounds the identical evaluate via
+// frees the lock. Already executed effects and scheduled page work are not
+// rolled back; late settlement is ignored. Headless bounds the identical evaluate via
 // `send_with_timeout(cdp_send)`. Only an awaitPromise evaluate needs this — every
 // other cdpSend settles promptly. Returns the CDP response, or the deadline
 // sentinel.
-async function evaluateAwaitingPromise(tid, params) {
-  const evalCall = cdpSend(tid, "Runtime.evaluate", params);
+async function evaluateAwaitingPromise(tid, params, operation = "eval") {
+  const evalCall = cdpSendEffect(tid, "Runtime.evaluate", params, operation);
   evalCall.catch(() => {});
   let timer;
   return Promise.race([
@@ -153,7 +153,7 @@ async function cdpEval(tid, code, uniqueContextId) {
     ...(uniqueContextId != null ? { uniqueContextId } : {}),
   });
   if (ev === EVAL_DEADLINE_REACHED) {
-    return { success: false, error: timeoutErr("eval", navigationTimeoutMs()) };
+    return { success: false, error: err("OutcomeUnknown", "Eval outcome is unknown; observe before retrying", { operation: "eval", reason: `response deadline reached after ${navigationTimeoutMs()}ms` }) };
   }
   if (ev.exceptionDetails) {
     const msg = ev.exceptionDetails.exception?.description || ev.exceptionDetails.text || "JS exception";
@@ -224,6 +224,10 @@ async function handleEval(command) {
 
 // ── Wait ───────────────────────────────────────────────────────────────────
 
+const navigationWaits = new Map();
+const WAIT_CANCELLED = Symbol("wait-cancelled");
+const TAB_CLOSED = Symbol("tab-closed");
+
 async function handleWait(command) {
   const tab = await resolveActiveTab();
   if (!tab) return { type: "Wait", success: false, error: noPageErr() };
@@ -245,6 +249,7 @@ async function handleWait(command) {
     // miss a navigation to a non-http document.
     let listener;
     let removedListener;
+    let timer;
     try {
       await Promise.race([
         new Promise((resolve) => {
@@ -264,15 +269,19 @@ async function handleWait(command) {
         // "the tab is gone" (exit 4 → recover via `tab`).
         new Promise((_, rej) => {
           removedListener = (closedId) => {
-            if (closedId === tab.id) rej(new Error("tab-closed"));
+            if (closedId === tab.id) rej(TAB_CLOSED);
           };
           chrome.tabs.onRemoved.addListener(removedListener);
         }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("nav-timeout")), timeoutMs)),
+        new Promise((_, rej) => { timer = setTimeout(() => rej(Symbol("navigation-timeout")), timeoutMs); }),
+        new Promise((_, rej) => {
+          if (command.request_id != null) navigationWaits.set(command.request_id, () => rej(WAIT_CANCELLED));
+        }),
       ]);
       return { type: "Wait", success: true };
     } catch (e) {
-      if (e?.message === "tab-closed") {
+      if (e === WAIT_CANCELLED) return { type:"Wait", success:false, error:otherErr("Wait cancelled") };
+      if (e === TAB_CLOSED) {
         return {
           type: "Wait",
           success: false,
@@ -281,6 +290,8 @@ async function handleWait(command) {
       }
       return { type: "Wait", success: false, error: timeoutErr("navigation", timeoutMs) };
     } finally {
+      clearTimeout(timer);
+      navigationWaits.delete(command.request_id);
       if (listener) chrome.webNavigation.onCompleted.removeListener(listener);
       if (removedListener) chrome.tabs.onRemoved.removeListener(removedListener);
     }
@@ -304,7 +315,7 @@ async function handleWait(command) {
       const remaining = Math.max(0, deadline - Date.now());
       const r = await sendToContentOnce(
         tab.id,
-        { type: "wait", condition: cond, timeout_ms: remaining },
+        { type: "wait", request_id: command.request_id, condition: cond, timeout_ms: remaining },
         activeFrameId,
         remaining + 2000,
       );
@@ -444,11 +455,11 @@ async function handleFetch(command) {
       const code = fetchExpression(command);
       const ev = await evaluateAwaitingPromise(tid, {
         expression: code, awaitPromise: true, returnByValue: true,
-      });
+      }, "fetch");
       // A `fetch()` to a host that accepts the connection but never responds
       // (or a body stream that never ends) would otherwise hang this evaluate
       // inside `withCdp` forever, wedging the tab's CDP queue. Bounded like
-      // `eval`: the deadline returns a typed Timeout and the detach frees the
+      // `eval`: the deadline leaves execution unconfirmed and the detach frees the
       // lock. Headless bounds the identical evaluate at the cdp_send timeout.
       if (ev === EVAL_DEADLINE_REACHED) return { __timeout: true };
       // The IIFE catches a rejected fetch itself and returns `{ neterror }`, so
@@ -469,7 +480,7 @@ async function handleFetch(command) {
       return {
         type: "FetchResult",
         success: false,
-        error: timeoutErr("fetch", navigationTimeoutMs()),
+        error: err("OutcomeUnknown", "Fetch outcome is unknown; observe before retrying", { operation: "fetch", reason: `response deadline reached after ${navigationTimeoutMs()}ms` }),
       };
     }
     // A network-level failure (refused/unresolved host, blocked request, CORS
@@ -494,4 +505,14 @@ async function handleFetch(command) {
   }
 }
 
-export { cdpEval, frameWorldContextId, handleDomGet, handleDomSet, handleEval, handleFetch, handleWait, resolveFrameWorld };
+async function handleWaitCancel(command) {
+  if (navigationWaits.has(command.request_id)) {
+    navigationWaits.get(command.request_id)();
+    return { type:"Wait", success:true };
+  }
+  const tab = await resolveActiveTab();
+  if (tab) await sendToContentOnce(tab.id, { type:"cancelWait", request_id:command.request_id }, activeFrameId);
+  return { type:"Wait", success:true };
+}
+
+export { cdpEval, frameWorldContextId, handleDomGet, handleDomSet, handleEval, handleFetch, handleWait, handleWaitCancel, resolveFrameWorld };

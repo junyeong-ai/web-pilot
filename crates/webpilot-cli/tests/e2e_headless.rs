@@ -75,6 +75,7 @@ fn settled_file(path: &PathBuf) -> String {
 }
 
 struct Fixture {
+    observation: common::Observation,
     home: PathBuf,
 }
 
@@ -104,7 +105,10 @@ impl Fixture {
             cmd.env(k, v);
         }
         // Force JSON regardless of how the test harness wires stdio.
-        cmd.arg("--json").output().expect("spawn webpilot")
+        self.observation.apply(&mut cmd, args);
+        let output = cmd.arg("--json").output().expect("spawn webpilot");
+        self.observation.remember(&output);
+        output
     }
 }
 
@@ -113,7 +117,10 @@ impl Fixture {
 fn headless_behavioral_flow() {
     let base = spawn_server();
     let home = std::env::temp_dir().join(format!("webpilot-e2e-{}", std::process::id()));
-    let fx = Fixture { home: home.clone() };
+    let fx = Fixture {
+        home: home.clone(),
+        observation: Default::default(),
+    };
 
     // 0. A zero CDP-send timeout would make every request expire instantly —
     //    settings validation must refuse it loudly at startup (InvalidArgument),
@@ -677,10 +684,10 @@ fn headless_behavioral_flow() {
     assert!(
         stdout(&fx.run(&[
             "eval",
-            "window.__dlg && window.__dlg[0] === true && window.__dlg[1] === 'dv' ? 'parity' : JSON.stringify(window.__dlg)",
+            "window.__dlg && window.__dlg[0] === false && window.__dlg[1] === null ? 'parity' : JSON.stringify(window.__dlg)",
         ]))
         .contains("parity"),
-        "confirm must answer true and prompt must return its default (accept-with-default)"
+        "confirm and prompt must be dismissed by default"
     );
     // The click scrolled #dlg into view; restore the top so later sections'
     // captures keep the full element set (the cursor:pointer pass is
@@ -926,7 +933,7 @@ fn headless_behavioral_flow() {
     //     click modifiers at all.
     let _ = fx.run(&[
         "eval",
-        "document.body.insertAdjacentHTML('beforeend', '<button id=modbtn onclick=\"this.dataset.mods=[event.ctrlKey,event.shiftKey,event.altKey,event.metaKey].join()\">mod</button>'); 'ok'",
+        "document.body.insertAdjacentHTML('beforeend', '<button id=modbtn onmousedown=\"this.dataset.mods=[event.ctrlKey,event.shiftKey,event.altKey,event.metaKey].join()\">mod</button>'); 'ok'",
     ]);
     let mod_cap = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&mod_cap), 0, "modbtn capture failed");
@@ -941,9 +948,11 @@ fn headless_behavioral_flow() {
     assert_eq!(
         mj["result"].as_str(),
         Some("\"true,true,false,false\""),
-        "the page's click handler must see ctrl+shift (and not alt/meta): {}",
+        "the page's pointer handler must see ctrl+shift (and not alt/meta): {}",
         stdout(&mods_read)
     );
+
+    fx.run(&["action", "key-press", "Escape"]);
 
     // 2b-click. A click must focus a focusable target, like a real click —
     //     mousedown's default action moves focus, firing focus/focusin and
@@ -4565,5 +4574,67 @@ fn headless_behavioral_flow() {
         stdout(&tt_set)
     );
 
+    common::assert_observation_contract(|args| fx.run(args), &base);
+    let setup = fx.run(&["eval", "document.getElementById('victim').onclick=()=>{window.executed++;const start=performance.now();while(performance.now()-start<1200){}};'ready'"]);
+    assert_eq!(code(&setup), 0);
+    let cap = fx.run(&["capture"]);
+    let victim = index_of(&cap, "victim");
+    let uncertain = fx.run_env(
+        &["action", "click", &victim],
+        &[("WEBPILOT_CDP_SEND_TIMEOUT_MS", "500")],
+    );
+    assert_eq!(
+        code(&uncertain),
+        9,
+        "an unconfirmed dispatched action must report OutcomeUnknown: {}",
+        stdout(&uncertain)
+    );
+    let effect: serde_json::Value =
+        serde_json::from_str(&stdout(&fx.run(&["eval", "window.executed"]))).unwrap();
+    assert_eq!(effect["result"], "2");
+    let accepted = fx.run_env(
+        &["eval", "[confirm('confirm'), prompt('prompt', 'default')]"],
+        &[("WEBPILOT_ACCEPT_DIALOGS", "true")],
+    );
+    assert_eq!(code(&accepted), 0, "{}", stdout(&accepted));
+    let accepted: serde_json::Value = serde_json::from_str(&stdout(&accepted)).unwrap();
+    assert_eq!(accepted["result"], "[true,\"default\"]");
+
+    let setup = fx.run(&["eval", "window.attributeEffects=0;customElements.define('slow-field',class extends HTMLElement{static observedAttributes=['value'];attributeChangedCallback(){window.attributeEffects++;const start=performance.now();while(performance.now()-start<1200){}}});document.body.appendChild(document.createElement('slow-field'));'ready'"]);
+    assert_eq!(code(&setup), 0, "{}", stdout(&setup));
+    let uncertain = fx.run_env(
+        &["dom", "set-attr", "slow-field", "value", "saved"],
+        &[("WEBPILOT_CDP_SEND_TIMEOUT_MS", "500")],
+    );
+    assert_eq!(code(&uncertain), 9, "{}", stdout(&uncertain));
+    let effect: serde_json::Value = serde_json::from_str(&stdout(&fx.run(&[
+        "eval",
+        "[window.attributeEffects,document.querySelector('slow-field').getAttribute('value')]",
+    ])))
+    .unwrap();
+    assert_eq!(effect["result"], "[1,\"saved\"]");
+    let uncertain = fx.run_env(
+        &["fetch", &format!("{base}/slow")],
+        &[("WEBPILOT_CDP_SEND_TIMEOUT_MS", "500")],
+    );
+    assert_eq!(code(&uncertain), 9, "{}", stdout(&uncertain));
+
+    let opaque = fx.run(&[
+        "capture",
+        "--url",
+        "data:text/html,<button>Opaque origin</button>",
+    ]);
+    assert_eq!(
+        code(&opaque),
+        0,
+        "snapshot identifiers must work outside secure contexts: {}",
+        stdout(&opaque)
+    );
+    let opaque: serde_json::Value = serde_json::from_str(&stdout(&opaque)).unwrap();
+    assert!(
+        opaque["snapshot_id"]
+            .as_str()
+            .is_some_and(|id| id.len() == 32)
+    );
     drop(fx);
 }

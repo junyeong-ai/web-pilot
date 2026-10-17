@@ -33,8 +33,8 @@ before reporting.
 **Out of scope**
 
 - Vulnerabilities in transitive dependencies — please report upstream.
-  WebPilot runs `cargo deny` on every PR and on a weekly schedule, so
-  RUSTSEC advisories are picked up automatically.
+  Dependency-changing PRs and pushes run `cargo deny` and `npm audit`;
+  the same audits run weekly to pick up new advisories.
 - Issues that require local code execution or physical access to the
   machine running WebPilot.
 - Self-XSS through user-supplied JavaScript passed to `webpilot eval`
@@ -46,8 +46,9 @@ before reporting.
 WebPilot's threat model assumes the operator is trusted and the
 target site is not. The runtime keeps these invariants:
 
-- All per-user state lives under `$WEBPILOT_HOME` with mode `0700`.
-  The IPC socket is `0600` under a `0700` parent; the Native Messaging
+- Per-user cache and durable data roots are created with mode `0700`.
+  `$WEBPILOT_HOME` overrides both; otherwise they use platform-specific paths
+  documented in `CLAUDE.md`. The IPC socket is `0600` under a `0700` parent; the Native Messaging
   host manifest restricts `allowed_origins` to the one extension ID.
 - Native messaging frames use 4-byte LE length prefixing — no
   message parsing is done on free text.
@@ -61,38 +62,43 @@ target site is not. The runtime keeps these invariants:
   anything that does not deserialize, closing the class of attack where a
   value the strict Rust types refuse is coerced and run by the looser JS
   bridge (e.g. a string where a numeric index is required). A single file
-  store (`artifacts/policies.json`) backs both modes; a store that exists
+  store (`policy/policies.json`, under the durable data root) backs both modes; a store that exists
   but cannot be parsed **fails closed** (denies).
-- Keys gate by *effect*, not command name, so every surface producing an
-  effect is covered by one key: `navigate` covers every URL load
-  (`navigate` action, `capture --url`, `tab new URL`); `eval` covers all
-  agent-initiated MAIN-world JS (`eval`, the `frame find` predicate, and
-  the `console`/`network start` monitoring hooks); `cookie_list` covers
-  reading cookie values (`cookie list`/`get`); `session_export`/
-  `session_import` cover bulk credential movement; `tab_close` covers
-  destroying a tab; `fetch`/`dom_set`/`cookie_set`/`cookie_delete` cover
-  the remaining script and mutation surfaces. So **all** credential-read,
-  navigation, and code-injection surfaces can be denied, not just the
-  obviously-named one.
+- Keys gate by *effect*, not command name. `navigate` covers URL loads
+  through actions, `capture --url`, and `tab new`; `eval` covers page-world
+  evaluation, `frame find`, monitor installation, and `dom set-html`.
+  Cookie and session keys gate their dedicated credential APIs. Device
+  emulation and context disposal use `device` and `context_close`.
+  The exhaustive `Command::policy_key()` and headless command handlers are
+  the authoritative mapping. These gates do not isolate a page's own effects:
+  an allowed click can submit data or execute page code.
+- Indexed actions require the observed `snapshot_id` and revalidate stored
+  node identity, visibility, and selected semantic properties. This detects
+  stale observations; it does not authenticate the page or establish which
+  business record a control affects.
 - The Native Messaging host rejects a command with `VersionMismatch`
   when the installed extension's reported version differs from the
-  version bundled into the binary, so a skewed install cannot operate
-  on the user's authenticated session under a stale protocol.
+  version bundled into the binary, within that host/extension pair. After a binary update, reload the
+  extension to reconnect it to a new host; an already-running host retains
+  its old binary and settings.
 
-**Credential-exposure note.** In browser mode WebPilot operates on the
-user's real, authenticated Chrome. The headless profile is also
-persistent across runs and can accumulate credentials through a
-navigate-then-login flow. In both cases `session export` and `cookie`
-commands can read live session cookies and storage; treat their output
-as secret material. To deny every credential-read surface, set
-`session_export`, `cookie_list`, and `session_import` to `deny` (and
-`cookie_set`/`cookie_delete` to deny writes). Policy on these runs at the
-privileged sink, so the gate holds on both the headless (`LocalTransport`)
-and browser (NM host) paths.
+**Credential exposure and policy limits.** Browser mode operates on the
+user's authenticated Chrome. The persistent headless profile can also contain
+credentials. Cookie/session commands, page text, screenshots, DOM reads and
+eval results can expose sensitive data. Omitting password input values from
+DOM snapshots does not make other outputs secret-free.
 
-`device` and `context` are intentionally ungated: they emulate the
-viewport / manage context lifecycle and cannot read or exfiltrate page
-data, so a policy key for them would add surface without value.
+Policy is a guardrail for a steered agent, not a sandbox against a same-user
+process that can edit the policy store or reach headless Chrome's local CDP
+endpoint. Use `policy default deny` and allow only required effects. Allowing
+`eval` permits page code to reproduce narrower denied effects; denying cookie
+and session keys alone does not prevent all credential access or exfiltration.
+Page content and MAIN-world monitoring buffers remain untrusted.
+
+The `download` gate and command-scoped download reports are headless-only.
+Browser mode follows the user's download rules and does not gate or report
+those downloads. Confirmation and prompt dialogs are dismissed by default;
+`chrome.accept_dialogs` explicitly enables acceptance.
 
 If you find a way to break any of the above, that qualifies as a
 security report under this policy.

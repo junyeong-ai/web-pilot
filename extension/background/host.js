@@ -66,7 +66,7 @@ let commandQueue = Promise.resolve();
 // Pure reads that touch no command state — answerable while a long command
 // (a 15s navigation) holds the queue. A health check must not report dead
 // because the worker is busy.
-const QUEUE_EXEMPT = new Set(["Status", "Ping"]);
+const QUEUE_EXEMPT = new Set(["Status", "Ping", "WaitCancel"]);
 
 function handleHostMessage(request, port) {
   const { id, command, monitor_policy } = request;

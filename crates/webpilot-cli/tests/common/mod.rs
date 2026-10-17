@@ -295,6 +295,15 @@ pub fn spawn_server() -> String {
                 // the test can tell a real transfer from a placeholder.
                 // More interactive elements than the bridge's index cap, so the
                 // clip is exercised against a real extraction rather than a stub.
+                if req.starts_with("GET /parsingframe") {
+                    let start = "<!doctype html><html><head><title>parsing</title></head><body>";
+                    let end = "<button id=parsed>Parsed</button></body></html>";
+                    let _ = stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", start.len()+end.len(), start).as_bytes());
+                    let _ = stream.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    let _ = stream.write_all(end.as_bytes());
+                    return;
+                }
                 if req.starts_with("GET /many") {
                     let mut body = String::from("<!doctype html><html><body>");
                     for i in 0..1200 {
@@ -420,4 +429,190 @@ pub fn code(out: &Output) -> i32 {
 
 pub fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[derive(Default)]
+pub struct Observation {
+    snapshot_id: std::sync::Mutex<Option<String>>,
+}
+
+impl Observation {
+    pub fn apply(&self, command: &mut std::process::Command, args: &[&str]) {
+        if args.first() == Some(&"action")
+            && args.get(1).is_some_and(|kind| {
+                matches!(
+                    *kind,
+                    "click"
+                        | "type"
+                        | "scroll-to"
+                        | "hover"
+                        | "focus"
+                        | "select"
+                        | "upload"
+                        | "drag"
+                )
+            })
+            && !args.contains(&"--snapshot-id")
+            && let Some(id) = self.snapshot_id.lock().expect("observation lock").as_ref()
+        {
+            command.args(["--snapshot-id", id]);
+        }
+    }
+
+    pub fn remember(&self, output: &Output) {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            && let Some(id) = value.get("snapshot_id").and_then(serde_json::Value::as_str)
+        {
+            *self.snapshot_id.lock().expect("observation lock") = Some(id.into());
+        }
+    }
+}
+
+pub fn assert_observation_contract(run: impl Fn(&[&str]) -> Output, base: &str) {
+    use serde_json::{Value, json};
+    let read = |args: &[&str]| {
+        let output = run(args);
+        assert_eq!(code(&output), 0, "{args:?}: {}", stdout(&output));
+        serde_json::from_slice::<Value>(&output.stdout).expect("JSON output")
+    };
+    read(&["capture", "--url", base]);
+    read(&[
+        "eval",
+        r#"document.body.innerHTML = `<p>Invoice total: 12345 KRW</p>
+      <input id="secret" type="password" value="fixture-password">
+      <button id="victim" onclick="window.executed=(window.executed||0)+1;window.trusted=event.isTrusted;window.activated=navigator.userActivation.isActive">Delete Alice</button>
+      <button id="image"><img alt="Add to cart"></button>
+      <button id="aslink" role="link">semantic link</button>
+      <div role="button link" tabindex="0">primary role</div>
+      <select multiple><option>A</option><option>B</option></select><a id="destination" href="relative">Destination</a>`; 'ready'"#,
+    ]);
+    let first = read(&["capture"]);
+    let id = first["snapshot_id"].as_str().expect("snapshot id");
+    let elements = first["elements"].as_array().unwrap();
+    assert!(
+        elements
+            .iter()
+            .find(|el| el["id"] == "secret")
+            .unwrap()
+            .get("value")
+            .is_none()
+    );
+    let index = elements.iter().find(|el| el["id"] == "victim").unwrap()["index"].to_string();
+    assert_eq!(read(&["find", "--role", "link"])["count"], 2);
+    assert_eq!(read(&["find", "--role", "listbox"])["count"], 1);
+    assert_eq!(
+        read(&["find", "--role", "button", "--text", "Add to cart"])["count"],
+        1
+    );
+    let old = run(&["action", "click", &index, "--snapshot-id", id]);
+    assert_eq!(
+        code(&old),
+        4,
+        "old observations must not resolve against a newer snapshot: {}",
+        stdout(&old)
+    );
+    read(&["capture"]);
+    read(&["action", "click", &index]);
+    assert_eq!(
+        read(&[
+            "eval",
+            "({trusted:window.trusted, activated:window.activated, executed:window.executed})"
+        ])["result"],
+        json!({"trusted":true,"activated":true,"executed":1}).to_string()
+    );
+    read(&["capture"]);
+    read(&[
+        "eval",
+        "document.getElementById('victim').textContent='Delete Bob';'changed'",
+    ]);
+    let changed = run(&["action", "click", &index]);
+    assert_eq!(
+        code(&changed),
+        4,
+        "changed action semantics must invalidate the observation: {}",
+        stdout(&changed)
+    );
+    let links = read(&["capture"]);
+    let link = links["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|el| el["id"] == "destination")
+        .unwrap()["index"]
+        .to_string();
+    read(&[
+        "eval",
+        "const base=document.createElement('base');base.href='/other/';document.head.appendChild(base);'changed'",
+    ]);
+    let redirected = run(&["action", "click", &link]);
+    assert_eq!(
+        code(&redirected),
+        4,
+        "a base URL change must invalidate the observed link destination: {}",
+        stdout(&redirected)
+    );
+    read(&["eval", "document.querySelector('base').remove();'restored'"]);
+    read(&["capture"]);
+    read(&[
+        "eval",
+        "document.body.insertAdjacentHTML('beforeend','<div id=overlay style=\"position:fixed;inset:0;z-index:999;background:white\">modal</div>');'covered'",
+    ]);
+    let covered = run(&["action", "click", &index]);
+    assert_eq!(
+        code(&covered),
+        7,
+        "covered controls must not be activated: {}",
+        stdout(&covered)
+    );
+    assert_eq!(read(&["eval", "window.executed"])["result"], "1");
+    read(&[
+        "eval",
+        "document.getElementById('overlay').remove();'uncovered'",
+    ]);
+    read(&["action", "hover", &index]);
+    read(&[
+        "eval",
+        "window.wrongClicks=0;window.rightClicks=0;document.body.insertAdjacentHTML('beforeend',`<div id=hoverProof><button id=wrongTarget style=\"position:fixed;left:200px;top:300px;width:150px;height:80px;z-index:20\" onclick=\"window.wrongClicks++\">Delete all</button><button id=movingTarget style=\"position:fixed;left:200px;top:300px;width:150px;height:80px;z-index:21\" onmouseenter=\"this.style.left='500px'\" onclick=\"window.rightClicks++\">Safe action</button></div>`);'ready'",
+    ]);
+    let moving = read(&["capture"]);
+    let target = moving["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|el| el["id"] == "movingTarget")
+        .unwrap()["index"]
+        .to_string();
+    let moved = run(&["action", "click", &target]);
+    assert_eq!(code(&moved), 7, "{}", stdout(&moved));
+    assert_eq!(
+        read(&["eval", "[window.wrongClicks,window.rightClicks]"])["result"],
+        "[0,0]",
+        "pointer positioning must not click a control exposed by hover"
+    );
+    read(&[
+        "eval",
+        "document.getElementById('hoverProof').remove();'removed'",
+    ]);
+    let text = read(&["capture", "--include", "text"]);
+    assert!(text["text_content"].as_str().unwrap().contains("12345 KRW"));
+    read(&[
+        "eval",
+        "new Promise(resolve=>{const frame=document.createElement('iframe');frame.onload=()=>resolve('created');frame.src='/frame';document.body.appendChild(frame)})",
+    ]);
+    read(&["frame", "url", "/frame"]);
+    read(&[
+        "eval",
+        "document.body.innerHTML='<a id=slow href=/parsingframe>Continue</a>';'ready'",
+    ]);
+    let frame = read(&["capture"]);
+    let slow = frame["elements"][0]["index"].to_string();
+    let landed = read(&["action", "click", &slow, "--capture"]);
+    assert!(
+        landed["elements"]
+            .as_array()
+            .is_some_and(|elements| elements.iter().any(|el| el["id"] == "parsed")),
+        "{landed}"
+    );
+    read(&["frame", "main"]);
+    read(&["capture"]);
 }

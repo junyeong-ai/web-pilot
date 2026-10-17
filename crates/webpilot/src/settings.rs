@@ -70,6 +70,7 @@ pub struct Timeouts {
 
 #[derive(Debug, Clone)]
 pub struct Chrome {
+    pub accept_dialogs: bool,
     /// Explicit Chrome/Chromium binary path. `None` falls back to platform
     /// auto-detection in the session launcher.
     pub binary: Option<String>,
@@ -249,6 +250,7 @@ impl Settings {
                 ),
             },
             chrome: Chrome {
+                accept_dialogs: bool_var("WEBPILOT_ACCEPT_DIALOGS", c.accept_dialogs, false),
                 binary: string_var("WEBPILOT_CHROME").or(c.binary),
                 viewport_width: u32_var("WEBPILOT_VIEWPORT_WIDTH", c.viewport_width, 1280),
                 viewport_height: u32_var("WEBPILOT_VIEWPORT_HEIGHT", c.viewport_height, 720),
@@ -377,6 +379,7 @@ struct FileTimeouts {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct FileChrome {
+    accept_dialogs: Option<bool>,
     binary: Option<String>,
     viewport_width: Option<u32>,
     viewport_height: Option<u32>,
@@ -521,6 +524,7 @@ mod tests {
                 download_window: Duration::from_millis(2_000),
             },
             chrome: Chrome {
+                accept_dialogs: false,
                 binary: None,
                 viewport_width: 1280,
                 viewport_height: 720,

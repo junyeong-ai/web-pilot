@@ -264,6 +264,7 @@ fn process_nm_message(
             "result": {
                 "type": "Config",
                 "schema": 1,
+                "accept_dialogs": webpilot::settings::get().chrome.accept_dialogs,
                 "timeouts": {
                     "navigation_ms":
                         webpilot::settings::timeouts().navigation.as_millis() as u64,

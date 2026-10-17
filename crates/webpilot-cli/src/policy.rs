@@ -72,6 +72,7 @@ pub fn parse_and_enforce(
             detail: format!("malformed command: {e}"),
         })?;
     enforce(&command)?;
+    command.validate()?;
     Ok(command)
 }
 

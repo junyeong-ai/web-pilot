@@ -13,12 +13,17 @@ pub struct ActionArgs {
     #[command(subcommand)]
     pub action: Action,
 
+    /// Snapshot identifier for index-addressed actions.
+    #[arg(long, global = true)]
+    pub snapshot_id: Option<String>,
+
     /// Auto-capture DOM after the action.
     #[arg(long, global = true)]
     pub capture: bool,
 }
 
 pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Result<CommandOutput> {
+    args.action.validate_snapshot(args.snapshot_id.as_deref())?;
     // Resolve an upload path against the CLI's working directory and confirm it
     // is a readable regular file BEFORE it crosses the wire. Otherwise a relative
     // path would be re-interpreted against Chrome's own cwd (browser mode runs a
@@ -52,6 +57,7 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
     let result = transport
         .send(Command::Action {
             action: args.action,
+            snapshot_id: args.snapshot_id,
             capture: args.capture,
         })
         .await?;

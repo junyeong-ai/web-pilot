@@ -77,6 +77,7 @@ fn capture_command_uses_include_list() {
 #[test]
 fn wait_condition_is_tagged() {
     let cmd = Command::Wait {
+        request_id: None,
         condition: WaitCondition::Selector {
             value: ".loading".into(),
         },
@@ -140,6 +141,7 @@ fn command_policy_key_gates_by_effect() {
     // Gated.
     assert_eq!(
         Command::Action {
+            snapshot_id: None,
             action: Action::Click {
                 index: 1,
                 modifiers: Default::default()
@@ -242,6 +244,7 @@ fn command_policy_key_gates_by_effect() {
     assert_eq!(Command::TabList.policy_key(), None);
     assert_eq!(
         Command::Wait {
+            request_id: None,
             condition: WaitCondition::Idle,
             timeout_ms: 1000,
         }
@@ -335,6 +338,7 @@ fn every_command_round_trips_with_a_stable_wire_shape_and_gate() {
             url: None,
         },
         Command::Action {
+            snapshot_id: None,
             action: Action::Click {
                 index: 1,
                 modifiers: Modifiers::default(),
@@ -343,8 +347,12 @@ fn every_command_round_trips_with_a_stable_wire_shape_and_gate() {
         },
         Command::Eval { code: "1".into() },
         Command::Wait {
+            request_id: None,
             condition: WaitCondition::Navigation,
             timeout_ms: 1000,
+        },
+        Command::WaitCancel {
+            request_id: "wait-1".into(),
         },
         Command::Status,
         Command::TabList,
@@ -409,6 +417,7 @@ fn every_command_round_trips_with_a_stable_wire_shape_and_gate() {
             | Command::Action { .. }
             | Command::Eval { .. }
             | Command::Wait { .. }
+            | Command::WaitCancel { .. }
             | Command::Status
             | Command::TabList
             | Command::TabSwitch { .. }
@@ -434,7 +443,7 @@ fn every_command_round_trips_with_a_stable_wire_shape_and_gate() {
         }
     }
 
-    assert_eq!(commands.len(), 26, "one instance per Command variant");
+    assert_eq!(commands.len(), 27, "one instance per Command variant");
     for c in &commands {
         assert_exhaustive(c);
         let json = serde_json::to_value(c).expect("serialize");

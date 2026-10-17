@@ -513,6 +513,8 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
     pub elements: Vec<InteractiveElement>,
     pub total_nodes: u32,
     pub page_url: String,
@@ -606,63 +608,14 @@ pub struct ElementFilter {
 }
 
 impl InteractiveElement {
-    pub fn implicit_role(&self) -> Option<&'static str> {
-        match (self.tag.as_str(), self.semantics.input_type.as_deref()) {
-            ("a", _) if self.semantics.href.is_some() => Some("link"),
-            ("button", _) => Some("button"),
-            // A submit/button/reset/image input IS a button in every sense —
-            // it's in the interactive set and renders `type=submit`, but without
-            // this arm `find --role button` silently missed it. `image` is the
-            // graphical submit button (`<input type="image">`).
-            ("input", Some("submit" | "button" | "reset" | "image")) => Some("button"),
-            ("input", Some("text" | "search" | "email" | "url" | "tel")) => Some("textbox"),
-            ("input", Some("checkbox")) => Some("checkbox"),
-            ("input", Some("radio")) => Some("radio"),
-            ("input", Some("number")) => Some("spinbutton"),
-            ("input", Some("range")) => Some("slider"),
-            ("select", _) => Some("combobox"),
-            ("textarea", _) => Some("textbox"),
-            // Interactive (widget) roles only. `implicit_role`'s sole caller is
-            // `find`'s `matches`, which filters the INTERACTIVE element set — a
-            // landmark container (`<nav>`/`<main>`/`<header>`/`<footer>`/`<aside>`/
-            // `<form>`) or a bare `<img>` is never in that set, so mapping them
-            // here would advertise `--role navigation`/`--role img` as findable
-            // when they can never match. Landmarks are surfaced via `@landmark`
-            // hints and navigated with `frame`, not `find --role`.
-            _ => None,
-        }
-    }
-
     pub fn matches(&self, filter: &ElementFilter) -> bool {
-        if let Some(ref role) = filter.role {
-            // Role matches an explicit ARIA `role` or the element's implicit role
-            // ONLY — never the raw tag name. `--role nav` must not match `<nav>`
-            // (its role is `navigation`), and `--role div` must not match every
-            // `<div>`; a tag query is `find --tag`.
-            //
-            // `role` is a SPACE-SEPARATED token list (the user agent uses the first
-            // valid token; authors write `role="<custom> button"` fallbacks), so
-            // match the query against any token — `--role button` finds
-            // `role="custom button"` — not the raw string, which would miss it.
-            // `split_ascii_whitespace`, NOT `split_whitespace`: HTML attribute token
-            // lists split on ASCII whitespace only (HTML "space characters"), the
-            // exact set the bridge's CSS `[role~="..."]` selector uses — so the
-            // collected set and the matched set agree. The Unicode `split_whitespace`
-            // would split a non-ASCII separator (NBSP) the selector treats as part of
-            // one token, diverging. Matching is case-INSENSITIVE on purpose: it is a
-            // user-facing filter, so `--role Button` finding `role="button"` is the
-            // forgiving behavior (the CSS selector stays case-sensitive per ARIA, but
-            // an off-case role still reaches the snapshot via its affordance).
-            let role_lower = role.to_lowercase();
-            let explicit = self.role.as_ref().is_some_and(|r| {
-                r.to_lowercase()
-                    .split_ascii_whitespace()
-                    .any(|t| t == role_lower)
-            });
-            let implicit = self.implicit_role().is_some_and(|r| r == role_lower);
-            if !explicit && !implicit {
-                return false;
-            }
+        if let Some(ref role) = filter.role
+            && !self
+                .role
+                .as_deref()
+                .is_some_and(|r| r.eq_ignore_ascii_case(role))
+        {
+            return false;
         }
         if let Some(ref text) = filter.text {
             let needle = norm_ws(text);
@@ -943,6 +896,10 @@ impl DomSnapshot {
             out.push('\n');
         }
 
+        if let Some(id) = &self.snapshot_id {
+            out.push_str(&format!("--- Snapshot: {} ---\n", line_safe(id)));
+        }
+
         // The captured page text (`--include text`) is content, not metadata —
         // render it in the agent-facing text the same as JSON carries it.
         // Without this, `capture --include text` showed the text in `--json`
@@ -1050,89 +1007,20 @@ mod tests {
     }
 
     #[test]
-    fn submit_button_reset_inputs_have_an_implicit_button_role() {
-        // A submit/button/reset input IS a button — `find --role button` must
-        // match it. A text input stays a textbox; an unknown type has no role.
-        for t in ["submit", "button", "reset", "image"] {
-            assert_eq!(
-                input_el(t).implicit_role(),
-                Some("button"),
-                "input type={t} must be a button"
-            );
-            let f = ElementFilter {
-                role: Some("button".into()),
-                ..Default::default()
-            };
-            assert!(
-                input_el(t).matches(&f),
-                "find --role button must match input type={t}"
-            );
-        }
-        assert_eq!(input_el("text").implicit_role(), Some("textbox"));
-        assert_eq!(input_el("color").implicit_role(), None);
-    }
-
-    #[test]
-    fn find_role_matches_a_token_in_a_multi_token_role() {
-        // ARIA `role` is a space-separated token list (the user agent uses the
-        // first valid token; authors write `role="<custom> button"` fallbacks), so
-        // `find --role button` must match any token — not only an exact whole
-        // string, which dropped the element entirely.
+    fn role_matching_uses_the_resolved_semantic_role() {
         let el = InteractiveElement {
-            index: 1,
-            tag: "div".into(),
-            id: None,
-            role: Some("custom button".into()),
-            text: String::new(),
-            semantics: ElementSemantics::default(),
-            state: ElementState::default(),
-            spatial: ElementSpatial::default(),
+            tag: "button".into(),
+            role: Some("link".into()),
+            ..input_el("button")
         };
-        let present = ElementFilter {
+        assert!(el.matches(&ElementFilter {
+            role: Some("LINK".into()),
+            ..Default::default()
+        }));
+        assert!(!el.matches(&ElementFilter {
             role: Some("button".into()),
             ..Default::default()
-        };
-        assert!(
-            el.matches(&present),
-            "a token in a multi-token role must match"
-        );
-        // No over-match: a role NOT among the tokens still fails, and a token is
-        // never matched as a substring of another (`butto` must not match).
-        for miss in ["link", "butto", "uttonx"] {
-            let f = ElementFilter {
-                role: Some(miss.into()),
-                ..Default::default()
-            };
-            assert!(
-                !el.matches(&f),
-                "a role not among the whitespace tokens must not match: {miss}"
-            );
-        }
-        // ASCII-whitespace tokenization, matching CSS `[role~=...]` and the HTML
-        // token-list definition: a NON-breaking space (U+00A0) is NOT a token
-        // separator, so `role="button\u{a0}link"` is ONE token and matches neither
-        // `button` nor `link`. (Rust's Unicode `split_whitespace` would wrongly
-        // split it and over-match, diverging from the selector.)
-        let nbsp = InteractiveElement {
-            role: Some("button\u{a0}link".into()),
-            ..el.clone()
-        };
-        for q in ["button", "link"] {
-            let f = ElementFilter {
-                role: Some(q.into()),
-                ..Default::default()
-            };
-            assert!(
-                !nbsp.matches(&f),
-                "a non-ASCII-whitespace separator is not a token boundary: {q}"
-            );
-        }
-        // Case-insensitive, like the single-token path.
-        let upper = ElementFilter {
-            role: Some("BUTTON".into()),
-            ..Default::default()
-        };
-        assert!(el.matches(&upper), "role match is case-insensitive");
+        }));
     }
 
     #[test]
@@ -1288,6 +1176,7 @@ mod tests {
         // indented (no leading `[` at column 0) and `line_safe`d (no control-char
         // tricks), while staying multi-line.
         let snap = DomSnapshot {
+            snapshot_id: None,
             elements: vec![],
             total_nodes: 0,
             page_url: "x".into(),
@@ -1335,6 +1224,7 @@ mod tests {
             spatial: ElementSpatial::default(),
         };
         let snap = DomSnapshot {
+            snapshot_id: None,
             elements: vec![el],
             total_nodes: 1,
             page_url: "x".into(),
@@ -1374,6 +1264,7 @@ mod tests {
                 spatial: ElementSpatial::default(),
             };
             DomSnapshot {
+                snapshot_id: None,
                 elements: vec![el],
                 total_nodes: 1,
                 page_url: "x".into(),
@@ -1414,6 +1305,7 @@ mod tests {
                 },
             };
             DomSnapshot {
+                snapshot_id: None,
                 elements: vec![el],
                 total_nodes: 1,
                 page_url: "x".into(),
@@ -1468,6 +1360,7 @@ mod tests {
             spatial: ElementSpatial::default(),
         };
         let text = DomSnapshot {
+            snapshot_id: None,
             elements: vec![el],
             total_nodes: 1,
             page_url: "x".into(),
@@ -1494,6 +1387,7 @@ mod tests {
     #[test]
     fn to_text_mentions_subframes_only_when_present() {
         let mut snap = DomSnapshot {
+            snapshot_id: None,
             elements: Vec::new(),
             total_nodes: 0,
             page_url: "x".into(),
@@ -1545,6 +1439,7 @@ mod tests {
             spatial: Default::default(),
         };
         let mut snap = DomSnapshot {
+            snapshot_id: None,
             elements: vec![el(), el(), el()],
             total_nodes: 3,
             page_url: String::new(),
@@ -1575,6 +1470,7 @@ mod tests {
     #[test]
     fn to_text_omits_the_scroll_line_when_nothing_measured() {
         let mut snap = DomSnapshot {
+            snapshot_id: None,
             elements: Vec::new(),
             total_nodes: 0,
             page_url: "x".into(),
@@ -1606,6 +1502,7 @@ mod tests {
     #[test]
     fn to_text_renders_captured_page_text() {
         let mut snap = DomSnapshot {
+            snapshot_id: None,
             elements: Vec::new(),
             total_nodes: 0,
             page_url: "x".into(),

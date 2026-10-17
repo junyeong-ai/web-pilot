@@ -16,6 +16,8 @@ pub enum IpcError {
     HostNotRunning(String),
     #[error("connection closed")]
     ConnectionClosed,
+    #[error("request outcome unconfirmed: {source}")]
+    Unconfirmed { source: Box<IpcError> },
     #[error("timed out")]
     Timeout,
 }
@@ -33,12 +35,14 @@ async fn send_to(path: &Path, request: &serde_json::Value) -> Result<serde_json:
         return Err(IpcError::HostNotRunning(path.display().to_string()));
     }
 
-    match tokio::time::timeout(ipc_timeout(), async {
+    let mut dispatched = false;
+    let outcome = tokio::time::timeout(ipc_timeout(), async {
         let stream = UnixStream::connect(path).await?;
         let (reader, mut writer) = stream.into_split();
 
         let mut payload = serde_json::to_vec(request)?;
         payload.push(b'\n');
+        dispatched = true;
         writer.write_all(&payload).await?;
         writer.shutdown().await?;
 
@@ -68,10 +72,18 @@ async fn send_to(path: &Path, request: &serde_json::Value) -> Result<serde_json:
         let response = serde_json::from_str(line.trim())?;
         Ok(response)
     })
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err(IpcError::Timeout),
+    .await;
+    let error = match outcome {
+        Ok(Ok(response)) => return Ok(response),
+        Ok(Err(error)) => error,
+        Err(_) => IpcError::Timeout,
+    };
+    if dispatched {
+        Err(IpcError::Unconfirmed {
+            source: Box::new(error),
+        })
+    } else {
+        Err(error)
     }
 }
 
@@ -117,4 +129,36 @@ pub async fn start_server() -> Result<UnixListener, IpcError> {
 
     tracing::info!(path = %path.display(), "IPC server listening");
     Ok(listener)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn lost_responses_are_distinct_from_requests_that_never_reach_a_host() {
+        let path = std::env::temp_dir().join(format!("webpilot-ipc-{}.sock", std::process::id()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+                serde_json::json!({"request": 1})
+            );
+        });
+        let error = send_to(&path, &serde_json::json!({"request": 1}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, IpcError::Unconfirmed { source } if matches!(*source, IpcError::ConnectionClosed))
+        );
+        peer.await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            send_to(&path, &serde_json::json!({})).await,
+            Err(IpcError::HostNotRunning(_))
+        ));
+    }
 }

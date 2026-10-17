@@ -13,10 +13,7 @@ pub type ElementIndex = u32;
 #[derive(Subcommand, Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
-    /// Click an element by index. `--ctrl/--shift/--alt/--meta` set the
-    /// modifier flags the page's own handlers see (an app-level ctrl
-    /// multi-select, a shift range-select); browser-level defaults like
-    /// open-in-new-tab don't apply to a synthetic click — use `tab new URL`.
+    /// Click a captured element using native pointer input.
     Click {
         index: ElementIndex,
         #[command(flatten)]
@@ -160,6 +157,32 @@ serde_plain::derive_display_from_serialize!(ActionKind);
 serde_plain::derive_fromstr_from_deserialize!(ActionKind);
 
 impl Action {
+    pub fn validate_snapshot(&self, snapshot_id: Option<&str>) -> Result<(), crate::WebPilotError> {
+        if self.requires_snapshot() && snapshot_id.is_none_or(str::is_empty) {
+            return Err(crate::WebPilotError::InvalidArgument { detail: "index-addressed actions require snapshot_id from the observed snapshot (--snapshot-id ID)".into() });
+        }
+        Ok(())
+    }
+
+    pub fn requires_snapshot(&self) -> bool {
+        match self {
+            Self::Click { .. }
+            | Self::Type { .. }
+            | Self::ScrollTo { .. }
+            | Self::Hover { .. }
+            | Self::Focus { .. }
+            | Self::Select { .. }
+            | Self::Upload { .. }
+            | Self::Drag { .. } => true,
+            Self::KeyPress { .. }
+            | Self::Navigate { .. }
+            | Self::Scroll { .. }
+            | Self::Back
+            | Self::Forward
+            | Self::Reload => false,
+        }
+    }
+
     pub fn kind(&self) -> ActionKind {
         use Action as A;
         match self {

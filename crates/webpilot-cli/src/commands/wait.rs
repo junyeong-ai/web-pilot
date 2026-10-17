@@ -18,7 +18,13 @@ pub struct WaitArgs {
 pub async fn run<T: Transport>(transport: &mut T, args: WaitArgs) -> Result<CommandOutput> {
     // The CLI flag is whole seconds; the wire (and the MCP surface) speak
     // milliseconds.
-    dispatch(transport, args.condition, args.timeout.saturating_mul(1000)).await
+    dispatch(
+        transport,
+        args.condition,
+        args.timeout.saturating_mul(1000),
+        None,
+    )
+    .await
 }
 
 /// Send a wait with a millisecond timeout — the wire-native unit. The CLI
@@ -29,9 +35,11 @@ pub async fn dispatch<T: Transport>(
     transport: &mut T,
     condition: WaitCondition,
     timeout_ms: u64,
+    request_id: Option<String>,
 ) -> Result<CommandOutput> {
     let result = transport
         .send(Command::Wait {
+            request_id,
             condition,
             timeout_ms,
         })

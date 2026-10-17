@@ -357,4 +357,29 @@ fn mcp_long_lived_transport_flow() {
         "a device reset from another process must clear the user-agent override this session owns: {}",
         ua_after_reset.text()
     );
+    mcp.next_id += 1;
+    let wait_id = mcp.next_id;
+    let wait = json!({"jsonrpc":"2.0", "id":wait_id, "method":"tools/call", "params":{"name":"browser_wait", "arguments":{"until":"selector", "value":"#missing-cancel-target", "timeout_ms":60000}}});
+    writeln!(mcp.stdin, "{wait}").unwrap();
+    mcp.stdin.flush().unwrap();
+    let ping = mcp.request("ping", json!({}));
+    assert_eq!(ping["id"], mcp.next_id, "ping must bypass the running wait");
+    mcp.notify("notifications/cancelled", json!({"requestId":wait_id}));
+    let text = mcp.tool("browser_snapshot", json!({"include":["text"]}));
+    assert!(text.ok(), "{}", text.text());
+    assert!(text.reply["result"]["structuredContent"]["text_content"].is_string());
+    let snapshot = mcp.tool("browser_snapshot", json!({}));
+    let snapshot = &snapshot.reply["result"]["structuredContent"];
+    let index = snapshot["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|el| el["id"] == "go")
+        .unwrap()["index"]
+        .clone();
+    let clicked = mcp.tool(
+        "browser_click",
+        json!({"index":index,"snapshot_id":snapshot["snapshot_id"],"capture":false}),
+    );
+    assert!(clicked.ok(), "{}", clicked.text());
 }

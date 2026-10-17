@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-17
+
+### Changed
+
+- Require the observed `snapshot_id` for indexed actions; reject changed names,
+  roles, link destinations and input types before acting.
+- Use native pointer input for clicks, with geometry and hit-target checks.
+- Dismiss confirmation and prompt dialogs by default; `chrome.accept_dialogs`
+  explicitly enables acceptance. Omit password values from DOM snapshots.
+- Use shared accessibility calculations for element roles and names.
+- Validate MCP arguments against the advertised schemas, return structured
+  success results, expose text snapshots and optional post-action captures.
+- Process MCP ping and cancellation while commands run; cancel active waits
+  without replaying mutations. Exit 9 reports an uncertain execution outcome.
+
+### Fixed
+
+- Retain live iframe execution contexts while their documents finish parsing.
+- Revalidate click targets after pointer movement, so hover-triggered movement
+  cannot redirect a click onto another control.
+- Preserve uncertain native key, drag and upload outcomes in browser mode;
+  attempt input release after failed dispatches and release upload handles.
+- Preserve uncertain outcomes for state-changing IPC requests and reject replies
+  with mismatched request IDs. Report DOM-write and fetch response loss in
+  headless mode, and eval/fetch deadlines in browser mode, as `OutcomeUnknown`.
+
 ## [0.10.0] - 2026-10-17
 
 ### Changed

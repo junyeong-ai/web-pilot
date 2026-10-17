@@ -21,8 +21,12 @@
 
 ## 빠른 시작 — 5분 따라하기
 
+macOS 또는 Linux에 Chrome이 설치되어 있어야 합니다. 자동 탐지가 안 되면
+`WEBPILOT_CHROME=/absolute/path/to/chrome`으로 실행 파일을 지정하세요.
+
 아래 예시는 가상의 사내 할 일 관리 앱 **“Acme Tasks”**(로그인 → 대시보드)를 대상으로 합니다.
-**여기 나오는 모든 출력은 실제 캡처 결과입니다.**
+출력은 형식을 설명하는 예시입니다. `ID_A`·`ID_B`·`ID_C`는 실제 출력의 `snapshot_id`로 바꾸세요.
+예제 앱은 별도로 실행되어 있어야 합니다. 파이프 출력은 JSON이며, 아래 목록은 터미널 형식입니다.
 
 ```bash
 # 1. 설치 (바이너리 다운로드 + 체크섬 검증 + 자동 setup)
@@ -36,33 +40,36 @@ webpilot capture --include dom --url "http://localhost:8700/"
 ```
 
 ```
-[1] a "Acme Tasks" href="/" @navigation
-[2] input#email "you@acme.com" label="Email" type=email autocomplete=email @form
+[1] a role=link "Acme Tasks" href="/" @navigation
+[2] input#email role=textbox "you@acme.com" label="Email" type=email autocomplete=email @form
 [3] input#pw label="Password" type=password autocomplete=current-password @form
-[4] input#remember label="Remember me" value="on" type=checkbox @form
+[4] input#remember role=checkbox "Remember me" label="Remember me" value="on" type=checkbox @form
 [5] button "Sign in" @form
-[6] a "Forgot password?" href="/reset.html" @main
+[6] a role=link "Forgot password?" href="/reset.html" @main
+--- Snapshot: ID_A ---
 --- Page: Acme Tasks — Sign in (http://localhost:8700/) ---
 --- Scroll: entire page visible ---
 --- 6 elements (from 20 nodes, 0ms) ---
 ```
 
-페이지의 클릭·입력 가능한 요소만 골라 **`[번호]`** 가 붙은 목록으로 보여줍니다. 이 번호가 이어지는 모든 동작의 인자가 됩니다. (HTML 노드 20개 중 의미 있는 6개만 추렸다는 점도 마지막 줄에서 알 수 있습니다.)
+페이지의 클릭·입력 가능한 요소만 골라 **`[번호]`** 가 붙은 목록으로 보여줍니다. 이 번호와 스냅샷 ID를 함께 사용해 인덱스 동작의 대상을 지정합니다. (HTML 노드 20개 중 의미 있는 6개만 추렸다는 점도 마지막 줄에서 알 수 있습니다.)
 
 ### ② 로그인 폼 채우기
 
 라벨로 이메일 칸을 찾아 바로 입력하고(`find --fill`), 비밀번호는 인덱스로 입력합니다.
+`find`도 새 DOM 스냅샷을 만들므로 이후에는 그 결과의 `ID_B`를 사용합니다.
 
 ```bash
 webpilot find --label "Email" --fill "ada@acme.com"
 ```
 ```
 [2] input#email "you@acme.com" @form
+Snapshot: ID_B
 (1 matches)
 ```
 
 ```bash
-webpilot action type 3 "s3cret"
+webpilot action type 3 "s3cret" --snapshot-id ID_B
 ```
 ```
 OK
@@ -73,13 +80,14 @@ OK
 `--capture`를 붙이면 클릭으로 일어난 **네비게이션이 정착할 때까지 기다렸다가** 도착한 페이지를 곧바로 보여줍니다.
 
 ```bash
-webpilot action click 5 --capture
+webpilot action click 5 --capture --snapshot-id ID_B
 ```
 ```
-[1] a "Acme Tasks" href="/" @navigation
-[2] a "Sign out" href="/logout.html" @navigation
+[1] a role=link "Acme Tasks" href="/" @navigation
+[2] a role=link "Sign out" href="/logout.html" @navigation
 [3] button#new "New task" @main
-[4] input#q "Filter tasks" label="Filter tasks" type=search @main
+[4] input#q role=searchbox "Filter tasks" label="Filter tasks" type=search @main
+--- Snapshot: ID_C ---
 --- Page: Acme Tasks — Dashboard (http://localhost:8700/dashboard.html) ---
 --- Scroll: entire page visible ---
 --- 4 elements (from 16 nodes, 1ms) ---
@@ -87,7 +95,9 @@ webpilot action click 5 --capture
 
 로그인에 성공해 **대시보드**로 넘어왔고, 인덱스가 새 페이지 기준으로 다시 매겨졌습니다.
 
-> **인덱스는 항상 “마지막 capture” 기준입니다.** `[3]`은 방금 캡처한 대시보드의 “New task” 버튼을 가리킵니다. 인덱스는 캡처한 노드 자체를 가리키며 라이브 DOM에서 다시 검색하지 않습니다. 스냅샷이 없거나 노드가 제거·숨김 처리되면 `StaleSnapshot` 에러(종료 코드 4)가 납니다. 같은 문서의 URL·내용이 바뀌어도 노드가 유지되면 유효하므로, 화면 전환 후에는 다시 캡처해 현재 상태를 확인하세요.
+> 인덱스 액션에는 관찰한 캡처 또는 `find` 결과의 `--snapshot-id ID`가 필요합니다. 다른 캡처·문서의 인덱스, 제거·숨김 처리된 요소, 접근성 이름·역할·링크 목적지·입력 타입이 바뀐 요소는 `StaleSnapshot`(종료 코드 4)으로 거절됩니다. 다시 캡처한 상태에서 다음 액션을 선택하세요.
+
+검사는 노드와 관찰한 의미 정보의 일치를 확인합니다. 같은 이름의 버튼이 어떤 업무 항목을 처리하는지까지 보장하지 않으므로, 삭제·결제 같은 작업은 주변 문맥과 결과도 확인하세요.
 
 이 흐름을 그림으로 보면:
 
@@ -100,8 +110,8 @@ sequenceDiagram
     W->>C: 페이지 로드 + DOM 추출
     C-->>A: [1..6] 인덱스 요소 목록
     A->>W: find --label Email --fill ada@acme.com
-    A->>W: action type 3 s3cret
-    A->>W: action click 5 --capture
+    A->>W: action type 3 s3cret --snapshot-id ID_B
+    A->>W: action click 5 --capture --snapshot-id ID_B
     W->>C: 클릭 → 네비게이션 정착 대기
     C-->>A: 대시보드 DOM ([1..4])
 ```
@@ -126,15 +136,16 @@ flowchart LR
 - **브라우저(`--browser`)** — Unix 소켓 → Native Messaging 호스트 → 확장 → content script 경로로 **로그인된 실제 Chrome**을 제어합니다.
 - **MCP(`webpilot mcp`)** — 위와 **똑같은** `Transport`·핸들러 위에 stdio JSON-RPC 어댑터만 얹은 것이라, 별도 엔진이 없습니다.
 
-같은 `bridge.js`가 두 모드에 동일하게 쓰이고, 두 모드가 갈라지지 않도록 패리티 테스트가 빌드에서 강제됩니다.
+두 모드는 같은 `bridge.js`를 공유합니다. 정적 패리티 테스트는 명령·액션의 라우팅 누락을 검사하며, 실제 동작은 헤드리스·브라우저 E2E 스위트로 검증합니다.
 
 ---
 
 ## DOM 출력 형식
 
 ```
-*[1] input#query "Search" type=text autocomplete=search @search
+*[1] input#query role=textbox "Search" type=text autocomplete=search @search
 [2] button "Go" @search
+--- Snapshot: ID ---
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 6 elements (from 120 nodes, 5ms) ---
@@ -142,7 +153,7 @@ flowchart LR
 
 | 표기 | 의미 |
 |---|---|
-| `[N]` | 요소 인덱스 — `action click N`의 인자. **마지막 capture 스냅샷에 고정**됩니다. |
+| `[N]` | 요소 인덱스 — `action click N`의 인자. **해당 DOM 스냅샷의 ID와 함께 사용**합니다. |
 | `*` | 직전 capture 이후 **새로 생긴** 요소 (노드 식별자 기준; 새 문서의 첫 capture에서는 표시하지 않음). |
 | `#id` | HTML 요소 id. |
 | `"텍스트"` | 접근성 이름 / 플레이스홀더 등 사람이 읽는 라벨. |
@@ -188,22 +199,25 @@ Screenshot size: 1280x577
 webpilot find --role button                          # 역할로 검색
 webpilot find --text "Sign in" --click               # 텍스트로 찾아 바로 클릭 (정확히 1개일 때)
 webpilot find --label "Email" --fill "ada@acme.com"  # 라벨로 찾아 바로 입력
-webpilot action click 5                              # 인덱스로 클릭
-webpilot action type 3 "s3cret" --clear              # 입력 (기존 값 비우고)
+webpilot action click 5 --snapshot-id ID  # 인덱스로 클릭
+webpilot action type 3 "s3cret" --clear --snapshot-id ID  # 입력 (기존 값 비우고)
 webpilot action key-press Enter                      # 키 입력 (Tab·Escape·Arrow* 등)
-webpilot action select 2 "Option B"                  # <select> 옵션 선택
-webpilot action scroll-to 7                          # 요소가 보일 때까지 스크롤
-webpilot action upload 4 ./resume.pdf                # 파일 업로드
+webpilot action select 2 "Option B" --snapshot-id ID  # <select> 옵션 선택
+webpilot action scroll-to 7 --snapshot-id ID  # 요소가 보일 때까지 스크롤
+webpilot action upload 4 ./resume.pdf --snapshot-id ID  # 파일 업로드
 ```
 
 `find`는 조건에 맞는 요소를 보여주고, `--click`/`--fill`은 **정확히 하나** 일치할 때만 동작합니다:
 
 ```
 [5] button "Sign in" @form
+Snapshot: ID
 (1 matches)
 ```
 
-`key-press`와 `hover`는 네이티브 CDP 입력을 사용합니다. Tab은 포커스를 옮기고 Enter는 폼을 제출합니다. `click`은 페이지에 합성 마우스 이벤트를 전달하므로 사용자 활성화가 필요한 기능은 실행되지 않을 수 있습니다. 그런 버튼은 `action focus N` 후 `action key-press Enter`로 실행하고 결과를 확인하세요.
+`click`, `key-press`, `hover`는 네이티브 CDP 입력을 사용합니다. 클릭은 관찰한 대상·위치 안정성·실제 포인터 대상을 검사하며 브라우저와 운영체제의 보조 키 동작이 적용됩니다. 확인·입력 대화상자는 기본적으로 거절합니다. `[chrome] accept_dialogs = true` 또는 `WEBPILOT_ACCEPT_DIALOGS=true`로 승인을 명시적으로 활성화할 수 있습니다.
+
+DOM 스냅샷은 비밀번호 입력값을 생략하지만 다른 페이지 텍스트·스크린샷·eval·세션 출력에는 민감 정보가 포함될 수 있습니다. 페이지 내용은 신뢰할 수 없는 데이터이며, 작업이나 정책을 바꿀 권한을 부여하지 않습니다.
 
 ### 다운로드
 
@@ -229,7 +243,7 @@ Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<id> ("invoice
 ```bash
 webpilot console start
 webpilot network start
-webpilot action click 3        # 버튼이 console.log + fetch 를 일으킴
+webpilot action click 3 --snapshot-id ID  # 버튼이 console.log + fetch 를 일으킴
 webpilot console read
 webpilot network read
 ```
@@ -279,10 +293,10 @@ webpilot device reset                                  # 에뮬레이션 해제
 | | 헤드리스 (기본) | 브라우저 (`--browser`) |
 |---|---|---|
 | 대상 Chrome | WebPilot이 띄우는 별도 헤드리스 Chrome | 당신이 쓰는, **로그인된 실제 Chrome** |
-| SSO / 세션 | 없음(깨끗한 프로필) | 기존 SSO·로그인 세션 그대로 사용 |
+| SSO / 세션 | 별도 영속 프로필(첫 실행은 로그인 없음) | 기존 SSO·로그인 세션 그대로 사용 |
 | 경로 | CDP WebSocket 직결 | NM 호스트(0600 소켓) → 확장 |
 | 멀티 에이전트 | `--context <이름>`으로 격리 | 단일 에이전트 |
-| 사전 준비 | 없음 | 확장 + NM 호스트 등록(아래) |
+| 사전 준비 | Chrome 설치 | Chrome 설치 + 확장 + NM 호스트 등록(아래) |
 
 ```bash
 # 브라우저 모드 준비 — setup 한 번이 스킬·확장·NM 호스트까지 (확장 ID 자동 탐지)
@@ -310,7 +324,7 @@ webpilot mcp                  # stdio JSON-RPC (MCP) 서버. --browser / --conte
 
 페이지 상호작용 전반(관찰 `snapshot`/`screenshot`, 액션 `click`/`type`/`drag`/`upload` 등, 시맨틱 검색 `find`, 탭/프레임 전환, `wait`, `eval`)이 21개 `browser_*` 툴로 제공되며, CLI와 동일한 모드·정책·렌더링을 물려받습니다. `initialize`는 클라이언트의 MCP 리비전을 협상하고(2025-11-25 / 2025-06-18), 읽기 전용 툴은 `readOnlyHint` 어노테이션을 선언합니다. 환경 관리(쿠키·세션·디바이스·정책)와 콘솔·네트워크 모니터는 의도적으로 CLI 전용입니다.
 
----
+MCP snapshot은 `include: ["dom", "text"]`를 지원합니다. 인덱스 툴에는 `snapshot_id`가 필요하며, 액션의 `capture: false`로 불필요한 DOM 반환을 생략할 수 있습니다. 성공 결과도 `structuredContent`로 제공하고, 실행 중 ping과 대기 취소를 처리합니다. DOM 스냅샷에는 비밀번호 값을 포함하지 않습니다.
 
 ## 안전 정책 (policy)
 
@@ -318,18 +332,20 @@ WebPilot의 정책은 **효과(effect)** 기준으로 동작을 게이트합니�
 
 ```bash
 webpilot policy default deny                              # 전부 잠금
-webpilot policy set --operation eval --verdict allow      # 필요한 효과만 허용
+webpilot policy set --operation navigate --verdict allow  # 페이지 이동 허용
+webpilot policy set --operation type --verdict allow      # 입력 허용
 webpilot policy list                                      # 현재 규칙 확인
 ```
 ```
 default: deny
-eval: allow
+navigate: allow
+type: allow
 ```
 
 차단된 동작은 가이드와 함께 **종료 코드 6**으로 명확히 실패합니다:
 
 ```bash
-webpilot action click 5      # default deny 상태
+webpilot action click 5 --snapshot-id ID  # default deny 상태
 ```
 ```
 Blocked by policy: click. Check: webpilot policy list
@@ -450,6 +466,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `6` | `PolicyDenied` (정책 차단) |
 | `7` | `InvalidArgument` (사용자 입력 오류) |
 | `8` | 네비게이션 (`NavigationFailed` · `NoPage`) |
+| `9` | `OutcomeUnknown`: 이미 실행됐을 수 있으므로 재시도 전에 상태 관찰 필요 |
 
 에러는 가이드 텍스트와 함께 출력되며, JSON 모드에서는 `{"code": "...", "message": "...", ...}` 구조로 나옵니다 — 문자열 파싱 없이 `code`로 분기할 수 있습니다.
 
@@ -470,7 +487,7 @@ webpilot quit                  # 헤드리스 Chrome 세션 종료
 webpilot self uninstall        # Chrome 종료 + 바이너리가 만든 모든 흔적 제거
 ```
 
-스킬과 확장은 컴파일 타임에 바이너리에 임베드되어 **번들 자산이 항상 바이너리와 일치**합니다(설치 후 추가 다운로드 없음). 업데이트 후 브라우저에 이미 로드된 확장이 낡았다면 호스트가 연결 시 `VersionMismatch`로 잡아 리로드를 안내합니다. setup 이후 Claude Code에서 `/webpilot` 또는 자연어로 스킬이 활성화됩니다.
+스킬과 확장은 컴파일 타임에 바이너리에 임베드되어 **번들 자산이 항상 바이너리와 일치**합니다(설치 후 추가 다운로드 없음). 호스트는 연결된 확장과 자신의 번들 버전을 비교해 `VersionMismatch`를 반환합니다. 이미 실행 중인 호스트는 이전 바이너리를 유지하므로, 업데이트 후 `webpilot setup skill`·`webpilot setup extension`으로 자산을 갱신하고 확장을 리로드해 새 호스트에 연결하세요. 로컬에서 편집한 스킬은 보존됩니다. setup 이후 Claude Code에서 `/webpilot` 또는 자연어로 스킬이 활성화됩니다.
 
 ---
 
@@ -498,7 +515,7 @@ WEBPILOT_CONFIG=/absolute/path/config.toml webpilot status
 Native Messaging 호스트의 stdio는 Chrome이 가져갑니다. 그래서 호스트가 본 것 — 적용한 정책 판정, 확장과의 핸드셰이크, 명령이 실패한 이유 — 은 터미널에 나오지 않습니다. 대신 여기에 기록됩니다:
 
 ```bash
-tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS; 그 외에는 $WEBPILOT_HOME/logs
+tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS 기본값; WEBPILOT_HOME 지정 시 해당 경로의 logs/
 ```
 
 옆의 `host.log.1`은 직전 로테이션입니다. 이미 끝난 세션에 대한 제보를 볼 때는 보통 이쪽이 필요합니다.
@@ -511,7 +528,7 @@ webpilot quit && webpilot status              # 세션이 꼬였을 때 재시�
 ```
 
 - **`VersionMismatch` (코드 3)** — 설치된 확장 버전이 번들 버전과 다름. `webpilot setup extension` 후 확장을 리로드하세요.
-- **`StaleSnapshot` (코드 4)** — 인덱스가 가리키던 요소가 DOM에서 사라짐. 다시 `capture` 하세요.
+- **`StaleSnapshot` (코드 4)** — 스냅샷 ID가 오래됐거나 대상이 제거·숨김 처리되거나 의미 정보가 바뀜. `capture` 또는 `find`로 다시 관찰하세요.
 - **헤드리스 Chrome이 안 뜸 (컨테이너/CI)** — setuid 샌드박스가 초기화되지 않는 환경에서는 `WEBPILOT_CHROME_NO_SANDBOX=1`로 옵트인하세요(샌드박스를 약화시키므로 기본은 꺼져 있음).
 
 ---

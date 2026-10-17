@@ -5,9 +5,13 @@
     "node": ">=24"
   },
   "scripts": {
-    "lint": "oxlint --deny-warnings extension/"
+    "lint": "node scripts/build-semantics.mjs --check && oxlint --deny-warnings extension/",
+    "build": "node scripts/build-semantics.mjs"
   },
   "devDependencies": {
+    "aria-query": "5.3.2",
+    "dom-accessibility-api": "0.7.1",
+    "esbuild": "0.28.2",
     "oxlint": "1.88.0"
   }
 }

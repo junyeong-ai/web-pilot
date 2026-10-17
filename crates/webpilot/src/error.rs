@@ -45,6 +45,11 @@ pub enum WebPilotError {
     #[error("{kind} timed out after {elapsed_ms}ms")]
     Timeout { kind: String, elapsed_ms: u64 },
 
+    #[error(
+        "Execution outcome unknown for {operation}: {reason}. Observe the page before retrying; the operation may already have run."
+    )]
+    OutcomeUnknown { operation: String, reason: String },
+
     #[error("Navigation failed: {url}: {reason}")]
     NavigationFailed { url: String, reason: String },
 
@@ -93,6 +98,17 @@ pub enum WebPilotError {
 }
 
 impl WebPilotError {
+    pub fn with_unknown_outcome(self, operation: impl Into<String>) -> Self {
+        if matches!(self, Self::Timeout { .. } | Self::ConnectionLost { .. }) {
+            Self::OutcomeUnknown {
+                operation: operation.into(),
+                reason: self.to_string(),
+            }
+        } else {
+            self
+        }
+    }
+
     /// Stable CLI exit code per error kind.
     pub fn exit_code(&self) -> i32 {
         use WebPilotError as E;
@@ -105,6 +121,7 @@ impl WebPilotError {
             | E::CookieNotFound { .. }
             | E::FrameNotFound { .. } => 4,
             E::Timeout { .. } => 5,
+            E::OutcomeUnknown { .. } => 9,
             E::PolicyDenied { .. } => 6,
             E::ConnectionLost { .. } | E::BridgeUnavailable | E::VersionMismatch { .. } => 3,
             E::InvalidArgument { .. } => 7,
@@ -122,6 +139,7 @@ impl WebPilotError {
             E::VersionMismatch { .. } => "VersionMismatch",
             E::SelectorNotFound { .. } => "SelectorNotFound",
             E::Timeout { .. } => "Timeout",
+            E::OutcomeUnknown { .. } => "OutcomeUnknown",
             E::NavigationFailed { .. } => "NavigationFailed",
             E::NoPage => "NoPage",
             E::FrameNotFound { .. } => "FrameNotFound",
@@ -164,6 +182,10 @@ impl WebPilotError {
             "Timeout" => Self::Timeout {
                 kind: str_field("kind").unwrap_or_else(|| "operation".into()),
                 elapsed_ms: u64_field("elapsed_ms").unwrap_or(0),
+            },
+            "OutcomeUnknown" => Self::OutcomeUnknown {
+                operation: str_field("operation").unwrap_or_default(),
+                reason: str_field("reason").unwrap_or(w.message),
             },
             "NavigationFailed" => Self::NavigationFailed {
                 url: str_field("url").unwrap_or_default(),
@@ -230,6 +252,10 @@ impl WebPilotError {
                 put("kind", kind.clone().into());
                 put("elapsed_ms", (*elapsed_ms).into());
             }
+            E::OutcomeUnknown { operation, reason } => {
+                put("operation", operation.clone().into());
+                put("reason", reason.clone().into());
+            }
             E::NavigationFailed { url, reason } => {
                 put("url", url.clone().into());
                 put("reason", reason.clone().into());
@@ -290,6 +316,20 @@ impl<'de> Deserialize<'de> for WebPilotError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uncertain_outcomes_round_trip_and_require_observation() {
+        let error = WebPilotError::Timeout {
+            kind: "Runtime.evaluate".into(),
+            elapsed_ms: 500,
+        }
+        .with_unknown_outcome("click");
+        assert_eq!(error.exit_code(), 9);
+        assert_eq!(error.code(), "OutcomeUnknown");
+        assert_eq!(WebPilotError::from_wire(error.to_wire()), error);
+        let absent = WebPilotError::StaleSnapshot { index: 1 };
+        assert_eq!(absent.clone().with_unknown_outcome("click"), absent);
+    }
 
     #[test]
     fn element_not_found_message_carries_data() {

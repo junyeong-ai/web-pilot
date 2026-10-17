@@ -27,6 +27,16 @@ async function cdpSend(tabId, method, params = {}) {
   return chrome.debugger.sendCommand({ tabId }, method, params);
 }
 
+async function cdpSendEffect(tabId, method, params, operation) {
+  try {
+    return await cdpSend(tabId, method, params);
+  } catch (error) {
+    throw Object.assign(new Error(`Execution outcome unknown for ${operation}; observe before retrying`), {
+      code: "OutcomeUnknown", data: { operation, reason: String(error) },
+    });
+  }
+}
+
 // Enable the Runtime domain with Chrome's native console buffer discarded first.
 // `Runtime.enable` REPLAYS that buffer, and Chrome keeps every console argument
 // unclipped and unbounded — but WebPilot reads console only through its MAIN-world
@@ -49,4 +59,4 @@ async function cdpReemitContexts(tabId) {
   await cdpEnableRuntime(tabId);
 }
 
-export { cdpSend, cdpEnableRuntime, cdpReemitContexts, pruneCdpLock, withCdp };
+export { cdpSend, cdpSendEffect, cdpEnableRuntime, cdpReemitContexts, pruneCdpLock, withCdp };

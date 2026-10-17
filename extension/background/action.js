@@ -2,11 +2,11 @@
 // navigation detection. Mirrors transport/local/action.rs.
 
 import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
-import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
-import { cdpSend, withCdp } from "./cdp.js";
+import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep, navigationTimeoutMs } from "./session.js";
+import { cdpSend, cdpSendEffect, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, installDialogOverride, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitHistoryTraversed, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
-import { frameWorldContextId } from "./query.js";
+import { frameWorldContextId, resolveFrameWorld } from "./query.js";
 import { countHttpSubframes } from "./capture.js";
 import { rearmMonitors } from "./state.js";
 
@@ -21,14 +21,7 @@ async function handleAction(command) {
   // a socket writer and is deliberately NOT a gate; writing the socket
   // directly would bypass it, which is why the host re-validates.)
 
-  // Inject the dialog override before any action runs in the page — into
-  // EVERY frame: a click's handler can call `alert`/`confirm`/`prompt` from
-  // any frame (a third-party iframe included), and a native modal in any of
-  // them blocks the page thread until the action's content call times out,
-  // with no recovery. Accept-with-default semantics mirror the headless
-  // dialog responder (Page.handleJavaScriptDialog accept:true), so a page
-  // branching on a dialog behaves identically in both modes. The override is
-  // idempotent, so re-installing on each action is a no-op.
+  // Apply the configured dialog response to every frame of the pinned tab.
   // `navigate` resolves its own target (the bound tab whatever its scheme, or a
   // fresh one) via `navigateBoundTab` below — it is how an agent REACHES an http
   // page, so it must NOT require one to start from. Every OTHER action needs an
@@ -148,19 +141,19 @@ async function handleAction(command) {
     }
 
     case "upload":
-      result = await handleUpload(tab.id, action);
+      result = await handleUpload(tab.id, action, command.snapshot_id);
       break;
 
     case "drag":
-      result = await handleDrag(tab.id, action);
+      result = await handleDrag(tab.id, action, command.snapshot_id);
       break;
 
     case "hover":
-      result = await handleHover(tab.id, action);
+      result = await handleHover(tab.id, action, command.snapshot_id);
       break;
 
     default:
-      result = await dispatchActionToPage(tab, action);
+      result = await dispatchActionToPage(tab, action, command.snapshot_id);
   }
 
   // Auto-capture DOM after success if requested — exactly like the headless
@@ -321,10 +314,10 @@ async function dispatchKeyPress(tabId, action) {
       let acc = 0;
       for (const m of held) {
         acc |= m[3];
-        await cdpSend(tid, "Input.dispatchKeyEvent", {
-          type: "rawKeyDown", modifiers: acc, key: m[0], code: m[1], windowsVirtualKeyCode: m[2],
-        });
         pressed.push(m);
+        await cdpSendEffect(tid, "Input.dispatchKeyEvent", {
+          type: "rawKeyDown", modifiers: acc, key: m[0], code: m[1], windowsVirtualKeyCode: m[2],
+        }, "key_press");
       }
       // The spacebar's canonical DOM `key` is " ", not the "Space" token a caller
       // may spell it as — Chrome rejects "Space" as a `key` value (it lands as an
@@ -332,10 +325,20 @@ async function dispatchKeyPress(tabId, action) {
       // spelling. Normalize to the character it produces (headless parity).
       const keyName = action.key === "Space" ? " " : action.key;
       const base = { modifiers, key: shiftLetter(keyName), code, windowsVirtualKeyCode: vk };
-      await cdpSend(tid, "Input.dispatchKeyEvent", text != null
-        ? { ...base, type: "keyDown", text }
-        : { ...base, type: "keyDown" });
-      await cdpSend(tid, "Input.dispatchKeyEvent", { ...base, type: "keyUp" });
+      let keyError = null;
+      try {
+        await cdpSendEffect(tid, "Input.dispatchKeyEvent", text != null
+          ? { ...base, type: "keyDown", text }
+          : { ...base, type: "keyDown" }, "key_press");
+      } catch (e) {
+        keyError = e;
+      }
+      try {
+        await cdpSendEffect(tid, "Input.dispatchKeyEvent", { ...base, type: "keyUp" }, "key_press");
+      } catch (e) {
+        keyError ??= e;
+      }
+      if (keyError) throw keyError;
     } catch (e) {
       chordErr = e;
     }
@@ -344,9 +347,9 @@ async function dispatchKeyPress(tabId, action) {
     for (const [mkey, mcode, mvk, bit] of [...pressed].reverse()) {
       racc &= ~bit;
       try {
-        await cdpSend(tid, "Input.dispatchKeyEvent", {
+        await cdpSendEffect(tid, "Input.dispatchKeyEvent", {
           type: "keyUp", modifiers: racc, key: mkey, code: mcode, windowsVirtualKeyCode: mvk,
-        });
+        }, "key_press");
       } catch (e) {
         releaseErr = releaseErr ?? e;
       }
@@ -363,7 +366,81 @@ async function dispatchKeyPress(tabId, action) {
   });
 }
 
-async function dispatchActionToPage(tab, action) {
+async function dispatchClick(tabId, action, snapshot_id) {
+  await ensureBridge(tabId, activeFrameId);
+  const prepare = (watch = false) => sendToContent(tabId, { type: "prepareClick", index: action.index, snapshot_id, watch }, activeFrameId);
+  const prep = await prepare();
+  if (prep.success === false) return prep;
+  try {
+    return await withCdp(tabId, async (tid) => {
+      const resolved = await resolveFrameWorld(tid, tabId, activeFrameId, "ISOLATED");
+      const uniqueContextId = resolved?.contextId;
+      if (!uniqueContextId) return { success: false, error: err("FrameNotFound", "Click frame is unavailable", { selector: String(activeFrameId) }) };
+      const remote = await cdpSend(tid, "Runtime.evaluate", {
+        expression: "(()=>{const t=window.__webpilot_state.pointerTarget;return t&&t.isConnected?t:null;})()",
+        uniqueContextId, returnByValue: false,
+      });
+      const objectId = remote.result?.objectId;
+      if (!objectId) return { success: false, error: err("StaleSnapshot", "Click target left the document", { index: action.index }) };
+      try {
+        const deadline = Date.now() + navigationTimeoutMs();
+        let previous = null;
+        let quad;
+        for (;;) {
+          const geometry = await cdpSend(tid, "DOM.getContentQuads", { objectId });
+          quad = geometry.quads?.[0];
+          if (!quad || quad.length !== 8) return { success: false, error: err("InvalidArgument", "Click target has no content quad") };
+          if (previous && quad.every((value, i) => value === previous[i])) break;
+          if (Date.now() >= deadline) return { success: false, error: err("Timeout", "Click target did not become stable", { kind: "click target stability", elapsed_ms: navigationTimeoutMs() }) };
+          previous = quad;
+          await sleep(16);
+        }
+        const ready = await prepare(true);
+        if (ready.success === false) return ready;
+        const x = quad[0] + (quad[2] - quad[0]) * ready.x_fraction + (quad[6] - quad[0]) * ready.y_fraction;
+        const y = quad[1] + (quad[3] - quad[1]) * ready.x_fraction + (quad[7] - quad[1]) * ready.y_fraction;
+        const m = action.modifiers || {};
+        const modifiers = (m.alt ? 1 : 0) | (m.ctrl ? 2 : 0) | (m.meta ? 4 : 0) | (m.shift ? 8 : 0);
+        const params = { x, y, button: "left", clickCount: 1, modifiers };
+        await cdpSend(tid, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers });
+        const verified = await prepare();
+        if (verified.success === false) return verified;
+        const geometry = await cdpSend(tid, "DOM.getContentQuads", { objectId });
+        if (!geometry.quads?.[0] || geometry.quads[0].length !== quad.length || !quad.every((value, i) => value === geometry.quads[0][i]) || verified.x_fraction !== ready.x_fraction || verified.y_fraction !== ready.y_fraction) {
+          return { success: false, error: err("InvalidArgument", "Click target moved after pointer positioning; capture again") };
+        }
+        const metrics = await cdpSend(tid, "Page.getLayoutMetrics");
+        const hit = await cdpSend(tid, "DOM.getNodeForLocation", { x: Math.round(x + metrics.cssLayoutViewport.pageX), y: Math.round(y + metrics.cssLayoutViewport.pageY), includeUserAgentShadowDOM: true });
+        if (hit.frameId !== resolved.frameId) return { success: false, error: err("InvalidArgument", "Click target is covered by another frame or page element") };
+        let pressError = null;
+        try {
+          await cdpSend(tid, "Input.dispatchMouseEvent", { ...params, type: "mousePressed" });
+        } catch (e) {
+          pressError = e;
+        }
+        try {
+          await cdpSend(tid, "Input.dispatchMouseEvent", { ...params, type: "mouseReleased" });
+        } catch (e) {
+          pressError ??= e;
+        }
+        if (pressError) return { success: false, error: err("OutcomeUnknown", "Click outcome is unknown; observe before retrying", { operation: "click", reason: String(pressError) }) };
+        const effects = await sendToContent(tabId, { type:"finishClick" }, activeFrameId).catch(() => null);
+        if (effects) {
+          for (const key of ["navigates", "frame_navigates"]) prep[key] = (!effects.click_cancelled && prep[key]) || effects[key];
+          if (effects.click_cancelled) { prep.opens_context = false; prep.target_name = null; }
+          prep.downloads = effects.downloads;
+        }
+        return prep;
+      } finally {
+        await cdpSend(tid, "Runtime.releaseObject", { objectId }).catch(() => {});
+      }
+    });
+  } finally {
+    await sendToContent(tabId, { type: "clearPointer" }, activeFrameId, 3000).catch(() => {});
+  }
+}
+
+async function dispatchActionToPage(tab, action, snapshot_id) {
   // A click-opened tab is caught by its creation events, registered before the
   // action runs — no detection window, no sleep, and reliable even for popups
   // that are still about:blank at creation. Only a tab the ACTED-ON tab opened
@@ -407,6 +484,8 @@ async function dispatchActionToPage(tab, action) {
     let r;
     if (action.kind === "key_press") {
       r = await dispatchKeyPress(tab.id, action);
+    } else if (action.kind === "click") {
+      r = await dispatchClick(tab.id, action, snapshot_id);
     } else {
       // The switched frame must still exist before a bridge action touches it: a
       // frame that vanished since the capture is FrameNotFound (exit 4 → recapture),
@@ -420,7 +499,7 @@ async function dispatchActionToPage(tab, action) {
         return { type: "Action", success: false, error: frameGone };
       }
       await ensureBridge(tab.id, activeFrameId);
-      r = await sendToContent(tab.id, { type: "executeAction", action }, activeFrameId);
+      r = await sendToContent(tab.id, { type: "executeAction", action, snapshot_id }, activeFrameId);
     }
     const result = { type: "Action", ...r };
     // `navigates` (a new TOP document), `frame_navigates` (the CURRENT frame) and
@@ -527,7 +606,7 @@ async function dispatchActionToPage(tab, action) {
   }
 }
 
-async function handleUpload(tabId, action) {
+async function handleUpload(tabId, action, snapshot_id) {
   try {
     await ensureBridge(tabId, activeFrameId);
     // Stash the EXACT snapshot element in the content script (object identity;
@@ -538,7 +617,7 @@ async function handleUpload(tabId, action) {
     // observe nor redirect the target between resolve and sink, and the direct
     // object reaches a file input inside an open shadow root. Parity: action.rs.
     try {
-      const prep = await sendToContent(tabId, { type: "prepareUpload", index: action.index }, activeFrameId);
+      const prep = await sendToContent(tabId, { type: "prepareUpload", index: action.index, snapshot_id }, activeFrameId);
       if (prep && prep.success === false) {
         return { type: "Action", success: false, error: prep.error };
       }
@@ -561,7 +640,11 @@ async function handleUpload(tabId, action) {
         if (!objectId) {
           return { success: false, error: err("StaleSnapshot", `[${action.index}] left the DOM before upload`, { index: action.index }) };
         }
-        await cdpSend(tid, "DOM.setFileInputFiles", { objectId, files: [action.path] });
+        try {
+          await cdpSendEffect(tid, "DOM.setFileInputFiles", { objectId, files: [action.path] }, "upload");
+        } finally {
+          await cdpSend(tid, "Runtime.releaseObject", { objectId }).catch(() => {});
+        }
         return { success: true };
       });
       if (outcome.success === false) {
@@ -579,7 +662,7 @@ async function handleUpload(tabId, action) {
   }
 }
 
-async function handleHover(tabId, action) {
+async function handleHover(tabId, action, snapshot_id) {
   try {
     await ensureBridge(tabId, activeFrameId);
     // Resolve the element centre through the bridge (it owns the index map),
@@ -588,7 +671,7 @@ async function handleHover(tabId, action) {
     // mirrors headless `do_hover` for true CSS-hover fidelity.
     const coords = await sendToContent(
       tabId,
-      { type: "getElementCoords", source: action.index, target: action.index },
+      { type: "getElementCoords", snapshot_id, source: action.index, target: action.index },
       activeFrameId,
     );
     if (!coords || coords.error) {
@@ -605,7 +688,7 @@ async function handleHover(tabId, action) {
   }
 }
 
-async function handleDrag(tabId, action) {
+async function handleDrag(tabId, action, snapshot_id) {
   try {
     await ensureBridge(tabId, activeFrameId);
     // The bridge resolves both element centres in one call (it knows the index
@@ -613,7 +696,7 @@ async function handleDrag(tabId, action) {
     // headless path does.
     const coords = await sendToContent(
       tabId,
-      { type: "getElementCoords", source: action.source, target: action.target },
+      { type: "getElementCoords", snapshot_id, source: action.source, target: action.target },
       activeFrameId,
     );
     if (!coords || coords.error) {
@@ -628,20 +711,30 @@ async function handleDrag(tabId, action) {
     // button — silently ignored, the page never sees mouseup (headless parity;
     // empirically verified there).
     await withCdp(tabId, async (tid) => {
-      await cdpSend(tid, "Input.dispatchMouseEvent", {
-        type: "mousePressed", x: sx, y: sy, button: "left", buttons: 1, clickCount: 1,
-      });
-      await sleep(50);
-      for (let i = 1; i <= steps; i++) {
-        const r = i / steps;
-        await cdpSend(tid, "Input.dispatchMouseEvent", {
-          type: "mouseMoved", x: sx + (tx - sx) * r, y: sy + (ty - sy) * r, button: "left", buttons: 1,
-        });
-        await sleep(20);
+      let gestureError = null;
+      try {
+        await cdpSendEffect(tid, "Input.dispatchMouseEvent", {
+          type: "mousePressed", x: sx, y: sy, button: "left", buttons: 1, clickCount: 1,
+        }, "drag");
+        await sleep(50);
+        for (let i = 1; i <= steps; i++) {
+          const r = i / steps;
+          await cdpSendEffect(tid, "Input.dispatchMouseEvent", {
+            type: "mouseMoved", x: sx + (tx - sx) * r, y: sy + (ty - sy) * r, button: "left", buttons: 1,
+          }, "drag");
+          await sleep(20);
+        }
+      } catch (e) {
+        gestureError = e;
       }
-      await cdpSend(tid, "Input.dispatchMouseEvent", {
-        type: "mouseReleased", x: tx, y: ty, button: "left", buttons: 0, clickCount: 1,
-      });
+      try {
+        await cdpSendEffect(tid, "Input.dispatchMouseEvent", {
+          type: "mouseReleased", x: tx, y: ty, button: "left", buttons: 0, clickCount: 1,
+        }, "drag");
+      } catch (e) {
+        gestureError ??= e;
+      }
+      if (gestureError) throw gestureError;
     });
 
     return { type: "Action", success: true };

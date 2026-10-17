@@ -84,9 +84,10 @@ function sleep(ms) {
 // Defaults match the headless settings defaults; the host overwrites them on
 // connect (and after an SW restart) with the operator's resolved settings, so a
 // single source of truth tunes both modes.
-const hostConfig = { navigationTimeoutMs: 15000, annotationPaintMs: 200 };
+const hostConfig = { acceptDialogs: false, navigationTimeoutMs: 15000, annotationPaintMs: 200 };
 
 function applyHostConfig(cfg) {
+  if (typeof cfg?.accept_dialogs === "boolean") hostConfig.acceptDialogs = cfg.accept_dialogs;
   const nav = cfg?.timeouts?.navigation_ms;
   if (Number.isFinite(nav) && nav > 0) hostConfig.navigationTimeoutMs = nav;
   const paint = cfg?.timeouts?.annotation_paint_ms;
@@ -100,6 +101,10 @@ function navigationTimeoutMs() {
 // Time to let the annotation overlay paint before the screenshot — the same
 // settings value headless uses (`timeouts.annotation_paint`), so the two modes
 // can never drift on a hardcoded magic number.
+function acceptDialogs() {
+  return hostConfig.acceptDialogs;
+}
+
 function annotationPaintMs() {
   return hostConfig.annotationPaintMs;
 }
@@ -166,4 +171,4 @@ async function resolveActiveTabForNavigation() {
   return (await pinnedTabOrThrow()) ?? resolveActiveTab();
 }
 
-export { PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, resolveActiveTab, resolveActiveTabForNavigation, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };
+export { acceptDialogs, PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, resolveActiveTab, resolveActiveTabForNavigation, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };

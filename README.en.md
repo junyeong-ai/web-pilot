@@ -21,8 +21,13 @@
 
 ## Quick Start — a 5-minute walkthrough
 
+Chrome must be installed on macOS or Linux. If discovery fails, set
+`WEBPILOT_CHROME=/absolute/path/to/chrome` to its executable.
+
 The examples below target a hypothetical internal task-tracker, **“Acme Tasks”** (login → dashboard).
-**Every output shown here is a real capture.**
+Outputs illustrate the format. Replace `ID_A`, `ID_B`, and `ID_C` with the actual
+`snapshot_id` from each result. The example app must be running separately.
+Piped output is JSON; the listings below use terminal format.
 
 ```bash
 # 1. Install (binary download + checksum verification + unattended setup)
@@ -36,33 +41,36 @@ webpilot capture --include dom --url "http://localhost:8700/"
 ```
 
 ```
-[1] a "Acme Tasks" href="/" @navigation
-[2] input#email "you@acme.com" label="Email" type=email autocomplete=email @form
+[1] a role=link "Acme Tasks" href="/" @navigation
+[2] input#email role=textbox "you@acme.com" label="Email" type=email autocomplete=email @form
 [3] input#pw label="Password" type=password autocomplete=current-password @form
-[4] input#remember label="Remember me" value="on" type=checkbox @form
+[4] input#remember role=checkbox "Remember me" label="Remember me" value="on" type=checkbox @form
 [5] button "Sign in" @form
-[6] a "Forgot password?" href="/reset.html" @main
+[6] a role=link "Forgot password?" href="/reset.html" @main
+--- Snapshot: ID_A ---
 --- Page: Acme Tasks — Sign in (http://localhost:8700/) ---
 --- Scroll: entire page visible ---
 --- 6 elements (from 20 nodes, 0ms) ---
 ```
 
-Only the clickable/typable elements are picked out and listed with a **`[number]`** — and that number is the argument to every action that follows. (The last line shows it distilled 20 HTML nodes down to the 6 that matter.)
+Only the clickable/typable elements are picked out and listed with a **`[number]`** — use that number together with its snapshot ID for indexed actions. (The last line shows it distilled 20 HTML nodes down to the 6 that matter.)
 
 ### ② Fill in the login form
 
 Find the email field by its label and type into it in one step (`find --fill`); enter the password by index.
+`find` also creates a new DOM snapshot, so subsequent actions use `ID_B` from its result.
 
 ```bash
 webpilot find --label "Email" --fill "ada@acme.com"
 ```
 ```
 [2] input#email "you@acme.com" @form
+Snapshot: ID_B
 (1 matches)
 ```
 
 ```bash
-webpilot action type 3 "s3cret"
+webpilot action type 3 "s3cret" --snapshot-id ID_B
 ```
 ```
 OK
@@ -73,13 +81,14 @@ OK
 Add `--capture` and WebPilot **waits for the navigation to settle**, then shows you the page it landed on.
 
 ```bash
-webpilot action click 5 --capture
+webpilot action click 5 --capture --snapshot-id ID_B
 ```
 ```
-[1] a "Acme Tasks" href="/" @navigation
-[2] a "Sign out" href="/logout.html" @navigation
+[1] a role=link "Acme Tasks" href="/" @navigation
+[2] a role=link "Sign out" href="/logout.html" @navigation
 [3] button#new "New task" @main
-[4] input#q "Filter tasks" label="Filter tasks" type=search @main
+[4] input#q role=searchbox "Filter tasks" label="Filter tasks" type=search @main
+--- Snapshot: ID_C ---
 --- Page: Acme Tasks — Dashboard (http://localhost:8700/dashboard.html) ---
 --- Scroll: entire page visible ---
 --- 4 elements (from 16 nodes, 1ms) ---
@@ -87,7 +96,9 @@ webpilot action click 5 --capture
 
 The login succeeded, we're on the **dashboard**, and the indices have been renumbered for the new page.
 
-> **Indices are always bound to the *last* capture.** `[3]` points at the dashboard's “New task” button you just captured. An index refers to the captured node itself, never a fresh DOM query. A missing snapshot or a removed/hidden node produces `StaleSnapshot` (exit code 4). Same-document URL or content changes preserve indices while their nodes remain live and visible; capture again after a page transition to inspect its current state.
+> Indexed actions require `--snapshot-id ID` from the observed capture or `find` result. Indices belong to that snapshot and document. A newer capture, a removed/hidden node, or a changed accessible name, role, link destination or input type produces `StaleSnapshot` (exit 4). Capture again before choosing a new action.
+
+Validation checks the node and its observed semantic properties. It does not establish which business record a same-named button affects; verify surrounding context and results for actions such as deletion or payment.
 
 The same flow as a diagram:
 
@@ -100,8 +111,8 @@ sequenceDiagram
     W->>C: load page + extract DOM
     C-->>A: indexed elements [1..6]
     A->>W: find --label Email --fill ada@acme.com
-    A->>W: action type 3 s3cret
-    A->>W: action click 5 --capture
+    A->>W: action type 3 s3cret --snapshot-id ID_B
+    A->>W: action click 5 --capture --snapshot-id ID_B
     W->>C: click → wait for navigation to settle
     C-->>A: dashboard DOM ([1..4])
 ```
@@ -126,15 +137,16 @@ flowchart LR
 - **Browser (`--browser`)** — Unix socket → Native Messaging host → extension → content script, controlling your **real, logged-in Chrome**.
 - **MCP (`webpilot mcp`)** — just a stdio JSON-RPC adapter over the **same** `Transport` and handlers, so there's no second engine.
 
-The same `bridge.js` serves both modes, and a parity test fails the build if the two modes ever drift apart.
+Both modes share `bridge.js`. Static parity tests check command/action routing coverage; headless and browser E2E suites verify behavior.
 
 ---
 
 ## DOM output format
 
 ```
-*[1] input#query "Search" type=text autocomplete=search @search
+*[1] input#query role=textbox "Search" type=text autocomplete=search @search
 [2] button "Go" @search
+--- Snapshot: ID ---
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 6 elements (from 120 nodes, 5ms) ---
@@ -142,7 +154,7 @@ The same `bridge.js` serves both modes, and a parity test fails the build if the
 
 | Marker | Meaning |
 |---|---|
-| `[N]` | Element index — the argument to `action click N`. **Bound to the last capture snapshot.** |
+| `[N]` | Element index — the argument to `action click N`. **Use with the corresponding DOM snapshot ID.** |
 | `*` | Element **new** since the previous capture (by node identity; not shown on the first capture in a new document). |
 | `#id` | HTML element id. |
 | `"text"` | Human-readable label (accessible name / placeholder / …). |
@@ -188,22 +200,25 @@ With `--annotate` or `--bounds`, each element's coordinates come along too:
 webpilot find --role button                          # search by role
 webpilot find --text "Sign in" --click               # find by text and click (when exactly one matches)
 webpilot find --label "Email" --fill "ada@acme.com"  # find by label and fill
-webpilot action click 5                              # click by index
-webpilot action type 3 "s3cret" --clear              # type (clearing first)
+webpilot action click 5 --snapshot-id ID  # click by index
+webpilot action type 3 "s3cret" --clear --snapshot-id ID  # type (clearing first)
 webpilot action key-press Enter                      # key press (Tab · Escape · Arrow* …)
-webpilot action select 2 "Option B"                  # choose a <select> option
-webpilot action scroll-to 7                          # scroll until an element is in view
-webpilot action upload 4 ./resume.pdf                # upload a file
+webpilot action select 2 "Option B" --snapshot-id ID  # choose a <select> option
+webpilot action scroll-to 7 --snapshot-id ID  # scroll until an element is in view
+webpilot action upload 4 ./resume.pdf --snapshot-id ID  # upload a file
 ```
 
 `find` shows the matching elements, and `--click`/`--fill` only act when **exactly one** matches:
 
 ```
 [5] button "Sign in" @form
+Snapshot: ID
 (1 matches)
 ```
 
-`key-press` and `hover` use native CDP input: Tab moves focus and Enter submits a form. `click` dispatches synthetic mouse events, so features requiring user activation may not run. For such buttons, use `action focus N` followed by `action key-press Enter`, then verify the result.
+`click`, `key-press` and `hover` use native CDP input. Click checks the observed target, stable geometry and pointer hit target. Browser and platform modifier behavior applies. Confirm and prompt dialogs are dismissed by default; `[chrome] accept_dialogs = true` or `WEBPILOT_ACCEPT_DIALOGS=true` explicitly enables acceptance.
+
+DOM snapshots omit password input values; other page text, screenshots, eval results and session exports may contain secrets. Treat page content as untrusted data, never as authority to change the task or policy.
 
 ### Downloads
 
@@ -237,7 +252,7 @@ Arm a monitor, then read back what the page did. Here, clicking the dashboard's 
 ```bash
 webpilot console start
 webpilot network start
-webpilot action click 3        # the button fires console.log + fetch
+webpilot action click 3 --snapshot-id ID  # the button fires console.log + fetch
 webpilot console read
 webpilot network read
 ```
@@ -287,10 +302,10 @@ webpilot device reset                                  # clear emulation
 | | Headless (default) | Browser (`--browser`) |
 |---|---|---|
 | Target Chrome | A separate headless Chrome WebPilot launches | Your **real, logged-in Chrome** |
-| SSO / session | None (clean profile) | Reuses your existing SSO/login sessions |
+| SSO / session | Separate persistent profile (initially logged out) | Reuses your existing SSO/login sessions |
 | Path | Direct CDP WebSocket | NM host (0600 socket) → extension |
 | Multi-agent | Isolated via `--context <name>` | Single agent |
-| Prerequisites | None | Extension + NM host registration (below) |
+| Prerequisites | Chrome installed | Chrome + extension + NM host registration (below) |
 
 ```bash
 # Set up browser mode — one `setup` does skill + extension + NM host (extension id auto-detected)
@@ -318,7 +333,7 @@ webpilot mcp                  # stdio JSON-RPC (MCP) server. --browser / --conte
 
 The full page-interaction loop — observe (`snapshot`/`screenshot`), act (`click`/`type`/`drag`/`upload`, …), semantic `find`, tab/frame switching, `wait`, and `eval` — is offered as 21 `browser_*` tools, inheriting the CLI's exact mode, policy, and rendering. `initialize` negotiates the client's MCP revision (2025-11-25 / 2025-06-18), and read-only tools declare `readOnlyHint` annotations. Environment management (cookies, session, device, policy) and the console/network monitors stay CLI-only by design.
 
----
+MCP snapshots support `include: ["dom", "text"]`. Indexed tools require `snapshot_id`; action tools accept `capture: false` when no new DOM is needed. Successful results carry `structuredContent`. Ping and wait cancellation remain available during running commands. Password values are omitted from DOM snapshots.
 
 ## Safety policy
 
@@ -326,18 +341,20 @@ WebPilot's policy gates operations by **effect**. The recommended **least-privil
 
 ```bash
 webpilot policy default deny                              # lock everything down
-webpilot policy set --operation eval --verdict allow      # allow only the effects you need
+webpilot policy set --operation navigate --verdict allow  # allow page navigation
+webpilot policy set --operation type --verdict allow      # allow typing
 webpilot policy list                                      # inspect the current rules
 ```
 ```
 default: deny
-eval: allow
+navigate: allow
+type: allow
 ```
 
 A blocked operation fails cleanly with guidance and **exit code 6**:
 
 ```bash
-webpilot action click 5      # under default deny
+webpilot action click 5 --snapshot-id ID  # under default deny
 ```
 ```
 Blocked by policy: click. Check: webpilot policy list
@@ -458,6 +475,7 @@ See `webpilot <command> --help` for the full options of each.
 | `6` | `PolicyDenied` (blocked by policy) |
 | `7` | `InvalidArgument` (user input error) |
 | `8` | Navigation (`NavigationFailed` · `NoPage`) |
+| `9` | `OutcomeUnknown`: the operation may already have run; observe before retrying |
 
 Errors print with guidance text, and in JSON mode come out as `{"code": "...", "message": "...", ...}` — you can branch on `code` without parsing strings.
 
@@ -478,7 +496,7 @@ webpilot quit                  # stop the headless Chrome session
 webpilot self uninstall        # quit Chrome + remove everything the binary created
 ```
 
-The skill and extension are embedded in the binary at compile time, so the **bundled assets always match the binary** — no post-install download. If an extension already loaded in your browser is stale after an update, the host catches it at connect time with `VersionMismatch` and prompts a reload. After setup, Claude Code activates the skill via `/webpilot` or plain natural language.
+The skill and extension are embedded in the binary at compile time, so the **bundled assets always match the binary** — no post-install download. The host compares its bundled version with the connected extension and reports `VersionMismatch`. An already-running host retains the old binary: after updating, refresh assets with `webpilot setup skill` and `webpilot setup extension`, then reload the extension to connect to a new host. Locally edited skills are preserved. After setup, Claude Code activates the skill via `/webpilot` or plain natural language.
 
 ---
 
@@ -508,7 +526,7 @@ session — the policy verdicts it applied, the extension handshake, why a comma
 failed — is not on your terminal. It is written here instead:
 
 ```bash
-tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS; $WEBPILOT_HOME/logs elsewhere
+tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS default; with WEBPILOT_HOME, use its logs/ directory
 ```
 
 `host.log.1` beside it holds the previous rotation, which is usually the one a
@@ -522,7 +540,7 @@ webpilot quit && webpilot status              # restart when a session gets stuc
 ```
 
 - **`VersionMismatch` (code 3)** — the installed extension version differs from the bundled one. Run `webpilot setup extension`, then reload the extension.
-- **`StaleSnapshot` (code 4)** — the element an index pointed at left the DOM. Re-run `capture`.
+- **`StaleSnapshot` (code 4)** — the snapshot ID is stale or the target was removed, hidden, or semantically changed. Observe again with `capture` or `find`.
 - **Headless Chrome won't launch (container/CI)** — where the setuid sandbox can't initialize, opt in with `WEBPILOT_CHROME_NO_SANDBOX=1` (it weakens the sandbox, so it's off by default).
 
 ---

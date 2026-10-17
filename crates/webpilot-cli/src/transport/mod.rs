@@ -51,6 +51,7 @@ pub async fn navigate_to<T: Transport>(
     use webpilot::Action;
     match transport
         .send(Command::Action {
+            snapshot_id: None,
             action: Action::Navigate { url },
             capture: false,
         })

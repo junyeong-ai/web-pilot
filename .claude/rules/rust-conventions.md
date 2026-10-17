@@ -20,6 +20,7 @@ paths:
 ## Error handling
 - Preserve `WebPilotError` through command handlers' `anyhow::Result` so callers retain typed fields and exit codes. External crate errors wrap into `WebPilotError::Other` at the boundary in `main.rs::into_webpilot_error`.
 - Exit codes from `WebPilotError::exit_code()` — never inferred from message substrings.
+- A dispatched mutation with a lost or timed-out response may already have run. Preserve `OutcomeUnknown`; never replay it as connection recovery. Post-action capture failure is `capture_error`, not failure of the completed action.
 - Structured fields per variant: `ElementNotFound { requested, available }`, `Timeout { kind, elapsed_ms }`, etc.
 
 ## Command handler pattern

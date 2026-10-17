@@ -131,6 +131,7 @@ pub async fn run() -> Result<CommandOutput> {
 /// no generic catch-all to fall through to.
 fn diagnose(error: &IpcError) -> CommandOutput {
     let (msg, hint) = match error {
+        IpcError::Unconfirmed { source } => return diagnose(source),
         IpcError::HostNotRunning(path) => {
             let hint = match check_nm_manifest() {
                 ManifestState::NotFound => {

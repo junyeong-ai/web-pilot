@@ -3,6 +3,7 @@ navigation_ms = 30000
 download_window_ms = 2000
 
 [chrome]
+accept_dialogs = false
 viewport_width = 1280
 viewport_height = 720
 no_sandbox = false

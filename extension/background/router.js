@@ -5,7 +5,7 @@ import { err, exceptionErr, otherErr, topErr } from "./errors.js";
 import { ensureRestored } from "./session.js";
 import { handleAction } from "./action.js";
 import { handleCapture } from "./capture.js";
-import { handleDomGet, handleDomSet, handleEval, handleFetch, handleWait } from "./query.js";
+import { handleDomGet, handleDomSet, handleEval, handleFetch, handleWait, handleWaitCancel } from "./query.js";
 import { handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport } from "./state.js";
 import { handleFrameList, handleFrameSwitch, handleStatus, handleTabClose, handleTabList, handleTabNew, handleTabSwitch } from "./browser.js";
 
@@ -67,6 +67,10 @@ async function processCommand(id, command, port) {
 
       case "Eval":
         result = await handleEval(command);
+        break;
+
+      case "WaitCancel":
+        result = await handleWaitCancel(command);
         break;
 
       case "Wait":

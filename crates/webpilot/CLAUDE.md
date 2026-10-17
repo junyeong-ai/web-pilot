@@ -9,20 +9,23 @@ encode/write in `screenshot.rs`, and the NM/IPC framing in
 - `action.rs` — the `Action` enum, deriving `clap::Subcommand` and `serde`
   together (the CLI surface *is* the wire shape). `ActionKind` is the action
   discriminant; its Display/FromStr come from `serde_plain`. `ElementIndex` is a
-  1-based `u32`.
+  1-based `u32`. Indexed actions require the enclosing command's `snapshot_id`;
+  `Action::validate_snapshot` centralizes validation.
 - `protocol.rs` — `Command` / `Response` / `ResponseData`, `DomProperty`,
   `FrameSelector`, `RunMode`. Add a command by adding a `Command` variant.
   `Command::policy_key()` maps command → `PolicyKey`; the match is **exhaustive**
   (read-only commands return `None` explicitly), so a new command cannot leak
-  ungated. Response reads use bare plural variants (`Tabs`, `Cookies`,
+  ungated. `Command::unconfirmed_operation()` separately classifies effects
+  when an IPC reply is lost; read-only responses retain connection errors.
+  Response reads use bare plural variants (`Tabs`, `Cookies`,
   `ConsoleEntries`, `NetworkEntries`).
 - `error.rs` — `WebPilotError` (variant-rich, no message parsing). `exit_code()`,
   `code()`, and `WireError` round-trip. Guidance comes from `Display` over the
-  data. Includes `StaleSnapshot` and `VersionMismatch`.
+  data. Includes `StaleSnapshot`, `VersionMismatch`, and `OutcomeUnknown` (exit 9: observe before retry).
 - `types.rs` — DOM / cookie / console / network / tab shapes; `PolicyKey` (the
   effect-based policy key — `ActionKind` ∪ {eval, fetch, dom_set, tab_close,
   cookie_list, cookie_set, cookie_delete, session_export, session_import, device,
-  context_close, download}, with an exhaustive `From<ActionKind>`); `PolicyVerdict`. `DomSnapshot.subframes` is
+  context_close, download}, with an exhaustive `From<ActionKind>`); `PolicyVerdict`. `DomSnapshot.snapshot_id` identifies the observation; `subframes` is
   the count of HTTP iframes outside the active frame. `DomSnapshot::to_text()`
   renders the agent-facing `[index] element` format.
 - `capture.rs` — `CaptureField` + `CaptureOpts`.

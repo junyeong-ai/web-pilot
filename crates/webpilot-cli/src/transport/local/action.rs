@@ -140,6 +140,7 @@ impl LocalTransport {
         &mut self,
         action: Action,
         capture: bool,
+        snapshot_id: Option<&str>,
     ) -> Result<ResponseData> {
         // Subscribed before anything runs, for every action kind: a reload whose
         // page exports on load, or a drag that a handler turns into a file, is
@@ -212,7 +213,11 @@ impl LocalTransport {
                 steps,
             } => {
                 self.require_main_frame("drag").await?;
-                self.do_drag(*source, *target, *steps).await?;
+                self.do_drag(*source, *target, *steps, snapshot_id)
+                    .await
+                    .map_err(|error| {
+                        crate::into_webpilot_error(error).with_unknown_outcome("drag")
+                    })?;
                 let downloads = self.downloads_from(&mut download_events, false).await;
                 return Ok(self.settled_action_result(capture, None, downloads).await);
             }
@@ -221,7 +226,7 @@ impl LocalTransport {
                 // Bridge.js dispatchEvent only triggers JS listeners, not the
                 // internal hover state.
                 self.require_main_frame("hover").await?;
-                self.do_hover(*index).await?;
+                self.do_hover(*index, snapshot_id).await?;
                 let downloads = self.downloads_from(&mut download_events, false).await;
                 return Ok(self.settled_action_result(capture, None, downloads).await);
             }
@@ -233,7 +238,7 @@ impl LocalTransport {
                 // switched iframe, and gating it would be a constraint the
                 // mechanism doesn't need.
                 let path = path.clone();
-                self.do_upload(*index, &path).await?;
+                self.do_upload(*index, &path, snapshot_id).await?;
                 let downloads = self.downloads_from(&mut download_events, false).await;
                 return Ok(self.settled_action_result(capture, None, downloads).await);
             }
@@ -266,7 +271,9 @@ impl LocalTransport {
         // page-mutating action runs in the page via the bridge.
         let (nav_hint, frame_navigates, download_hint, opens_context, named_frame) = match &action {
             Action::KeyPress { key, modifiers } => {
-                self.do_key_press(key, modifiers).await?;
+                self.do_key_press(key, modifiers).await.map_err(|error| {
+                    crate::into_webpilot_error(error).with_unknown_outcome("key_press")
+                })?;
                 // Enter can submit a form, and that navigation is QUEUED (HTML
                 // spec) — its start event may land after the key-dispatch response,
                 // so the buffered drain alone can miss it and `--capture` would
@@ -278,9 +285,13 @@ impl LocalTransport {
             }
             _ => {
                 let action_json = serde_json::to_value(&action)?;
-                let raw = self
-                    .invoke_bridge(&json!({"type": "executeAction", "action": action_json}))
-                    .await?;
+                let raw = if let Action::Click { index, modifiers } = &action {
+                    self.do_click(*index, modifiers, snapshot_id).await?
+                } else {
+                    self
+                    .invoke_bridge(&json!({"type": "executeAction", "action": action_json, "snapshot_id": snapshot_id}))
+                    .await.map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome(action.kind().to_string()))?
+                };
                 let resp = Self::parse_bridge_response(raw)?;
                 // `navigates`: a click that will load a new TOP document (drives
                 // `url_changed` + the main settle). `frame_navigates`: the same for
@@ -509,7 +520,85 @@ impl LocalTransport {
         Ok(())
     }
 
-    async fn do_upload(&self, index: u32, path: &std::path::Path) -> Result<()> {
+    async fn do_click(
+        &self,
+        index: u32,
+        modifiers: &webpilot::action::Modifiers,
+        snapshot_id: Option<&str>,
+    ) -> Result<Value> {
+        let mut prep = Self::parse_bridge_response(
+            self.invoke_bridge(
+                &json!({"type":"prepareClick", "index":index, "snapshot_id":snapshot_id}),
+            )
+            .await?,
+        )?;
+        let object_id = self.eval_object_id("(()=>{const t=window.__webpilot_state.pointerTarget;return t&&t.isConnected?t:null;})()")
+            .await?.ok_or(WebPilotError::StaleSnapshot { index })?;
+        let outcome = async {
+            let deadline = tokio::time::Instant::now() + webpilot::settings::timeouts().navigation;
+            let mut previous = Value::Null;
+            let quad = loop {
+                let geometry = self.page.send("DOM.getContentQuads", Some(json!({"objectId":object_id}))).await?;
+                let quad = geometry["quads"].as_array().and_then(|quads| quads.first()).cloned()
+                    .ok_or_else(|| WebPilotError::InvalidArgument { detail: "Click target has no content quad".into() })?;
+                if quad == previous { break quad; }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(WebPilotError::Timeout { kind:"click target stability".into(), elapsed_ms:webpilot::settings::timeouts().navigation.as_millis() as u64 }.into());
+                }
+                previous = quad;
+                tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+            };
+            let ready = Self::parse_bridge_response(self.invoke_bridge(&json!({"type":"prepareClick", "index":index, "snapshot_id":snapshot_id, "watch":true})).await?)?;
+            let fx = coord(&ready, "x_fraction")?;
+            let fy = coord(&ready, "y_fraction")?;
+            let q: Vec<f64> = serde_json::from_value(quad)?;
+            if q.len() != 8 { anyhow::bail!("Malformed content quad"); }
+            let x = q[0] + (q[2]-q[0])*fx + (q[6]-q[0])*fy;
+            let y = q[1] + (q[3]-q[1])*fx + (q[7]-q[1])*fy;
+            let params = json!({"x":x,"y":y,"button":"left","clickCount":1,"modifiers":modifier_mask(modifiers)});
+            self.page.send("Input.dispatchMouseEvent", Some(json!({"type":"mouseMoved", "x":x, "y":y, "modifiers":modifier_mask(modifiers)}))).await?;
+            let verified = Self::parse_bridge_response(self.invoke_bridge(&json!({"type":"prepareClick", "index":index, "snapshot_id":snapshot_id})).await?)?;
+            let geometry = self.page.send("DOM.getContentQuads", Some(json!({"objectId":object_id}))).await?;
+            let current_quad: Vec<f64> = serde_json::from_value(geometry["quads"][0].clone()).map_err(|_| WebPilotError::InvalidArgument { detail:"Click target has no content quad after pointer positioning".into() })?;
+            if current_quad != q || coord(&verified, "x_fraction")? != fx || coord(&verified, "y_fraction")? != fy {
+                return Err(WebPilotError::InvalidArgument { detail:"Click target moved after pointer positioning; capture again".into() }.into());
+            }
+            let metrics = self.page.send("Page.getLayoutMetrics", None).await?;
+            let page_x = coord(&metrics["cssLayoutViewport"], "pageX")?;
+            let page_y = coord(&metrics["cssLayoutViewport"], "pageY")?;
+            let hit = self.page.send("DOM.getNodeForLocation", Some(json!({"x":(x+page_x).round() as i64,"y":(y+page_y).round() as i64,"includeUserAgentShadowDOM":true}))).await?;
+            let frame = self.active_frame_id.lock().await.clone().unwrap_or_else(|| self.main_frame_id.clone());
+            if hit["frameId"].as_str() != Some(frame.as_str()) {
+                return Err(WebPilotError::InvalidArgument { detail:"Click target is covered by another frame or page element".into() }.into());
+            }
+            let pressed = self.page.send("Input.dispatchMouseEvent", Some({let mut p=params.clone();p["type"]=json!("mousePressed");p})).await;
+            let released = self.page.send("Input.dispatchMouseEvent", Some({let mut p=params;p["type"]=json!("mouseReleased");p})).await;
+            pressed.map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("click"))?;
+            released.map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("click"))?;
+            if let Ok(effects) = self.invoke_bridge(&json!({"type":"finishClick"})).await {
+                let cancelled = effects["click_cancelled"] == true;
+                for key in ["navigates", "frame_navigates"] {
+                    prep[key] = json!((!cancelled && prep[key] == true) || effects[key] == true);
+                }
+                if cancelled { prep["opens_context"] = json!(false); prep["target_name"] = Value::Null; }
+                prep["downloads"] = effects["downloads"].clone();
+            }
+            Ok(prep)
+        }.await;
+        let _ = self
+            .page
+            .send("Runtime.releaseObject", Some(json!({"objectId":object_id})))
+            .await;
+        let _ = self.invoke_bridge(&json!({"type":"clearPointer"})).await;
+        outcome
+    }
+
+    async fn do_upload(
+        &self,
+        index: u32,
+        path: &std::path::Path,
+        snapshot_id: Option<&str>,
+    ) -> Result<()> {
         // File inputs cannot be filled by page JS, so CDP must set the file by
         // node — and the node has to be the EXACT element the index addressed.
         // The bridge stashes that snapshot element by object identity (a stale
@@ -522,7 +611,9 @@ impl LocalTransport {
         // selector never could.
         let outcome = async {
             let prep = self
-                .invoke_bridge(&json!({"type": "prepareUpload", "index": index}))
+                .invoke_bridge(
+                    &json!({"type": "prepareUpload", "index": index, "snapshot_id": snapshot_id}),
+                )
                 .await?;
             Self::parse_bridge_response(prep)?;
             self.set_upload_target_file(index, path).await
@@ -550,22 +641,33 @@ impl LocalTransport {
             .await?
             .ok_or(WebPilotError::StaleSnapshot { index })?;
 
-        self.page
+        let outcome = self
+            .page
             .send(
                 "DOM.setFileInputFiles",
                 Some(json!({"objectId": object_id, "files": [path.to_string_lossy()]})),
             )
-            .await?;
+            .await;
+        let _ = self
+            .page
+            .send(
+                "Runtime.releaseObject",
+                Some(json!({"objectId": object_id})),
+            )
+            .await;
+        outcome
+            .map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("upload"))?;
         Ok(())
     }
 
-    async fn do_hover(&self, index: u32) -> Result<()> {
+    async fn do_hover(&self, index: u32, snapshot_id: Option<&str>) -> Result<()> {
         // Resolve the visible-element center via bridge (uses the same
         // index space that capture exposes), then move the cursor there
         // through CDP's input layer. This is what activates `:hover`.
         let coords = self
             .invoke_bridge(&serde_json::json!({
                 "type": "getElementCoords",
+                "snapshot_id": snapshot_id,
                 "source": index,
                 "target": index,
             }))
@@ -949,6 +1051,7 @@ impl LocalTransport {
             for m in &held {
                 let (mkey, mcode, mvk, bit) = m;
                 acc |= bit;
+                pressed.push(m);
                 self.page
                     .send(
                         "Input.dispatchKeyEvent",
@@ -961,7 +1064,6 @@ impl LocalTransport {
                         })),
                     )
                     .await?;
-                pressed.push(m);
             }
 
             // `nativeVirtualKeyCode` is deliberately omitted: it is the
@@ -980,8 +1082,9 @@ impl LocalTransport {
             if let Some(t) = &text {
                 down["text"] = json!(t);
             }
-            self.page.send("Input.dispatchKeyEvent", Some(down)).await?;
-            self.page
+            let down = self.page.send("Input.dispatchKeyEvent", Some(down)).await;
+            let up = self
+                .page
                 .send(
                     "Input.dispatchKeyEvent",
                     Some(json!({
@@ -992,7 +1095,9 @@ impl LocalTransport {
                         "windowsVirtualKeyCode": vk,
                     })),
                 )
-                .await
+                .await;
+            down?;
+            up
         }
         .await;
 
@@ -1141,10 +1246,17 @@ impl LocalTransport {
             .and_then(Value::as_i64)
     }
 
-    async fn do_drag(&self, source: u32, target: u32, steps: u32) -> Result<()> {
+    async fn do_drag(
+        &self,
+        source: u32,
+        target: u32,
+        steps: u32,
+        snapshot_id: Option<&str>,
+    ) -> Result<()> {
         let coords = self
             .invoke_bridge(&json!({
                 "type": "getElementCoords",
+                "snapshot_id": snapshot_id,
                 "source": source,
                 "target": target,
             }))
@@ -1163,36 +1275,40 @@ impl LocalTransport {
         // leaving the page mid-drag (mouseup never fires) while the command
         // reports success. Empirically verified: without it the page sees
         // mousedown + a single move and NO mouseup.
-        self.page
-            .send(
-                "Input.dispatchMouseEvent",
-                Some(json!({
-                    "type": "mousePressed", "x": sx, "y": sy,
-                    "button": "left", "buttons": 1, "clickCount": 1,
-                })),
-            )
-            .await?;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        let steps = steps.max(1);
-        for i in 1..=steps {
-            let ratio = i as f64 / steps as f64;
+        let gesture = async {
             self.page
                 .send(
                     "Input.dispatchMouseEvent",
                     Some(json!({
-                        "type": "mouseMoved",
-                        "x": sx + (tx - sx) * ratio,
-                        "y": sy + (ty - sy) * ratio,
-                        "button": "left",
-                        "buttons": 1,
+                        "type": "mousePressed", "x": sx, "y": sy,
+                        "button": "left", "buttons": 1, "clickCount": 1,
                     })),
                 )
                 .await?;
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        self.page
+            let steps = steps.max(1);
+            for i in 1..=steps {
+                let ratio = i as f64 / steps as f64;
+                self.page
+                    .send(
+                        "Input.dispatchMouseEvent",
+                        Some(json!({
+                            "type": "mouseMoved",
+                            "x": sx + (tx - sx) * ratio,
+                            "y": sy + (ty - sy) * ratio,
+                            "button": "left",
+                            "buttons": 1,
+                        })),
+                    )
+                    .await?;
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        let release = self
+            .page
             .send(
                 "Input.dispatchMouseEvent",
                 Some(json!({
@@ -1200,7 +1316,9 @@ impl LocalTransport {
                     "button": "left", "buttons": 0, "clickCount": 1,
                 })),
             )
-            .await?;
+            .await;
+        gesture?;
+        release?;
         Ok(())
     }
 }

@@ -9,7 +9,8 @@ command handlers.
 
 ```bash
 cargo fmt --all -- --check     # CI gates on this — run it in every local pass too
-npm ci && npm run lint       # locked extension tooling; Node version in .node-version
+npm ci && npm run lint       # checks generated semantics + extension lint; Node in .node-version
+# After changing accessibility dependencies: npm run build, then npm run lint
 cargo build --workspace --release --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -83,18 +84,17 @@ MCP exposes a curated subset of commands — adding a command is not an MCP chan
 ## DOM Output Format
 
 ```
-*[1] input#query "Search" type=text autocomplete=search @search
+*[1] input#query role=textbox "Search" type=text autocomplete=search @search
 [2] button "Go" @search
+--- Snapshot: ID ---
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 1 iframe(s) not shown — list: webpilot frame, enter: webpilot frame url <pattern> ---
 ```
 
-`[index]` is the argument to `action click N`. **Indices are bound to the last
-`capture` snapshot**: bridge.js stores the element references seen at capture
-time, and index actions resolve against that list. If there is no snapshot (no
-capture yet) or the element has left the DOM, the result is a typed
-`StaleSnapshot` error (exit 4), never a re-resolution against the live DOM.
+`[index]` and `snapshot_id` identify an observed element. Indexed CLI actions
+require `--snapshot-id ID`; MCP indexed tools require `snapshot_id`. A newer DOM extraction (including `find`) in that frame or a different document, removed/hidden nodes, or changed accessible
+names, roles, hrefs or input types returns `StaleSnapshot` (exit 4).
 `*` marks an element new since the last capture — detected by **node identity**
 against the previous snapshot, suppressed on the first capture in a new document
 (a fresh page starts with no snapshot, so it is not "all new"; a same-document
@@ -118,12 +118,12 @@ page text, element text, option lists, and the shadow walk.
 
 | Area | Rule |
 |---|---|
-| Action | `{"kind": "click", "index": 7}` — one definition (clap + serde, snake_case) |
+| Action | `Command::Action { action: {"kind": "click", "index": 7}, snapshot_id: "…", capture: false }`; indexed actions require the observation ID. `Action` itself has one definition (clap + serde, snake_case). |
 | ActionKind | snake_case wire tag, matching `Action.kind` exactly |
 | PolicyKey | Effect-keyed gate: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`, `device`, `context_close`, `download`}. Keyed by **effect, not command** — `navigate` gates every URL-load (`navigate` action, `capture --url`, `tab new URL`); `download` gates the file a page makes the browser write, whatever started it — a `deny` becomes Chrome's own `Browser.setDownloadBehavior` refusal, so the transfer never begins; `eval` gates every MAIN-world JS sink (`eval`, `frame find`, `console`/`network start`, `dom set-html`). `Command::policy_key()` maps command→key via an **exhaustive match** (reads → `None`), so a new command can't compile without declaring its gate. Enforced at the browser-reaching sink — `LocalTransport::send` (headless) / NM host (browser), never the CLI `IpcTransport`; the host re-parses the wire value to a typed `Command` before enforcing (blocks a Rust-rejects/JS-coerces bypass). Store `policy/policies.json` under the durable data root (survives cache eviction). Per-effect gating rationale lives in the `PolicyKey` variant doc-comments + the `policy_key()` arms. |
 | ConsoleEntry | `{"source": "exception", "level": "error", "message": "...", "timestamp": 0}` — `level` is the console API's own taxonomy, so an uncaught error, which the console shows but no `console.*` call made, is typed by `source` (`console`/`exception`/`rejection`) instead of being flattened into `error` and told apart by reading the message |
 | Monitor read | `{"entries": [...], "truncated": false, "covers_load": true}` — the two ways a read can be less than the whole story, both stated rather than left to be inferred from an empty list: `truncated` is the eviction flag (the 500-entry cap dropped something), `covers_load` is whether the recorder was in place before the document's first script. False for a document built while nothing was attached (one loaded between two CLI invocations, or a popup, already loading when its target appears) and always false in browser mode, which injects at navigation settle. The recorders stamp it from the null `documentElement` only a document-start injection sees; the render adds `--- recorder installed after this document started … ---` |
-| Wait | `Wait { condition, timeout_ms }`; `condition` is the `until`-tagged `WaitCondition` — `{"until": "selector", "value": ".loading"}`, one of `selector`/`text`/`navigation`/`idle` |
+| Wait | `Wait { condition, timeout_ms, request_id? }`; request-scoped `WaitCancel { request_id }` cancels that wait; `condition` is the `until`-tagged `WaitCondition` — `{"until": "selector", "value": ".loading"}`, one of `selector`/`text`/`navigation`/`idle` |
 | Capture | `{"include": ["dom","screenshot"], "opts": {...}}` |
 | Status | `{connected, mode: "headless"\|"browser", tab_url, tab_title, chrome_version, extension_version}` — every field but the first two is optional and omitted when absent (`extension_version` is browser-mode only; the tab pair is the PINNED tab, absent when its page is gone) |
 | Errors | `{"code": "ElementNotFound", "message": "...", "requested": 5, "available": 3}` |
@@ -140,7 +140,8 @@ hand-written match tables.
 - **Forced**: `--json` flag
 
 `CommandOutput` enum → `output::render()`, a single conversion.
-`CommandOutput::to_agent_text()` reuses the same renderers for MCP tool results.
+`CommandOutput::to_json()` supplies CLI JSON and MCP structured content;
+`to_agent_text()` reuses the human renderers for MCP text blocks.
 
 ## Error Handling
 
@@ -155,10 +156,12 @@ hand-written match tables.
 | 6 | `PolicyDenied` | security |
 | 7 | `InvalidArgument` | user error |
 | 8 | `NavigationFailed`, `NoPage` | navigation |
+| 9 | `OutcomeUnknown` | dispatched operation may already have run; observe before retrying |
 
-`StaleSnapshot` = an index's element left the DOM since capture (re-capture
-needed). `VersionMismatch` = installed extension version ≠ bundled version
-(`webpilot setup extension`, then reload).
+`StaleSnapshot` = an observation no longer identifies an actionable element
+(re-capture needed). `VersionMismatch` compares the connected extension with
+the running host's bundled version. After updating the binary/assets, reload
+the extension to replace the old host process too.
 
 Guidance text is produced directly from data by `WebPilotError::Display` — no
 message parsing or substring matching. External crate errors are wrapped into

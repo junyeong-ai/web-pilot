@@ -30,6 +30,7 @@ use common::{code, spawn_server, stdout, wait_for};
 const BIN: &str = env!("CARGO_BIN_EXE_webpilot");
 
 struct BrowserFixture {
+    observation: common::Observation,
     home: PathBuf,
     user_data_dir: PathBuf,
     chrome: Child,
@@ -47,13 +48,15 @@ impl Drop for BrowserFixture {
 impl BrowserFixture {
     /// Run `webpilot --browser <args>` against the isolated home.
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(BIN)
-            .arg("--browser")
+        let mut cmd = Command::new(BIN);
+        cmd.arg("--browser")
             .args(args)
             .arg("--json")
-            .env("WEBPILOT_HOME", &self.home)
-            .output()
-            .expect("spawn webpilot")
+            .env("WEBPILOT_HOME", &self.home);
+        self.observation.apply(&mut cmd, args);
+        let output = cmd.output().expect("spawn webpilot");
+        self.observation.remember(&output);
+        output
     }
 }
 
@@ -238,6 +241,7 @@ fn browser_behavioral_flow() {
         &extension_dir.canonicalize().expect("ext dir"),
     );
     let fx = BrowserFixture {
+        observation: Default::default(),
         home,
         user_data_dir,
         chrome,
@@ -485,7 +489,7 @@ fn browser_behavioral_flow() {
     assert!(
         stdout(&fx.run(&[
             "eval",
-            "window.__dlg && window.__dlg[0] === true && window.__dlg[1] === 'dv' ? 'parity' : JSON.stringify(window.__dlg)",
+            "window.__dlg && window.__dlg[0] === false && window.__dlg[1] === null ? 'parity' : JSON.stringify(window.__dlg)",
         ]))
         .contains("parity"),
         "confirm must answer true and prompt must return its default (headless parity)"
@@ -632,7 +636,7 @@ fn browser_behavioral_flow() {
     //     dispatchActionToPage → the shared bridge).
     let _ = fx.run(&[
         "eval",
-        "document.body.insertAdjacentHTML('beforeend', '<button id=modbtn onclick=\"this.dataset.mods=[event.ctrlKey,event.shiftKey,event.altKey,event.metaKey].join()\">mod</button>'); 'ok'",
+        "document.body.insertAdjacentHTML('beforeend', '<button id=modbtn onmousedown=\"this.dataset.mods=[event.ctrlKey,event.shiftKey,event.altKey,event.metaKey].join()\">mod</button>'); 'ok'",
     ]);
     let mod_cap = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(code(&mod_cap), 0, "modbtn capture failed");
@@ -651,12 +655,13 @@ fn browser_behavioral_flow() {
         0,
         "browser modifier click failed"
     );
+    fx.run(&["action", "key-press", "Escape"]);
     let mods_read = fx.run(&["eval", "document.getElementById('modbtn').dataset.mods"]);
     let mj: serde_json::Value = serde_json::from_str(&stdout(&mods_read)).expect("eval json");
     assert_eq!(
         mj["result"].as_str(),
         Some("\"true,true,false,false\""),
-        "the page's click handler must see ctrl+shift in browser mode too: {}",
+        "the page's pointer handler must see ctrl+shift in browser mode too: {}",
         stdout(&mods_read)
     );
 
@@ -1860,5 +1865,6 @@ fn browser_behavioral_flow() {
         stdout(&survived)
     );
 
+    common::assert_observation_contract(|args| fx.run(args), &base);
     drop(fx);
 }
