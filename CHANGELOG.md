@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-24
+
 ### Added
 
 - Serve MCP 2026-07-28 clients statelessly: `server/discover`, per-request
