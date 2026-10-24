@@ -8,13 +8,16 @@
 //! host calls [`enforce`] before forwarding a request to the extension.
 //! Enforcing in the host (not the CLI-side `IpcTransport`) is what makes a deny
 //! rule a real boundary: another local process writing raw JSON to the socket
-//! still hits it.
+//! still hits it. The headless-only commands that drive raw CDP without a wire
+//! `Command` (`device`, `context close`) gate their effect with [`enforce_key`]
+//! in their handlers, and the CLI checks the same key before Chrome launches.
 //!
-//! The store lives at `policy_dir()/policies.json` — the DURABLE data root, not
-//! the evictable cache, so OS cache eviction can never silently reset deny rules
-//! to allow. It is the *only* policy state — both privileged sinks read it
-//! through [`enforce`], so a `webpilot policy set` rule takes effect identically
-//! everywhere. The extension keeps no policy state of its own.
+//! The store lives at `policy_dir()/policies.json` — under the DURABLE data root
+//! (or `WEBPILOT_HOME`), never the evictable cache, so OS cache eviction can
+//! never silently reset deny rules to allow. It is the *only* policy state —
+//! every gate reads it through [`enforce_key`], so a `webpilot policy set` rule
+//! takes effect identically everywhere. The extension keeps no policy state of
+//! its own.
 //!
 //! Fail closed: a store that exists but can't be read or parsed denies every
 //! gated operation rather than silently allowing it. An absent file is the

@@ -5,10 +5,11 @@
 //! - **Cache root** (`root()`): ephemeral state — sockets, PID files,
 //!   screenshots, headless Chrome profile. Safe for the OS to evict.
 //! - **Data root** (`data_root()`): durable state — the unpacked Chrome
-//!   extension that the user has loaded into Chrome. Must survive cache
-//!   eviction; if it disappears the extension breaks.
+//!   extension, the policy store and the installed skill's digest. Must
+//!   survive cache eviction: Chrome holds the extension's absolute path, and a
+//!   lost policy store would drop every deny rule.
 //!
-//! Each path has two accessors:
+//! A path is reached through one of two kinds of accessor, often both:
 //!
 //! - `*()` — *materialise* the path on first call (creating ancestors with
 //!   mode 0700) and memoise where the path is process-wide constant. Use
@@ -29,6 +30,10 @@
 //! 2. macOS: `$HOME/Library/Application Support/webpilot`.
 //! 3. Linux/BSD: `$XDG_DATA_HOME/webpilot` then `$HOME/.local/share/webpilot`.
 //! 4. Last resort: `/tmp/webpilot-<user>-data`.
+//!
+//! When `WEBPILOT_HOME` is set, the policy store and the skill digest live
+//! under it instead of the data root; the extension always stays in the data
+//! root.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -243,9 +248,9 @@ pub fn skill_record_file() -> PathBuf {
 /// Directory holding the policy store. Policy is persistent security config, not
 /// a regenerable cache artifact, so it lives under the DURABLE data root — never
 /// the cache root, where OS cache eviction (or a cache cleaner) would silently
-/// drop every deny rule and fail open. `WEBPILOT_HOME`, the all-in-one override,
-/// still wins when set, so an explicit setup and the test suite stay
-/// self-contained instead of reaching into the real user data dir. Materialises.
+/// drop every deny rule and fail open. `WEBPILOT_HOME` still wins when set, so
+/// an explicit setup and the test suite stay self-contained instead of reaching
+/// into the real user data dir. Materialises.
 pub fn policy_dir() -> PathBuf {
     materialise(policy_dir_path(), Owner::User)
 }

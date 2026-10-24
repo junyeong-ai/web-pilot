@@ -47,9 +47,10 @@ WebPilot's threat model assumes the operator is trusted and the
 target site is not. The runtime keeps these invariants:
 
 - Per-user cache and durable data roots are created with mode `0700`.
-  `$WEBPILOT_HOME` overrides both; otherwise they use platform-specific paths
-  documented in `CLAUDE.md`. The IPC socket is `0600` under a `0700` parent; the Native Messaging
-  host manifest restricts `allowed_origins` to the one extension ID.
+  Their platform paths and the `$WEBPILOT_HOME` / `$WEBPILOT_DATA_HOME`
+  overrides are documented in `crates/webpilot/src/dirs.rs`. The IPC socket is
+  `0600` under a `0700` parent; the Native Messaging host manifest restricts
+  `allowed_origins` to the one extension ID.
 - Native messaging frames use 4-byte LE length prefixing — no
   message parsing is done on free text.
 - Internal errors and exit codes use typed `WebPilotError` variants. External
