@@ -337,7 +337,7 @@ Expose the same engine to any MCP host — with no second implementation.
 webpilot mcp                  # stdio JSON-RPC (MCP) server. --browser / --context still apply
 ```
 
-The full page-interaction loop — observe (`snapshot`/`screenshot`), act (`click`/`type`/`drag`/`upload`, …), semantic `find`, tab/frame switching, `wait`, and `eval` — is offered as 21 `browser_*` tools, inheriting the CLI's exact mode, policy, and rendering. `initialize` negotiates the client's MCP revision (2025-11-25 / 2025-06-18), and read-only tools declare `readOnlyHint` annotations. Environment management (cookies, session, device, policy) and the console/network monitors stay CLI-only by design.
+The full page-interaction loop — observe (`snapshot`/`screenshot`), act (`click`/`type`/`drag`/`upload`, …), semantic `find`, tab/frame switching, `wait`, and `eval` — is offered as 21 `browser_*` tools, inheriting the CLI's exact mode, policy, and rendering. It serves MCP 2026-07-28 statelessly (`server/discover`, per-request `_meta`) and still answers the `initialize` handshake of 2025-11-25 / 2025-06-18 clients; both entry points carry usage `instructions` for the model. Read-only tools declare `readOnlyHint` annotations. Environment management (cookies, session, device, policy) and the console/network monitors stay CLI-only by design.
 
 MCP snapshots support `include: ["dom", "text"]`. Indexed tools require `snapshot_id`; action tools accept `capture: false` when no new DOM is needed. Successful results carry `structuredContent`. Ping and wait cancellation remain available during running commands. Password values are omitted from DOM snapshots.
 

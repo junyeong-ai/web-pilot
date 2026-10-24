@@ -112,8 +112,10 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   CLI JSON and MCP structured output; `to_agent_text()` reuses human renderers.
 - `mcp.rs` — `webpilot mcp`: a stdio JSON-RPC (MCP) server, hand-rolled with no
   protocol dependency (same philosophy as native messaging / CDP / IPC).
-  `initialize` negotiates the protocol revision (`SUPPORTED_PROTOCOL_VERSIONS`,
-  newest wins when the client's is unknown). Each tool builds a typed
+  Dual-era per request: a request whose `_meta` names a revision is served
+  statelessly (`MODERN_PROTOCOL_VERSIONS`, `server/discover`, `resultType`);
+  otherwise `initialize` negotiates a `LEGACY_PROTOCOL_VERSIONS` revision.
+  `INSTRUCTIONS` is the model guidance both entry points serve. Each tool builds a typed
   `Command`/`Action` and runs it through the existing handler over the shared
   `Transport`, inheriting mode, policy, and rendering. The input reader stays active during a serialized command so ping and cancellation remain responsive; cancellation interrupts waits and lets mutations finish cleanup. Schemas validate inputs before opening a transport. Successes carry structured output alongside text. Action tools inject the
   wire `kind` to reuse `Action`'s deserialization and defaults; `browser_find`

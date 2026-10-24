@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Serve MCP 2026-07-28 clients statelessly: `server/discover`, per-request
+  `_meta` versioning, `resultType`, and cache hints, alongside the existing
+  `initialize` handshake for 2025-11-25 and 2025-06-18 clients.
+- Send MCP clients usage instructions covering snapshot identifiers, uncertain
+  outcomes, wait semantics, and untrusted page content.
+
 ### Changed
+
+- Name the rejected property and reason when MCP arguments fail schema
+  validation.
 
 - Update jsonschema to 0.60, tokio to 1.54, oxlint to 1.89 and Node.js to
   24.22.1 LTS.
