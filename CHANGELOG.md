@@ -47,10 +47,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Describe the text output in the bundled skill: the labels an agent reads
+  (`Screenshot:`, `Downloaded:`, `URL changed:`, monitor notes) instead of JSON
+  keys it no longer receives.
 - Say so when a console or network read has no entries, instead of returning
   empty text.
 - Stop text-only captures from reporting "0 elements" for a page that has
   controls, and keep the tabs that separate table cells in rendered page text.
+
+### Security
+
+- Pre-approve only the commands that observe and act in the bundled skill.
+  Eval, fetch, uploads, cookies, sessions, DOM writes, tab close, policy changes
+  and setup ask again, so a page that steers the agent cannot relax the policy
+  or send a local file without the user seeing it.
 
 ## [0.11.0] - 2026-10-17
 
