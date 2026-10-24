@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-24
+
 ### Changed
 
 - **Breaking:** In browser mode, a command that changes the page needs a tab
