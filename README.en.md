@@ -96,7 +96,7 @@ webpilot action click 5 --capture --snapshot-id ID_B
 
 The login succeeded, we're on the **dashboard**, and the indices have been renumbered for the new page.
 
-If the action runs but its follow-up capture fails, `capture_error` reports that observation failure. Capture again to inspect the result; do not repeat the action.
+If the action runs but its follow-up capture fails, the output says `Capture failed (the action itself succeeded)` (`capture_error` in JSON). Capture again to inspect the result; do not repeat the action.
 
 > Indexed actions require `--snapshot-id ID` from the observed capture or `find` result. Indices belong to that snapshot and document. A newer capture, a removed/hidden node, or a changed accessible name, role, link destination or input type produces `StaleSnapshot` (exit 4). Capture again before choosing a new action.
 
@@ -151,7 +151,7 @@ Both modes share `bridge.js`. Static parity tests check command/action routing c
 --- Snapshot: ID ---
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
---- 6 elements (from 120 nodes, 5ms) ---
+--- 2 elements (from 120 nodes, 5ms) ---
 ```
 
 | Marker | Meaning |
@@ -163,7 +163,7 @@ Both modes share `bridge.js`. Static parity tests check command/action routing c
 | `@ctx` | ARIA landmark (navigation · main · banner · form · search …). |
 | Last line | Extracted-element count / total node count / elapsed time. |
 
-Extra footers for iframes and shadow DOM (`--- N iframe(s) not shown ---`, `--- shadow DOM clipped … ---`) appear when relevant, so the agent knows the list may have been truncated. An action's `--capture` lists the elements in view and the ones the action added; `--- N offscreen element(s) not listed ---` counts the rest, which keep their indices.
+Extra footers appear when relevant — `N iframe(s) not shown`, `shadow DOM clipped`, `page text clipped`, `index shortened` — so the agent knows the listing is incomplete. An action's `--capture` lists the elements in view and the ones the action added; `--- N offscreen element(s) not listed ---` counts the rest, which keep their indices.
 
 ---
 
@@ -282,7 +282,7 @@ webpilot fetch "http://localhost:8700/api/me" \
   --method POST --header content-type:application/json --body '{}'  # request with session cookies
 ```
 
-Storage belongs to the exported page's origin; import it while on that origin. Cookies cover the active context, while localStorage and sessionStorage cover the active page/frame.
+Storage belongs to the exported page's origin; import it while on that origin. Cookies cover the current context, while localStorage and sessionStorage cover the pinned page and frame.
 
 ### Evaluate JavaScript
 
@@ -370,7 +370,7 @@ Blocked by policy: click. Check: webpilot policy list
 ```
 
 - `eval` is the **master key**. With `eval` allowed, page JS can reproduce other effects, so narrow denies on `navigate` / `fetch` / `cookie_list` are merely advisory. **Deny `eval` first.**
-- Policy is enforced at the **single sink that reaches the browser** (headless: `LocalTransport::send`; browser: the NM host). The host **re-parses** every wire value into a typed `Command` before checking, so a “Rust rejects / JS coerces” bypass is impossible.
+- Policy is enforced **where a process reaches the browser**: `LocalTransport::send` (headless), the NM host (browser), and the `device` / `context close` handlers. The host **re-parses** every wire value into a typed `Command` before checking, so a “Rust rejects / JS coerces” bypass is impossible.
 - The policy store lives under the **durable data root** (`policy/policies.json`), not the OS cache — so a cache wipe can't silently reset your deny rules to allow.
 
 > Policy is a **guardrail against a steered agent**, not a sandbox against a malicious same-user process. The store and `webpilot policy` belong to the same user the agent runs as — protect them externally if that boundary matters.
@@ -457,7 +457,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `context <list\|close>` | Multi-agent isolation contexts |
 | `status` | Check connection status |
 | `mcp` | Run the MCP server (stdio) |
-| `setup` / `self update` / `uninstall` | Install lifecycle |
+| `setup` / `self update` / `self uninstall` | Install lifecycle |
 | `quit` | Stop the headless Chrome session |
 
 See `webpilot <command> --help` for the full options of each.
@@ -479,7 +479,7 @@ See `webpilot <command> --help` for the full options of each.
 | `1` | General / session error |
 | `2` | CLI usage error (unknown flag, non-numeric index, …) |
 | `3` | Infrastructure (`ConnectionLost` · `BridgeUnavailable` · `VersionMismatch`) |
-| `4` | Not found (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
+| `4` | Not found (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `NoPinnedTab` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
 | `5` | `Timeout` |
 | `6` | `PolicyDenied` (blocked by policy) |
 | `7` | `InvalidArgument` (user input error) |
@@ -522,7 +522,14 @@ Precedence is defaults < configuration file < `WEBPILOT_*` environment variables
 Time keys use `_ms` (milliseconds); TTL keys use `_secs` (seconds).
 Unknown keys and invalid configuration files fail explicitly. Malformed environment
 values fall through to the configuration file or defaults. MCP servers and Native
-Messaging hosts read settings at startup; restart those processes after changes.
+Messaging hosts read settings at startup; restart those processes after changes
+(for the host, reload the extension).
+
+Browser mode reads its settings and policy store in the Native Messaging host,
+which Chrome starts with its own environment: `WEBPILOT_*` variables,
+`WEBPILOT_CONFIG`, `WEBPILOT_HOME` and `WEBPILOT_DATA_HOME` set in your shell do
+not reach it. Keep browser-mode settings in the default `config.toml`, or set
+those variables where Chrome is launched.
 
 ---
 
@@ -550,6 +557,7 @@ webpilot quit                  # stop headless; the next page command starts Chr
 
 - **`VersionMismatch` (code 3)** — the installed extension version differs from the bundled one. Run `webpilot setup extension`, then reload the extension.
 - **`StaleSnapshot` (code 4)** — the snapshot ID is stale or the target was removed, hidden, or semantically changed. Observe again with `capture` or `find`.
+- **`NoPinnedTab` (code 4)** — browser mode has no working tab yet, so a command that changes a page is refused. Capture the page to borrow the tab you are viewing, load a URL, or switch to a tab.
 - **Headless Chrome won't launch (container/CI)** — where the setuid sandbox can't initialize, opt in with `WEBPILOT_CHROME_NO_SANDBOX=1` (it weakens the sandbox, so it's off by default).
 
 ---

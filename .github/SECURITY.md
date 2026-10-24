@@ -65,7 +65,10 @@ target site is not. The runtime keeps these invariants:
   value the strict Rust types refuse is coerced and run by the looser JS
   bridge (e.g. a string where a numeric index is required). A single file
   store (`policy/policies.json`, under the durable data root) backs both modes; a store that exists
-  but cannot be parsed **fails closed** (denies).
+  but cannot be parsed **fails closed** (denies). Each process resolves that root
+  from its own environment, and the NM host runs in Chrome's: with
+  `WEBPILOT_HOME` or `WEBPILOT_DATA_HOME` set in the shell but not where Chrome
+  starts, `webpilot policy` edits a store browser mode never reads.
 - Keys gate by *effect*, not command name. `navigate` covers URL loads
   through actions, `capture --url`, and `tab new`; `eval` covers page-world
   evaluation, `frame find`, monitor installation, and `dom set-html`.

@@ -1,5 +1,5 @@
 [timeouts]
-navigation_ms = 30000
+navigation_ms = 15000
 download_window_ms = 2000
 
 [chrome]

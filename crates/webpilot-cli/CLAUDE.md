@@ -145,7 +145,9 @@ status beside the content without altering stdout.
 
 ## Navigation (`mod.rs::navigate_reconnect`)
 
-Completion is one predicate, `navigation_settled(page, loader_id, before_url)`:
+One `timeouts.navigation` budget runs from sending `Page.navigate` through its
+reply, every settle probe and every poll. Completion is one predicate,
+`navigation_settled(page, loader_id, before_url, until)`:
 - committed = (loader_id matches) **or** (frame URL ≠ before_url)
 - ready = `readyState` is `interactive`/`complete`
 
@@ -157,6 +159,10 @@ frame, force-re-emits the new document's execution contexts so a dropped
 same-site reload → the loaderId distinguishes the new document from the old. No
 loaderId and no error = a same-document (fragment) navigation → complete
 immediately (frame preserved). `net::ERR_ABORTED` is not an immediate failure but
-pending — if it later settles, Ok; if not by the deadline, `NavigationFailed`.
+pending for `PROBE`: a commit in that window settles it, otherwise the previous
+document is still live and the navigation succeeds on it. A load that outlasts the
+budget is stopped (`abandon_navigation`) and reports `Timeout`: a load waiting on
+its server holds every renderer-bound command, a later session's `Page.enable`
+included.
 Armed monitors need no settle step: their hooks are registered per document, so a
 new one carries them from its first script.

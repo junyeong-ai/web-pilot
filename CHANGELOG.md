@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load that fails or does not settle within the navigation timeout reports
   `NavigationFailed` or `Timeout`, closes the tab and restores the previous
   pin, as headless does, instead of reporting success on a tab still loading.
+- Correct the documentation: browser mode reads its settings and policy store
+  in the Native Messaging host, under Chrome's environment rather than the
+  shell's; the README lists `NoPinnedTab` and every place policy is enforced;
+  the example configuration uses the default navigation timeout; the skill and
+  MCP instructions describe the navigation timeout, recovery steps an agent can
+  take, and which page content is untrusted.
 
 ## [0.13.0] - 2026-10-24
 

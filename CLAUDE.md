@@ -193,7 +193,7 @@ Artifacts are swept past `[artifacts] ttl_secs` (7 days), since each is minted
 under a fresh name; the sweep is due at most hourly (`runtime/last-sweep`) and
 runs from the sinks every command passes, as "Two process lifetimes" requires.
 
-Settings resolve through `webpilot::settings`: **defaults < `config.toml` < env
-var**. `config.toml` sits under the cache root (`WEBPILOT_CONFIG` moves it) with
-sections `[timeouts]`/`[chrome]`/`[context]`/`[artifacts]`/`[cdp]`/`[capture]`;
+Settings resolve through `webpilot::settings` in the process reading them (for
+browser mode, the NM host in Chrome's environment): **defaults < `config.toml` <
+env var**. `config.toml` sits under the cache root (`WEBPILOT_CONFIG` moves it);
 `settings.rs` names each key, its `WEBPILOT_*` variable and what it trades.

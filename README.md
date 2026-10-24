@@ -95,7 +95,7 @@ webpilot action click 5 --capture --snapshot-id ID_B
 
 로그인에 성공해 **대시보드**로 넘어왔고, 인덱스가 새 페이지 기준으로 다시 매겨졌습니다.
 
-액션은 실행됐지만 후속 캡처만 실패하면 `capture_error`가 반환됩니다. 이때 액션을 반복하지 말고 `capture`로 결과를 다시 관찰하세요.
+액션은 실행됐지만 후속 캡처만 실패하면 `Capture failed (the action itself succeeded)`가 출력됩니다(JSON에서는 `capture_error`). 이때 액션을 반복하지 말고 `capture`로 결과를 다시 관찰하세요.
 
 > 인덱스 액션에는 관찰한 캡처 또는 `find` 결과의 `--snapshot-id ID`가 필요합니다. 다른 캡처·문서의 인덱스, 제거·숨김 처리된 요소, 접근성 이름·역할·링크 목적지·입력 타입이 바뀐 요소는 `StaleSnapshot`(종료 코드 4)으로 거절됩니다. 다시 캡처한 상태에서 다음 액션을 선택하세요.
 
@@ -150,7 +150,7 @@ flowchart LR
 --- Snapshot: ID ---
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
---- 6 elements (from 120 nodes, 5ms) ---
+--- 2 elements (from 120 nodes, 5ms) ---
 ```
 
 | 표기 | 의미 |
@@ -162,7 +162,7 @@ flowchart LR
 | `@ctx` | ARIA 랜드마크 (navigation · main · banner · form · search …). |
 | 마지막 줄 | 추출 요소 수 / 전체 노드 수 / 소요 시간. |
 
-iframe·shadow DOM 관련 추가 푸터(`--- N iframe(s) not shown ---`, `--- shadow DOM clipped … ---`)도 필요할 때 함께 표시되어, 목록이 일부 잘렸는지 에이전트가 알 수 있습니다. 액션의 `--capture`는 화면 안 요소와 그 액션이 추가한 요소를 나열하고, 나머지는 `--- N offscreen element(s) not listed ---`로 개수만 알립니다(인덱스는 그대로 유효합니다).
+필요할 때 추가 푸터(`N iframe(s) not shown`, `shadow DOM clipped`, `page text clipped`, `index shortened`)가 표시되어, 목록이 완전하지 않다는 것을 에이전트가 알 수 있습니다. 액션의 `--capture`는 화면 안 요소와 그 액션이 추가한 요소를 나열하고, 나머지는 `--- N offscreen element(s) not listed ---`로 개수만 알립니다(인덱스는 그대로 유효합니다).
 
 ---
 
@@ -273,7 +273,7 @@ webpilot fetch "http://localhost:8700/api/me" \
   --method POST --header content-type:application/json --body '{}'  # 세션 쿠키로 인증 요청
 ```
 
-저장소 데이터는 내보낸 페이지의 origin에 속하며, 가져오기는 해당 origin에서 수행해야 합니다. 쿠키는 활성 컨텍스트 전체, localStorage·sessionStorage는 활성 페이지/프레임 범위입니다.
+저장소 데이터는 내보낸 페이지의 origin에 속하며, 가져오기는 해당 origin에서 수행해야 합니다. 쿠키는 현재 컨텍스트 전체, localStorage·sessionStorage는 고정 탭의 페이지와 프레임 범위입니다.
 
 ### 자바스크립트 평가
 
@@ -361,7 +361,7 @@ Blocked by policy: click. Check: webpilot policy list
 ```
 
 - `eval`은 **마스터 키**입니다. `eval`이 허용되면 페이지 JS로 다른 효과를 재현할 수 있으니, `navigate`·`fetch`·`cookie_list` 같은 좁은 deny는 보조적일 뿐입니다. **`eval`을 먼저 막으세요.**
-- 정책은 **브라우저에 닿는 단 하나의 sink**(헤드리스: `LocalTransport::send`, 브라우저: NM 호스트)에서만 강제됩니다. 호스트는 모든 와이어 값을 타입 있는 `Command`로 **다시 파싱**한 뒤 검사하므로 “Rust는 거부, JS는 강제 변환” 식 우회가 불가능합니다.
+- 정책은 **프로세스가 브라우저에 닿는 지점**에서 강제됩니다: `LocalTransport::send`(헤드리스), NM 호스트(브라우저), `device`·`context close` 핸들러. 호스트는 모든 와이어 값을 타입 있는 `Command`로 **다시 파싱**한 뒤 검사하므로 “Rust는 거부, JS는 강제 변환” 식 우회가 불가능합니다.
 - 정책 저장소는 OS 캐시가 아니라 **영속 데이터 루트**(`policy/policies.json`)에 있어, 캐시 정리로 deny 규칙이 슬그머니 풀리지 않습니다.
 
 > 정책은 **방향이 틀어진 에이전트에 대한 가드레일**이지, 같은 사용자 권한의 악성 프로세스를 막는 샌드박스가 아닙니다. 저장소와 `webpilot policy`는 에이전트와 같은 사용자 소유입니다 — 그 경계가 중요하다면 외부에서 보호하세요.
@@ -448,7 +448,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `context <list\|close>` | 멀티 에이전트 격리 컨텍스트 |
 | `status` | 연결 상태 확인 |
 | `mcp` | MCP 서버(stdio) 실행 |
-| `setup` / `self update` / `uninstall` | 설치 라이프사이클 |
+| `setup` / `self update` / `self uninstall` | 설치 라이프사이클 |
 | `quit` | 헤드리스 Chrome 세션 종료 |
 
 전체 옵션은 `webpilot <command> --help`로 확인하세요.
@@ -470,7 +470,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `1` | 일반 / 세션 오류 |
 | `2` | CLI 사용법 오류 (알 수 없는 플래그, 숫자가 아닌 인덱스 등) |
 | `3` | 인프라 (`ConnectionLost` · `BridgeUnavailable` · `VersionMismatch`) |
-| `4` | 찾지 못함 (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
+| `4` | 찾지 못함 (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `NoPinnedTab` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
 | `5` | `Timeout` |
 | `6` | `PolicyDenied` (정책 차단) |
 | `7` | `InvalidArgument` (사용자 입력 오류) |
@@ -513,7 +513,14 @@ WEBPILOT_CONFIG=/absolute/path/config.toml webpilot status
 시간 키는 `_ms`(밀리초), TTL은 `_secs`(초)를 사용합니다.
 알 수 없는 키·잘못된 설정 파일은 오류로 처리합니다. 형식이 잘못된 환경변수는
 설정 파일 또는 기본값으로 내려갑니다. MCP 서버와 Native Messaging 호스트는
-시작할 때 설정을 읽으므로 변경 후 해당 프로세스를 다시 시작하세요.
+시작할 때 설정을 읽으므로 변경 후 해당 프로세스를 다시 시작하세요(호스트는
+확장을 리로드하면 다시 시작됩니다).
+
+브라우저 모드는 설정과 정책 저장소를 Native Messaging 호스트에서 읽습니다. 이
+호스트는 Chrome이 자기 환경으로 실행하므로, 셸에서 지정한 `WEBPILOT_*`
+환경변수, `WEBPILOT_CONFIG`, `WEBPILOT_HOME`, `WEBPILOT_DATA_HOME`은 전달되지
+않습니다. 브라우저 모드 설정은 기본 위치의 `config.toml`에 두거나, Chrome을
+실행하는 환경에 지정하세요.
 
 ---
 
@@ -538,6 +545,7 @@ webpilot quit                  # 헤드리스 세션 종료; 다음 페이지 �
 
 - **`VersionMismatch` (코드 3)** — 설치된 확장 버전이 번들 버전과 다름. `webpilot setup extension` 후 확장을 리로드하세요.
 - **`StaleSnapshot` (코드 4)** — 스냅샷 ID가 오래됐거나 대상이 제거·숨김 처리되거나 의미 정보가 바뀜. `capture` 또는 `find`로 다시 관찰하세요.
+- **`NoPinnedTab` (코드 4)** — 브라우저 모드에 아직 작업 탭이 없어 페이지를 바꾸는 명령이 거절됨. `capture`로 보고 있는 탭을 빌리거나, URL을 열거나, 탭을 전환하세요.
 - **헤드리스 Chrome이 안 뜸 (컨테이너/CI)** — setuid 샌드박스가 초기화되지 않는 환경에서는 `WEBPILOT_CHROME_NO_SANDBOX=1`로 옵트인하세요(샌드박스를 약화시키므로 기본은 꺼져 있음).
 
 ---
