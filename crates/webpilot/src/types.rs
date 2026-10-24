@@ -909,13 +909,20 @@ impl DomSnapshot {
         // `[` can't sit at column 0) and `line_safe` each (a lone `\r` can't
         // cursor-return over the indent, no other control char tricks). Kept
         // multi-line — only the line structure is neutralised, the text preserved.
+        // A tab cannot move text to another line or over the indent, so it stays:
+        // it is how `innerText` separates table cells.
         if let Some(text) = &self.text_content
             && !text.is_empty()
         {
             out.push_str("--- Page text ---\n");
             for line in text.lines() {
                 out.push_str("  ");
-                out.push_str(&line_safe(line));
+                for (i, cell) in line.split('\t').enumerate() {
+                    if i > 0 {
+                        out.push('\t');
+                    }
+                    out.push_str(&line_safe(cell));
+                }
                 out.push('\n');
             }
             if self.text_truncated {
@@ -975,12 +982,17 @@ impl DomSnapshot {
             );
         }
 
-        out.push_str(&format!(
-            "--- {} elements (from {} nodes, {}ms) ---\n",
-            self.elements.len(),
-            self.total_nodes,
-            self.extraction_ms,
-        ));
+        // Only a DOM extraction indexes elements (and mints the snapshot ID);
+        // a text-only capture would otherwise report a page of buttons as
+        // "0 elements".
+        if self.snapshot_id.is_some() {
+            out.push_str(&format!(
+                "--- {} elements (from {} nodes, {}ms) ---\n",
+                self.elements.len(),
+                self.total_nodes,
+                self.extraction_ms,
+            ));
+        }
 
         out
     }
@@ -1203,6 +1215,38 @@ mod tests {
         assert!(
             out.contains("  [999]"),
             "page text is preserved, only fenced (indented): {out}"
+        );
+    }
+
+    #[test]
+    fn text_only_capture_keeps_table_cells_and_claims_no_element_count() {
+        let mut snap = DomSnapshot {
+            snapshot_id: None,
+            elements: vec![],
+            total_nodes: 0,
+            page_url: "x".into(),
+            page_title: "y".into(),
+            scroll: None,
+            scroll_percent: 0,
+            extraction_ms: 0,
+            subframes: 0,
+            shadow_truncated: false,
+            elements_truncated: false,
+            text_content: Some("Name\tPrice\nTea\t3".into()),
+            text_truncated: false,
+            accessibility_tree: None,
+        };
+        let out = snap.to_text();
+        assert!(out.contains("  Name\tPrice\n  Tea\t3\n"), "{out}");
+        assert!(
+            !out.contains("elements (from"),
+            "no DOM pass ran, so no element count: {out}"
+        );
+
+        snap.snapshot_id = Some("s1".into());
+        assert!(
+            snap.to_text()
+                .contains("--- 0 elements (from 0 nodes, 0ms) ---")
         );
     }
 

@@ -23,12 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP clients are not told to run commands they cannot reach. A stale snapshot
   names every cause, including a newer capture, instead of claiming the page
   changed.
-
 - Update jsonschema to 0.60, tokio to 1.54, oxlint to 1.89 and Node.js to
   24.22.1 LTS.
 - Audit workflows with zizmor. Build release binaries without restoring the
   Actions cache, attest them with `actions/attest`, and call the CI gate through
   the self-repository reference. Run E2E suites against Chrome for Testing 156.
+
+### Fixed
+
+- Stop text-only captures from reporting "0 elements" for a page that has
+  controls, and keep the tabs that separate table cells in rendered page text.
 
 ## [0.11.0] - 2026-10-17
 
