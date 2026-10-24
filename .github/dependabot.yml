@@ -62,3 +62,16 @@ updates:
     commit-message:
       prefix: "deps"
       include: scope
+
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Seoul
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "build"
+      include: scope
