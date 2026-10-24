@@ -54,7 +54,8 @@ WebPilot drives a real Chrome. Observe before acting: browser_navigate and brows
 return interactive elements as [N] with a snapshot_id, and indexed tools need both. A newer \
 snapshot, a navigation, or a change to the element makes an old snapshot_id stale \
 (StaleSnapshot): take a new snapshot instead of retrying. Acting tools return a fresh snapshot \
-unless capture is false. browser_find searches every indexed element, including ones a \
+unless capture is false; it lists the elements in view and the ones the action added, while \
+browser_snapshot lists the whole page. browser_find searches every indexed element, including ones a \
 shortened listing omits, and takes a new snapshot: use its snapshot_id afterwards.
 Failed calls return isError with a typed code in structuredContent. OutcomeUnknown means the \
 action may already have run: observe the page before repeating it. A capture_error after an \
@@ -1287,7 +1288,7 @@ fn build_tool_specs() -> Value {
             )
         {
             let indexed = properties.contains_key("index") || properties.contains_key("source");
-            properties.insert("capture".into(), json!({"type":"boolean", "default":true, "description":"Return a new DOM snapshot after the action."}));
+            properties.insert("capture".into(), json!({"type":"boolean", "default":true, "description":"Return a new DOM snapshot after the action, listing the elements in view and the ones the action added."}));
             if indexed {
                 properties.insert("snapshot_id".into(), json!({"type":"string", "description":"Snapshot identifier returned with the observed elements."}));
                 tool["inputSchema"]["required"]

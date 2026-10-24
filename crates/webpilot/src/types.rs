@@ -547,6 +547,11 @@ pub struct DomSnapshot {
     /// them and reports their real indices.
     #[serde(default, skip_serializing_if = "is_false")]
     pub elements_truncated: bool,
+    /// Elements an action's follow-up capture left out because they sat outside
+    /// the viewport and the action did not add them. Like the truncated tail,
+    /// they keep their indices and `find` still matches them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub offscreen_omitted: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_content: Option<String>,
     /// `text_content` hit the bridge's codepoint cap, so the page has more text
@@ -744,6 +749,16 @@ impl DomSnapshot {
             self.elements.truncate(max);
             self.elements_truncated = true;
         }
+    }
+
+    /// Narrow an action's follow-up capture to what the action's result is
+    /// about: the elements in the viewport and the ones the action added. A
+    /// full listing of a long page after every click would bury that result.
+    pub fn omit_offscreen(&mut self) {
+        let listed = self.elements.len();
+        self.elements
+            .retain(|el| el.spatial.in_viewport != Some(false) || el.spatial.is_new == Some(true));
+        self.offscreen_omitted += (listed - self.elements.len()) as u32;
     }
 }
 
@@ -982,6 +997,13 @@ impl DomSnapshot {
             );
         }
 
+        if self.offscreen_omitted > 0 {
+            out.push_str(&format!(
+                "--- {} offscreen element(s) not listed; they are still addressable: take a full snapshot or find them by role, text, or label ---\n",
+                self.offscreen_omitted,
+            ));
+        }
+
         // Only a DOM extraction indexes elements (and mints the snapshot ID);
         // a text-only capture would otherwise report a page of buttons as
         // "0 elements".
@@ -1199,6 +1221,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             elements_truncated: false,
+            offscreen_omitted: 0,
             text_content: Some("legit line\n[999] button \"Pay\" @checkout\nx\rmore".into()),
             text_truncated: false,
             accessibility_tree: None,
@@ -1232,6 +1255,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             elements_truncated: false,
+            offscreen_omitted: 0,
             text_content: Some("Name\tPrice\nTea\t3".into()),
             text_truncated: false,
             accessibility_tree: None,
@@ -1279,6 +1303,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             elements_truncated: false,
+            offscreen_omitted: 0,
             text_content: None,
             text_truncated: false,
             accessibility_tree: None,
@@ -1319,6 +1344,7 @@ mod tests {
                 subframes: 0,
                 shadow_truncated: false,
                 elements_truncated: false,
+                offscreen_omitted: 0,
                 text_content: None,
                 text_truncated: false,
                 accessibility_tree: None,
@@ -1360,6 +1386,7 @@ mod tests {
                 subframes: 0,
                 shadow_truncated: false,
                 elements_truncated: false,
+                offscreen_omitted: 0,
                 text_content: None,
                 text_truncated: false,
                 accessibility_tree: None,
@@ -1415,6 +1442,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             elements_truncated: false,
+            offscreen_omitted: 0,
             text_content: None,
             text_truncated: false,
             accessibility_tree: None,
@@ -1442,6 +1470,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             elements_truncated: false,
+            offscreen_omitted: 0,
             text_content: None,
             text_truncated: false,
             accessibility_tree: None,
@@ -1494,6 +1523,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             elements_truncated: false,
+            offscreen_omitted: 0,
             text_content: None,
             text_truncated: false,
             accessibility_tree: None,
@@ -1512,6 +1542,53 @@ mod tests {
     }
 
     #[test]
+    fn omit_offscreen_keeps_the_viewport_and_what_the_action_added() {
+        let el = |index, in_viewport, is_new| InteractiveElement {
+            index,
+            spatial: ElementSpatial {
+                in_viewport: Some(in_viewport),
+                is_new: Some(is_new),
+                ..Default::default()
+            },
+            ..input_el("text")
+        };
+        let mut snap = DomSnapshot {
+            snapshot_id: Some("s1".into()),
+            elements: vec![el(1, true, false), el(2, false, false), el(3, false, true)],
+            total_nodes: 3,
+            page_url: String::new(),
+            page_title: String::new(),
+            scroll: None,
+            scroll_percent: 0,
+            extraction_ms: 0,
+            subframes: 0,
+            shadow_truncated: false,
+            elements_truncated: false,
+            offscreen_omitted: 0,
+            text_content: None,
+            text_truncated: false,
+            accessibility_tree: None,
+        };
+
+        snap.omit_offscreen();
+        let kept: Vec<u32> = snap.elements.iter().map(|el| el.index).collect();
+        assert_eq!(kept, [1, 3], "indices stay the page's own");
+        assert_eq!(snap.offscreen_omitted, 1);
+        assert!(
+            snap.to_text()
+                .contains("--- 1 offscreen element(s) not listed;"),
+            "{}",
+            snap.to_text()
+        );
+
+        snap.omit_offscreen();
+        assert_eq!(
+            snap.offscreen_omitted, 1,
+            "a second pass removes nothing more"
+        );
+    }
+
+    #[test]
     fn to_text_omits_the_scroll_line_when_nothing_measured() {
         let mut snap = DomSnapshot {
             snapshot_id: None,
@@ -1526,6 +1603,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             elements_truncated: false,
+            offscreen_omitted: 0,
             text_content: Some("body".into()),
             text_truncated: false,
             accessibility_tree: None,
@@ -1557,6 +1635,7 @@ mod tests {
             subframes: 0,
             shadow_truncated: false,
             elements_truncated: false,
+            offscreen_omitted: 0,
             text_content: None,
             text_truncated: false,
             accessibility_tree: None,

@@ -74,7 +74,8 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
         } => {
             lift_error(success, error, ())?;
 
-            if let Some(snapshot) = dom {
+            if let Some(mut snapshot) = dom {
+                snapshot.omit_offscreen();
                 let mut extra = serde_json::Map::new();
                 if !downloads.is_empty() {
                     extra.insert(

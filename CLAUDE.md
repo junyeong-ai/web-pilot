@@ -117,6 +117,10 @@ can emit an unbounded index — the browser keeps the whole index, so an element
 past it stays addressable and `find` (which renders only its matches) still
 matches it. The extraction-side caps live in `bridge.js`, which both modes share:
 page text, element text, option lists, and the shadow walk.
+`--- N offscreen element(s) not listed ---` appears on an action's follow-up
+capture (`--capture`, the MCP action tools), which lists only the elements in the
+viewport and the ones the action added (`DomSnapshot::omit_offscreen`); the
+omitted ones keep their indices. A capture lists the whole page.
 
 ## Wire Protocol
 
