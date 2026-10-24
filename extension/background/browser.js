@@ -2,7 +2,7 @@
 // Mirrors transport/local/browser.rs.
 
 import { err, exceptionErr, lineSafeClip, noPageErr, topErr } from "./errors.js";
-import { activeFrameId, activeTabId, ensureRestored, navigationTimeoutMs, resolveActiveTab, setActiveFrameId, setActiveTabId } from "./session.js";
+import { activeFrameId, activeTabBorrowed, activeTabId, currentPin, ensureRestored, navigationTimeoutMs, pinTab, resolveActiveTab, resolveTabForRead, restorePin, setActiveFrameId, unpinTab, viewedTab } from "./session.js";
 import { cdpEnableRuntime, withCdp } from "./cdp.js";
 import { cdpEval, frameWorldContextId } from "./query.js";
 import { adoptedDocumentReady } from "./navigation.js";
@@ -41,10 +41,10 @@ async function handleTabNew(url) {
       error: err("InvalidArgument", `invalid URL for tab new: ${url}`),
     };
   }
-  // The tab the agent is bound to now — restored if this `tab new` fails, so a
-  // bad URL never strands an orphan tab or drifts the pin onto a chrome-error
-  // page (navigate's no-leak contract, headless parity).
-  const prevTabId = activeTabId;
+  // The pin as it stands — restored if this `tab new` fails, so a bad URL never
+  // strands an orphan tab or leaves the pin on a closed one (navigate's no-leak
+  // contract, headless parity).
+  const previous = currentPin();
   // Buffer main-frame load errors from BEFORE the tab exists: a refused
   // connection fails within milliseconds, so a listener registered after
   // create() resolves could miss it. Correlate by tab id afterward.
@@ -57,7 +57,7 @@ async function handleTabNew(url) {
   chrome.webNavigation.onErrorOccurred.addListener(onErr);
   try {
     const created = await chrome.tabs.create({ url, active: true });
-    setActiveTabId(created.id);
+    pinTab(created.id);
     // A fresh tab has its own frame tree — drop any frame scope.
     setActiveFrameId(0);
     // Settle on a ready page and report its real, post-redirect URL/title — `tab
@@ -73,11 +73,11 @@ async function handleTabNew(url) {
     // the same effect under the same policy gate, so it must agree.
     const failed = navErrors.find((d) => d.tabId === created.id);
     if (failed) {
-      // Roll the failed open back: close the dead error tab and re-pin the
-      // agent's previous tab, so a bad URL is the same no-leak NavigationFailed
-      // `navigate` produces (headless parity).
+      // Roll the failed open back: close the dead error tab and restore the
+      // pin, so a bad URL is the same no-leak NavigationFailed `navigate`
+      // produces (headless parity).
       await chrome.tabs.remove(created.id).catch(() => {});
-      if (prevTabId != null && prevTabId !== created.id) setActiveTabId(prevTabId);
+      restorePin(previous);
       return {
         type: "Action",
         success: false,
@@ -99,7 +99,7 @@ async function handleTabNew(url) {
     if (!settled) {
       // The new tab vanished during settle; the orphan is already gone, but the
       // pin must return to where the agent was (headless parity).
-      if (prevTabId != null && prevTabId !== created.id) setActiveTabId(prevTabId);
+      restorePin(previous);
       return {
         type: "Action",
         success: false,
@@ -108,6 +108,7 @@ async function handleTabNew(url) {
         }),
       };
     }
+    const viewed = await viewedTab();
     return {
       type: "Action",
       success: true,
@@ -117,7 +118,8 @@ async function handleTabNew(url) {
         // `??`: a settled tab whose document is untitled reports the honest ""
         // — `||` would resurrect the transient creation-time title.
         title: settled.title ?? created.title ?? "",
-        active: true,
+        pinned: true,
+        viewed: viewed?.id === created.id,
       },
     };
   } finally {
@@ -142,6 +144,10 @@ async function handleTabClose(tabId) {
   }
   try {
     await chrome.tabs.remove(id);
+    // Closing the pinned tab is the agent ending its work there: release the pin
+    // so the next command starts from first use instead of failing on a tab it
+    // closed on purpose. A pinned tab closed any other way stays a TabNotFound.
+    if (id === activeTabId) unpinTab();
     return { type: "Action", success: true };
   } catch (e) {
     // A bad or already-closed id is a not-found — typed to match headless
@@ -170,7 +176,7 @@ async function handleTabSwitch(tabId) {
     // capture/eval/actions all reach the tab through CDP regardless of which
     // window is frontmost. The pin below, not OS focus, is what commands follow.
     await chrome.tabs.update(target, { active: true });
-    setActiveTabId(target);
+    pinTab(target);
     // A different tab has its own frame tree — drop any frame scope.
     setActiveFrameId(0);
     // Armed console/network monitors follow the working tab, as headless does on
@@ -185,18 +191,19 @@ async function handleTabSwitch(tabId) {
 
 async function handleTabList() {
   const tabs = await chrome.tabs.query({});
-  // `active` marks the WebPilot-PINNED tab — the one commands act on — to match
-  // headless, where `active` is the bound CDP target. Chrome's own UI-foreground
-  // flag (`t.active`) is irrelevant: the agent does not control it and commands
-  // do not target it. Read the pinned id directly (no resolveActiveTab, which
-  // would pin a tab or throw on a vanished pin — a list must do neither).
+  const viewed = await viewedTab();
+  // `pinned` is the tab commands act on, `viewed` the one the user is looking at;
+  // they differ whenever the agent works in a tab of its own. Read the pin
+  // directly (no resolver, which would borrow a tab or throw on a vanished pin —
+  // a list must do neither).
   return {
     type: "Tabs",
     tabs: tabs.map((t) => ({
       id: String(t.id),
       url: t.url || "",
       title: t.title || "",
-      active: t.id === activeTabId,
+      pinned: t.id === activeTabId,
+      viewed: t.id === viewed?.id,
     })),
   };
 }
@@ -212,20 +219,19 @@ async function handleStatus() {
   // self-corrects, but a health check must not lie). `ensureRestored` is a fast
   // `storage.session` read, not a queue op, so QUEUE_EXEMPT still holds.
   await ensureRestored();
-  // Report the pinned tab when one is set — that is the tab commands will act
-  // on. Status is read-only, so it never pins as a side effect.
-  let tab = null;
-  if (activeTabId != null) {
-    // A pin is set: report THAT tab, or nothing if it has died. Do NOT fall
-    // through to the focused tab — `resolveActiveTab` throws TabNotFound for a
-    // dead pin, so every other command fails on it; status showing a healthy
-    // focused tab instead would tell the agent it is somewhere its commands
-    // can't reach. A null tab here mirrors that "the pinned tab is gone".
-    tab = await chrome.tabs.get(activeTabId).catch(() => null);
+  // Report the pinned tab and how it is held — or, with nothing pinned, the tab
+  // the user is viewing, which a read borrows when it is an http(s) page. Status
+  // is read-only, so it never pins as a side effect. A dead pin reports no tab:
+  // showing a healthy focused tab instead would tell the agent it is somewhere
+  // its commands can't reach.
+  let tab;
+  let pin;
+  if (activeTabId == null) {
+    tab = await viewedTab();
+    pin = "unpinned";
   } else {
-    // No pin: show the focused window's active tab — what a first command would
-    // pin. (resolveActiveTab pins the same tab; status just doesn't persist it.)
-    [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    tab = await chrome.tabs.get(activeTabId).catch(() => null);
+    pin = !tab ? "closed" : activeTabBorrowed ? "borrowed" : "own";
   }
   // Chrome version derives from the user agent (no direct API in MV3 SW).
   const ua = navigator.userAgent || "";
@@ -234,6 +240,7 @@ async function handleStatus() {
     type: "Status",
     connected: isHostConnected(),
     mode: "browser",
+    pin,
     // `?? null`, not `|| null`: a pinned tab with an empty title (a page with no
     // `<title>`) keeps `""`, matching headless `do_status`, which maps
     // `document.title` straight through as `Some("")`. `||` would report it as
@@ -253,7 +260,7 @@ function activeFrameIdWire() {
 }
 
 async function handleFrameList() {
-  const tab = await resolveActiveTab();
+  const tab = await resolveTabForRead();
   // A non-http page has no webpilot-addressable frame tree, so this is NoPage —
   // exactly like `frame switch` — not an empty list that an agent would read as
   // "this page simply has no iframes". (An http page with no iframes still
@@ -269,7 +276,7 @@ async function handleFrameList() {
   const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null);
   if (!all) {
     return topErr(
-      err("TabNotFound", `Tab not found: ${tab.id}. List the open tabs and switch to one explicitly.`, { tab_id: String(tab.id) }),
+      err("TabNotFound", `Tab not found: ${tab.id}`, { tab_id: String(tab.id) }),
     );
   }
   const frames = all.map((f) => ({
@@ -355,7 +362,7 @@ async function handleFrameSwitch(selector) {
       type: "FrameSwitched",
       success: false,
       frame_id: activeFrameIdWire(),
-      error: err("TabNotFound", `Tab not found: ${tab.id}. List the open tabs and switch to one explicitly.`, { tab_id: String(tab.id) }),
+      error: err("TabNotFound", `Tab not found: ${tab.id}`, { tab_id: String(tab.id) }),
     };
   }
   const httpFrames = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http"));

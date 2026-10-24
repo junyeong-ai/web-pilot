@@ -51,7 +51,7 @@ async function frameVanishedError(tabId, frameId, frames = null) {
   if (!Array.isArray(list)) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab) {
-      return err("TabNotFound", `Tab not found: ${tabId}. List the open tabs and switch to one explicitly.`, {
+      return err("TabNotFound", `Tab not found: ${tabId}`, {
         tab_id: String(tabId),
       });
     }
@@ -89,7 +89,7 @@ async function ensureBridge(tabId, frameId = 0) {
   // answer — the same split the headless transport makes.
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) {
-    const te = new Error(`Tab not found: ${tabId}. List the open tabs and switch to one explicitly.`);
+    const te = new Error(`Tab not found: ${tabId}`);
     te.code = "TabNotFound";
     te.data = { tab_id: String(tabId) };
     throw te;

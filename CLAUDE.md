@@ -137,7 +137,7 @@ CLI JSON and MCP structured content; `to_agent_text()` the MCP text blocks.
 | 1 | `Other`, `Session`, `ContextInUse` | unknown / session / context held by another live process |
 | 2 | _(clap arg parse)_ | CLI usage error — unknown flag / non-numeric index / missing arg |
 | 3 | `ConnectionLost`, `BridgeUnavailable`, `VersionMismatch` | infra |
-| 4 | `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `TabNotFound`, `ContextNotFound`, `CookieNotFound`, `FrameNotFound` | not-found |
+| 4 | `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `TabNotFound`, `NoPinnedTab`, `ContextNotFound`, `CookieNotFound`, `FrameNotFound` | not-found |
 | 5 | `Timeout` | timeout |
 | 6 | `PolicyDenied` | security |
 | 7 | `InvalidArgument` | user error |

@@ -262,14 +262,41 @@ serde_plain::derive_fromstr_from_deserialize!(PolicyKey);
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 
+/// How the tab commands act on was chosen. Browser mode shares Chrome with its
+/// user, so it tells a tab the agent took on purpose from one it only borrowed
+/// to read; every headless tab is the session's own.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PinState {
+    /// A tab the agent opened or switched to: a URL loads in it.
+    Own,
+    /// The tab the user was viewing, borrowed by a read while nothing was
+    /// pinned. Commands act on it, but loading a URL opens a new tab instead.
+    Borrowed,
+    /// Nothing is pinned (browser mode, before first use or after `tab close`
+    /// closed the pinned tab): a read borrows the tab the user is viewing,
+    /// loading a URL opens a new tab, and any other command needs one of the two.
+    Unpinned,
+    /// The pinned tab is gone. Browser mode reports `TabNotFound` until another
+    /// tab is chosen; headless reports it once, then moves to a surviving tab.
+    Closed,
+}
+
+serde_plain::derive_display_from_serialize!(PinState);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TabInfo {
     #[serde(deserialize_with = "deserialize_id_as_string")]
     pub id: String,
     pub url: String,
     pub title: String,
+    /// The tab commands act on.
     #[serde(default)]
-    pub active: bool,
+    pub pinned: bool,
+    /// The tab the user is viewing: the active tab of the last focused window.
+    /// Always false in headless, which has no viewer.
+    #[serde(default)]
+    pub viewed: bool,
 }
 
 fn deserialize_id_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>

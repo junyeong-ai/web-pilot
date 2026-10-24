@@ -53,8 +53,10 @@ first. Approval matches a command's leading words, so put `--browser`,
 - `--browser`: the user's authenticated Chrome. Run `webpilot setup` once,
   then load the printed extension directory through `chrome://extensions` →
   Developer mode → Load unpacked. Login sessions remain in that browser. Until
-  a tab is chosen, a navigation opens a new tab and any other command uses the
-  tab the user is viewing.
+  a tab is pinned, loading a URL (`navigate`, `capture --url`) opens a tab of its
+  own and a command that only reads the page, such as `capture`, `find`,
+  `dom get-*` or `wait`, borrows the tab the user is viewing; any other command
+  needs one of the two first (`NoPinnedTab`).
 - `--context NAME`: an isolated headless browser context for a separate task
   or concurrent agent. Cookies and storage are isolated. `context list` lists
   contexts; `context close NAME` disposes one (`--all` disposes unused contexts).
@@ -188,10 +190,21 @@ file input, including hidden inputs and open shadow roots; visibility is not
 required for upload. Cross-origin out-of-process frames that
 cannot be reached report `FrameNotFound`.
 
-If `tab` marks no tab as pinned, the pinned tab closed. Select a survivor
-explicitly before acting: headless reports `TabNotFound` once and pins a
-fallback, while browser mode leaves the choice to the caller. Do not blindly repeat a
-mutating command on a different tab.
+`status` says how the tab is pinned, and `tab` marks the pinned tab and, in
+browser mode, the one the user is viewing:
+
+- `own`: a tab the agent opened or switched to; a URL loads in it.
+- `borrowed` (browser): the tab the user was viewing, taken by a read. Commands
+  act on it, but loading a URL opens a new tab instead of replacing the user's
+  page.
+- `unpinned` (browser): nothing pinned yet, or `tab close` closed the pinned tab.
+- `closed`: the pinned tab is gone; in browser mode, closed other than by
+  `tab close`. Headless reports `TabNotFound` once and moves to a surviving tab;
+  browser mode reports it until you `tab switch` or `tab new`.
+
+A pin from an earlier task can outlive it. When the task is about the page the
+user is looking at and `tab` marks another tab as viewed, switch to that one. Do
+not blindly repeat a mutating command on a different tab.
 
 ## Read and change page data
 

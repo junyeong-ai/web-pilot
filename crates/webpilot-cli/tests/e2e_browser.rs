@@ -1209,31 +1209,160 @@ fn browser_behavioral_flow() {
         stdout(&fx.run(&["cookie", "delete", "http://", "k"]))
     );
 
-    // 5. Deterministic tab binding: commands act on the pinned tab, and a
-    //    vanished pin is a typed TabNotFound — never a silent retarget to
-    //    whatever tab happens to be focused. `tab new` re-pins.
-    let tabs = fx.run(&["tab"]);
-    assert_eq!(code(&tabs), 0, "tab list failed: {}", stdout(&tabs));
-    let tabs_json: serde_json::Value = serde_json::from_str(&stdout(&tabs)).expect("tabs json");
-    let fixture_tab = tabs_json
-        .as_array()
-        .expect("tabs array")
-        .iter()
-        .find(|t| t["url"].as_str().is_some_and(|u| u.starts_with(&base)))
-        .and_then(|t| {
-            t["id"]
-                .as_str()
-                .map(str::to_string)
-                .or_else(|| t["id"].as_u64().map(|n| n.to_string()))
-        })
-        .expect("fixture tab id");
-    let closed = fx.run(&["tab", "close", &fixture_tab]);
+    // 5. Tab binding: commands act on the pinned tab, and the pin says how it was
+    //    chosen. `tab close` on the pinned tab releases it: an effect then needs
+    //    a tab first (NoPinnedTab), a read borrows the tab the user is viewing,
+    //    and loading a URL leaves that borrowed tab alone and opens one of its
+    //    own. A pinned tab that closes any other way is a typed TabNotFound —
+    //    never a silent retarget to whatever tab is focused. `tab new` re-pins.
+    let pin_state = || {
+        let status = fx.run(&["status"]);
+        assert_eq!(code(&status), 0, "status failed: {}", stdout(&status));
+        let json: serde_json::Value = serde_json::from_str(&stdout(&status)).expect("status json");
+        json["pin"].as_str().unwrap_or_default().to_string()
+    };
+    let tabs_now = || {
+        let tabs = fx.run(&["tab"]);
+        assert_eq!(code(&tabs), 0, "tab list failed: {}", stdout(&tabs));
+        let json: serde_json::Value = serde_json::from_str(&stdout(&tabs)).expect("tabs json");
+        json.as_array().expect("tabs array").clone()
+    };
+    let tab_id = |t: &serde_json::Value| {
+        t["id"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| t["id"].as_u64().map(|n| n.to_string()))
+            .expect("tab id")
+    };
+    let pinned_tab = || tabs_now().into_iter().find(|t| t["pinned"] == true);
+
+    // The tab left in view loads while an `eval` deny suppresses the monitor
+    // re-arm, so a console read after borrowing it passes only if the armed
+    // monitor follows the pin.
+    let deny = fx.run(&["policy", "set", "--operation", "eval", "--verdict", "deny"]);
+    assert_eq!(code(&deny), 0, "policy set eval deny: {}", stdout(&deny));
+    let unhooked = fx.run(&["tab", "new", &format!("{base}/second")]);
+    assert_eq!(code(&unhooked), 0, "tab new failed: {}", stdout(&unhooked));
+    let opened = fx.run(&["tab", "new", &format!("{base}/frame")]);
+    assert_eq!(code(&opened), 0, "tab new failed: {}", stdout(&opened));
+    assert_eq!(
+        code(&fx.run(&["policy", "clear"])),
+        0,
+        "policy clear failed"
+    );
+    assert_eq!(pin_state(), "own", "a tab the agent opened is its own");
+    let own = tab_id(&pinned_tab().expect("the opened tab is pinned"));
+    let closed = fx.run(&["tab", "close", &own]);
     assert_eq!(code(&closed), 0, "tab close failed: {}", stdout(&closed));
+    assert_eq!(
+        pin_state(),
+        "unpinned",
+        "closing the pinned tab releases it"
+    );
+    let in_view = tabs_now()
+        .into_iter()
+        .find(|t| t["viewed"] == true)
+        .expect("a tab is in view");
+    assert!(
+        in_view["url"]
+            .as_str()
+            .is_some_and(|u| u.ends_with("/second")),
+        "closing the last tab brings the one before it into view: {in_view}"
+    );
+
+    let unpinned_effect = fx.run(&["action", "key-press", "Escape"]);
+    assert_eq!(
+        code(&unpinned_effect),
+        4,
+        "an effect with nothing pinned must be refused, not run on the viewed tab: {}",
+        stdout(&unpinned_effect)
+    );
+    assert!(
+        stdout(&unpinned_effect).contains("NoPinnedTab"),
+        "{}",
+        stdout(&unpinned_effect)
+    );
+
+    let borrowed_read = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(
+        code(&borrowed_read),
+        0,
+        "a read with nothing pinned borrows the viewed tab: {}",
+        stdout(&borrowed_read)
+    );
+    assert_eq!(pin_state(), "borrowed");
+    let followed = fx.run(&["console", "read"]);
+    assert_eq!(
+        code(&followed),
+        0,
+        "the armed console monitor must follow the pin onto the borrowed tab: {}",
+        stdout(&followed)
+    );
+    let borrowed = pinned_tab().expect("the borrowed tab is pinned");
+    let borrowed_id = tab_id(&borrowed);
+    let dead_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("bind a free port")
+        .local_addr()
+        .expect("local addr")
+        .port();
+    let tab_count = tabs_now().len();
+    let refused = fx.run(&[
+        "action",
+        "navigate",
+        &format!("http://127.0.0.1:{dead_port}/"),
+    ]);
+    assert_eq!(
+        code(&refused),
+        8,
+        "a refused load from a borrowed pin must be NavigationFailed: {}",
+        stdout(&refused)
+    );
+    assert_eq!(
+        tabs_now().len(),
+        tab_count,
+        "the tab the failed navigation opened must be closed"
+    );
+    assert_eq!(
+        pin_state(),
+        "borrowed",
+        "a failed navigation restores the borrowed pin"
+    );
+    let nav = fx.run(&["action", "navigate", &format!("{base}/frame")]);
+    assert_eq!(code(&nav), 0, "navigate failed: {}", stdout(&nav));
+    let nav_json: serde_json::Value = serde_json::from_str(&stdout(&nav)).expect("navigate json");
+    assert!(
+        nav_json["new_tab"]["id"].is_string(),
+        "a navigation off a borrowed tab must report the tab it opened: {}",
+        stdout(&nav)
+    );
+    let kept = tabs_now()
+        .into_iter()
+        .find(|t| tab_id(t) == borrowed_id)
+        .expect("the borrowed tab must stay open");
+    assert_eq!(
+        kept["url"], borrowed["url"],
+        "a navigation must not replace the borrowed tab's page"
+    );
+    assert_eq!(kept["pinned"], false, "the pin moves to the opened tab");
+    assert_eq!(pin_state(), "own");
+
+    // The page closes its own tab (a one-entry history allows it): the pin was
+    // not released, so commands report the vanished tab until one is chosen.
+    assert_eq!(
+        code(&fx.run(&[
+            "eval",
+            "setTimeout(function(){window.close()},200); 'scheduled'"
+        ])),
+        0,
+        "scheduling the self-close failed"
+    );
+    let vanished = (0..100).any(|_| pin_state() == "closed");
+    assert!(vanished, "the pinned tab never closed itself");
     let orphaned = fx.run(&["capture", "--include", "dom"]);
     assert_eq!(
         code(&orphaned),
         4,
-        "a command against a closed pin must be typed TabNotFound, not retargeted: {}",
+        "a command against a vanished pin must be typed TabNotFound, not retargeted: {}",
         stdout(&orphaned)
     );
     assert!(
@@ -1801,7 +1930,7 @@ fn browser_behavioral_flow() {
         pop_status_json["tab_url"]
             .as_str()
             .is_some_and(|u| u.ends_with("/second")),
-        "the popup must be the active tab after adoption: {}",
+        "the popup must be the pinned tab after adoption: {}",
         stdout(&pop_status)
     );
 
@@ -1842,7 +1971,7 @@ fn browser_behavioral_flow() {
         .as_array()
         .expect("tabs array")
         .iter()
-        .find(|t| t["active"] == serde_json::Value::Bool(true))
+        .find(|t| t["pinned"] == serde_json::Value::Bool(true))
         .and_then(|t| {
             t["id"]
                 .as_str()

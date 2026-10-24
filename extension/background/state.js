@@ -2,7 +2,7 @@
 // export/import. Mirrors transport/local/state.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
-import { activeFrameId, monitoringState, resolveActiveTab, saveMonitoringState } from "./session.js";
+import { activeFrameId, monitoringState, resolveActiveTab, resolveTabForRead, saveMonitoringState } from "./session.js";
 import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
 
 // The recorders, injected from this extension's own package — the same files
@@ -54,8 +54,9 @@ function setMonitorPolicy(mp) {
 // the narrower scope and starts at settle.
 //
 // The armed intent is agent-level, so this is also the whole of "the monitor
-// follows the pin": every pin move (tab switch / new / popup adoption) re-arms
-// the new working tab. A no-op unless armed, so a plain navigation pays nothing.
+// follows the pin": every pin move (tab switch / new / popup adoption / a
+// read's borrow) re-arms the new working tab. A no-op unless armed, so a plain
+// navigation pays nothing.
 async function rearmMonitors(tabId) {
   // `&& monitorPolicy.X`: re-injecting a MAIN-world hook is the same effect
   // `console start` / `network start` are gated on (`eval`), so a deny that
@@ -264,17 +265,18 @@ async function handleConsoleStart() {
 }
 
 async function handleConsoleRead(since) {
-  const tab = await resolveActiveTab();
-  if (!tab) return topErr(noPageErr());
   // Reading before `console start` would return an empty buffer (success) —
   // indistinguishable from "the page logged nothing" — so an agent could
   // conclude there were no messages when the monitor was simply never armed.
-  // Fail loud, matching headless do_console_read.
+  // Fail loud, matching headless do_console_read, and before resolving the tab
+  // so a read refused for the agent's own state borrows nothing.
   if (!monitoringState.console) {
     return topErr(
       err("InvalidArgument", "console monitoring is not active — start the console monitor first"),
     );
   }
+  const tab = await resolveTabForRead();
+  if (!tab) return topErr(noPageErr());
   try {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
@@ -396,15 +398,15 @@ async function handleNetworkStart() {
 }
 
 async function handleNetworkRead(since) {
-  const tab = await resolveActiveTab();
-  if (!tab) return topErr(noPageErr());
   // See handleConsoleRead: an empty read before `network start` would read as
-  // "no requests" rather than "monitor not armed". Fail loud.
+  // "no requests" rather than "monitor not armed". Fail loud, before borrowing.
   if (!monitoringState.network) {
     return topErr(
       err("InvalidArgument", "network monitoring is not active — start the network monitor first"),
     );
   }
+  const tab = await resolveTabForRead();
+  if (!tab) return topErr(noPageErr());
   try {
     const r = await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
@@ -514,7 +516,7 @@ async function handleSessionExport() {
     // partitioned auth cookie would silently vanish from the export (headless
     // `Storage.getCookies` sees every partition).
     const all = await chrome.cookies.getAll({ partitionKey: {} });
-    const tab = await resolveActiveTab();
+    const tab = await resolveTabForRead();
     // No http page (e.g. only chrome://newtab focused) means Web Storage can't be
     // read at all — fail rather than write a session file with silently empty
     // localStorage/sessionStorage that re-imports as data loss. Headless always
@@ -617,7 +619,7 @@ async function handleSessionImport(rawData) {
     // page — when the pin is a non-http page.
     const hasStorage = Object.keys(data.local_storage || {}).length > 0
       || Object.keys(data.session_storage || {}).length > 0;
-    const tab = await resolveActiveTab();
+    const tab = hasStorage ? await resolveActiveTab() : null;
     if (hasStorage && !tab) {
       return { type: "SessionResult", success: false, error: noPageErr() };
     }

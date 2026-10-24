@@ -311,7 +311,7 @@ webpilot device reset                                  # clear emulation
 | SSO / session | Separate persistent profile (initially logged out) | Reuses your existing SSO/login sessions |
 | Path | Direct CDP WebSocket | NM host (0600 socket) → extension |
 | Multi-agent | Isolated via `--context <name>` | Single agent |
-| First navigation | Loads in the session's own page | Opens a new tab; the tab you are on stays as it is |
+| Working tab | The session's own page | A tab of its own: loading a URL opens one. A read borrows the tab you are viewing, and loading a URL then opens a new tab instead of replacing that page; other commands are refused until a tab is chosen |
 | Prerequisites | Chrome installed | Chrome + extension + NM host registration (below) |
 
 ```bash
@@ -396,6 +396,7 @@ webpilot status --json | jq
   "context": null,
   "extension_version": null,
   "mode": "headless",
+  "pin": "own",
   "tab_title": "Acme Tasks — Sign in",
   "tab_url": "http://localhost:8700/"
 }
@@ -542,7 +543,7 @@ report about a session that has already ended needs.
 
 
 ```bash
-webpilot status                # connection state / Chrome version / active tab
+webpilot status                # connection state / Chrome version / pinned tab and how it is held
 webpilot -v capture --include dom --url URL   # debug logging to stderr
 webpilot quit                  # stop headless; the next page command starts Chrome
 ```

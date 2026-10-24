@@ -75,7 +75,7 @@ impl Session {
             .ok()?
             .as_array()?
             .iter()
-            .find(|t| t["active"] == Value::Bool(true))
+            .find(|t| t["pinned"] == Value::Bool(true))
             .and_then(|t| t["id"].as_str().map(str::to_owned))
     }
 

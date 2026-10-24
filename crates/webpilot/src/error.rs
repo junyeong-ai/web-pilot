@@ -76,8 +76,13 @@ pub enum WebPilotError {
     #[error("Blocked by policy: {operation}. Check: webpilot policy list")]
     PolicyDenied { operation: String },
 
-    #[error("Tab not found: {tab_id}. List the open tabs and switch to one explicitly.")]
+    #[error("Tab not found: {tab_id}. List the open tabs and switch to one, or open a new tab.")]
     TabNotFound { tab_id: String },
+
+    #[error(
+        "No tab is pinned yet: take a snapshot of the page to work on, open a new tab, or switch to one."
+    )]
+    NoPinnedTab,
 
     #[error("Context not found: {name}. List: webpilot context list")]
     ContextNotFound { name: String },
@@ -117,6 +122,7 @@ impl WebPilotError {
             | E::StaleSnapshot { .. }
             | E::SelectorNotFound { .. }
             | E::TabNotFound { .. }
+            | E::NoPinnedTab
             | E::ContextNotFound { .. }
             | E::CookieNotFound { .. }
             | E::FrameNotFound { .. } => 4,
@@ -148,6 +154,7 @@ impl WebPilotError {
             E::ConnectionLost { .. } => "ConnectionLost",
             E::PolicyDenied { .. } => "PolicyDenied",
             E::TabNotFound { .. } => "TabNotFound",
+            E::NoPinnedTab => "NoPinnedTab",
             E::ContextNotFound { .. } => "ContextNotFound",
             E::ContextInUse { .. } => "ContextInUse",
             E::CookieNotFound { .. } => "CookieNotFound",
@@ -208,6 +215,7 @@ impl WebPilotError {
             "TabNotFound" => Self::TabNotFound {
                 tab_id: str_field("tab_id").unwrap_or(w.message),
             },
+            "NoPinnedTab" => Self::NoPinnedTab,
             "ContextNotFound" => Self::ContextNotFound {
                 name: str_field("name").unwrap_or(w.message),
             },
@@ -427,6 +435,16 @@ mod tests {
 
         let recovered: WebPilotError = serde_json::from_value(json).unwrap();
         assert_eq!(recovered, original);
+        assert_eq!(recovered.exit_code(), 4);
+    }
+
+    #[test]
+    fn no_pinned_tab_round_trips_with_exit_4() {
+        let json = serde_json::to_value(WebPilotError::NoPinnedTab.to_wire()).unwrap();
+        assert_eq!(json["code"], "NoPinnedTab");
+
+        let recovered: WebPilotError = serde_json::from_value(json).unwrap();
+        assert_eq!(recovered, WebPilotError::NoPinnedTab);
         assert_eq!(recovered.exit_code(), 4);
     }
 

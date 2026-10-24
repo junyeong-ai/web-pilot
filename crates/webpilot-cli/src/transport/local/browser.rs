@@ -4,8 +4,8 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 use webpilot::WebPilotError;
-use webpilot::protocol::{FrameSelector, ResponseData, RunMode};
-use webpilot::types::{Download, FrameInfo, TabInfo};
+use webpilot::protocol::{FrameSelector, ResponseData, RunMode, StatusInfo};
+use webpilot::types::{Download, FrameInfo, PinState, TabInfo};
 
 use super::{LocalTransport, action_success, target_in_context};
 
@@ -63,16 +63,16 @@ impl LocalTransport {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                // Active = WebPilot's own pinned tab, not CDP `attached`. The
-                // `attached` flag is true for ANY debugger client on the target,
-                // so an open DevTools window or a second tool would mark a tab
-                // (or several) active that the agent never pinned. The pin is
-                // `self.target_id`, the one this transport acts on — and while it
-                // is dead this transport sits on a fallback no page command may
-                // touch, so NO tab is the agent's: marking the fallback would point
-                // the recovery at a tab whose very next capture is a TabNotFound.
-                active: self.pin_vanished.is_none()
+                // The pin is `self.target_id`, the one this transport acts on —
+                // not CDP `attached`, which is true for ANY debugger client on the
+                // target, so an open DevTools window or a second tool would mark a
+                // tab the agent never pinned. While the pin is dead this transport
+                // sits on a fallback no page command may touch, so NO tab is the
+                // agent's: marking the fallback would point the recovery at a tab
+                // whose very next capture is a TabNotFound.
+                pinned: self.pin_vanished.is_none()
                     && t.get("targetId").and_then(|v| v.as_str()) == Some(self.target_id.as_str()),
+                viewed: false,
             })
             .collect();
         Ok(ResponseData::Tabs { tabs })
@@ -260,7 +260,8 @@ impl LocalTransport {
             id,
             url,
             title,
-            active: true,
+            pinned: true,
+            viewed: false,
         })
     }
 
@@ -329,7 +330,8 @@ impl LocalTransport {
                 id: target_id,
                 url,
                 title,
-                active: true,
+                pinned: true,
+                viewed: false,
             }),
             capture_error: None,
             downloads,
@@ -363,7 +365,8 @@ impl LocalTransport {
         // Closing the tab this session is bound to needs no pin bookkeeping: the
         // pin already names it (`pick_active_target` writes every target it binds),
         // so the close leaves a DEAD pin and the next page command reports the one
-        // loud TabNotFound. Browser mode gets the same effect from its sticky pin.
+        // loud TabNotFound. Browser mode, whose fallback would be a tab the user
+        // is browsing, releases its pin instead.
         if let Err(e) = self
             .browser
             .close_target(tab_id, webpilot::settings::timeouts().cdp_send)
@@ -622,6 +625,19 @@ impl LocalTransport {
             .get("product")
             .and_then(|v| v.as_str())
             .map(parse_chrome_product);
+        // A dead pin leaves this transport on a fallback the agent has not been
+        // told about; reporting that page would describe a tab it does not hold.
+        if self.pin_vanished.is_some() {
+            return Ok(ResponseData::Status(StatusInfo {
+                connected: true,
+                mode: RunMode::Headless,
+                pin: Some(PinState::Closed),
+                tab_url: None,
+                tab_title: None,
+                chrome_version,
+                extension_version: None,
+            }));
+        }
         let title = self
             .page
             .evaluate("document.title")
@@ -635,14 +651,15 @@ impl LocalTransport {
             .ok()
             .and_then(|v| v.as_str().map(str::to_string));
 
-        Ok(ResponseData::Status {
+        Ok(ResponseData::Status(StatusInfo {
             connected: true,
             mode: RunMode::Headless,
+            pin: Some(PinState::Own),
             tab_url: url,
             tab_title: title,
             chrome_version,
             extension_version: None,
-        })
+        }))
     }
 }
 

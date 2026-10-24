@@ -2,8 +2,14 @@
 // host-pushed config — persisted across MV3 suspensions and restored before
 // any command runs. Mirrors the persisted-pin state in transport/local/mod.rs.
 
+import { rearmMonitors } from "./state.js";
+
 let activeFrameId = 0;
 let activeTabId = null;
+// A borrowed pin is the tab the user was viewing, taken by a read while nothing
+// was pinned: commands act on it, but loading a URL opens a tab of the agent's
+// own rather than replacing the user's page.
+let activeTabBorrowed = false;
 // The armed-monitor intent is AGENT-level, not per-tab — the headless model
 // exactly (one persisted flag per kind, re-armed on the pinned tab at every
 // pin move and navigation settle). Keying it by tab id would tie the intent to
@@ -13,7 +19,7 @@ let activeTabId = null;
 const monitoringState = { console: false, network: false };
 
 // An MV3 service worker is killed when idle and restarted on the next event,
-// losing in-memory state. `activeTabId`, `activeFrameId` and the monitoring
+// losing in-memory state. The pin, `activeFrameId` and the monitoring
 // flags are persisted to session storage and restored here before any command
 // runs — otherwise the first command after a restart would silently target the
 // wrong tab or the main frame instead of the iframe the agent had switched to.
@@ -33,10 +39,12 @@ function ensureRestored() {
     restorePromise = (async () => {
       const data = await chrome.storage.session.get([
         "activeTabId",
+        "activeTabBorrowed",
         "activeFrameId",
         "monitoring",
       ]);
       if (data?.activeTabId != null) activeTabId = data.activeTabId;
+      activeTabBorrowed = data?.activeTabBorrowed === true;
       if (data?.activeFrameId != null) activeFrameId = data.activeFrameId;
       if (data?.monitoring) {
         monitoringState.console = !!data.monitoring.console;
@@ -57,9 +65,28 @@ function setActiveFrameId(id) {
   chrome.storage.session?.set({ activeFrameId: id });
 }
 
-function setActiveTabId(id) {
-  activeTabId = id;
-  chrome.storage.session?.set({ activeTabId: id });
+// Pin the tab commands act on. Every pin is the agent's own unless a read
+// borrowed the user's viewed tab.
+function pinTab(tabId, { borrowed = false } = {}) {
+  activeTabId = tabId;
+  activeTabBorrowed = borrowed;
+  chrome.storage.session?.set({ activeTabId: tabId, activeTabBorrowed: borrowed });
+}
+
+// Release the pin: the next command starts over from first use.
+function unpinTab() {
+  pinTab(null);
+  setActiveFrameId(0);
+}
+
+// The pin as it stands, for a command that must put it back if it fails.
+function currentPin() {
+  return { tabId: activeTabId, borrowed: activeTabBorrowed, frameId: activeFrameId };
+}
+
+function restorePin(pin) {
+  pinTab(pin.tabId, { borrowed: pin.borrowed });
+  setActiveFrameId(pin.frameId);
 }
 
 function saveMonitoringState() {
@@ -117,46 +144,84 @@ function annotationPaintMs() {
 const PROBE_MS = 2000;
 
 // ── Active tab ──────────────────────────────────────────────────────────────
-// Browser mode binds every command to ONE tab, exactly as headless binds to
-// one target: pinned on first use (a navigation opens a tab of the agent's
-// own; any other command takes the focused window's active http tab), moved
-// only by an explicit `tab switch` / `tab new` / a tab the acted-on page
-// opened. A vanished pin is a typed TabNotFound — never a silent retarget to
-// whatever tab happens to be focused, which would route the agent's actions to
-// a page it has not seen. One pin per extension by design: multi-agent
-// isolation is a headless `--context` feature. The pin's lifetime is the
-// browser session (storage.session) on purpose — tab ids are meaningless
-// across a browser restart, so a fresh session re-pins on first use exactly
-// like a first run.
-// The pinned tab, or the typed TabNotFound a vanished pin raises. `null` means no
-// tab is pinned yet — the caller picks the unpinned fallback (a bridge command
-// has no page; a navigate creates one). No http filtering here: the two resolvers
-// below apply it (or not) per their needs.
+// Browser mode binds every command to ONE tab, as headless binds to one target,
+// but it shares Chrome with its user, so the pin records how it was chosen. With
+// nothing pinned, loading a URL opens a tab of the agent's own, a read borrows
+// the tab the user is viewing, and any other command is refused (NoPinnedTab):
+// an effect never lands on a page the agent has neither opened nor observed.
+// Effects act on a borrowed tab, but loading a URL opens a new tab rather than
+// replacing the user's page. Once set, the pin moves only by `tab new` /
+// `tab switch` / a tab a URL load or the acted-on page opened, and `tab close`
+// on it releases it. A tab that vanishes any other way is a typed
+// TabNotFound — never a silent retarget to whatever tab is focused. One pin per
+// extension by design: multi-agent isolation is a headless `--context` feature.
+// The pin lives as long as the browser session (storage.session): tab ids mean
+// nothing across a restart, so a fresh session starts unpinned like a first run.
+
+// The pinned tab, or the typed TabNotFound a vanished pin raises; `null` when
+// nothing is pinned. No http filtering here: the resolvers below apply it.
 async function pinnedTabOrThrow() {
   if (activeTabId == null) return null;
   const tab = await chrome.tabs.get(activeTabId).catch(() => null);
   if (tab) return tab;
-  const e = new Error(`Tab not found: ${activeTabId}. List the open tabs and switch to one explicitly.`);
+  const e = new Error(`Tab not found: ${activeTabId}`);
   e.code = "TabNotFound";
   e.data = { tab_id: String(activeTabId) };
   throw e;
 }
 
-async function resolveActiveTab() {
-  const pinned = await pinnedTabOrThrow();
-  if (pinned) {
-    // The pinned tab must be an injectable http(s) page. A pin left on a
-    // chrome:// / about: page has no bridge, so a command there is NoPage
-    // (navigate first) — not a confusing BridgeUnavailable from a failed
-    // inject. Matches the focused fallback below, which already returns null
-    // for a non-http tab, so every caller already handles this.
-    return pinned.url?.startsWith("http") ? pinned : null;
-  }
-  const [focused] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!focused?.url?.startsWith("http")) return null;
-  setActiveTabId(focused.id);
-  return focused;
+// The tab the user is viewing: the active tab of the last focused window.
+async function viewedTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return tab ?? null;
 }
 
+// The tab an effect acts on. `null` when the pinned tab is not an http(s) page:
+// it has no bridge, so the caller reports NoPage (navigate first) rather than a
+// confusing BridgeUnavailable from a failed inject.
+async function resolveActiveTab() {
+  const pinned = await pinnedTabOrThrow();
+  if (!pinned) {
+    const e = new Error("No tab is pinned yet");
+    e.code = "NoPinnedTab";
+    throw e;
+  }
+  return pinned.url?.startsWith("http") ? pinned : null;
+}
 
-export { acceptDialogs, PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, pinnedTabOrThrow, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };
+// The tab a read observes. With nothing pinned it borrows the tab the user is
+// viewing, so the commands that follow act on the page this read reported. A
+// borrow is a pin move, so armed monitors follow it as they follow every other.
+async function resolveTabForRead() {
+  const pinned = await pinnedTabOrThrow();
+  if (pinned) return pinned.url?.startsWith("http") ? pinned : null;
+  const viewed = await viewedTab();
+  if (!viewed?.url?.startsWith("http")) return null;
+  pinTab(viewed.id, { borrowed: true });
+  await rearmMonitors(viewed.id);
+  return viewed;
+}
+
+export {
+  acceptDialogs,
+  PROBE_MS,
+  activeFrameId,
+  activeTabBorrowed,
+  activeTabId,
+  annotationPaintMs,
+  applyHostConfig,
+  currentPin,
+  ensureRestored,
+  monitoringState,
+  navigationTimeoutMs,
+  pinTab,
+  pinnedTabOrThrow,
+  resolveActiveTab,
+  resolveTabForRead,
+  restorePin,
+  saveMonitoringState,
+  setActiveFrameId,
+  sleep,
+  unpinTab,
+  viewedTab,
+};

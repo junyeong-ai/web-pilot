@@ -2,7 +2,7 @@
 // Mirrors transport/local/capture.rs.
 
 import { err, exceptionErr, noPageErr, otherErr, topErr } from "./errors.js";
-import { activeFrameId, annotationPaintMs, resolveActiveTab, sleep } from "./session.js";
+import { activeFrameId, annotationPaintMs, resolveTabForRead, sleep } from "./session.js";
 import { cdpSend, withCdp } from "./cdp.js";
 import { resolveFrameWorld } from "./query.js";
 import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
@@ -56,9 +56,9 @@ async function handleCapture(command) {
       // happens to be looking at. It resets the frame scope and re-arms monitors
       // at settle, so a capture after `frame switch` + `--url` is main-frame
       // scoped, exactly as headless `navigate_reconnect`.
-      tabId = await navigateBoundTab(command.url);
+      ({ tabId } = await navigateBoundTab(command.url));
     } else {
-      const t = await resolveActiveTab();
+      const t = await resolveTabForRead();
       if (!t) return topErr(noPageErr());
       tabId = t.id;
     }

@@ -2,7 +2,7 @@
 // navigation detection. Mirrors transport/local/action.rs.
 
 import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
-import { PROBE_MS, activeFrameId, resolveActiveTab, setActiveFrameId, setActiveTabId, sleep, navigationTimeoutMs } from "./session.js";
+import { PROBE_MS, activeFrameId, pinTab, resolveActiveTab, setActiveFrameId, sleep, navigationTimeoutMs, viewedTab } from "./session.js";
 import { cdpSend, cdpSendEffect, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, installDialogOverride, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitHistoryTraversed, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
@@ -62,11 +62,22 @@ async function handleAction(command) {
       // navigateBoundTab resolves-or-creates the target, settles, resets the
       // frame scope, and re-arms monitors — the same path `capture --url` uses.
       // A typed failure (TabNotFound for a vanished pin) keeps its code; a raw
-      // navigation error becomes NavigationFailed.
+      // navigation error becomes NavigationFailed. A tab it opened is reported
+      // as `new_tab`, so the agent learns its work moved to a new tab.
       try {
-        const tabId = await navigateBoundTab(action.url);
+        const { tabId, opened } = await navigateBoundTab(action.url);
         const landed = await chrome.tabs.get(tabId).catch(() => null);
         result = { type: "Action", success: true, url_changed: landed?.url || action.url };
+        if (opened) {
+          const viewed = await viewedTab();
+          result.new_tab = {
+            id: String(tabId),
+            url: landed?.url || action.url,
+            title: landed?.title ?? "",
+            pinned: true,
+            viewed: viewed?.id === tabId,
+          };
+        }
       } catch (e) {
         result = {
           type: "Action",
@@ -576,7 +587,7 @@ async function dispatchActionToPage(tab, action, snapshot_id) {
         await chrome.tabs.update(newTab.id, { active: true });
         // The agent's working tab moved — re-pin so every later command
         // follows it, and drop any frame scope (a new tab's tree is its own).
-        setActiveTabId(newTab.id);
+        pinTab(newTab.id);
         setActiveFrameId(0);
         // Read the tab's identity only AFTER it leaves about:blank and commits its
         // destination: a slow or redirecting target=_blank popup reports
@@ -589,11 +600,13 @@ async function dispatchActionToPage(tab, action, snapshot_id) {
         // land on the real document.
         await rearmMonitors(newTab.id);
         const settled = (await chrome.tabs.get(newTab.id).catch(() => null)) || newTab;
+        const viewed = await viewedTab();
         result.new_tab = {
           id: String(settled.id),
           url: settled.url || "",
           title: settled.title || "",
-          active: true,
+          pinned: true,
+          viewed: viewed?.id === settled.id,
         };
       }
     }

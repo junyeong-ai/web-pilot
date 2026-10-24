@@ -67,12 +67,12 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       (Chrome orders it by target GUID, so a re-derivation can land elsewhere).
       A pin whose tab closed STAYS on disk until the command that REPORTS it —
       `send`'s one loud `TabNotFound` — moves it onto the fallback, so a
-      pin-independent command (`tab` list, the browser-global cookie/session
-      ops) can never consume the signal silently; `tab list` marks no tab active
-      meanwhile, and an explicit `tab switch`/`tab new` answers the dead pin
-      instead. Browser mode's pin is sticky in the same way but never
-      auto-moves: it drives the user's own Chrome, where the fallback would be a
-      tab the user is browsing.
+      pin-independent command (`tab` list, `status`, the browser-global
+      cookie/session ops) can never consume the signal silently: meanwhile `tab`
+      marks no tab pinned and `status` reports `closed`, and an explicit
+      `tab switch`/`tab new` answers the dead pin instead. Browser mode's pin
+      never auto-moves, since the fallback would be a tab the user is browsing;
+      its model is in `.claude/rules/extension.md`.
   - `local_context.rs` — per-user CDP browser-context store (multi-agent,
     `MAX_CONTEXTS`).
 - `cdp.rs` — `CdpClient` (one tokio-tungstenite WebSocket to the browser

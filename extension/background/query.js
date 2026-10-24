@@ -2,7 +2,7 @@
 // Mirrors transport/local/query.rs.
 
 import { err, exceptionErr, lineSafeClip, noPageErr, otherErr, timeoutErr } from "./errors.js";
-import { PROBE_MS, activeFrameId, navigationTimeoutMs, resolveActiveTab, sleep } from "./session.js";
+import { PROBE_MS, activeFrameId, activeTabId, navigationTimeoutMs, resolveActiveTab, resolveTabForRead, sleep } from "./session.js";
 import { cdpSend, cdpSendEffect, cdpEnableRuntime, cdpReemitContexts, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, sendToContent, sendToContentOnce } from "./content.js";
 
@@ -229,7 +229,7 @@ const WAIT_CANCELLED = Symbol("wait-cancelled");
 const TAB_CLOSED = Symbol("tab-closed");
 
 async function handleWait(command) {
-  const tab = await resolveActiveTab();
+  const tab = await resolveTabForRead();
   if (!tab) return { type: "Wait", success: false, error: noPageErr() };
 
   const cond = command.condition || { until: "idle" };
@@ -285,7 +285,7 @@ async function handleWait(command) {
         return {
           type: "Wait",
           success: false,
-          error: err("TabNotFound", `Tab not found: ${tab.id}. List the open tabs and switch to one explicitly.`, { tab_id: String(tab.id) }),
+          error: err("TabNotFound", `Tab not found: ${tab.id}`, { tab_id: String(tab.id) }),
         };
       }
       return { type: "Wait", success: false, error: timeoutErr("navigation", timeoutMs) };
@@ -377,7 +377,7 @@ async function handleDomSet(command) {
 }
 
 async function handleDomGet(command) {
-  const tab = await resolveActiveTab();
+  const tab = await resolveTabForRead();
   if (!tab) return { type: "CommandResult", success: false, error: noPageErr() };
   const msg = bridgeMessageForDom("get", command);
   if (!msg) return { type: "CommandResult", success: false, error: otherErr("Invalid property") };
@@ -510,8 +510,9 @@ async function handleWaitCancel(command) {
     navigationWaits.get(command.request_id)();
     return { type:"Wait", success:true };
   }
-  const tab = await resolveActiveTab();
-  if (tab) await sendToContentOnce(tab.id, { type:"cancelWait", request_id:command.request_id }, activeFrameId);
+  // Without a live pinned tab there is no wait to cancel: it ran in that tab.
+  const tab = activeTabId == null ? null : await chrome.tabs.get(activeTabId).catch(() => null);
+  if (tab?.url?.startsWith("http")) await sendToContentOnce(tab.id, { type:"cancelWait", request_id:command.request_id }, activeFrameId);
   return { type:"Wait", success:true };
 }
 

@@ -10,8 +10,8 @@ use crate::action::Action;
 use crate::capture::{CaptureField, CaptureOpts};
 use crate::error::WebPilotError;
 use crate::types::{
-    ConsoleEntry, CookieInfo, DomSnapshot, Download, FrameInfo, NetworkEntry, PolicyKey, SameSite,
-    TabInfo,
+    ConsoleEntry, CookieInfo, DomSnapshot, Download, FrameInfo, NetworkEntry, PinState, PolicyKey,
+    SameSite, TabInfo,
 };
 use crate::wait::WaitCondition;
 
@@ -297,6 +297,28 @@ pub enum RunMode {
 
 serde_plain::derive_display_from_serialize!(RunMode);
 
+/// The connection and the tab commands act on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusInfo {
+    pub connected: bool,
+    pub mode: RunMode,
+    /// How the reported tab is held; absent while nothing is connected, or in
+    /// a reply from a host that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<PinState>,
+    /// The pinned tab, or while nothing is pinned the tab the user is viewing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab_title: Option<String>,
+    /// Chrome version (always populated when `connected`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chrome_version: Option<String>,
+    /// WebPilot extension version (browser mode only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_version: Option<String>,
+}
+
 fn default_wait_timeout_ms() -> u64 {
     10_000
 }
@@ -382,20 +404,7 @@ pub enum ResponseData {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<WebPilotError>,
     },
-    Status {
-        connected: bool,
-        mode: RunMode,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tab_url: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tab_title: Option<String>,
-        /// Chrome version (always populated when `connected`).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        chrome_version: Option<String>,
-        /// WebPilot extension version (browser mode only).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        extension_version: Option<String>,
-    },
+    Status(StatusInfo),
     Tabs {
         tabs: Vec<TabInfo>,
     },

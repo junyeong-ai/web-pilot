@@ -7,54 +7,62 @@
 use anyhow::Result;
 use webpilot::WebPilotError;
 use webpilot::ipc::{self, IpcError};
-use webpilot::protocol::{Command, Request, Response, ResponseData, RunMode};
-use webpilot::types::{line_safe, line_safe_clip};
+use webpilot::protocol::{Command, Request, Response, ResponseData, RunMode, StatusInfo};
+use webpilot::types::{PinState, line_safe, line_safe_clip};
 
 use crate::commands::setup::nm_host;
 use crate::output::CommandOutput;
 
+/// What a pin state means for the next command, worded for any client.
+fn pin_line(pin: PinState) -> &'static str {
+    match pin {
+        PinState::Own => "own — a URL loads in this tab",
+        PinState::Borrowed => "borrowed from the user's view — loading a URL opens a new tab",
+        PinState::Unpinned => {
+            "none — a read borrows the tab the user is viewing; loading a URL opens a new tab"
+        }
+        PinState::Closed => "closed — switch to an open tab or open a new one",
+    }
+}
+
 /// Render a typed `Status` response into the unified `CommandOutput` shape.
-pub fn render(
-    connected: bool,
-    mode: RunMode,
-    tab_url: Option<String>,
-    tab_title: Option<String>,
-    chrome_version: Option<String>,
-    extension_version: Option<String>,
-    context_label: Option<&str>,
-) -> CommandOutput {
-    let mut human = format!("Mode: {mode}");
-    human.push_str(&format!("\nConnected: {connected}"));
+pub fn render(status: StatusInfo, context_label: Option<&str>) -> CommandOutput {
+    let mut human = format!("Mode: {}", status.mode);
+    human.push_str(&format!("\nConnected: {}", status.connected));
     if let Some(ctx) = context_label {
         // `line_safe` like every other agent-facing field — a context name
         // carrying a newline must not forge an extra status line.
         human.push_str(&format!("\nContext: {}", line_safe(ctx)));
     }
-    if let Some(ref v) = chrome_version {
+    if let Some(ref v) = status.chrome_version {
         human.push_str(&format!("\nChrome: {v}"));
     }
-    if let Some(ref v) = extension_version {
+    if let Some(ref v) = status.extension_version {
         human.push_str(&format!("\nExtension: v{v}"));
+    }
+    if let Some(pin) = status.pin {
+        human.push_str(&format!("\nPin: {}", pin_line(pin)));
     }
     // `tab_title`/`tab_url` are page-controlled; `line_safe_clip` them at the
     // same 200-char cap the DOM footer uses so a crafted title can neither embed
     // a newline to forge a status line nor flood the line with an unbounded
     // string (the `--json` path is already safe via JSON escaping).
-    if let Some(ref t) = tab_title {
+    if let Some(ref t) = status.tab_title {
         human.push_str(&format!("\nTab: {}", line_safe_clip(t, 200)));
     }
-    if let Some(ref u) = tab_url {
+    if let Some(ref u) = status.tab_url {
         human.push_str(&format!("\nURL: {}", line_safe_clip(u, 200)));
     }
 
     CommandOutput::Data {
         json: serde_json::json!({
-            "connected": connected,
-            "mode": mode.to_string(),
-            "tab_url": tab_url,
-            "tab_title": tab_title,
-            "chrome_version": chrome_version,
-            "extension_version": extension_version,
+            "connected": status.connected,
+            "mode": status.mode.to_string(),
+            "pin": status.pin,
+            "tab_url": status.tab_url,
+            "tab_title": status.tab_title,
+            "chrome_version": status.chrome_version,
+            "extension_version": status.extension_version,
             "context": context_label,
         }),
         human,
@@ -76,9 +84,16 @@ const NO_SESSION_HINT: &str = concat!(
 /// state is and what leaves it, the same courtesy browser mode's `diagnose` pays
 /// its own not-connected paths.
 pub fn no_session(context: Option<&str>) -> CommandOutput {
-    let CommandOutput::Data { json, human } =
-        render(false, RunMode::Headless, None, None, None, None, context)
-    else {
+    let status = StatusInfo {
+        connected: false,
+        mode: RunMode::Headless,
+        pin: None,
+        tab_url: None,
+        tab_title: None,
+        chrome_version: None,
+        extension_version: None,
+    };
+    let CommandOutput::Data { json, human } = render(status, context) else {
         unreachable!("render always produces Data")
     };
     CommandOutput::Data {
@@ -105,22 +120,7 @@ pub async fn run() -> Result<CommandOutput> {
             detail: format!("malformed reply from the Native Messaging host: {e}"),
         })?;
     match response.result {
-        ResponseData::Status {
-            connected,
-            mode,
-            tab_url,
-            tab_title,
-            chrome_version,
-            extension_version,
-        } => Ok(render(
-            connected,
-            mode,
-            tab_url,
-            tab_title,
-            chrome_version,
-            extension_version,
-            None,
-        )),
+        ResponseData::Status(status) => Ok(render(status, None)),
         ResponseData::Error { error } => Err(error.into()),
         _ => anyhow::bail!("Unexpected response shape"),
     }
@@ -318,15 +318,16 @@ mod tests {
         // `Z` / `q` appear nowhere in the framing ("Mode/Connected/Tab/URL",
         // "Headless", "https://evil.test/"), so each count measures exactly the
         // rendered value, not the labels around it.
-        let out = render(
-            true,
-            RunMode::Headless,
-            Some("https://evil.test/".to_owned() + &"q".repeat(50_000)),
-            Some("Z".repeat(50_000)),
-            None,
-            None,
-            None,
-        );
+        let status = StatusInfo {
+            connected: true,
+            mode: RunMode::Headless,
+            pin: None,
+            tab_url: Some("https://evil.test/".to_owned() + &"q".repeat(50_000)),
+            tab_title: Some("Z".repeat(50_000)),
+            chrome_version: None,
+            extension_version: None,
+        };
+        let out = render(status, None);
         let CommandOutput::Data { human, .. } = out else {
             panic!("status renders Data");
         };

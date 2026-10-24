@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** In browser mode, a command that changes the page needs a tab
+  first. With nothing pinned, loading a URL (`navigate`, `capture --url`) opens
+  a tab of its own, a command that only reads the page, such as `capture`,
+  `find`, `dom get-*` or `wait`, borrows the tab the user is viewing, and any
+  other command reports `NoPinnedTab` (exit 4) instead of acting on a page the
+  agent has not seen.
+- In browser mode, loading a URL never replaces a tab borrowed from the user's
+  view: it opens a new tab, which `action navigate` reports as `new_tab`.
+- `tab close` on the pinned tab releases the pin in browser mode, so the next
+  command starts over instead of failing with `TabNotFound`. A pinned tab that
+  closes any other way still reports `TabNotFound`.
+- **Breaking:** The tab list and the `new_tab` that `action`, `tab new` and
+  `find` report mark the tab commands act on as `pinned` (was `active`) and, in
+  browser mode, the tab the user is viewing as `viewed`; the tab list's text
+  output names both.
+- `status` reports how the tab is held (`pin`: `own`, `borrowed`, `unpinned`,
+  `closed`). After the pinned tab closed, headless no longer reports the
+  fallback page as the pinned tab.
+- `TabNotFound` suggests opening a new tab as well as switching to one.
+
+### Fixed
+
+- A failed `tab new`, or a failed navigation that opened a tab, restores the
+  previous pin, including no pin, instead of leaving it on the closed tab.
+
 ## [0.12.1] - 2026-10-24
 
 ### Fixed

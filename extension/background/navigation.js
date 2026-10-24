@@ -1,7 +1,7 @@
 // Navigation settle: commit watch, settled-wait, and document readiness.
 // Mirrors the navigation half of transport/local/mod.rs.
 
-import { PROBE_MS, navigationTimeoutMs, pinnedTabOrThrow, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
+import { PROBE_MS, activeTabBorrowed, currentPin, navigationTimeoutMs, pinTab, pinnedTabOrThrow, restorePin, setActiveFrameId, sleep } from "./session.js";
 import { rearmMonitors } from "./state.js";
 
 // ── Navigation settle ───────────────────────────────────────────────────────
@@ -167,7 +167,7 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
         // then surfaces as a misleading NavigationFailed. (`chrome.tabs.get`
         // resolves for a live tab whatever its navigation state, so a null here
         // is a genuine vanish, never a transient mid-nav blip.)
-        const e = new Error(`Tab not found: ${tabId}. List the open tabs and switch to one explicitly.`);
+        const e = new Error(`Tab not found: ${tabId}`);
         e.code = "TabNotFound";
         e.data = { tab_id: String(tabId) };
         throw e;
@@ -347,19 +347,22 @@ async function waitActiveFrameSettled(tabId, frameId, beforeDocId) {
   }
 }
 
-// Navigate the pinned tab to `url`, or create and pin a tab of the agent's own
-// when none is pinned. This is the single tab-resolution path for a top-level
-// navigation, shared by `action navigate` and `capture --url` so the two can't
-// drift: navigate is how an agent REACHES an http page, so it must succeed from
-// a non-http start exactly as headless navigates its bound about:blank — never a
-// `NoPage`. Resets the frame scope and re-arms monitors at settle, mirroring the
-// headless `navigate_reconnect`. Returns the settled tab id.
+// Navigate the agent's own pinned tab to `url`, or open and pin a tab of its own
+// when nothing is pinned or the pin is borrowed — a navigation never replaces a
+// page the user is browsing. This is the single tab-resolution path for a
+// top-level navigation, shared by `action navigate` and `capture --url` so the
+// two can't drift: navigate is how an agent REACHES an http page, so it must
+// succeed from a non-http start exactly as headless navigates its bound
+// about:blank — never a `NoPage`. Resets the frame scope and re-arms monitors at
+// settle, mirroring the headless `navigate_reconnect`. A tab it opened is closed
+// again, and the pin put back, when the navigation fails. Returns the settled
+// tab id and whether the tab is new.
 async function navigateBoundTab(url) {
-  // The pinned tab is reused whatever its URL: navigate needs no bridge, and
-  // headless navigates its bound target in place even from about:blank. With no
-  // pin, the navigation opens a tab of its own rather than replacing a page the
-  // user is browsing.
-  const existing = await pinnedTabOrThrow();
+  // The own pinned tab is reused whatever its URL: navigate needs no bridge, and
+  // headless navigates its bound target in place even from about:blank.
+  const pinned = await pinnedTabOrThrow();
+  const existing = pinned && !activeTabBorrowed ? pinned : null;
+  const previous = currentPin();
   let tabId;
   let beforeUrl = "";
   let beforeDocId = null;
@@ -376,20 +379,40 @@ async function navigateBoundTab(url) {
     watch = watchMainFrameCommit(tabId);
     await chrome.tabs.update(tabId, { url, active: true });
   } else {
-    // No tab pinned yet — create one already pointed at `url`. Here the commit
-    // watch is registered AFTER the create (the create IS the navigation), so a
-    // very fast load's `onCommitted` can land before the watch attaches. That is
-    // safe, not the existing-tab branch's watch-before-navigate race: `beforeUrl`
-    // is "", so the settle's URL-change fallback fires on ANY real URL the new tab
-    // reaches, and a fresh tab has no prior frame scope for the documentId check
-    // to mis-decide. The watch is a fast-path optimization here, not the only
-    // settle signal.
-    const t = await chrome.tabs.create({ url, active: true });
-    tabId = t.id;
-    setActiveTabId(tabId);
-    watch = watchMainFrameCommit(tabId);
+    // No own tab — create one already pointed at `url`. Here the commit watch is
+    // registered AFTER the create (the create IS the navigation), so a very fast
+    // load's `onCommitted` can land before the watch attaches. That is safe:
+    // `beforeUrl` is "", so the settle's URL-change fallback fires on ANY real URL
+    // the new tab reaches, and a fresh tab has no prior frame scope for the
+    // documentId check to mis-decide. A load error has no such fallback, and a
+    // refused connection fails within milliseconds, so errors are buffered from
+    // before the tab exists and the watch is seeded with this tab's (as
+    // `handleTabNew` does).
+    const early = [];
+    const onEarlyError = (d) => {
+      if (d.frameId === 0) early.push(d);
+    };
+    chrome.webNavigation.onErrorOccurred.addListener(onEarlyError);
+    try {
+      const t = await chrome.tabs.create({ url, active: true });
+      tabId = t.id;
+      pinTab(tabId);
+      watch = watchMainFrameCommit(tabId);
+      const failed = early.find((d) => d.tabId === tabId);
+      if (failed && !watch.error) watch.error = failed.error || "navigation error";
+    } finally {
+      chrome.webNavigation.onErrorOccurred.removeListener(onEarlyError);
+    }
   }
-  await waitNavigationSettled(tabId, beforeUrl, watch, url);
+  try {
+    await waitNavigationSettled(tabId, beforeUrl, watch, url);
+  } catch (e) {
+    if (!existing) {
+      await chrome.tabs.remove(tabId).catch(() => {});
+      restorePin(previous);
+    }
+    throw e;
+  }
   // Drop the frame scope only for a CROSS-document navigation — its frame tree is
   // replaced, so a capture after `frame switch` then a navigate is main-scoped. A
   // same-document nav (hash/pushState) keeps the document AND its documentId, so a
@@ -406,7 +429,7 @@ async function navigateBoundTab(url) {
   // Re-arm console/network hooks at settle (headless parity) so traffic the new
   // page fires before `load` is captured, not lost to the `onCompleted` gap.
   await rearmMonitors(tabId);
-  return tabId;
+  return { tabId, opened: !existing };
 }
 
 export {

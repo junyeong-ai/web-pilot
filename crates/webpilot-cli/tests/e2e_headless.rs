@@ -3641,9 +3641,9 @@ fn headless_behavioral_flow() {
             .as_array()
             .expect("tab list array")
             .iter()
-            .find(|t| t["active"] == serde_json::Value::Bool(true))
+            .find(|t| t["pinned"] == serde_json::Value::Bool(true))
             .and_then(|t| t["id"].as_str())
-            .expect("an active tab")
+            .expect("a pinned tab")
             .to_string()
     };
 
@@ -3868,7 +3868,7 @@ fn headless_behavioral_flow() {
         "tab list after closing the active tab must work (pin-independent), not TabNotFound: {}",
         stdout(&dead_pin_list)
     );
-    // ...and it must mark NO tab active: the pin names a tab that is gone, so
+    // ...and it must mark NO tab pinned: the pin names a tab that is gone, so
     // every survivor is a tab the agent never chose. Marking the fallback would
     // point the recovery at a tab whose very next page command is a TabNotFound.
     assert!(
@@ -3877,10 +3877,16 @@ fn headless_behavioral_flow() {
             .as_array()
             .expect("tab list array")
             .iter()
-            .any(|t| t["active"] == serde_json::Value::Bool(true)),
-        "a dead pin must leave no tab marked active: {}",
+            .any(|t| t["pinned"] == serde_json::Value::Bool(true)),
+        "a dead pin must leave no tab marked pinned: {}",
         stdout(&dead_pin_list)
     );
+    // Status reports the vanished pin rather than the fallback page it sits on,
+    // and, being pin-independent too, leaves the signal for the next page command.
+    let dead_pin_status: serde_json::Value =
+        serde_json::from_str(&stdout(&fx.run(&["status"]))).expect("status json");
+    assert_eq!(dead_pin_status["pin"], "closed", "{dead_pin_status}");
+    assert!(dead_pin_status["tab_url"].is_null(), "{dead_pin_status}");
     // The list is pin-INDEPENDENT, so it must not CONSUME the dead-pin signal
     // either: an agent that only listed has not been told its tab is gone, and
     // the next page command must still be the one loud TabNotFound rather than a
@@ -4055,7 +4061,7 @@ fn headless_behavioral_flow() {
         .as_array()
         .expect("tab list array")
         .iter()
-        .filter(|t| t["active"] == serde_json::Value::Bool(true))
+        .filter(|t| t["pinned"] == serde_json::Value::Bool(true))
         .filter_map(|t| t["url"].as_str().map(str::to_owned))
         .collect();
     assert_eq!(
@@ -4084,7 +4090,7 @@ fn headless_behavioral_flow() {
     assert_eq!(
         href(&first_bind),
         repinned_urls[0],
-        "the page a command binds must be the tab the list marks active: {}",
+        "the page a command binds must be the tab the list marks pinned: {}",
         stdout(&first_bind)
     );
     assert_eq!(
@@ -4139,7 +4145,7 @@ fn headless_behavioral_flow() {
             .as_array()
             .expect("tab list array")
             .iter()
-            .filter(|t| t["active"] == serde_json::Value::Bool(true))
+            .filter(|t| t["pinned"] == serde_json::Value::Bool(true))
             .count(),
         1,
         "the recovered session must pin the page it navigated: {}",

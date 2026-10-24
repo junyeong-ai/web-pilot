@@ -47,9 +47,17 @@ async fn list_tabs<T: Transport>(transport: &mut T) -> Result<CommandOutput> {
             let human_lines: Vec<String> = tabs
                 .iter()
                 .map(|t| {
-                    let marker = if t.active { "*" } else { " " };
+                    let marks: Vec<&str> = [(t.pinned, "pinned"), (t.viewed, "viewed")]
+                        .into_iter()
+                        .filter_map(|(on, mark)| on.then_some(mark))
+                        .collect();
+                    let suffix = if marks.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", marks.join(", "))
+                    };
                     format!(
-                        "{marker} [{}] {} — {}",
+                        "[{}] {} — {}{suffix}",
                         t.id,
                         line_safe_clip(&t.title, 200),
                         line_safe_clip(&t.url, 200)

@@ -302,7 +302,7 @@ webpilot device reset                                  # 에뮬레이션 해제
 | SSO / 세션 | 별도 영속 프로필(첫 실행은 로그인 없음) | 기존 SSO·로그인 세션 그대로 사용 |
 | 경로 | CDP WebSocket 직결 | NM 호스트(0600 소켓) → 확장 |
 | 멀티 에이전트 | `--context <이름>`으로 격리 | 단일 에이전트 |
-| 첫 이동 | 세션 자체 페이지에서 로드 | 새 탭을 열고, 보고 있던 탭은 그대로 둠 |
+| 작업 탭 | 세션 자체 페이지 | 에이전트 자신의 탭: URL을 열면 새 탭을 엶. 읽기는 보고 있는 탭을 빌리고, 그 뒤에 URL을 열면 그 페이지를 덮지 않고 새 탭을 엶. 그 밖의 명령은 탭이 정해질 때까지 거절 |
 | 사전 준비 | Chrome 설치 | Chrome 설치 + 확장 + NM 호스트 등록(아래) |
 
 ```bash
@@ -387,6 +387,7 @@ webpilot status --json | jq
   "context": null,
   "extension_version": null,
   "mode": "headless",
+  "pin": "own",
   "tab_title": "Acme Tasks — Sign in",
   "tab_url": "http://localhost:8700/"
 }
@@ -530,7 +531,7 @@ tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS 기본값; WEBPILOT_HO
 
 
 ```bash
-webpilot status                # 연결 상태 / Chrome 버전 / 활성 탭 확인
+webpilot status                # 연결 상태 / Chrome 버전 / 고정 탭과 고정 방식 확인
 webpilot -v capture --include dom --url URL   # stderr 디버그 로그
 webpilot quit                  # 헤드리스 세션 종료; 다음 페이지 명령이 Chrome을 시작
 ```

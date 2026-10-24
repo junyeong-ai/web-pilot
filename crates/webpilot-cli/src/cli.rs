@@ -278,22 +278,7 @@ async fn run_headless_status(mode: OutputMode, context: Option<&str>) -> Result<
     let result = transport.send(Command::Status).await?;
 
     let out = match result {
-        ResponseData::Status {
-            connected,
-            mode: run_mode,
-            tab_url,
-            tab_title,
-            chrome_version,
-            extension_version,
-        } => commands::status::render(
-            connected,
-            run_mode,
-            tab_url,
-            tab_title,
-            chrome_version,
-            extension_version,
-            context,
-        ),
+        ResponseData::Status(status) => commands::status::render(status, context),
         ResponseData::Error { error } => return Err(error.into()),
         _ => anyhow::bail!("Unexpected response shape"),
     };

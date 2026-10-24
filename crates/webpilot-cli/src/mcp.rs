@@ -57,6 +57,10 @@ snapshot, a navigation, or a change to the element makes an old snapshot_id stal
 unless capture is false; it lists the elements in view and the ones the action added, while \
 browser_snapshot lists the whole page. browser_find searches every indexed element, including ones a \
 shortened listing omits, and takes a new snapshot: use its snapshot_id afterwards.
+In the user's own Chrome, tools work in one tab. browser_navigate loads in the agent's own tab, \
+opening one when no tab is pinned. Until a tab is chosen, a read such as browser_snapshot borrows \
+the tab the user is viewing: later tools act on it, but browser_navigate opens a new tab instead of \
+loading over that page. Other tools need a tab first (NoPinnedTab).
 Failed calls return isError with a typed code in structuredContent. OutcomeUnknown means the \
 action may already have run: observe the page before repeating it. A capture_error after an \
 action means the action ran and only the follow-up snapshot failed.
