@@ -2,10 +2,10 @@
 // Mirrors transport/local/browser.rs.
 
 import { err, exceptionErr, lineSafeClip, noPageErr, topErr } from "./errors.js";
-import { activeFrameId, activeTabBorrowed, activeTabId, currentPin, ensureRestored, navigationTimeoutMs, pinTab, resolveActiveTab, resolveTabForRead, restorePin, setActiveFrameId, unpinTab, viewedTab } from "./session.js";
+import { activeFrameId, activeTabBorrowed, activeTabId, ensureRestored, pinTab, resolveActiveTab, resolveTabForRead, setActiveFrameId, unpinTab, viewedTab } from "./session.js";
 import { cdpEnableRuntime, withCdp } from "./cdp.js";
 import { cdpEval, frameWorldContextId } from "./query.js";
-import { adoptedDocumentReady } from "./navigation.js";
+import { navigateBoundTab } from "./navigation.js";
 import { rearmMonitors } from "./state.js";
 import { isHostConnected } from "./host.js";
 
@@ -41,89 +41,29 @@ async function handleTabNew(url) {
       error: err("InvalidArgument", `invalid URL for tab new: ${url}`),
     };
   }
-  // The pin as it stands — restored if this `tab new` fails, so a bad URL never
-  // strands an orphan tab or leaves the pin on a closed one (navigate's no-leak
-  // contract, headless parity).
-  const previous = currentPin();
-  // Buffer main-frame load errors from BEFORE the tab exists: a refused
-  // connection fails within milliseconds, so a listener registered after
-  // create() resolves could miss it. Correlate by tab id afterward.
-  // ERR_ABORTED is excluded — headless `navigate` treats it as pending, not
-  // failure (a page can abort-and-recover), and `tab new` must agree.
-  const navErrors = [];
-  const onErr = (d) => {
-    if (d.frameId === 0 && d.error !== "net::ERR_ABORTED") navErrors.push(d);
-  };
-  chrome.webNavigation.onErrorOccurred.addListener(onErr);
+  // The same open-load-settle path a URL load from an unowned pin takes, so
+  // `tab new` answers under the same budget and rolls back the same way: a load
+  // that fails or does not settle closes the tab it opened and restores the pin
+  // (headless parity).
   try {
-    const created = await chrome.tabs.create({ url, active: true });
-    pinTab(created.id);
-    // A fresh tab has its own frame tree — drop any frame scope.
-    setActiveFrameId(0);
-    // Settle on a ready page and report its real, post-redirect URL/title — `tab
-    // new` lands like `navigate`, so the agent's next action cannot race the new
-    // tab's load and a redirect is reflected, not the requested URL echoed back.
-    // `adoptedDocumentReady` waits to leave about:blank and parse (the headless
-    // `wait_navigation_settled(before_url: "about:blank")` twin); best-effort, so
-    // a tab that never leaves about:blank returns at the deadline.
-    await adoptedDocumentReady(created.id, navigationTimeoutMs());
-    // A load that FAILED (refused connection, DNS) leaves the new tab on
-    // Chrome's error page — reporting success there is the lie `navigate`
-    // already refuses (it returns NavigationFailed, exit 8), and `tab new` is
-    // the same effect under the same policy gate, so it must agree.
-    const failed = navErrors.find((d) => d.tabId === created.id);
-    if (failed) {
-      // Roll the failed open back: close the dead error tab and restore the
-      // pin, so a bad URL is the same no-leak NavigationFailed `navigate`
-      // produces (headless parity).
-      await chrome.tabs.remove(created.id).catch(() => {});
-      restorePin(previous);
-      return {
-        type: "Action",
-        success: false,
-        error: err("NavigationFailed", `Navigation failed: ${failed.error}`, {
-          url,
-          reason: failed.error,
-        }),
-      };
-    }
-    // Armed monitors follow the agent's working tab onto the new one (headless
-    // parity) — done after the page settles so the hooks inject into the real
-    // document, not the transient about:blank.
-    await rearmMonitors(created.id);
-    const settled = await chrome.tabs.get(created.id).catch(() => null);
-    // The tab CLOSED during the settle (a self-closing page, the user) — a
-    // success carrying a new_tab that no longer exists would send the agent
-    // acting on a ghost. tabs.get fails only for a gone tab, so null here is
-    // tab-gone truth: typed TabNotFound (exit 4 → recover via `tab`).
-    if (!settled) {
-      // The new tab vanished during settle; the orphan is already gone, but the
-      // pin must return to where the agent was (headless parity).
-      restorePin(previous);
-      return {
-        type: "Action",
-        success: false,
-        error: err("TabNotFound", `the new tab closed before it settled`, {
-          tab_id: String(created.id),
-        }),
-      };
-    }
+    const { tabId } = await navigateBoundTab(url, { newTab: true });
+    const landed = await chrome.tabs.get(tabId).catch(() => null);
     const viewed = await viewedTab();
     return {
       type: "Action",
       success: true,
       new_tab: {
-        id: String(created.id),
-        url: settled.url || created.url || url,
-        // `??`: a settled tab whose document is untitled reports the honest ""
-        // — `||` would resurrect the transient creation-time title.
-        title: settled.title ?? created.title ?? "",
+        id: String(tabId),
+        // The settled, post-redirect URL, not the requested one echoed back.
+        url: landed?.url || url,
+        // `??`: an untitled document reports the honest "".
+        title: landed?.title ?? "",
         pinned: true,
-        viewed: viewed?.id === created.id,
+        viewed: viewed?.id === tabId,
       },
     };
-  } finally {
-    chrome.webNavigation.onErrorOccurred.removeListener(onErr);
+  } catch (e) {
+    return { type: "Action", success: false, error: exceptionErr(e) };
   }
 }
 

@@ -350,20 +350,22 @@ async function waitActiveFrameSettled(tabId, frameId, beforeDocId) {
   }
 }
 
-// Navigate the agent's own pinned tab to `url`, or open and pin a tab of its own
-// when nothing is pinned or the pin is borrowed — a navigation never replaces a
-// page the user is browsing. This is the single tab-resolution path for a
-// top-level navigation, shared by `action navigate` and `capture --url` so the
-// two can't drift: navigate is how an agent REACHES an http page, so it must
+// Load `url` in the agent's own pinned tab, or open and pin a tab of its own when
+// nothing is pinned, the pin is borrowed, or `newTab` asks for one — a URL load
+// never replaces a page the user is browsing. This is the single path for a
+// top-level URL load, shared by `action navigate`, `capture --url` and `tab new`
+// so they can't drift: navigate is how an agent REACHES an http page, so it must
 // succeed from a non-http start exactly as headless navigates its bound
 // about:blank — never a `NoPage`. Resets the frame scope and re-arms monitors at
 // settle, mirroring the headless `navigate_reconnect`. A tab it opened is closed
 // again, and the pin put back, when the navigation fails. Returns the settled
 // tab id and whether the tab is new.
-async function navigateBoundTab(url) {
+async function navigateBoundTab(url, { newTab = false } = {}) {
   // The own pinned tab is reused whatever its URL: navigate needs no bridge, and
-  // headless navigates its bound target in place even from about:blank.
-  const pinned = await pinnedTabOrThrow();
+  // headless navigates its bound target in place even from about:blank. `tab new`
+  // always opens a tab, so it reads no pin, not even a vanished one it may be
+  // replacing.
+  const pinned = newTab ? null : await pinnedTabOrThrow();
   const existing = pinned && !activeTabBorrowed ? pinned : null;
   const previous = currentPin();
   let tabId;
@@ -389,8 +391,7 @@ async function navigateBoundTab(url) {
     // the new tab reaches, and a fresh tab has no prior frame scope for the
     // documentId check to mis-decide. A load error has no such fallback, and a
     // refused connection fails within milliseconds, so errors are buffered from
-    // before the tab exists and the watch is seeded with this tab's (as
-    // `handleTabNew` does).
+    // before the tab exists and the watch is seeded with this tab's.
     const early = [];
     const onEarlyError = (d) => {
       if (d.frameId === 0) early.push(d);

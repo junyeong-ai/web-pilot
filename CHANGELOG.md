@@ -9,12 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `timeouts.navigation` bounds the whole URL load in headless mode, as it
-  already did in browser mode. A server slow to answer stretched a load by up
-  to five seconds past it: a fixed three-second wait for `Page.navigate`'s
+- `[timeouts] navigation_ms` (`WEBPILOT_NAVIGATION_TIMEOUT_MS`) bounds the
+  whole URL load in headless mode. A server slow to answer stretched a load by
+  up to five seconds past it: a fixed three-second wait for `Page.navigate`'s
   reply, the full budget counted only after that wait, and a readiness probe
   that ran past the deadline. The timeout error reported the configured value
   either way. Browser mode's readiness probe also stops at the deadline.
+- In browser mode, `tab new URL` loads through the same path as `navigate`: a
+  load that fails or does not settle within the navigation timeout reports
+  `NavigationFailed` or `Timeout`, closes the tab and restores the previous
+  pin, as headless does, instead of reporting success on a tab still loading.
 
 ## [0.13.0] - 2026-10-24
 
