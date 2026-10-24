@@ -163,7 +163,7 @@ Both modes share `bridge.js`. Static parity tests check command/action routing c
 | `@ctx` | ARIA landmark (navigation · main · banner · form · search …). |
 | Last line | Extracted-element count / total node count / elapsed time. |
 
-Extra footers for iframes and shadow DOM (`--- N iframe(s) not shown ---`, `--- shadow DOM clipped … ---`) appear when relevant, so the agent knows the list may have been truncated.
+Extra footers for iframes and shadow DOM (`--- N iframe(s) not shown ---`, `--- shadow DOM clipped … ---`) appear when relevant, so the agent knows the list may have been truncated. An action's `--capture` lists the elements in view and the ones the action added; `--- N offscreen element(s) not listed ---` counts the rest, which keep their indices.
 
 ---
 

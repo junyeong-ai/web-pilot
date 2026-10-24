@@ -162,7 +162,7 @@ flowchart LR
 | `@ctx` | ARIA 랜드마크 (navigation · main · banner · form · search …). |
 | 마지막 줄 | 추출 요소 수 / 전체 노드 수 / 소요 시간. |
 
-iframe·shadow DOM 관련 추가 푸터(`--- N iframe(s) not shown ---`, `--- shadow DOM clipped … ---`)도 필요할 때 함께 표시되어, 목록이 일부 잘렸는지 에이전트가 알 수 있습니다.
+iframe·shadow DOM 관련 추가 푸터(`--- N iframe(s) not shown ---`, `--- shadow DOM clipped … ---`)도 필요할 때 함께 표시되어, 목록이 일부 잘렸는지 에이전트가 알 수 있습니다. 액션의 `--capture`는 화면 안 요소와 그 액션이 추가한 요소를 나열하고, 나머지는 `--- N offscreen element(s) not listed ---`로 개수만 알립니다(인덱스는 그대로 유효합니다).
 
 ---
 
