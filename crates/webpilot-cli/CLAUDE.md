@@ -120,8 +120,8 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   `Transport`, inheriting mode, policy, and rendering. The input reader stays active during a serialized command so ping and cancellation remain responsive; cancellation interrupts waits and lets mutations finish cleanup. Schemas validate inputs before opening a transport. Successes carry structured output alongside text. Action tools inject the
   wire `kind` to reuse `Action`'s deserialization and defaults; `browser_find`
   deserializes the CLI's own `FindArgs`. The surface is curated to page
-  interaction (act/observe/orient/wait + `eval`) — environment management
-  (cookies, session, device, policy, monitors) stays CLI-only.
+  interaction (act/observe/orient/wait/diagnose + `eval`) — environment
+  management (cookies, session, device, policy) stays CLI-only.
   `Execution::Mcp` puts it in the compiler-checked topology.
 - `assets.rs` — compile-time embedded skill + extension (`include_dir!`);
   `expected_extension_version()` (stale-install gate) and

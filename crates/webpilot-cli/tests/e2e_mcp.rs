@@ -381,4 +381,24 @@ fn mcp_long_lived_transport_flow() {
         json!({"index":found["matches"][0]["index"],"snapshot_id":found["snapshot_id"],"capture":false}),
     );
     assert!(clicked.ok(), "{}", clicked.text());
+
+    // The monitors reach MCP through the CLI handlers: arm, record, filter.
+    assert!(mcp.tool("browser_console", json!({"action":"start"})).ok());
+    assert!(
+        mcp.tool(
+            "browser_eval",
+            json!({"code":"console.warn('mcp-warn'); console.error('mcp-error'); 1"})
+        )
+        .ok()
+    );
+    let errors = mcp.tool("browser_console", json!({"action":"read","level":"error"}));
+    assert!(errors.ok(), "{}", errors.text());
+    let entries = &errors.reply["result"]["structuredContent"]["entries"];
+    assert_eq!(entries.as_array().map(Vec::len), Some(1), "{entries}");
+    assert_eq!(entries[0]["message"], "mcp-error");
+    let misplaced = mcp.tool("browser_console", json!({"action":"clear","level":"error"}));
+    assert_eq!(misplaced.code().as_deref(), Some("InvalidArgument"));
+    assert!(mcp.tool("browser_network", json!({"action":"start"})).ok());
+    let requests = mcp.tool("browser_network", json!({"action":"read"}));
+    assert!(requests.ok(), "{}", requests.text());
 }

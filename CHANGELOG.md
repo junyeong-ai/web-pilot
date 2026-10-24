@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `initialize` handshake for 2025-11-25 and 2025-06-18 clients.
 - Send MCP clients usage instructions covering snapshot identifiers, uncertain
   outcomes, wait semantics, and untrusted page content.
+- Add the MCP `browser_console` and `browser_network` tools: start recording,
+  read (by level or timestamp), and clear, with the same coverage notes as the
+  CLI. Starting a monitor passes the `eval` policy gate.
 
 ### Changed
 
@@ -41,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Say so when a console or network read has no entries, instead of returning
+  empty text.
 - Stop text-only captures from reporting "0 elements" for a page that has
   controls, and keep the tabs that separate table cells in rendered page text.
 

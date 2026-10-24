@@ -63,11 +63,15 @@ pub async fn run<T: Transport>(transport: &mut T, args: NetworkArgs) -> Result<C
             truncated,
             covers_load,
         } => {
-            let mut human: String = requests
-                .iter()
-                .map(network_row)
-                .collect::<Vec<_>>()
-                .join("\n");
+            let mut human = if requests.is_empty() {
+                "(no requests)".to_owned()
+            } else {
+                requests
+                    .iter()
+                    .map(network_row)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
             // Both limits ride in the JSON and the human text — see `console read`:
             // `truncated` for what the cap dropped, `covers_load` for the window
             // before the recorder existed, where no requests means nothing was

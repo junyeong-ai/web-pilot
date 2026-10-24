@@ -71,11 +71,15 @@ pub async fn run<T: Transport>(transport: &mut T, args: ConsoleArgs) -> Result<C
                 _ => entries,
             };
 
-            let mut human: String = filtered
-                .iter()
-                .map(console_row)
-                .collect::<Vec<_>>()
-                .join("\n");
+            let mut human = if filtered.is_empty() {
+                "(no console entries)".to_owned()
+            } else {
+                filtered
+                    .iter()
+                    .map(console_row)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
             // Both limits ride in the JSON and the human text so neither an MCP nor
             // a CLI agent reads a buffer as the whole story: `truncated` for what
             // the cap dropped, `covers_load` for the window before the recorder

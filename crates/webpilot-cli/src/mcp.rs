@@ -21,7 +21,7 @@ use webpilot::WebPilotError;
 use webpilot::action::Action;
 use webpilot::capture::{CaptureField, CaptureOpts};
 
-use crate::commands::{action, capture, eval, find, frame, tab, wait};
+use crate::commands::{action, capture, console, eval, find, frame, network, tab, wait};
 use crate::output::CommandOutput;
 use crate::transport::{IpcTransport, LocalTransport, Transport};
 
@@ -816,6 +816,27 @@ async fn call_tool<T: Transport>(
             };
             frame::run(transport, frame::FrameArgs { command }).await
         }
+        "browser_console" => {
+            let command = match monitor_action(args)? {
+                MonitorAction::Start => console::ConsoleCommand::Start,
+                MonitorAction::Read => console::ConsoleCommand::Read {
+                    level: args.get("level").and_then(Value::as_str).map(str::to_owned),
+                    since: args.get("since").and_then(Value::as_u64),
+                },
+                MonitorAction::Clear => console::ConsoleCommand::Clear,
+            };
+            console::run(transport, console::ConsoleArgs { command }).await
+        }
+        "browser_network" => {
+            let command = match monitor_action(args)? {
+                MonitorAction::Start => network::NetworkCommand::Start,
+                MonitorAction::Read => network::NetworkCommand::Read {
+                    since: args.get("since").and_then(Value::as_u64),
+                },
+                MonitorAction::Clear => network::NetworkCommand::Clear,
+            };
+            network::run(transport, network::NetworkArgs { command }).await
+        }
         "browser_eval" => {
             eval::run(
                 transport,
@@ -938,6 +959,36 @@ fn screenshot_content(output: &CommandOutput) -> std::result::Result<Vec<Value>,
     ])
 }
 
+enum MonitorAction {
+    Start,
+    Read,
+    Clear,
+}
+
+/// The `action` of a monitor tool. Its filters belong to `read`; on another
+/// action they are rejected rather than dropped.
+fn monitor_action(args: &Value) -> std::result::Result<MonitorAction, WebPilotError> {
+    let action = match str_arg(args, "action")?.as_str() {
+        "start" => MonitorAction::Start,
+        "read" => return Ok(MonitorAction::Read),
+        "clear" => MonitorAction::Clear,
+        other => {
+            return Err(WebPilotError::InvalidArgument {
+                detail: format!("unknown monitor action: {other} (expected start, read, or clear)"),
+            });
+        }
+    };
+    match ["level", "since"]
+        .into_iter()
+        .find(|key| args.get(key).is_some())
+    {
+        Some(key) => Err(WebPilotError::InvalidArgument {
+            detail: format!("{key} applies to action=read only"),
+        }),
+        None => Ok(action),
+    }
+}
+
 fn str_arg(args: &Value, key: &str) -> std::result::Result<String, WebPilotError> {
     args.get(key)
         .and_then(Value::as_str)
@@ -961,16 +1012,18 @@ fn bool_arg(args: &Value, key: &str) -> std::result::Result<bool, WebPilotError>
 
 /// The exposed tool surface, with JSON Schemas. Curated to the agent loop —
 /// observe (snapshot/screenshot), act (the `Action` surface), orient (find /
-/// tabs / frame), synchronize (wait) — plus `eval` as the escape hatch; each
-/// acting tool auto-captures the resulting DOM so the model always gets a
-/// fresh snapshot back. Every schema sets `additionalProperties: false`: the
-/// schema is the argument contract, never a hint.
+/// tabs / frame), synchronize (wait), diagnose (console / network) — plus
+/// `eval` as the escape hatch; each acting tool auto-captures the resulting DOM
+/// so the model always gets a fresh snapshot back. Every schema sets
+/// `additionalProperties: false`: the schema is the argument contract, never a
+/// hint.
 ///
 /// `annotations` carry only hints that differ from the spec defaults
 /// (readOnlyHint=false, destructiveHint=true, idempotentHint=false,
 /// openWorldHint=true). On the open web any page handler may commit changes,
 /// so interacting tools keep the conservative defaults; only viewport/routing
-/// tools (scroll, hover, focus, frame) are marked non-destructive.
+/// tools (scroll, hover, focus, frame) and the monitors, which change nothing
+/// but WebPilot's own recorder, are marked non-destructive.
 fn tool_specs() -> &'static Value {
     static SPECS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
     SPECS.get_or_init(build_tool_specs)
@@ -1247,7 +1300,7 @@ fn build_tool_specs() -> Value {
         {
             "name": "browser_wait",
             "title": "Wait for condition",
-            "description": "Wait for a condition before continuing.",
+            "description": "Wait until a selector or text appears, the next navigation completes, or the DOM stays unchanged for 500 ms (idle; not network idle). navigation waits for the next load and cannot confirm one that already finished.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1259,6 +1312,37 @@ fn build_tool_specs() -> Value {
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": true },
+        },
+        {
+            "name": "browser_console",
+            "title": "Console messages",
+            "description": "Record the page's console messages, uncaught exceptions, and unhandled rejections: start recording, read the entries (optionally one level, or those at or after a timestamp), or clear them. A read states when the recorder missed the page load; reload to cover it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["start", "read", "clear"] },
+                    "level": { "type": "string", "enum": ["log", "error", "warn", "info", "debug"], "description": "Only entries of this level (read only)." },
+                    "since": { "type": "integer", "minimum": 0, "description": "Only entries at or after this millisecond timestamp (read only)." },
+                },
+                "required": ["action"],
+                "additionalProperties": false,
+            },
+            "annotations": { "destructiveHint": false, "idempotentHint": true },
+        },
+        {
+            "name": "browser_network",
+            "title": "Network requests",
+            "description": "Record the page's fetch and XHR requests: start recording, read them (optionally those at or after a timestamp), or clear them. A read states when the recorder missed the page load; reload to cover it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["start", "read", "clear"] },
+                    "since": { "type": "integer", "minimum": 0, "description": "Only requests at or after this millisecond timestamp (read only)." },
+                },
+                "required": ["action"],
+                "additionalProperties": false,
+            },
+            "annotations": { "destructiveHint": false, "idempotentHint": true },
         },
     ]);
     for tool in specs.as_array_mut().expect("tool list") {
@@ -1607,6 +1691,8 @@ mod tests {
             "browser_frame",
             "browser_eval",
             "browser_wait",
+            "browser_console",
+            "browser_network",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
@@ -1719,6 +1805,30 @@ mod tests {
             reply["result"]["tools"].is_array(),
             "tools/list passes the gate once initialized: {reply}"
         );
+    }
+
+    #[test]
+    fn monitor_filters_belong_to_read() {
+        assert!(matches!(
+            monitor_action(&json!({"action": "read", "level": "error", "since": 1})),
+            Ok(MonitorAction::Read)
+        ));
+        assert!(matches!(
+            monitor_action(&json!({"action": "start"})),
+            Ok(MonitorAction::Start)
+        ));
+        for args in [
+            json!({"action": "start", "level": "error"}),
+            json!({"action": "clear", "since": 1}),
+        ] {
+            assert!(
+                matches!(
+                    monitor_action(&args),
+                    Err(WebPilotError::InvalidArgument { .. })
+                ),
+                "{args}"
+            );
+        }
     }
 
     #[test]
