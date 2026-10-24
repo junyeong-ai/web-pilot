@@ -332,6 +332,8 @@ webpilot mcp                  # stdio JSON-RPC (MCP) 서버. --browser / --conte
 
 MCP snapshot은 `include: ["dom", "text"]`를 지원합니다. 인덱스 툴에는 `snapshot_id`가 필요하며, 액션의 `capture: false`로 불필요한 DOM 반환을 생략할 수 있습니다. 성공 결과도 `structuredContent`로 제공하고, 실행 중 ping과 대기 취소를 처리합니다. DOM 스냅샷에는 비밀번호 값을 포함하지 않습니다.
 
+MCP 호스트마다 `--context NAME`을 따로 지정하세요. 컨텍스트를 함께 쓰는 호스트들은 고정 탭과 스냅샷도 함께 쓰므로, 한쪽이 캡처하면 다른 쪽의 `snapshot_id`가 무효가 됩니다.
+
 ## 안전 정책 (policy)
 
 WebPilot의 정책은 **효과(effect)** 기준으로 동작을 게이트합니다. 기본을 `deny`로 잠근 뒤 필요한 것만 허용(allowlist)하는 **최소 권한** 모드가 권장됩니다.

@@ -341,6 +341,8 @@ The full page-interaction loop — observe (`snapshot`/`screenshot`), act (`clic
 
 MCP snapshots support `include: ["dom", "text"]`. Indexed tools require `snapshot_id`; action tools accept `capture: false` when no new DOM is needed. Successful results carry `structuredContent`. Ping and wait cancellation remain available during running commands. Password values are omitted from DOM snapshots.
 
+Give each MCP host its own `--context NAME`. Hosts that share a context share one pinned tab and one snapshot: a capture by one makes the other's `snapshot_id` stale.
+
 ## Safety policy
 
 WebPilot's policy gates operations by **effect**. The recommended **least-privilege** mode locks the baseline to `deny`, then allowlists only what's needed.
