@@ -29,7 +29,7 @@ jobs:
   # commit being released — reusing ci.yml so the gate cannot drift from CI.
   gate:
     name: Gate
-    uses: ./.github/workflows/ci.yml
+    uses: $/.github/workflows/ci.yml
     with:
       ref: ${{ inputs.tag || github.ref }}
 
@@ -38,6 +38,8 @@ jobs:
     needs: gate
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    # A published binary never restores cache state another run wrote.
+    cache-mode: none
     permissions:
       contents: read
       id-token: write
@@ -56,7 +58,7 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
 
@@ -68,7 +70,6 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           target: ${{ matrix.target }}
-          cache-key: release-${{ matrix.target }}
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} --bin webpilot
@@ -95,7 +96,7 @@ jobs:
             echo "checksum=${archive}.sha256"
           } >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.package.outputs.archive }}
 
@@ -116,7 +117,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
 

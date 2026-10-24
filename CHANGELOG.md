@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Update jsonschema to 0.60, tokio to 1.54, oxlint to 1.89 and Node.js to
   24.22.1 LTS.
+- Audit workflows with zizmor. Build release binaries without restoring the
+  Actions cache, attest them with `actions/attest`, and call the CI gate through
+  the self-repository reference. Run E2E suites against Chrome for Testing 156.
 
 ## [0.11.0] - 2026-10-17
 
