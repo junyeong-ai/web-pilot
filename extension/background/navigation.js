@@ -167,7 +167,7 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
         // then surfaces as a misleading NavigationFailed. (`chrome.tabs.get`
         // resolves for a live tab whatever its navigation state, so a null here
         // is a genuine vanish, never a transient mid-nav blip.)
-        const e = new Error(`Tab not found: ${tabId}. List: webpilot tab`);
+        const e = new Error(`Tab not found: ${tabId}. List the open tabs and switch to one explicitly.`);
         e.code = "TabNotFound";
         e.data = { tab_id: String(tabId) };
         throw e;

@@ -952,13 +952,13 @@ impl DomSnapshot {
         }
 
         if self.subframes > 0 {
-            // Guide entry with `frame url <pattern>`: `webpilot frame` lists each
-            // subframe by URL (an iframe usually has no name), and matching the
-            // listed URL is the path that actually resolves. `frame switch
-            // <name>` only matches a frame's `name` attribute, so steering the
-            // agent to it would fail on the common unnamed iframe.
+            // Guide entry by URL pattern: the frame listing shows each subframe
+            // by URL (an iframe usually has no name), and matching the listed URL
+            // is the path that actually resolves. Switching by name only matches
+            // a frame's `name` attribute, so steering the agent to it would fail
+            // on the common unnamed iframe.
             out.push_str(&format!(
-                "--- {} iframe(s) not shown — list: webpilot frame, enter: webpilot frame url <pattern> ---\n",
+                "--- {} iframe(s) not shown — list frames, then switch to one by URL pattern ---\n",
                 self.subframes,
             ));
         }
@@ -971,7 +971,7 @@ impl DomSnapshot {
 
         if self.elements_truncated {
             out.push_str(
-                "--- index shortened — the page has more elements than listed; they are still addressable: find them with `webpilot find` ---\n",
+                "--- index shortened — the page has more elements than listed; they are still addressable: find them by role, text, or label ---\n",
             );
         }
 
@@ -1418,12 +1418,12 @@ mod tests {
         snap.elements_truncated = true;
         let shortened = snap.to_text();
         assert!(shortened.contains("index shortened"));
-        assert!(shortened.contains("webpilot find"));
+        assert!(shortened.contains("find them by role"));
 
         snap.subframes = 2;
         let text = snap.to_text();
         assert!(text.contains("2 iframe(s) not shown"));
-        assert!(text.contains("webpilot frame url"));
+        assert!(text.contains("switch to one by URL pattern"));
     }
 
     #[test]

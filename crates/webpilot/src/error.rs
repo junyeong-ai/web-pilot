@@ -19,11 +19,11 @@ use thiserror::Error;
 fn element_not_found_text(requested: u32, available: u32) -> String {
     if available == 0 {
         format!(
-            "Element [{requested}] not found — the page has no interactive elements. Re-capture: webpilot capture --include dom"
+            "Element [{requested}] not found — the page has no interactive elements. Capture the page again."
         )
     } else {
         format!(
-            "Element [{requested}] not found (page has [1]-[{available}]). Re-capture: webpilot capture --include dom"
+            "Element [{requested}] not found (page has [1]-[{available}]). Capture the page again for current indices."
         )
     }
 }
@@ -35,7 +35,7 @@ pub enum WebPilotError {
     ElementNotFound { requested: u32, available: u32 },
 
     #[error(
-        "Element [{index}] is from a stale or missing snapshot — the page changed since the last capture. Re-capture: webpilot capture --include dom"
+        "Element [{index}] belongs to an outdated snapshot: a newer capture, a navigation, or a change to the element invalidated it. Capture the page again and act with the new snapshot ID."
     )]
     StaleSnapshot { index: u32 },
 
@@ -53,19 +53,19 @@ pub enum WebPilotError {
     #[error("Navigation failed: {url}: {reason}")]
     NavigationFailed { url: String, reason: String },
 
-    #[error("No web page open. Navigate: webpilot action navigate URL")]
+    #[error("No web page open. Navigate to a URL first.")]
     NoPage,
 
-    #[error("Frame not found: {selector}. List frames: webpilot frame")]
+    #[error("Frame not found: {selector}. List the page's frames to pick one.")]
     FrameNotFound { selector: String },
 
     #[error("Invalid argument: {detail}")]
     InvalidArgument { detail: String },
 
-    #[error("Bridge not loaded. Try: webpilot capture --include dom")]
+    #[error("Bridge not loaded. Capturing the page loads it.")]
     BridgeUnavailable,
 
-    #[error("Chrome connection lost: {detail}. Run: webpilot status")]
+    #[error("Chrome connection lost: {detail}. Check the browser session before retrying.")]
     ConnectionLost { detail: String },
 
     #[error(
@@ -76,7 +76,7 @@ pub enum WebPilotError {
     #[error("Blocked by policy: {operation}. Check: webpilot policy list")]
     PolicyDenied { operation: String },
 
-    #[error("Tab not found: {tab_id}. List: webpilot tab")]
+    #[error("Tab not found: {tab_id}. List the open tabs and switch to one explicitly.")]
     TabNotFound { tab_id: String },
 
     #[error("Context not found: {name}. List: webpilot context list")]

@@ -285,7 +285,7 @@ async function handleWait(command) {
         return {
           type: "Wait",
           success: false,
-          error: err("TabNotFound", `Tab not found: ${tab.id}. List: webpilot tab`, { tab_id: String(tab.id) }),
+          error: err("TabNotFound", `Tab not found: ${tab.id}. List the open tabs and switch to one explicitly.`, { tab_id: String(tab.id) }),
         };
       }
       return { type: "Wait", success: false, error: timeoutErr("navigation", timeoutMs) };

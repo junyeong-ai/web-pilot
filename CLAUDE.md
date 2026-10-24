@@ -93,7 +93,7 @@ the connection error. This exhaustive classification is separate from policy.
 --- Snapshot: ID ---
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
---- 1 iframe(s) not shown — list: webpilot frame, enter: webpilot frame url <pattern> ---
+--- 1 iframe(s) not shown — list frames, then switch to one by URL pattern ---
 ```
 
 `[index]` and `snapshot_id` identify an observed element. Indexed CLI actions

@@ -107,7 +107,7 @@ impl LocalTransport {
                     .await?;
             }
             screenshot_error = Some(
-                "screenshots are main-frame only and an iframe is active. Switch back first: webpilot frame main".into(),
+                "screenshots are main-frame only and an iframe is active. Switch back to the main frame first.".into(),
             );
         }
 

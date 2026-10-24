@@ -106,7 +106,7 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
             }
             if let Some(ref ce) = capture_error {
                 msg.push_str(&format!(
-                    "\nCapture failed (the action itself succeeded): {ce} — re-run `webpilot capture --include dom`"
+                    "\nCapture failed (the action itself succeeded): {ce} — capture the page again instead of repeating the action"
                 ));
             }
             for d in &downloads {

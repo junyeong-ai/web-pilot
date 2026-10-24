@@ -193,7 +193,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
             .collect();
         return Err(webpilot::WebPilotError::InvalidArgument {
             detail: format!(
-                "{} elements match the filter; narrow it or act by index (webpilot action click N): {}{}",
+                "{} elements match the filter; narrow it or act on one by index: {}{}",
                 matches.len(),
                 listed.join(", "),
                 if matches.len() > 5 { ", …" } else { "" }

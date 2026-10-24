@@ -135,7 +135,7 @@ async function pinnedTabOrThrow() {
   if (activeTabId == null) return null;
   const tab = await chrome.tabs.get(activeTabId).catch(() => null);
   if (tab) return tab;
-  const e = new Error(`Tab not found: ${activeTabId}. List: webpilot tab`);
+  const e = new Error(`Tab not found: ${activeTabId}. List the open tabs and switch to one explicitly.`);
   e.code = "TabNotFound";
   e.data = { tab_id: String(activeTabId) };
   throw e;

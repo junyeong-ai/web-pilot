@@ -53,7 +53,7 @@
   const staleSnapshot = (index) =>
     err(
       "StaleSnapshot",
-      `Element [${index}] is from a stale or missing snapshot — the page changed since the last capture. Re-capture: webpilot capture --include dom`,
+      `Element [${index}] belongs to an outdated snapshot: a newer capture, a navigation, or a change to the element invalidated it. Capture the page again and act with the new snapshot ID.`,
       { index },
     );
 

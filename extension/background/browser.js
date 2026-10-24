@@ -269,7 +269,7 @@ async function handleFrameList() {
   const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null);
   if (!all) {
     return topErr(
-      err("TabNotFound", `Tab not found: ${tab.id}. List: webpilot tab`, { tab_id: String(tab.id) }),
+      err("TabNotFound", `Tab not found: ${tab.id}. List the open tabs and switch to one explicitly.`, { tab_id: String(tab.id) }),
     );
   }
   const frames = all.map((f) => ({
@@ -355,7 +355,7 @@ async function handleFrameSwitch(selector) {
       type: "FrameSwitched",
       success: false,
       frame_id: activeFrameIdWire(),
-      error: err("TabNotFound", `Tab not found: ${tab.id}. List: webpilot tab`, { tab_id: String(tab.id) }),
+      error: err("TabNotFound", `Tab not found: ${tab.id}. List the open tabs and switch to one explicitly.`, { tab_id: String(tab.id) }),
     };
   }
   const httpFrames = frames.filter((f) => f.frameId !== 0 && f.url?.startsWith("http"));
