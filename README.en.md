@@ -437,7 +437,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 |---|---|
 | `capture --include <…>` | Capture page state (dom · text · screenshot · pdf · accessibility) |
 | `action <click\|type\|key-press\|navigate\|scroll\|select\|upload\|hover\|focus\|drag\|…>` | Browser actions |
-| `find --role/--text/--label/--placeholder [--click\|--fill]` | Semantic element search (+ act) |
+| `find --role/--text/--label/--placeholder/--tag [--click\|--fill]` | Semantic element search (+ act) |
 | `eval <js>` | Evaluate JS in the page context |
 | `wait <selector\|text\|navigation\|idle>` | Wait for a condition |
 | `tab <switch\|new\|close\|find>` | Tab management |
@@ -504,7 +504,7 @@ webpilot quit                  # stop the headless Chrome session
 webpilot self uninstall        # quit Chrome + remove everything the binary created
 ```
 
-The skill and extension are embedded in the binary at compile time, so the **bundled assets always match the binary** — no post-install download. The host compares its bundled version with the connected extension and reports `VersionMismatch`. An already-running host retains the old binary: after updating, refresh assets with `webpilot setup skill` and `webpilot setup extension`, then reload the extension to connect to a new host. Locally edited skills are preserved. After setup, Claude Code activates the skill via `/webpilot` or plain natural language.
+The skill and extension are embedded in the binary at compile time, so the **bundled assets always match the binary** — no post-install download. The host compares its bundled version with the connected extension and reports `VersionMismatch`. An already-running host retains the old binary. `webpilot self update` refreshes the skill (keeping local edits) and the extension files, then names the one step left: reload the extension to connect the new host. After installing a binary another way, run `webpilot setup skill` and `webpilot setup extension` yourself. After setup, Claude Code activates the skill via `/webpilot` or plain natural language.
 
 ---
 

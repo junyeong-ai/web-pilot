@@ -8,21 +8,24 @@ command handlers.
 ## Build & Run
 
 ```bash
-cargo fmt --all -- --check     # CI gates on this — run it in every local pass too
-npm ci && npm run lint       # checks generated semantics + extension lint; Node in .node-version
-# After changing accessibility dependencies: npm run build, then npm run lint
-cargo build --workspace --release --locked
-cargo test --workspace --locked
+# Every local pass runs the gates CI runs:
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+RUSTDOCFLAGS='-D warnings -D rustdoc::broken-intra-doc-links' cargo doc --workspace --no-deps --locked
+npm ci && npm run lint       # generated semantics + extension lint; Node in .node-version
+shellcheck scripts/*.sh
+# CI also checks the declared MSRV: cargo +<workspace rust-version> check --workspace --locked
+# After changing accessibility dependencies: npm run build, then npm run lint
 
-# The behavioural suites launch a real Chrome, so they are opt-in (CI runs all three):
+# The behavioural suites launch a real Chrome, so they are opt-in (CI runs each in its own job):
 WEBPILOT_CHROME="/path/to/Chrome for Testing" \
   cargo test -p webpilot-cli --locked --test e2e_headless -- --ignored
 # The same invocation applies to --test e2e_mcp and --test e2e_browser.
 
 webpilot capture --include dom --url "https://example.com"   # headless (default)
-webpilot --browser capture --include dom                     # browser mode (SSO Chrome)
-webpilot --context agent-1 capture --include dom             # multi-agent isolation
+webpilot capture --browser --include dom                     # browser mode (SSO Chrome)
+webpilot capture --context agent-1 --include dom             # multi-agent isolation
 webpilot mcp            # MCP server (stdio); honors --browser / --context
 webpilot status
 webpilot quit
@@ -75,7 +78,7 @@ acts on the pinned page) (headless). The browser
 side adds a case in `extension/background/router.js` and its handler in the
 domain module that mirrors the Rust file (`action`/`capture`/`query`/`state`/
 `browser`.js ↔ the same-named `.rs`) — JS, so not compiler-checked, but
-`tests/browser_parity.rs` fails the build if any `Command` variant lacks a
+`tests/browser_parity.rs` fails `cargo test` if any `Command` variant lacks a
 router case, and `oxlint` gates the extension the way `clippy` gates the crates. Add a `bridge.js` case only when new content-script behavior is
 needed. Gate a command by adding an arm to `protocol::Command::policy_key()` —
 that match is exhaustive too, so a new command **must declare its gate** and
@@ -94,6 +97,7 @@ the connection error. This exhaustive classification is separate from policy.
 --- Page: Example (https://example.com) ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 1 iframe(s) not shown — list frames, then switch to one by URL pattern ---
+--- 2 elements (from 120 nodes, 5ms) ---
 ```
 
 `[index]` and `snapshot_id` identify an observed element. Indexed CLI actions
@@ -124,22 +128,7 @@ omitted ones keep their indices. A capture lists the whole page.
 
 ## Wire Protocol
 
-| Area | Rule |
-|---|---|
-| Action | `Command::Action { action: {"kind": "click", "index": 7}, snapshot_id: "…", capture: false }`; indexed actions require the observation ID. `Action` itself has one definition (clap + serde, snake_case). |
-| ActionKind | snake_case wire tag, matching `Action.kind` exactly |
-| PolicyKey | Effect-keyed gate: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`, `device`, `context_close`, `download`}. Keyed by **effect, not command** — `navigate` gates every URL-load (`navigate` action, `capture --url`, `tab new URL`); `download` gates the file a page makes the browser write, whatever started it — a `deny` becomes Chrome's own `Browser.setDownloadBehavior` refusal, so the transfer never begins; `eval` gates every MAIN-world JS sink (`eval`, `frame find`, `console`/`network start`, `dom set-html`). `Command::policy_key()` maps command→key via an **exhaustive match** (reads → `None`), so a new command can't compile without declaring its gate. Enforced at the browser-reaching sink — `LocalTransport::send` (headless) / NM host (browser), never the CLI `IpcTransport`; the host re-parses the wire value to a typed `Command` before enforcing (blocks a Rust-rejects/JS-coerces bypass). Store `policy/policies.json` under the durable data root (survives cache eviction). Per-effect gating rationale lives in the `PolicyKey` variant doc-comments + the `policy_key()` arms. |
-| ConsoleEntry | `{"source": "exception", "level": "error", "message": "...", "timestamp": 0}` — `level` is the console API's own taxonomy, so an uncaught error, which the console shows but no `console.*` call made, is typed by `source` (`console`/`exception`/`rejection`) instead of being flattened into `error` and told apart by reading the message |
-| Monitor read | `{"entries": [...], "truncated": false, "covers_load": true}` — the two ways a read can be less than the whole story, both stated rather than left to be inferred from an empty list: `truncated` is the eviction flag (the 500-entry cap dropped something), `covers_load` is whether the recorder was in place before the document's first script. False for a document built while nothing was attached (one loaded between two CLI invocations, or a popup, already loading when its target appears) and always false in browser mode, which injects at navigation settle. The recorders stamp it from the null `documentElement` only a document-start injection sees; the render adds `--- recorder installed after this document started … ---` |
-| Wait | `Wait { condition, timeout_ms, request_id? }`; request-scoped `WaitCancel { request_id }` cancels that wait; `condition` is the `until`-tagged `WaitCondition` — `{"until": "selector", "value": ".loading"}`, one of `selector`/`text`/`navigation`/`idle` |
-| Capture | `{"include": ["dom","screenshot"], "opts": {...}}` |
-| Status | `{connected, mode: "headless"\|"browser", tab_url, tab_title, chrome_version, extension_version}` — every field but the first two is optional and omitted when absent (`extension_version` is browser-mode only; the tab pair is the PINNED tab, absent when its page is gone) |
-| Errors | `{"code": "ElementNotFound", "message": "...", "requested": 5, "available": 3}` |
-| FrameSelector | `{"by": "url", "pattern": "/auth/"}` — `main` / `name` / `url` / `predicate`, all four in BOTH modes (a predicate is caller JS, so it rides the `eval` gate). Only the curated MCP surface narrows it: `browser_frame` takes name or URL, and `frame find` stays CLI-only |
-| DomProperty | `{"kind": "html"}` or `{"kind": "attr", "name": "href"}` |
-
-Display/FromStr for single snake_case enums are derived via `serde_plain` — no
-hand-written match tables.
+The wire shapes and their rules live with the types, in `crates/webpilot/CLAUDE.md`.
 
 ## Output Modes
 
@@ -203,36 +192,22 @@ message parsing or substring matching. External crate errors are wrapped into
 
 ## Runtime Paths
 
-```
-$WEBPILOT_HOME              explicit override
-~/Library/Caches/webpilot   macOS
-$XDG_RUNTIME_DIR/webpilot   Linux/BSD (tmpfs, mode 0700) — preferred
-$XDG_CACHE_HOME/webpilot    Linux fallback, then ~/.cache/webpilot
-/tmp/webpilot-<user>        last resort
-```
-(full resolution order in `dirs.rs`)
+Two per-user roots, both mode 0700, resolved in `dirs.rs` (its module doc gives
+the order per platform; `WEBPILOT_HOME` and `WEBPILOT_DATA_HOME` override):
 
-Subdirectories: `runtime/` (sockets, PIDs, locks), `contexts/` (multi-agent),
-`logs/` (`host.log` + one rotated predecessor — browser mode only: Chrome owns
-the NM host's stdio, so its account of a session reaches nobody otherwise; the
-CLI keeps stderr, which its caller does capture),
-`artifacts/` (screenshots, PDFs, sessions, plus `downloads/<browser-context>/`
-for files a page downloads), `chrome-profile/`. Artifacts are swept past
-`[artifacts] ttl` (7d) — every one is minted under a fresh name, so nothing else
-bounds the directory. The sweep is due at most hourly, tracked by
-`runtime/last-sweep`, and runs from the sinks every command passes
-(`LocalTransport::send` and the NM host's request path) — a session outlives any
-one process, so tying it to a launch or a process start would sweep once and
-never again. The **policy store**
-(`policy/policies.json`) lives instead under the durable data root
-(`$WEBPILOT_DATA_HOME` / `~/Library/Application Support/webpilot` /
-`$XDG_DATA_HOME` / `~/.local/share/webpilot`), or under `$WEBPILOT_HOME` when set:
-a security config must survive the cache eviction the paths above are subject to.
-`skill-install.sha256` sits beside it under the same root and for the same
-reason: it records the digest `setup skill` last wrote to `~/.claude/skills`, so
-a later install can tell WebPilot's own stale copy (refresh) from one the user
-edited (keep) — losing it to eviction would strand every future refresh behind
-a prompt.
+- **Cache root**, evictable: `runtime/` (sockets, PIDs, locks), `contexts/`,
+  `logs/` (`host.log` + one rotated predecessor; browser mode only, because
+  Chrome owns the NM host's stdio), `artifacts/` (screenshots, PDFs, sessions,
+  `downloads/<browser-context>/`), `chrome-profile/`, `config.toml`.
+- **Data root**, durable: the unpacked extension, `policy/policies.json` and
+  `skill-install.sha256`. A loaded extension, a security config and the skill's
+  provenance digest must survive cache eviction. `policy/` follows
+  `WEBPILOT_HOME` when it is set (`policy_dir_path`).
+
+Artifacts are swept past `[artifacts] ttl_secs` (7 days); each is minted under a
+fresh name, so nothing else bounds the directory. The sweep is due at most hourly
+(`runtime/last-sweep`) and runs from the sinks every command passes, for the
+reason "Two process lifetimes" gives.
 
 Settings resolve through one layer, `webpilot::settings`: **defaults <
 `config.toml` < env var**. Tune via `config.toml` (under the cache root —

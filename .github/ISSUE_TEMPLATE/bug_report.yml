@@ -14,7 +14,7 @@ body:
     attributes:
       label: WebPilot version
       description: Output of `webpilot --version`.
-      placeholder: webpilot 0.2.0
+      placeholder: webpilot X.Y.Z
     validations:
       required: true
 
@@ -82,7 +82,9 @@ body:
     attributes:
       label: Logs
       description: |
-        Run with `RUST_LOG=webpilot=debug` and paste the relevant tail.
+        Re-run the failing command with `-v` and paste stderr. In browser mode,
+        also attach `logs/host.log` and `logs/host.log.1` from the cache root
+        (`~/Library/Caches/webpilot/` on macOS).
       render: shell
     validations:
       required: false

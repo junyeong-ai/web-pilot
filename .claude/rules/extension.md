@@ -1,6 +1,7 @@
 ---
 paths:
   - "extension/**"
+  - "crates/webpilot-cli/src/transport/local/**"
 ---
 
 # Chrome Extension & bridge.js

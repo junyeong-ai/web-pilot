@@ -14,8 +14,8 @@
 
 ## Wire-protocol impact
 
-<!-- Any change touching crates/webpilot/{action,capture,protocol,error,wait}.rs,
-     extension/content/bridge.js, or extension/background/router.js MUST be
+<!-- Any change touching crates/webpilot/{action,capture,protocol,error,types,wait}.rs,
+     extension/content/bridge.js, or extension/background/*.js MUST be
      ticked here. -->
 
 - [ ] No protocol change
@@ -24,13 +24,17 @@
 
 ## Local checks
 
+The list CI gates on is "Build & Run" in `CLAUDE.md`.
+
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - [ ] `cargo test --workspace --locked --no-fail-fast`
-- [ ] `RUSTDOCFLAGS='-D warnings -D rustdoc::broken-intra-doc-links' cargo doc --workspace --no-deps --locked` (if rustdoc touched)
+- [ ] `RUSTDOCFLAGS='-D warnings -D rustdoc::broken-intra-doc-links' cargo doc --workspace --no-deps --locked`
+- [ ] `npm ci && npm run lint`
+- [ ] `shellcheck scripts/*.sh`
 
 ## Security
 
 - [ ] No new dependencies, **or** the additions pass `cargo deny check`
-- [ ] No expansion of the `WEBPILOT_HOME` mode-0700 invariant
+- [ ] No weakening of the mode-0700 cache and data roots
 - [ ] No new IPC / NM surface that bypasses policy enforcement

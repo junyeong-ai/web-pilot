@@ -123,6 +123,12 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   interaction (act/observe/orient/wait/diagnose + `eval`) — environment
   management (cookies, session, device, policy) stays CLI-only.
   `Execution::Mcp` puts it in the compiler-checked topology.
+- `lockfile.rs` — the one `flock` implementation behind the launch lock and the
+  policy and context stores.
+- `test_support.rs` — an in-process mock CDP server, so unit tests drive the
+  real `CdpClient`.
+- `commands/setup/` — `setup` installs the skill, the extension and the NM host
+  (one module each); `skill.rs` keeps a user's edits through its provenance digest.
 - `assets.rs` — compile-time embedded skill + extension (`include_dir!`);
   `expected_extension_version()` (stale-install gate) and
   `expected_extension_id()` (the id derived from the manifest's pinned `key`, so

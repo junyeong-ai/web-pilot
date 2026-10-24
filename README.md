@@ -428,7 +428,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 |---|---|
 | `capture --include <…>` | 페이지 상태 캡처 (dom · text · screenshot · pdf · accessibility) |
 | `action <click\|type\|key-press\|navigate\|scroll\|select\|upload\|hover\|focus\|drag\|…>` | 브라우저 동작 |
-| `find --role/--text/--label/--placeholder [--click\|--fill]` | 의미 기반 요소 검색(+동작) |
+| `find --role/--text/--label/--placeholder/--tag [--click\|--fill]` | 의미 기반 요소 검색(+동작) |
 | `eval <js>` | 페이지 컨텍스트에서 JS 평가 |
 | `wait <selector\|text\|navigation\|idle>` | 조건 대기 |
 | `tab <switch\|new\|close\|find>` | 탭 관리 |
@@ -495,7 +495,7 @@ webpilot quit                  # 헤드리스 Chrome 세션 종료
 webpilot self uninstall        # Chrome 종료 + 바이너리가 만든 모든 흔적 제거
 ```
 
-스킬과 확장은 컴파일 타임에 바이너리에 임베드되어 **번들 자산이 항상 바이너리와 일치**합니다(설치 후 추가 다운로드 없음). 호스트는 연결된 확장과 자신의 번들 버전을 비교해 `VersionMismatch`를 반환합니다. 이미 실행 중인 호스트는 이전 바이너리를 유지하므로, 업데이트 후 `webpilot setup skill`·`webpilot setup extension`으로 자산을 갱신하고 확장을 리로드해 새 호스트에 연결하세요. 로컬에서 편집한 스킬은 보존됩니다. setup 이후 Claude Code에서 `/webpilot` 또는 자연어로 스킬이 활성화됩니다.
+스킬과 확장은 컴파일 타임에 바이너리에 임베드되어 **번들 자산이 항상 바이너리와 일치**합니다(설치 후 추가 다운로드 없음). 호스트는 연결된 확장과 자신의 번들 버전을 비교해 `VersionMismatch`를 반환합니다. 이미 실행 중인 호스트는 이전 바이너리를 유지합니다. `webpilot self update`는 스킬(로컬 편집은 보존)과 확장 파일을 갱신한 뒤 남은 한 단계, 즉 확장을 리로드해 새 호스트에 연결하라는 안내를 출력합니다. 다른 방법으로 바이너리를 설치했다면 `webpilot setup skill`과 `webpilot setup extension`을 직접 실행하세요. setup 이후 Claude Code에서 `/webpilot` 또는 자연어로 스킬이 활성화됩니다.
 
 ---
 

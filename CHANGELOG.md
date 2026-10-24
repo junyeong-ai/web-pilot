@@ -35,8 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that forwards both no longer gives the model the listing several times over.
 - Name the rejected property and reason when MCP arguments fail schema
   validation.
-- Word recovery guidance in errors and DOM footers without CLI commands, so
-  MCP clients are not told to run commands they cannot reach. A stale snapshot
+- Word the agent's recovery steps in errors and DOM footers without CLI
+  commands, so MCP clients are not told to run commands they cannot reach;
+  operator remedies (policy, extension reinstall) keep theirs. A stale snapshot
   names every cause, including a newer capture, instead of claiming the page
   changed.
 - Update jsonschema to 0.60, tokio to 1.54, oxlint to 1.89 and Node.js to
