@@ -26,7 +26,7 @@ macOS 또는 Linux에 Chrome이 설치되어 있어야 합니다. 자동 탐지�
 
 아래 예시는 가상의 사내 할 일 관리 앱 **“Acme Tasks”**(로그인 → 대시보드)를 대상으로 합니다.
 출력은 형식을 설명하는 예시입니다. `ID_A`·`ID_B`·`ID_C`는 실제 출력의 `snapshot_id`로 바꾸세요.
-예제 앱은 별도로 실행되어 있어야 합니다. 파이프 출력은 JSON이며, 아래 목록은 터미널 형식입니다.
+예제 앱은 별도로 실행되어 있어야 합니다. 아래 목록은 기본 텍스트 출력이며, `--json`을 붙이면 같은 결과를 JSON으로 받습니다.
 
 ```bash
 # 1. 설치 (바이너리 다운로드 + 체크섬 검증 + 자동 setup)
@@ -177,7 +177,7 @@ webpilot capture --include screenshot                           # 뷰포트 PNG 
 webpilot capture --include screenshot --full-page               # 스크롤 전체를 한 장에
 webpilot capture --include screenshot --annotate                # 요소에 번호 라벨을 그려서 캡처
 webpilot capture --include pdf                                  # PDF 렌더링
-webpilot capture --include dom text screenshot                  # 한 번에 여러 개 (JSON 출력)
+webpilot capture --include dom text screenshot                  # 한 번에 여러 개
 ```
 
 스크린샷·PDF·접근성 트리는 파일로 저장되고, 경로를 알려줍니다:
@@ -369,16 +369,15 @@ Blocked by policy: click. Check: webpilot policy list
 
 ## 출력 모드
 
-| 상황 | 동작 |
+| 플래그 | 동작 |
 |---|---|
-| **터미널** | 사람용 메시지는 stderr, 콘텐츠는 stdout |
-| **파이프** | stdout이 TTY가 아니면 자동으로 JSON |
-| **강제** | `--json` 플래그 |
+| **(없음)** | 텍스트. 콘텐츠는 stdout, 안내와 부가 정보는 stderr. 터미널과 파이프에서 같습니다(에이전트의 셸 도구는 파이프로 읽습니다) |
+| **`--json`** | 구조화된 JSON을 stdout으로 |
 
-같은 `status` 명령도 파이프로 넘기면 JSON으로 바뀝니다:
+스크립트에서는 `--json`을 붙입니다:
 
 ```bash
-webpilot status | jq
+webpilot status --json | jq
 ```
 ```json
 {
@@ -456,7 +455,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 
 - `--browser` — 헤드리스 대신 로그인된 실제 Chrome(NM 경로) 제어
 - `--context <이름>` — 멀티 에이전트 격리 컨텍스트(헤드리스)
-- `--json` — JSON 출력 강제 (파이프 시 자동)
+- `--json` — 텍스트 대신 구조화된 JSON 출력
 - `-v, --verbose` — stderr 디버그 로그
 
 ---

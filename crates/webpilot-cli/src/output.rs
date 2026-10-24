@@ -4,21 +4,23 @@
 //! emit JSON or human-readable text. Errors render via `Display` on the
 //! structured `WebPilotError` — there is no message-string parsing.
 
-use std::io::IsTerminal;
 use webpilot::WebPilotError;
 use webpilot::types::{DomSnapshot, line_safe_clip};
 
+/// Text is the default whether or not stdout is a terminal: an agent's shell
+/// tool reads a pipe, and the text render is the form written for it. JSON is
+/// an explicit request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
-    Human,
+    Text,
     Json,
 }
 
-pub fn detect_output_mode(force_json: bool) -> OutputMode {
-    if force_json || !std::io::stdout().is_terminal() {
+pub fn output_mode(json: bool) -> OutputMode {
+    if json {
         OutputMode::Json
     } else {
-        OutputMode::Human
+        OutputMode::Text
     }
 }
 
@@ -38,7 +40,7 @@ pub enum CommandOutput {
         json: serde_json::Value,
         /// An out-of-band note that belongs with the content but must not
         /// pollute the piped `stdout` (which a shell may consume verbatim — a
-        /// `fetch` body, an `eval` value). It rides stderr in human mode and is
+        /// `fetch` body, an `eval` value). It rides stderr in text mode and is
         /// prepended in the MCP text block, so a fact the JSON carries
         /// structurally (a `fetch` HTTP status, a `dom get` "attribute absent")
         /// is never visible on one surface and missing on another. `None` for
@@ -181,7 +183,7 @@ impl CommandOutput {
     }
 
     /// Flatten to one agent-facing text block — the body of an MCP tool result.
-    /// Mirrors the Human render but returns the text instead of splitting it
+    /// Mirrors the text render but returns one block instead of splitting it
     /// across stdout/stderr, so the MCP surface and the CLI share one set of
     /// renderers (`DomSnapshot::to_text`, the handler-built `human` strings).
     pub(crate) fn to_agent_text(&self) -> String {
@@ -268,14 +270,14 @@ fn emit_json(value: &serde_json::Value) {
     }
 }
 
-/// Render an error to stderr (Human) or stdout (Json).
+/// Render an error to stderr (Text) or stdout (Json).
 ///
 /// Guidance text comes from `Display` on the structured error variant — the
 /// data is the source of truth, the message is derived. There is no
 /// fallback that inspects the message text for substrings.
 pub fn render_error(err: &WebPilotError, mode: OutputMode) {
     match mode {
-        OutputMode::Human => eprintln!("{err}"),
+        OutputMode::Text => eprintln!("{err}"),
         OutputMode::Json => {
             let wire = err.to_wire();
             match serde_json::to_string(&wire) {

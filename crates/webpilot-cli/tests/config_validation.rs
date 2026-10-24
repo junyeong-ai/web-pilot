@@ -82,11 +82,9 @@ fn explicit_config_path_that_does_not_exist_fails_loud() {
          InvalidArgument, not a silent fall-back to defaults; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // Piped stdout auto-selects JSON mode, so the typed error body lands there.
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("does not exist"),
-        "the error must name the missing path: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr).contains("does not exist"),
+        "the error must name the missing path: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -134,10 +132,10 @@ fn empty_webpilot_config_means_unset_and_reads_the_default_path() {
     assert_eq!(
         out.status.code(),
         Some(7),
-        "the malformed DEFAULT config must gate the run; stdout: {}",
-        String::from_utf8_lossy(&out.stdout)
+        "the malformed DEFAULT config must gate the run; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    let body = String::from_utf8_lossy(&out.stdout).into_owned();
+    let body = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
         body.contains("invalid settings") && !body.contains("does not exist"),
         "an empty WEBPILOT_CONFIG must resolve the DEFAULT path (parse error), \

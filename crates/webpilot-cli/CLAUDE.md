@@ -108,8 +108,8 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   The host's lifetime is Chrome's: stdin EOF (Chrome gone) exits the process —
   a graceful teardown is unreachable (the blocking writer ends only when every
   channel sender drops, and detached per-connection tasks hold them).
-- `output.rs` — `CommandOutput` → human/json `render()`. `to_json()` supplies
-  CLI JSON and MCP structured output; `to_agent_text()` reuses human renderers.
+- `output.rs` — `CommandOutput` → text/json `render()`. `to_json()` supplies
+  CLI JSON and MCP structured output; `to_agent_text()` reuses the text renderers.
 - `mcp.rs` — `webpilot mcp`: a stdio JSON-RPC (MCP) server, hand-rolled with no
   protocol dependency (same philosophy as native messaging / CDP / IPC).
   Dual-era per request: a request whose `_meta` names a revision is served

@@ -27,7 +27,7 @@ Chrome must be installed on macOS or Linux. If discovery fails, set
 The examples below target a hypothetical internal task-tracker, **“Acme Tasks”** (login → dashboard).
 Outputs illustrate the format. Replace `ID_A`, `ID_B`, and `ID_C` with the actual
 `snapshot_id` from each result. The example app must be running separately.
-Piped output is JSON; the listings below use terminal format.
+The listings below are the default text output; add `--json` for the same result as JSON.
 
 ```bash
 # 1. Install (binary download + checksum verification + unattended setup)
@@ -178,7 +178,7 @@ webpilot capture --include screenshot                           # viewport PNG (
 webpilot capture --include screenshot --full-page               # the whole scrollable page in one shot
 webpilot capture --include screenshot --annotate                # numbered labels drawn on elements
 webpilot capture --include pdf                                  # PDF rendering
-webpilot capture --include dom text screenshot                  # several at once (JSON output)
+webpilot capture --include dom text screenshot                  # several at once
 ```
 
 Screenshots, PDFs, and the accessibility tree are saved to files, and the path is reported:
@@ -378,16 +378,15 @@ Blocked by policy: click. Check: webpilot policy list
 
 ## Output modes
 
-| Situation | Behavior |
+| Flag | Behavior |
 |---|---|
-| **Terminal** | Human messages to stderr, content to stdout |
-| **Piped** | stdout not a TTY → automatic JSON |
-| **Forced** | the `--json` flag |
+| **(none)** | Text: content to stdout, notes and side information to stderr — the same on a terminal and in a pipe (an agent's shell tool reads a pipe) |
+| **`--json`** | The structured JSON form on stdout |
 
-The same `status` command becomes JSON when piped:
+Scripts add `--json`:
 
 ```bash
-webpilot status | jq
+webpilot status --json | jq
 ```
 ```json
 {
@@ -465,7 +464,7 @@ See `webpilot <command> --help` for the full options of each.
 
 - `--browser` — drive your real, logged-in Chrome (NM path) instead of headless
 - `--context <name>` — multi-agent isolation context (headless)
-- `--json` — force JSON output (automatic when piped)
+- `--json` — structured JSON output instead of text
 - `-v, --verbose` — debug logging to stderr
 
 ---

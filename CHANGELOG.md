@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** print text by default even when stdout is piped, since an
+  agent's shell tool reads a pipe and the text render is written for it. Pass
+  `--json` for the structured form; scripts that relied on automatic JSON must
+  add it.
 - Name the rejected property and reason when MCP arguments fail schema
   validation.
 - Word recovery guidance in errors and DOM footers without CLI commands, so

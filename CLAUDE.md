@@ -139,13 +139,13 @@ hand-written match tables.
 
 ## Output Modes
 
-- **Terminal**: human → stderr, content → stdout
-- **Piped**: stdout not a TTY → JSON automatically
-- **Forced**: `--json` flag
+- **Default**: text — content → stdout, notes → stderr, on a terminal and in a
+  pipe alike (an agent's shell tool reads a pipe; the text render is written for it)
+- **`--json`**: the structured form on stdout
 
 `CommandOutput` enum → `output::render()`, a single conversion.
 `CommandOutput::to_json()` supplies CLI JSON and MCP structured content;
-`to_agent_text()` reuses the human renderers for MCP text blocks.
+`to_agent_text()` reuses the text renderers for MCP text blocks.
 
 ## Error Handling
 

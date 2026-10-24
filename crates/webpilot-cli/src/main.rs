@@ -33,7 +33,7 @@ async fn main() {
 
     if let Err(e) = result {
         let err = into_webpilot_error(e);
-        let mode = output::detect_output_mode(std::env::args().any(|a| a == "--json"));
+        let mode = output::output_mode(std::env::args().any(|a| a == "--json"));
         output::render_error(&err, mode);
         std::process::exit(err.exit_code());
     }

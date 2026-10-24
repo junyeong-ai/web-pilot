@@ -16,7 +16,7 @@ struct Cli {
     #[command(subcommand)]
     command: commands::Command,
 
-    /// Force JSON output (auto-detected when stdout is piped).
+    /// Print the structured JSON form instead of text.
     #[arg(long, global = true)]
     json: bool,
 
@@ -43,7 +43,7 @@ pub async fn run_cli() -> Result<()> {
         .with_target(false)
         .try_init();
 
-    let mode = output::detect_output_mode(cli.json);
+    let mode = output::output_mode(cli.json);
     if let Cmd::Action(args) = &cli.command {
         args.action.validate_snapshot(args.snapshot_id.as_deref())?;
     }

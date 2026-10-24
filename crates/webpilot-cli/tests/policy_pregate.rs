@@ -34,13 +34,13 @@ fn denied_gated_commands_do_not_launch_chrome() {
             out.status.code(),
             Some(6),
             "{args:?} under default-deny must be PolicyDenied (6): {}",
-            String::from_utf8_lossy(&out.stdout)
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 
     // No session may have been launched by the denied commands: `status` is
     // side-effect-free and must report disconnected with no Chrome started.
-    let status = run(&["status"]);
+    let status = run(&["status", "--json"]);
     assert!(status.status.success(), "status must succeed");
     let s = String::from_utf8_lossy(&status.stdout);
     assert!(

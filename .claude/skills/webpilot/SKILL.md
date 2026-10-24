@@ -7,8 +7,8 @@ allowed-tools: Bash(webpilot *) Read
 
 # WebPilot
 
-`webpilot` starts headless Chrome automatically. Output is JSON when piped;
-`--json` forces it. Content goes to stdout and diagnostics to stderr.
+`webpilot` starts headless Chrome automatically. Output is text: content on
+stdout, notes and diagnostics on stderr. `--json` returns the structured form.
 Chrome must already be installed; set `WEBPILOT_CHROME` to its executable if
 automatic discovery fails. Use `webpilot <command> --help` for options.
 
