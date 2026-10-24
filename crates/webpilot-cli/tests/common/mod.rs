@@ -340,6 +340,12 @@ pub fn spawn_server() -> String {
                     );
                     return;
                 }
+                if req.starts_with("GET /stall") {
+                    // A server that accepts the request and never answers: the
+                    // read returns only once the browser gives up the connection.
+                    let _ = stream.read(&mut [0u8; 1]);
+                    return;
+                }
                 if req.starts_with("GET /empty204") {
                     let _ =
                         stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");

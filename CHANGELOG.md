@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A failed `tab new`, or a failed navigation that opened a tab, restores the
   previous pin, including no pin, instead of leaving it on the closed tab.
+- In headless mode, a URL load the server never answers no longer makes every
+  later command time out: the load is stopped at the navigation timeout, the
+  previous page stays in place, and the error names the navigation timeout
+  rather than the three-second `Page.navigate` send limit.
 
 ## [0.12.1] - 2026-10-24
 

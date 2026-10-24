@@ -773,8 +773,10 @@ impl LocalTransport {
         //   for same-URL reloads, where the URL alone can't.
         // - `Ok` without a `loaderId` → a same-document (fragment) navigation;
         //   already complete, nothing to wait for.
-        // - send `Err` → the page socket dropped mid swap; report it if the
-        //   navigation never lands.
+        // - send `Timeout` → no response yet (`Page.navigate` replies only once
+        //   the server answers); the settle deadline decides.
+        // - any other send `Err` → the page socket dropped mid swap; report it if
+        //   the navigation never lands.
         let mut start_error = None;
         let mut is_download = false;
         let loader_id = match self
@@ -820,7 +822,10 @@ impl LocalTransport {
                 loader
             }
             Err(e) => {
-                start_error = Some(crate::into_webpilot_error(e));
+                let e = crate::into_webpilot_error(e);
+                if !matches!(e, WebPilotError::Timeout { .. }) {
+                    start_error = Some(e);
+                }
                 None
             }
         };
@@ -930,6 +935,11 @@ impl LocalTransport {
                     self.clear_active_frame().await;
                     return Ok(self.downloads_from(&mut download_events, is_download).await);
                 }
+                // Stop the load that never settled. A load the server never
+                // answers blocks a newly attached session's `Page.enable`
+                // (measured), so left pending it would time out every later
+                // command; stopped, the tab stays on whatever document it holds.
+                let _ = self.page.send("Page.stopLoading", None).await;
                 return Err(start_error
                     .unwrap_or(WebPilotError::Timeout {
                         kind: "navigation".into(),

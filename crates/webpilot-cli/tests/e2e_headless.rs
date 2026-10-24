@@ -1097,6 +1097,36 @@ fn headless_behavioral_flow() {
         stdout(&tabs_after)
     );
 
+    // 2b-stall. A navigation the server never answers times out as a navigation
+    //     and is stopped, so the page it left keeps answering the next command.
+    let href = || {
+        let out = fx.run(&["eval", "location.href"]);
+        assert_eq!(code(&out), 0, "eval failed: {}", stdout(&out));
+        let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("eval json");
+        json["result"].as_str().unwrap_or_default().to_string()
+    };
+    let before_stall = href();
+    let stalled = fx.run_env(
+        &["action", "navigate", &format!("{base}/stall")],
+        &[("WEBPILOT_NAVIGATION_TIMEOUT_MS", "2000")],
+    );
+    assert_eq!(
+        code(&stalled),
+        5,
+        "a navigation the server never answers must time out: {}",
+        stdout(&stalled)
+    );
+    assert!(
+        stdout(&stalled).contains("navigation timed out"),
+        "the timeout must name the navigation, not the CDP send: {}",
+        stdout(&stalled)
+    );
+    assert_eq!(
+        href(),
+        before_stall,
+        "a stopped navigation leaves the previous page in place"
+    );
+
     // 2c. `upload` sets a file on the input the index addressed — resolved by
     //     snapshot identity and handed to CDP as an object reference, never a
     //     live document-order re-query a page could redirect. Prove the file
