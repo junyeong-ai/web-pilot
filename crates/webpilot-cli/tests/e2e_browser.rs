@@ -137,8 +137,12 @@ fn http_get(port: u16, path: &str) -> String {
 
 fn spawn_chrome(chrome: &Path, home: &Path, user_data_dir: &Path, extension_dir: &Path) -> Child {
     let mut cmd = Command::new(chrome);
+    // The window the headless suite gets from the `[chrome] viewport_*`
+    // defaults: the shared fixture places fixed-position controls for it, and
+    // Chrome's own default window differs across versions (156: 756x356).
     cmd.args([
         "--headless=new",
+        "--window-size=1280,720",
         &format!("--user-data-dir={}", user_data_dir.display()),
         &format!("--load-extension={}", extension_dir.display()),
         "--remote-debugging-port=0",
