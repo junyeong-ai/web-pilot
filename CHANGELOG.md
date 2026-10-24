@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-24
+
+### Fixed
+
+- Describe `WEBPILOT_HOME` correctly in the security policy and code docs: it
+  moves the cache root, the policy store and the skill digest, while the
+  unpacked extension stays in the data root. Name every place policy is
+  enforced, including the `device` and `context close` handlers.
+- Give each fact in the developer guidance one home across the CLAUDE.md files
+  and rules, and correct statements that no longer matched the code.
+
 ## [0.12.0] - 2026-10-24
 
 ### Added
