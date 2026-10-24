@@ -369,17 +369,16 @@ fn mcp_long_lived_transport_flow() {
     assert!(text.ok(), "{}", text.text());
     assert!(text.reply["result"]["structuredContent"]["text_content"].is_string());
     let snapshot = mcp.tool("browser_snapshot", json!({}));
-    let snapshot = &snapshot.reply["result"]["structuredContent"];
-    let index = snapshot["elements"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|el| el["id"] == "go")
-        .unwrap()["index"]
-        .clone();
+    let listing = &snapshot.reply["result"]["structuredContent"];
+    assert!(
+        listing.get("elements").is_none() && listing["element_count"].as_u64() > Some(0),
+        "the listing travels in the text block, its length in structuredContent: {listing}"
+    );
+    let found = mcp.tool("browser_find", json!({"role":"button","text":"Go"}));
+    let found = &found.reply["result"]["structuredContent"];
     let clicked = mcp.tool(
         "browser_click",
-        json!({"index":index,"snapshot_id":snapshot["snapshot_id"],"capture":false}),
+        json!({"index":found["matches"][0]["index"],"snapshot_id":found["snapshot_id"],"capture":false}),
     );
     assert!(clicked.ok(), "{}", clicked.text());
 }

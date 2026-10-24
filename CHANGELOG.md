@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent's shell tool reads a pipe and the text render is written for it. Pass
   `--json` for the structured form; scripts that relied on automatic JSON must
   add it.
+- Leave the element array out of MCP `structuredContent` for DOM results and
+  report `element_count` instead; the text block carries the listing. A host
+  that forwards both no longer gives the model the listing several times over.
 - Name the rejected property and reason when MCP arguments fail schema
   validation.
 - Word recovery guidance in errors and DOM footers without CLI commands, so

@@ -143,8 +143,19 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
 }
 
 impl CommandOutput {
+    /// The MCP `structuredContent`. A DOM listing travels in the text block
+    /// alone, with its length here: a host may hand both to the model, and the
+    /// element array would repeat the listing several times over.
     pub(crate) fn structured_content(&self) -> serde_json::Value {
-        let value = self.to_json();
+        let mut value = self.to_json();
+        if let Self::Dom { snapshot, .. } = self {
+            let object = value.as_object_mut().expect("DomSnapshot is an object");
+            object.remove("elements");
+            object.insert(
+                "element_count".into(),
+                serde_json::json!(snapshot.elements.len()),
+            );
+        }
         if value.is_object() {
             value
         } else {
@@ -294,6 +305,31 @@ pub fn render_error(err: &WebPilotError, mode: OutputMode) {
 mod tests {
     use super::{CommandOutput, dom_extra_lines};
     use serde_json::json;
+
+    #[test]
+    fn structured_dom_content_counts_the_listing_instead_of_repeating_it() {
+        let snapshot = serde_json::from_value(json!({
+            "snapshot_id": "s1",
+            "elements": [],
+            "total_nodes": 4,
+            "page_url": "https://example.com/",
+            "page_title": "Example",
+            "extraction_ms": 1,
+        }))
+        .expect("snapshot");
+        let output = CommandOutput::Dom {
+            snapshot,
+            extra: serde_json::Map::new(),
+        };
+        let structured = output.structured_content();
+        assert!(structured.get("elements").is_none(), "{structured}");
+        assert_eq!(structured["element_count"], 0);
+        assert_eq!(structured["snapshot_id"], "s1");
+        assert!(
+            output.to_json()["elements"].is_array(),
+            "--json keeps the array"
+        );
+    }
 
     #[test]
     fn content_note_rides_the_text_channel_with_the_body() {

@@ -330,7 +330,7 @@ webpilot mcp                  # stdio JSON-RPC (MCP) 서버. --browser / --conte
 
 페이지 상호작용 전반(관찰 `snapshot`/`screenshot`, 액션 `click`/`type`/`drag`/`upload` 등, 시맨틱 검색 `find`, 탭/프레임 전환, `wait`, `eval`)이 21개 `browser_*` 툴로 제공되며, CLI와 동일한 모드·정책·렌더링을 물려받습니다. MCP 2026-07-28을 상태 없이(`server/discover`, 요청별 `_meta`) 제공하면서 2025-11-25 / 2025-06-18 클라이언트의 `initialize` 핸드셰이크에도 응답하며, 두 진입점 모두 모델용 사용 지침(`instructions`)을 함께 보냅니다. 읽기 전용 툴은 `readOnlyHint` 어노테이션을 선언합니다. 환경 관리(쿠키·세션·디바이스·정책)와 콘솔·네트워크 모니터는 의도적으로 CLI 전용입니다.
 
-MCP snapshot은 `include: ["dom", "text"]`를 지원합니다. 인덱스 툴에는 `snapshot_id`가 필요하며, 액션의 `capture: false`로 불필요한 DOM 반환을 생략할 수 있습니다. 성공 결과도 `structuredContent`로 제공하고, 실행 중 ping과 대기 취소를 처리합니다. DOM 스냅샷에는 비밀번호 값을 포함하지 않습니다.
+MCP snapshot은 `include: ["dom", "text"]`를 지원합니다. 인덱스 툴에는 `snapshot_id`가 필요하며, 액션의 `capture: false`로 불필요한 DOM 반환을 생략할 수 있습니다. 성공 결과도 `structuredContent`로 제공하며(DOM 결과에는 스냅샷 ID, 페이지, 개수, 액션 효과가 담기고 요소 목록은 텍스트 블록에만 있습니다), 실행 중 ping과 대기 취소를 처리합니다. DOM 스냅샷에는 비밀번호 값을 포함하지 않습니다.
 
 MCP 호스트마다 `--context NAME`을 따로 지정하세요. 컨텍스트를 함께 쓰는 호스트들은 고정 탭과 스냅샷도 함께 쓰므로, 한쪽이 캡처하면 다른 쪽의 `snapshot_id`가 무효가 됩니다.
 
