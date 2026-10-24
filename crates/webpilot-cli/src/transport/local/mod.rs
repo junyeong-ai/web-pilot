@@ -764,6 +764,13 @@ impl LocalTransport {
         // command is still in flight must not fire into a gap.
         let mut download_events = self.browser.subscribe_events();
 
+        // One budget for the whole navigation, counted from the moment it is
+        // sent: the `Page.navigate` reply, each settle probe and each poll wait
+        // only for what remains of it, so `timeouts.navigation` is the longest a
+        // navigation takes.
+        let navigation = webpilot::settings::timeouts().navigation;
+        let deadline = std::time::Instant::now() + navigation;
+
         // `Page.navigate` outcomes:
         // - `errorText` with a concrete net code (DNS, refused, CSP) → fail now.
         // - `errorText == net::ERR_ABORTED` → a cross-site swap superseded the old
@@ -773,10 +780,10 @@ impl LocalTransport {
         //   for same-URL reloads, where the URL alone can't.
         // - `Ok` without a `loaderId` → a same-document (fragment) navigation;
         //   already complete, nothing to wait for.
-        // - send `Timeout` → no response yet (`Page.navigate` replies only once
-        //   the server answers); the settle deadline decides.
-        // - any other send `Err` → the page socket dropped mid swap; report it if
-        //   the navigation never lands.
+        // - send `Timeout` → the budget ran out before the server answered
+        //   (`Page.navigate` replies only once the load has a response).
+        // - any other send `Err` → the connection or the session dropped; report
+        //   it if the navigation never lands.
         let mut start_error = None;
         let mut is_download = false;
         let loader_id = match self
@@ -784,7 +791,7 @@ impl LocalTransport {
             .send_with_timeout(
                 "Page.navigate",
                 Some(json!({"url": url})),
-                std::time::Duration::from_secs(3),
+                deadline.saturating_duration_since(std::time::Instant::now()),
             )
             .await
         {
@@ -821,13 +828,15 @@ impl LocalTransport {
                 }
                 loader
             }
-            Err(e) => {
-                let e = crate::into_webpilot_error(e);
-                if !matches!(e, WebPilotError::Timeout { .. }) {
-                    start_error = Some(e);
+            Err(e) => match crate::into_webpilot_error(e) {
+                WebPilotError::Timeout { .. } => {
+                    return Err(self.abandon_navigation(navigation).await.into());
                 }
-                None
-            }
+                e => {
+                    start_error = Some(e);
+                    None
+                }
+            },
         };
 
         // ERR_ABORTED is a STAY-PUT, not a failure: a 204/download/intercepted
@@ -835,19 +844,18 @@ impl LocalTransport {
         // live and capturable. Bound its wait by the short PROBE — a TRANSITIONAL
         // abort (a swap that supersedes the load) commits a new document within it
         // and settles below; a TERMINAL one never commits, and spinning to the
-        // full navigation deadline only delays a false NavigationFailed. (A
-        // concrete net error already returned above; a send `Err` keeps the long
-        // deadline so a real socket drop isn't masked.)
+        // end of the budget only delays a false NavigationFailed. (A concrete net
+        // error already returned above; a send `Err` keeps the whole budget so a
+        // real socket drop isn't masked.)
         let mut aborted = matches!(
             &start_error,
             Some(WebPilotError::NavigationFailed { reason, .. }) if reason == "net::ERR_ABORTED"
         );
-        let mut deadline = std::time::Instant::now()
-            + if aborted {
-                PROBE
-            } else {
-                webpilot::settings::timeouts().navigation
-            };
+        let mut settle_by = if aborted {
+            deadline.min(std::time::Instant::now() + PROBE)
+        } else {
+            deadline
+        };
         let loader = loader_id.as_deref();
         loop {
             if let Some((target_id, target_url)) = self.bound_target().await {
@@ -871,7 +879,7 @@ impl LocalTransport {
                     // the active iframe scope and the bridge-context readiness
                     // gate. (The context listener, the registered bridge world,
                     // and the monitor hooks are session-scoped and carry over.)
-                    if navigation_settled(&self.page, loader, &before_url).await {
+                    if navigation_settled(&self.page, loader, &before_url, settle_by).await {
                         self.clear_active_frame().await;
                         // Force the new document's contexts to re-announce
                         // themselves. The new bridge/main-world
@@ -901,7 +909,7 @@ impl LocalTransport {
                         }
                         return Ok(self.downloads_from(&mut download_events, is_download).await);
                     }
-                } else if navigation_settled(&self.page, loader, &before_url).await {
+                } else if navigation_settled(&self.page, loader, &before_url, settle_by).await {
                     // Same-URL navigation: necessarily same-site, so the existing
                     // session stays valid (no renderer swap). The loader match
                     // distinguishes the reloaded document from the previous one.
@@ -910,12 +918,12 @@ impl LocalTransport {
                 }
             }
 
-            if std::time::Instant::now() >= deadline {
+            if std::time::Instant::now() >= settle_by {
                 if aborted {
                     // A TRANSITIONAL abort's commit can land in the poll→deadline
                     // gap. Take one more reading before declaring stay-put: if the
                     // main-tab URL moved (a cross-page commit), it was transitional
-                    // after all — re-enter the loop on the FULL deadline so the
+                    // after all — re-enter the loop on the rest of the budget so the
                     // cross-page branch rebinds the new document. Only a confirmed
                     // no-move is the TERMINAL stay-put (a 204/download/intercepted
                     // load): the main frame stopped without committing, so the
@@ -928,26 +936,34 @@ impl LocalTransport {
                     };
                     if moved {
                         aborted = false;
-                        deadline =
-                            std::time::Instant::now() + webpilot::settings::timeouts().navigation;
+                        settle_by = deadline;
                         continue;
                     }
                     self.clear_active_frame().await;
                     return Ok(self.downloads_from(&mut download_events, is_download).await);
                 }
-                // Stop the load that never settled. A load the server never
-                // answers blocks a newly attached session's `Page.enable`
-                // (measured), so left pending it would time out every later
-                // command; stopped, the tab stays on whatever document it holds.
-                let _ = self.page.send("Page.stopLoading", None).await;
-                return Err(start_error
-                    .unwrap_or(WebPilotError::Timeout {
-                        kind: "navigation".into(),
-                        elapsed_ms: webpilot::settings::timeouts().navigation.as_millis() as u64,
-                    })
-                    .into());
+                let timed_out = self.abandon_navigation(navigation).await;
+                return Err(start_error.unwrap_or(timed_out).into());
             }
-            tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
+            tokio::time::sleep(
+                webpilot::settings::timeouts()
+                    .poll_interval
+                    .min(settle_by.saturating_duration_since(std::time::Instant::now())),
+            )
+            .await;
+        }
+    }
+
+    /// End a navigation that outlasted its budget. The load is stopped first: a
+    /// load still waiting on its server holds every renderer-bound command —
+    /// `Page.getFrameTree` and `Runtime.evaluate` on this session, `Page.enable`
+    /// on a later one (measured) — so left pending it would time out each command
+    /// after it, while stopped the tab stays on whatever document it holds.
+    async fn abandon_navigation(&self, budget: std::time::Duration) -> WebPilotError {
+        let _ = self.page.send("Page.stopLoading", None).await;
+        WebPilotError::Timeout {
+            kind: "navigation".into(),
+            elapsed_ms: budget.as_millis() as u64,
         }
     }
 
@@ -1343,8 +1359,18 @@ fn apply_download_event(
     }
 }
 
-async fn navigation_settled(page: &CdpSession, loader_id: Option<&str>, before_url: &str) -> bool {
-    let Ok(Ok(tree)) = tokio::time::timeout(PROBE, page.send("Page.getFrameTree", None)).await
+/// Whether the navigation committed (its loader, or a main frame that left
+/// `before_url`) and its document has parsed. Each probe is time-boxed by `PROBE`
+/// and never runs past `until`: a pending load holds both probes (measured), so
+/// an unbounded one would outlast the navigation's budget.
+async fn navigation_settled(
+    page: &CdpSession,
+    loader_id: Option<&str>,
+    before_url: &str,
+    until: std::time::Instant,
+) -> bool {
+    let probe = || PROBE.min(until.saturating_duration_since(std::time::Instant::now()));
+    let Ok(Ok(tree)) = tokio::time::timeout(probe(), page.send("Page.getFrameTree", None)).await
     else {
         return false;
     };
@@ -1361,7 +1387,7 @@ async fn navigation_settled(page: &CdpSession, loader_id: Option<&str>, before_u
         return false;
     }
     matches!(
-        tokio::time::timeout(PROBE, page.evaluate("document.readyState")).await,
+        tokio::time::timeout(probe(), page.evaluate("document.readyState")).await,
         Ok(Ok(state)) if matches!(state.as_str(), Some("interactive") | Some("complete"))
     )
 }
@@ -2257,6 +2283,10 @@ mod navigation_settled_tests {
         }
     }
 
+    fn one_probe() -> std::time::Instant {
+        std::time::Instant::now() + PROBE
+    }
+
     async fn mock_page(url: &str) -> CdpSession {
         let conn = Arc::new(CdpClient::connect(url).await.unwrap());
         attach_session(&conn).await
@@ -2266,7 +2296,7 @@ mod navigation_settled_tests {
     async fn settled_when_loader_matches_and_document_ready() {
         let url = mock_cdp(serve_frame("L1", "https://same", "complete")).await;
         let page = mock_page(&url).await;
-        assert!(navigation_settled(&page, Some("L1"), "https://same").await);
+        assert!(navigation_settled(&page, Some("L1"), "https://same", one_probe()).await);
     }
 
     #[tokio::test]
@@ -2275,20 +2305,36 @@ mod navigation_settled_tests {
         // URL having moved is enough to count as committed.
         let url = mock_cdp(serve_frame("Lx", "https://new", "interactive")).await;
         let page = mock_page(&url).await;
-        assert!(navigation_settled(&page, Some("Lwant"), "https://old").await);
+        assert!(navigation_settled(&page, Some("Lwant"), "https://old", one_probe()).await);
     }
 
     #[tokio::test]
     async fn not_settled_when_neither_loader_nor_url_committed() {
         let url = mock_cdp(serve_frame("Lx", "https://old", "complete")).await;
         let page = mock_page(&url).await;
-        assert!(!navigation_settled(&page, Some("Lwant"), "https://old").await);
+        assert!(!navigation_settled(&page, Some("Lwant"), "https://old", one_probe()).await);
+    }
+
+    #[tokio::test]
+    async fn a_held_probe_ends_at_the_deadline() {
+        // A load waiting on its server holds `Page.getFrameTree`: the check must
+        // give up when the navigation's budget does, not a whole PROBE later.
+        let url = mock_cdp(|req: &Value| match req["method"].as_str() {
+            Some("Target.attachToTarget") => Reply::Send(ok(req, json!({ "sessionId": "MOCK" }))),
+            _ => Reply::Silent,
+        })
+        .await;
+        let page = mock_page(&url).await;
+        let started = std::time::Instant::now();
+        let until = started + std::time::Duration::from_millis(100);
+        assert!(!navigation_settled(&page, Some("L1"), "https://same", until).await);
+        assert!(started.elapsed() < PROBE / 2, "{:?}", started.elapsed());
     }
 
     #[tokio::test]
     async fn not_settled_while_document_still_loading() {
         let url = mock_cdp(serve_frame("L1", "https://same", "loading")).await;
         let page = mock_page(&url).await;
-        assert!(!navigation_settled(&page, Some("L1"), "https://same").await);
+        assert!(!navigation_settled(&page, Some("L1"), "https://same", one_probe()).await);
     }
 }

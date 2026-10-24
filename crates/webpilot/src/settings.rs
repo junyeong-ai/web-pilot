@@ -45,6 +45,8 @@ pub struct Settings {
 #[derive(Debug, Clone)]
 pub struct Timeouts {
     pub cdp_send: Duration,
+    /// The longest a URL load takes, from sending it to a parsed document, in
+    /// both modes; headless stops a load still unfinished then.
     pub navigation: Duration,
     pub reload_wait: Duration,
     pub back_forward: Duration,

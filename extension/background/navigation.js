@@ -116,15 +116,16 @@ async function settledActionUrl(tabId, beforeUrl, watch, navHint) {
   return settled?.url || beforeUrl;
 }
 
-// Read the main frame's readyState, bounded by PROBE_MS. A renderer wedged by a
-// parser-blocking script (`<script>while(true){}</script>` running before
-// DOMContentLoaded) queues the injected probe function forever, so an unbounded
-// `executeScript` would hang the await — and since the settle loop only re-checks
-// its deadline BETWEEN probes, the navigation deadline would never fire and the
-// command would never settle. Headless bounds the identical `document.readyState`
-// read with its PROBE timeout (mod.rs). Returns the readyState string, or null on
-// a probe timeout / failure / renderer swap (the caller retries on the next poll).
-async function probeReadyState(target) {
+// Read the main frame's readyState, bounded by `limitMs` (PROBE_MS unless the
+// caller's deadline is nearer). A renderer wedged by a parser-blocking script
+// (`<script>while(true){}</script>` running before DOMContentLoaded) queues the
+// injected probe function forever, so an unbounded `executeScript` would hang
+// the await — and since the settle loop only re-checks its deadline BETWEEN
+// probes, the navigation deadline would never fire and the command would never
+// settle. Headless bounds the identical `document.readyState` read with its
+// PROBE timeout (mod.rs). Returns the readyState string, or null on a probe
+// timeout / failure / renderer swap (the caller retries on the next poll).
+async function probeReadyState(target, limitMs = PROBE_MS) {
   let timer;
   const probe = chrome.scripting
     .executeScript({ target, func: () => document.readyState })
@@ -133,7 +134,7 @@ async function probeReadyState(target) {
   return Promise.race([
     probe,
     new Promise((resolve) => {
-      timer = setTimeout(() => resolve(null), PROBE_MS);
+      timer = setTimeout(() => resolve(null), limitMs);
     }),
   ]).finally(() => clearTimeout(timer));
 }
@@ -196,9 +197,11 @@ async function waitNavigationSettled(tabId, beforeUrl, watch, url) {
           : Boolean(frame?.url && frame.url !== beforeUrl);
         if (documentMatches) {
           // Probe readiness (PROBE-bounded so a wedged renderer can't hang the
-          // settle); a probe failing mid renderer swap just retries on the next
-          // poll, exactly like the headless time-boxed PROBE.
-          const ready = await probeReadyState({ tabId, frameIds: [0] });
+          // settle, and never past the budget, which bounds the whole
+          // navigation); a probe failing mid renderer swap just retries on the
+          // next poll, exactly like the headless time-boxed PROBE.
+          const remaining = budget() - (Date.now() - start);
+          const ready = await probeReadyState({ tabId, frameIds: [0] }, Math.min(PROBE_MS, remaining));
           if (ready === "interactive" || ready === "complete") return;
         }
       }

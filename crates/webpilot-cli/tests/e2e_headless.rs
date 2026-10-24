@@ -1097,8 +1097,9 @@ fn headless_behavioral_flow() {
         stdout(&tabs_after)
     );
 
-    // 2b-stall. A navigation the server never answers times out as a navigation
-    //     and is stopped, so the page it left keeps answering the next command.
+    // 2b-stall. A navigation the server never answers times out as a navigation,
+    //     within its budget, and is stopped, so the page it left keeps answering
+    //     the next command.
     let href = || {
         let out = fx.run(&["eval", "location.href"]);
         assert_eq!(code(&out), 0, "eval failed: {}", stdout(&out));
@@ -1106,9 +1107,16 @@ fn headless_behavioral_flow() {
         json["result"].as_str().unwrap_or_default().to_string()
     };
     let before_stall = href();
+    let started = std::time::Instant::now();
     let stalled = fx.run_env(
         &["action", "navigate", &format!("{base}/stall")],
         &[("WEBPILOT_NAVIGATION_TIMEOUT_MS", "2000")],
+    );
+    // The process start and the attach are inside this measure, hence the margin.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "the navigation budget bounds the whole navigation: took {:?} for 2000ms",
+        started.elapsed()
     );
     assert_eq!(
         code(&stalled),
