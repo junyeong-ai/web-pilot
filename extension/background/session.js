@@ -118,8 +118,9 @@ const PROBE_MS = 2000;
 
 // ── Active tab ──────────────────────────────────────────────────────────────
 // Browser mode binds every command to ONE tab, exactly as headless binds to
-// one target: pinned on first use (the focused window's active http tab),
-// moved only by an explicit `tab switch` / `tab new` / a tab the acted-on page
+// one target: pinned on first use (a navigation opens a tab of the agent's
+// own; any other command takes the focused window's active http tab), moved
+// only by an explicit `tab switch` / `tab new` / a tab the acted-on page
 // opened. A vanished pin is a typed TabNotFound — never a silent retarget to
 // whatever tab happens to be focused, which would route the agent's actions to
 // a page it has not seen. One pin per extension by design: multi-agent
@@ -157,18 +158,5 @@ async function resolveActiveTab() {
   return focused;
 }
 
-// `navigate` is the one command that REPLACES the tab's URL, so it needs no
-// injectable bridge and must reuse the pinned tab even when that tab is non-http
-// (a pin left on about:blank / chrome://), where `resolveActiveTab` returns null
-// to steer bridge commands to a NoPage. Headless navigates its bound target in
-// place regardless of the old URL; without this, browser mode would orphan the
-// non-http pin and open a SECOND tab — a tab-state divergence. With no pin yet it
-// defers to `resolveActiveTab`'s focused-http-or-create path: a first navigate has
-// no agent tab to reuse (exactly as headless creates its bound target at session
-// open), and that path deliberately does NOT hijack the user's focused non-http
-// tab (e.g. their new-tab page).
-async function resolveActiveTabForNavigation() {
-  return (await pinnedTabOrThrow()) ?? resolveActiveTab();
-}
 
-export { acceptDialogs, PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, resolveActiveTab, resolveActiveTabForNavigation, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };
+export { acceptDialogs, PROBE_MS, activeFrameId, activeTabId, annotationPaintMs, applyHostConfig, ensureRestored, monitoringState, navigationTimeoutMs, pinnedTabOrThrow, resolveActiveTab, saveMonitoringState, setActiveFrameId, setActiveTabId, sleep };

@@ -1,7 +1,7 @@
 // Navigation settle: commit watch, settled-wait, and document readiness.
 // Mirrors the navigation half of transport/local/mod.rs.
 
-import { PROBE_MS, navigationTimeoutMs, resolveActiveTabForNavigation, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
+import { PROBE_MS, navigationTimeoutMs, pinnedTabOrThrow, setActiveFrameId, setActiveTabId, sleep } from "./session.js";
 import { rearmMonitors } from "./state.js";
 
 // ── Navigation settle ───────────────────────────────────────────────────────
@@ -347,16 +347,19 @@ async function waitActiveFrameSettled(tabId, frameId, beforeDocId) {
   }
 }
 
-// Navigate the bound tab to `url`, or create + pin a fresh tab when there is no
-// injectable http tab to reuse (a chrome://newtab focus, an about: page, a
-// vanished page). This is the single tab-resolution path for a top-level
+// Navigate the pinned tab to `url`, or create and pin a tab of the agent's own
+// when none is pinned. This is the single tab-resolution path for a top-level
 // navigation, shared by `action navigate` and `capture --url` so the two can't
 // drift: navigate is how an agent REACHES an http page, so it must succeed from
 // a non-http start exactly as headless navigates its bound about:blank — never a
 // `NoPage`. Resets the frame scope and re-arms monitors at settle, mirroring the
 // headless `navigate_reconnect`. Returns the settled tab id.
 async function navigateBoundTab(url) {
-  const existing = await resolveActiveTabForNavigation();
+  // The pinned tab is reused whatever its URL: navigate needs no bridge, and
+  // headless navigates its bound target in place even from about:blank. With no
+  // pin, the navigation opens a tab of its own rather than replacing a page the
+  // user is browsing.
+  const existing = await pinnedTabOrThrow();
   let tabId;
   let beforeUrl = "";
   let beforeDocId = null;

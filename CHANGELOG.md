@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- In browser mode, a navigation with no tab chosen yet opens a new tab instead
+  of replacing the page the user is viewing. Other first commands still use the
+  current tab.
 - **Breaking:** print text by default even when stdout is piped, since an
   agent's shell tool reads a pipe and the text render is written for it. Pass
   `--json` for the structured form; scripts that relied on automatic JSON must

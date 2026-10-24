@@ -17,7 +17,9 @@ automatic discovery fails. Use `webpilot <command> --help` for options.
 - Default: a persistent headless Chrome session. `webpilot quit` stops it.
 - `--browser`: the user's authenticated Chrome. Run `webpilot setup` once,
   then load the printed extension directory through `chrome://extensions` →
-  Developer mode → Load unpacked. Login sessions remain in that browser.
+  Developer mode → Load unpacked. Login sessions remain in that browser. Until
+  a tab is chosen, a navigation opens a new tab and any other command uses the
+  tab the user is viewing.
 - `--context NAME`: an isolated headless browser context for a separate task
   or concurrent agent. Cookies and storage are isolated. `context list` lists
   contexts; `context close NAME` disposes one (`--all` disposes unused contexts).

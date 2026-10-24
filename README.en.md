@@ -311,6 +311,7 @@ webpilot device reset                                  # clear emulation
 | SSO / session | Separate persistent profile (initially logged out) | Reuses your existing SSO/login sessions |
 | Path | Direct CDP WebSocket | NM host (0600 socket) → extension |
 | Multi-agent | Isolated via `--context <name>` | Single agent |
+| First navigation | Loads in the session's own page | Opens a new tab; the tab you are on stays as it is |
 | Prerequisites | Chrome installed | Chrome + extension + NM host registration (below) |
 
 ```bash
