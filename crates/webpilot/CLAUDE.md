@@ -8,54 +8,35 @@ encode/write in `screenshot.rs`, and the NM/IPC framing in
 
 - `action.rs` — the `Action` enum, deriving `clap::Subcommand` and `serde`
   together (the CLI surface *is* the wire shape). `ActionKind` is the action
-  discriminant; its Display/FromStr come from `serde_plain`. `ElementIndex` is a
-  1-based `u32`. Indexed actions require the enclosing command's `snapshot_id`;
-  `Action::validate_snapshot` centralizes validation.
+  discriminant. `ElementIndex` is a 1-based `u32`; `Action::validate_snapshot`
+  checks that an indexed action carries the enclosing command's `snapshot_id`.
 - `protocol.rs` — `Command` / `Response` / `ResponseData`, `DomProperty`,
-  `FrameSelector`, `RunMode`. Add a command by adding a `Command` variant.
-  `Command::policy_key()` maps command → `PolicyKey`; the match is **exhaustive**
-  (read-only commands return `None` explicitly), so a new command cannot leak
-  ungated. `Command::unconfirmed_operation()` separately classifies effects
-  when an IPC reply is lost; read-only responses retain connection errors.
-  Response reads use bare plural variants (`Tabs`, `Cookies`,
-  `ConsoleEntries`, `NetworkEntries`).
-- `error.rs` — `WebPilotError` (variant-rich, no message parsing). `exit_code()`,
-  `code()`, and `WireError` round-trip. Guidance comes from `Display` over the
-  data. Includes `StaleSnapshot`, `VersionMismatch`, and `OutcomeUnknown` (exit 9: observe before retry).
-- `types.rs` — DOM / cookie / console / network / tab shapes; `PolicyKey` (the
-  effect-based policy key — `ActionKind` ∪ {eval, fetch, dom_set, tab_close,
-  cookie_list, cookie_set, cookie_delete, session_export, session_import, device,
-  context_close, download}, with an exhaustive `From<ActionKind>`); `PolicyVerdict`. `DomSnapshot.snapshot_id` identifies the observation; `subframes` is
-  the count of HTTP iframes outside the active frame. `DomSnapshot::to_text()`
-  renders the agent-facing `[index] element` format.
+  `FrameSelector`, `RunMode`, and the exhaustive per-command classifications
+  `Command::policy_key()` and `Command::unconfirmed_operation()`. Response reads
+  use bare plural variants (`Tabs`, `Cookies`, `ConsoleEntries`, `NetworkEntries`).
+- `error.rs` — `WebPilotError` with `exit_code()` and `code()`, and the
+  `WireError` it round-trips through.
+- `types.rs` — DOM / cookie / console / network / tab shapes; `PolicyKey` and
+  `PolicyVerdict`. `DomSnapshot::to_text()` renders the agent-facing `[index]
+  element` format.
 - `capture.rs` — `CaptureField` + `CaptureOpts`.
 - `wait.rs` — `WaitCondition` (selector / text / navigation / idle), tagged by
   `until`.
-- `settings.rs` — single settings layer (defaults < `config.toml` < env). The
-  one source for every tunable env read; `Settings::{timeouts,chrome,context,cdp,capture,artifacts}`.
+- `settings.rs` — the settings layer, `Settings::{timeouts,chrome,context,cdp,capture,artifacts}`.
   `cdp.event_buffer` defaults to 512: one connection's ring carries the browser
   domain plus every flat-protocol page session's events.
-- `dirs.rs` — the two per-user roots (mode 0700): the evictable cache
-  (`root()` — runtime / contexts / logs / artifacts / chrome-profile) and the
-  durable data root (`data_root()` — the unpacked extension, the policy store,
-  `skill-install.sha256`); pure vs materializing accessors; `config_file_path()`.
-  Paths are env/platform only (not settings-driven).
+- `dirs.rs` — the cache and data roots and every path under them; the module
+  doc gives resolution, overrides and the two kinds of accessor.
 - `ipc.rs` / `native_messaging.rs` — Unix socket; Chrome NM 4-byte-LE framing.
 - `screenshot.rs` — base64 → resize → PNG.
 - `url_glob.rs` — the one `*`-glob matcher behind `frame url` and `tab find
   --url`; `urlGlobMatch` in `browser.js` mirrors it.
 
-Conventions: `.claude/rules/rust-conventions.md`. Never hand-write an enum's
-Display/FromStr — use `serde_plain::derive_*`.
-
-Policy is not a wire command: `webpilot policy` edits a local file, and where
-`Command::policy_key()` is enforced is in `.claude/rules/rust-conventions.md`.
-
 ## Wire shapes
 
 | Area | Rule |
 |---|---|
-| Action | `Command::Action { action: {"kind": "click", "index": 7}, snapshot_id: "…", capture: false }`; indexed actions require the snapshot ID. `Action` has one definition (clap + serde, snake_case). |
+| Action | `Command::Action { action: {"kind": "click", "index": 7}, snapshot_id: "…", capture: false }`; an indexed action carries the observed `snapshot_id` |
 | ActionKind | snake_case wire tag, matching `Action.kind` exactly |
 | PolicyKey | Effect-keyed gate: `ActionKind` ∪ {`eval`, `fetch`, `dom_set`, `tab_close`, `cookie_list`, `cookie_set`, `cookie_delete`, `session_export`, `session_import`, `device`, `context_close`, `download`}. Keyed by **effect, not command**: `navigate` gates every URL load (`navigate` action, `capture --url`, `tab new URL`); `download` gates the file a page makes the browser write, whatever started it, and a `deny` becomes Chrome's own `Browser.setDownloadBehavior` refusal, so the transfer never begins; `eval` gates every MAIN-world JS sink (`eval`, `frame find`, `console`/`network start`, `dom set-html`). Per-effect rationale lives in the `PolicyKey` variant docs and the `policy_key()` arms. |
 | ConsoleEntry | `{"source": "exception", "level": "error", "message": "...", "timestamp": 0}` — `level` is the console API's own taxonomy, so an uncaught error, which the console shows but no `console.*` call made, is typed by `source` (`console`/`exception`/`rejection`) instead of being flattened into `error` |

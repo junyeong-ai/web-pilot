@@ -7,8 +7,8 @@ paths:
 
 ## Single source of truth
 - `Action` (in `webpilot::action`) derives both `clap::Subcommand` and `serde::{Serialize,Deserialize}`. The same enum is the CLI surface and the wire protocol — no parallel `BrowserAction` / `ActionCommand` / `to_browser_action` mapping.
-- `WebPilotError` (in `webpilot::error`) carries typed fields for guidance via `Display` and exit-code selection. Wire error: `{code, message, ...data}` round-trips through `WireError`. Classify external protocol errors at their adapter boundary; downstream code uses the resulting types, not message substrings.
 - Use the shared `WaitCondition`, `CaptureField`, `CaptureOpts`, `FrameSelector`, and `DomProperty` definitions for command inputs instead of parallel untyped representations.
+- A unit-variant enum serialized as a plain string takes its `Display`/`FromStr` from `serde_plain::derive_*`, never hand-written, so its text form is its wire value.
 
 ## Naming
 - Subcommand enums: singular `XCommand` (e.g., `TabCommand`, `FrameCommand`).
@@ -18,46 +18,14 @@ paths:
 - String parsing: `impl FromStr` — never bespoke `parse(s)` / `from_str_lossy(s)` helpers.
 
 ## Error handling
-- Preserve `WebPilotError` through command handlers' `anyhow::Result` so callers retain typed fields and exit codes. External crate errors wrap into `WebPilotError::Other` at the boundary in `main.rs::into_webpilot_error`.
-- Exit codes from `WebPilotError::exit_code()` — never inferred from message substrings.
-- A dispatched mutation with a lost or timed-out response may already have run. Preserve `OutcomeUnknown`; never replay it as connection recovery. Post-action capture failure is `capture_error`, not failure of the completed action.
-- Structured fields per variant: `ElementNotFound { requested, available }`, `Timeout { kind, elapsed_ms }`, etc.
+- `WebPilotError` carries typed fields per variant (`ElementNotFound { requested, available }`, `Timeout { kind, elapsed_ms }`, …). Guidance comes from `Display` over those fields and the exit code from `exit_code()` — never from message substrings.
+- Classify external protocol errors at their adapter boundary; downstream code matches the resulting types. External crate errors wrap into `WebPilotError::Other` at `main.rs::into_webpilot_error`.
+- Preserve `WebPilotError` through command handlers' `anyhow::Result` so callers retain typed fields and exit codes.
+- A dispatched mutation with a lost or timed-out response may already have run. Preserve `OutcomeUnknown`; never replay it as connection recovery.
 
-## Command handler pattern
-Every command handler is **generic over `Transport`** — written once, run in both browser and headless modes.
-```rust
-pub async fn run<T: Transport>(transport: &mut T, args: FooArgs) -> Result<CommandOutput> {
-    let result = transport.send(Command::Foo { ... }).await?;
-    match result { /* destructure ResponseData */ }
-}
-```
-Headless-only commands (`profile`, `record`, `device`, `context`) take `&mut LocalTransport` directly so they can reach the underlying CDP via `local.page()` / `local.browser()`. Pure-local commands (`policy`, `setup`, `diff`, `uninstall`, `self`) take no transport at all — resolved in `run_cli` before any session opens.
-
-Output variants: `Ok(String)`, `Data { json, human }`, `Dom { snapshot, extra }`, `Content { stdout, json, note }`, `List { items, human_lines, summary }`. `note` carries context such as an HTTP status alongside human content and MCP text without altering stdout content.
-
-## Transport
-- `Transport` trait — sole boundary between command logic and I/O. `send(Command) -> ResponseData`.
-- `IpcTransport` — Unix socket → NM Host → Extension → bridge.js (browser mode). Does **not** enforce policy (it is only a socket writer); the host does.
-- `LocalTransport` — direct CDP to bridge.js (headless mode). Holds one `browser: Arc<CdpClient>` (the browser-endpoint WebSocket) and a `page: CdpSession` (a flat-protocol session on it, `Target.attachToTarget { flatten: true }`), plus optional `browser_context_id` and `target_id`. Owns navigation logic (a cross-site swap is handled on the surviving session, no reconnect). Calls `policy::enforce` first — it is the headless privileged sink — then re-establishes per command what a transport must not capture once, because Chrome outlives every process: which page is bound (`reconcile_binding`), the download disposition, the device emulation, the monitor hooks.
-
-## Policy
-- `webpilot::protocol::Command::policy_key()` maps a command to its gated `PolicyKey` via an **exhaustive match** (read-only commands return `None` explicitly, no wildcard) — so a new privileged command cannot compile without declaring its gate, and can never default to ungated. `webpilot-cli::policy` owns the single file store (`policy/policies.json`, under the durable data root — not the evictable cache, so OS cache eviction can't silently reset deny rules) and `enforce`; writes are atomic and a torn/unreadable store fails closed. `webpilot policy` is a local file command — no wire variant, no browser round-trip.
-- Enforcement runs at the process that actually reaches a browser, never at a mere pipe: `LocalTransport::send` (headless) and the **NM host** request loop (browser). Enforcing only in the CLI-side `IpcTransport` would be bypassable by writing the socket directly.
-
-## Settings
-- All tunables resolve through `webpilot::settings` (defaults < `config.toml` < env). No scattered `std::env::var` for timeouts/viewport/TTL/CDP-buffer — add new tunables there. Path resolution stays in `dirs` (env/platform only).
-
-## Context isolation
-- `LocalTransport::open(Some("agent-1"))` resolves a named CDP browser context, creating one if absent. Per-user state under `dirs::contexts_dir()`.
-- `context close NAME` (the `close_contexts` handler) disposes a single named context — or every one with `--all`; `quit_session()` terminates Chrome itself (all contexts at once). It respects the same liveness lock the GC does: a context another live process holds is never evicted — a single named close fails loud (`ContextInUse`), `--all` skips it and reports it kept. Closing the context the caller is itself bound to is always allowed (its own shared lock is not a foreign holder), so it never self-blocks.
-- `ensure_session()` uses `libc::flock` to serialize concurrent Chrome launches.
-
-## Paths
-- Two per-user roots, both mode 0700: `dirs::root()` is the evictable cache (`runtime/`, `contexts/`, `logs/`, `artifacts/`, `chrome-profile/`) and `dirs::data_root()` is durable (the unpacked extension, `policy/policies.json`, `skill-install.sha256`) — a security config or an extension Chrome has loaded must not vanish with a cache sweep. Each path has a materialising accessor and a pure `*_path()` twin; inspection-only code takes the latter so looking never creates state. **Never** hard-code a `/tmp/...` path — always resolve through `webpilot::dirs`.
-
-## Bridge calls
-- `self.invoke_bridge(&Value)` (a `LocalTransport` method) — pass a `Value`, not a string. It targets the bridge's isolated-world context, not the page.
-- `parse_bridge_response(raw)` extracts typed `WebPilotError` from `{success: false, error: ...}` responses.
+## Settings and paths
+- Every tunable resolves through `webpilot::settings`; add new ones there, never a scattered `std::env::var`. Read them in place (`webpilot::settings::timeouts().<field>`), with no per-crate facade.
+- Resolve every path through `webpilot::dirs`, never a hard-coded `/tmp/...`. Path resolution reads only env and platform, never settings, which would be circular. Inspection-only code reads a pure `*_path()` accessor, adding one if the path lacks it, so looking never creates state.
 
 ## Forbidden
 - `unwrap_or_default()` on `serde_json::to_string*` — use `expect("static")` or surface the error.
