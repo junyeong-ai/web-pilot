@@ -175,8 +175,7 @@ impl LocalTransport {
             .load(std::sync::atomic::Ordering::Acquire)
         {
             return Err(WebPilotError::InvalidArgument {
-                detail: "console monitoring is not active — run `webpilot console start` first"
-                    .into(),
+                detail: "console monitoring is not active — start the console monitor first".into(),
             }
             .into());
         }
@@ -389,8 +388,7 @@ impl LocalTransport {
             .load(std::sync::atomic::Ordering::Acquire)
         {
             return Err(WebPilotError::InvalidArgument {
-                detail: "network monitoring is not active — run `webpilot network start` first"
-                    .into(),
+                detail: "network monitoring is not active — start the network monitor first".into(),
             }
             .into());
         }
@@ -836,15 +834,15 @@ const MONITOR_SHAPE: u32 = 2;
 /// installed it. Its entries would be dropped one by one and the read would
 /// answer with the empty list — "the page was quiet", from a recorder that is
 /// simply the wrong one.
-const MONITOR_SHAPE_CONSOLE: &str = "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`";
-const MONITOR_SHAPE_NETWORK: &str = "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`";
+const MONITOR_SHAPE_CONSOLE: &str = "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then start the console monitor";
+const MONITOR_SHAPE_NETWORK: &str = "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then start the network monitor";
 
 /// The armed flag is set but THIS document carries no hook: an `eval` policy deny
 /// removed the monitor's registration, so documents built after it carry nothing.
 /// An empty success here would read as "the page was quiet" while the monitor was
 /// in fact off.
-const MONITOR_NOT_INSTALLED_CONSOLE: &str = "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`";
-const MONITOR_NOT_INSTALLED_NETWORK: &str = "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`";
+const MONITOR_NOT_INSTALLED_CONSOLE: &str = "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then start the console monitor";
+const MONITOR_NOT_INSTALLED_NETWORK: &str = "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then start the network monitor";
 
 fn monitor_install_js(kind: Monitor) -> &'static str {
     match kind {

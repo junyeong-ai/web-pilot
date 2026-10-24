@@ -272,7 +272,7 @@ async function handleConsoleRead(since) {
   // Fail loud, matching headless do_console_read.
   if (!monitoringState.console) {
     return topErr(
-      err("InvalidArgument", "console monitoring is not active — run `webpilot console start` first"),
+      err("InvalidArgument", "console monitoring is not active — start the console monitor first"),
     );
   }
   try {
@@ -328,13 +328,13 @@ async function handleConsoleRead(since) {
     if (out.missing) {
       return topErr(err(
         "InvalidArgument",
-        "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`",
+        "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then start the console monitor",
       ));
     }
     if (out.stale) {
       return topErr(err(
         "InvalidArgument",
-        "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot console start`",
+        "this document's console entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then start the console monitor",
       ));
     }
     return {
@@ -373,7 +373,7 @@ async function handleConsoleClear() {
     if (hit?.result !== true) {
       return topErr(err(
         "InvalidArgument",
-        "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot console start`",
+        "the console monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then start the console monitor",
       ));
     }
     return { type: "CommandResult", success: true };
@@ -402,7 +402,7 @@ async function handleNetworkRead(since) {
   // "no requests" rather than "monitor not armed". Fail loud.
   if (!monitoringState.network) {
     return topErr(
-      err("InvalidArgument", "network monitoring is not active — run `webpilot network start` first"),
+      err("InvalidArgument", "network monitoring is not active — start the network monitor first"),
     );
   }
   try {
@@ -458,13 +458,13 @@ async function handleNetworkRead(since) {
     if (out.missing) {
       return topErr(err(
         "InvalidArgument",
-        "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`",
+        "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then start the network monitor",
       ));
     }
     if (out.stale) {
       return topErr(err(
         "InvalidArgument",
-        "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then run `webpilot network start`",
+        "this document's network entries were not written by this build's recorder — reload the page (or navigate) so it carries a current one, then start the network monitor",
       ));
     }
     return {
@@ -496,7 +496,7 @@ async function handleNetworkClear() {
     if (hit?.result !== true) {
       return topErr(err(
         "InvalidArgument",
-        "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then run `webpilot network start`",
+        "the network monitor is not installed in this document — an `eval` policy deny stops it being installed in a new document; check `webpilot policy list`, then start the network monitor",
       ));
     }
     return { type: "CommandResult", success: true };
