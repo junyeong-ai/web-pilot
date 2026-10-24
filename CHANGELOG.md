@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Update jsonschema to 0.60, tokio to 1.54, oxlint to 1.89 and Node.js to
+  24.22.1 LTS.
+
 ## [0.11.0] - 2026-10-17
 
 ### Changed
