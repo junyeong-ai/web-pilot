@@ -528,6 +528,16 @@ impl CdpClient {
         Ok(require_array(&result, "targetInfos", "Target.getTargets")?.clone())
     }
 
+    /// Make `target_id` the active tab of its window.
+    pub async fn activate_target(&self, target_id: &str) -> Result<()> {
+        self.send(
+            "Target.activateTarget",
+            Some(serde_json::json!({"targetId": target_id})),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Complete a close only after Chrome no longer lists the target. The close
     /// response acknowledges the request before the target has finished closing.
     pub async fn close_target(&self, target_id: &str, timeout: std::time::Duration) -> Result<()> {

@@ -119,13 +119,6 @@ impl LocalTransport {
             return Ok(not_found);
         }
 
-        if let Err(e) = self
-            .browser
-            .send("Target.activateTarget", Some(json!({"targetId": tab_id})))
-            .await
-        {
-            return self.tab_gone_or(e, tab_id).await;
-        }
         // The bind primes the new page before it swaps, so the pin move is atomic:
         // a tab that dies mid-switch leaves the current pin untouched rather than
         // retargeting to a page with no bridge world. Popup adoption relies on

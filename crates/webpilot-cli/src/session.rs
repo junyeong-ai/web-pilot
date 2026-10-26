@@ -277,6 +277,13 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-background-networking",
+        // A tab that loses the foreground keeps its renderer's priority and its
+        // timers: Chrome otherwise deprioritises a renderer with no visible page,
+        // and a background tab took seconds to answer CDP commands (measured). A
+        // command can still be using such a page, as when it reads the opener
+        // behind a popup its click opened.
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
         "--disable-component-update",
         "--disable-default-apps",
         "--disable-popup-blocking",

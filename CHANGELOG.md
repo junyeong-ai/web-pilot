@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Chrome with signals, so every session's clone stayed until reboot and, after
   a Chrome update, kept the replaced version's files on disk. Headless Chrome
   now launches with the clone disabled, as Chrome for Testing is built.
+- In headless mode, a command no longer waits on a tab that is not the visible
+  one in its window. Chrome deprioritises such a tab's renderer, so after the
+  pinned tab closed and the session fell back to another tab, or once a tab
+  opened over the pinned one, commands took seconds to answer, and at worst
+  every later command, `status` included, failed after 30 seconds with a
+  `Page.enable` `Timeout`. The page a command drives is now made the active tab
+  of its window, and a tab behind a popup keeps its priority while a command
+  still reads it.
 
 ## [0.13.1] - 2026-10-24
 

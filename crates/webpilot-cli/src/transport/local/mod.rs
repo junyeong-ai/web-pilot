@@ -1020,19 +1020,23 @@ impl LocalTransport {
         Ok(())
     }
 
-    /// Resolve the page this transport acts on, and bind it when it is not the
-    /// page already held — `open`'s resolution, run per command. A long-lived
-    /// transport is left in the state a fresh CLI process would find: bound to
-    /// the pin, or to a fallback with the dead pin's id held for `send` to report
-    /// once. The active frame is deliberately KEPT across a rebind, exactly as
-    /// `open` keeps it — a scoped command then resolves it as `FrameNotFound`
-    /// rather than silently running in the main frame. The context anchor is not
-    /// needed here: it only breaks the tie on a context's first command, which
-    /// leaves a pin behind for every command after it.
+    /// Resolve the page this transport acts on, bind it when it is not the page
+    /// already held, and keep it its window's active tab — `open`'s resolution,
+    /// run per command. A tab opened between two commands, by the page or by
+    /// another process, puts a page held across them in the background. A
+    /// long-lived transport is left in the state a fresh CLI process would find:
+    /// bound to the pin, or to a fallback with the dead pin's id held for `send`
+    /// to report once. The active frame is deliberately KEPT across a rebind,
+    /// exactly as `open` keeps it — a scoped command then resolves it as
+    /// `FrameNotFound` rather than silently running in the main frame. The
+    /// context anchor is not needed here: it only breaks the tie on a context's
+    /// first command, which leaves a pin behind for every command after it.
     async fn reconcile_binding(&mut self) -> Result<()> {
         let (target_id, vanished) =
             pick_active_target(&self.browser, self.browser_context_id.as_deref(), None).await?;
-        if target_id != self.target_id {
+        if target_id == self.target_id {
+            self.browser.activate_target(&target_id).await?;
+        } else {
             self.bind_target(&target_id).await?;
         }
         self.pin_vanished = vanished;
@@ -2013,7 +2017,12 @@ async fn pick_active_target(
     Ok((derived, vanished))
 }
 
+/// Attach to the page commands will drive, making it its window's active tab
+/// first: headless Chrome can hold a background tab's renderer commands until
+/// the tab is activated (measured: `Page.enable` unanswered past the 30-second
+/// CDP timeout), and every command this session sends goes to that renderer.
 pub(super) async fn attach_to_page(conn: &Arc<CdpClient>, target_id: &str) -> Result<CdpSession> {
+    conn.activate_target(target_id).await?;
     let mut cdp = conn.attach(target_id).await?;
     cdp.send("Page.enable", None).await?;
     // Page.enable makes dialog responses the attached client's responsibility.

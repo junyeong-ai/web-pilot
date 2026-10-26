@@ -29,8 +29,9 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       `parse_bridge_response` lifts an `invoke_bridge` reply of
       `{success: false, error}` into a typed `WebPilotError`. The per-command re-establishment the root `CLAUDE.md`
       requires happens in `send`: `reconcile_binding` (which page, resolved from
-      the pin; `bind_target` is the single "make this page the bound one" step,
-      shared with `tab switch`), `ensure_download_behavior`,
+      the pin and kept its window's active tab, since headless Chrome can hold a
+      background tab's renderer commands; `bind_target` is the single "make this
+      page the bound one" step, shared with `tab switch`), `ensure_download_behavior`,
       `ensure_device_emulation`, `ensure_monitor_hooks`.
     - `action.rs` — page-mutating (click/type/scroll/drag, `do_action`).
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
