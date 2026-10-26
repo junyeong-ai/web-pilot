@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Page.enable` `Timeout`. The page a command drives is now made the active tab
   of its window, and a tab behind a popup keeps its priority while a command
   still reads it.
+- The MCP `browser_screenshot` tool with `annotate: true` returns the labelled
+  image with the snapshot its `[N]` labels belong to, and that snapshot's
+  `snapshot_id`. It failed with "screenshot produced no artefact" every time,
+  although the image had been saved.
 
 ## [0.13.1] - 2026-10-24
 

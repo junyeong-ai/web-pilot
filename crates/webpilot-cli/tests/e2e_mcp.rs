@@ -374,6 +374,20 @@ fn mcp_long_lived_transport_flow() {
         listing.get("elements").is_none() && listing["element_count"].as_u64() > Some(0),
         "the listing travels in the text block, its length in structuredContent: {listing}"
     );
+    // An annotated screenshot draws the [N] labels of the snapshot it takes, so
+    // the image comes back with that snapshot's id for acting on a label.
+    let annotated = mcp.tool("browser_screenshot", json!({"annotate": true}));
+    assert!(annotated.ok(), "{}", annotated.reply);
+    assert_eq!(
+        annotated.reply["result"]["content"][0]["type"], "image",
+        "{}",
+        annotated.reply
+    );
+    assert!(
+        annotated.reply["result"]["structuredContent"]["snapshot_id"].is_string(),
+        "{}",
+        annotated.reply
+    );
     let found = mcp.tool("browser_find", json!({"role":"button","text":"Go"}));
     let found = &found.reply["result"]["structuredContent"];
     let clicked = mcp.tool(

@@ -934,37 +934,32 @@ fn build_action(tool: &str, args: &Value) -> std::result::Result<Action, WebPilo
 
 /// An MCP image block (plus the saved path as text) from a screenshot capture.
 /// The host receives the actual pixels — a bare filesystem path would be
-/// useless to a remote or sandboxed client.
+/// useless to a remote or sandboxed client. An annotated capture is a DOM
+/// capture: its text block is the snapshot whose `[N]` labels the image draws.
 fn screenshot_content(output: &CommandOutput) -> std::result::Result<Vec<Value>, WebPilotError> {
-    let CommandOutput::Data { json: data, .. } = output else {
-        return Err(WebPilotError::Other {
-            detail: "screenshot produced no artefact".into(),
-        });
+    let fields = match output {
+        CommandOutput::Data { json, .. } => json.as_object(),
+        CommandOutput::Dom { extra, .. } => Some(extra),
+        _ => None,
     };
-    let Some(path) = data.get("screenshot_path").and_then(Value::as_str) else {
-        let detail = data
-            .get("screenshot_error")
-            .and_then(Value::as_str)
-            .unwrap_or("screenshot produced no artefact");
+    let field = |key: &str| fields.and_then(|f| f.get(key)).and_then(Value::as_str);
+    let Some(path) = field("screenshot_path") else {
         return Err(WebPilotError::Other {
-            detail: detail.to_string(),
+            detail: field("screenshot_error")
+                .unwrap_or("screenshot produced no artefact")
+                .to_string(),
         });
     };
     let bytes = std::fs::read(path).map_err(|e| WebPilotError::Other {
         detail: format!("failed to read screenshot {path}: {e}"),
     })?;
     let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
-    // Reuse the capture renderer so the text block carries the SAME identity lines
-    // the CLI prints — `Page:`/`Title:` alongside `Screenshot:`. A screenshot has
-    // no DOM footer, so without this an MCP client holding the image can't tell
-    // which page (after a redirect, or a switched iframe) it actually shows.
-    let text = crate::output::dom_extra_lines(data.as_object().ok_or(WebPilotError::Other {
-        detail: "screenshot output was not an object".into(),
-    })?)
-    .join("\n");
+    // The text block carries the same lines the CLI prints — `Page:`/`Title:`
+    // beside `Screenshot:` — so a client holding the image can tell which page
+    // (after a redirect, or in a switched iframe) it shows.
     Ok(vec![
         json!({ "type": "image", "data": encoded, "mimeType": "image/png" }),
-        json!({ "type": "text", "text": text }),
+        json!({ "type": "text", "text": output.to_agent_text() }),
     ])
 }
 
@@ -1082,7 +1077,7 @@ fn build_tool_specs() -> Value {
                 "type": "object",
                 "properties": {
                     "full_page": { "type": "boolean", "description": "Capture the entire scrollable area instead of the viewport.", "default": false },
-                    "annotate": { "type": "boolean", "description": "Draw the snapshot's [N] labels on interactive elements (viewport only; cannot be combined with full_page).", "default": false },
+                    "annotate": { "type": "boolean", "description": "Take a new snapshot and draw its [N] labels on the interactive elements; the result carries that snapshot's listing and snapshot_id (viewport only; cannot be combined with full_page).", "default": false },
                 },
                 "additionalProperties": false,
             },
