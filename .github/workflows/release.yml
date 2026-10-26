@@ -72,7 +72,9 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} --bin webpilot
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target "${TARGET}" --bin webpilot
 
       - name: Package
         id: package
