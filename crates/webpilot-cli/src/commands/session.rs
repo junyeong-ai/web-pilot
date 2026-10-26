@@ -21,7 +21,7 @@ pub struct SessionArgs {
 
 #[derive(Subcommand)]
 pub enum SessionCommand {
-    /// Export cookies + localStorage to file.
+    /// Export cookies, localStorage and sessionStorage to a file.
     Export {
         #[arg(long)]
         output: Option<String>,

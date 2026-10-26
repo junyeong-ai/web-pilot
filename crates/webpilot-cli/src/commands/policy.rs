@@ -21,17 +21,20 @@ pub struct PolicyArgs {
 #[derive(Subcommand)]
 pub enum PolicyCommand {
     /// Set a safety policy for an operation. Keys gate by effect: any action
-    /// kind, plus `eval` (also covers `console`/`network start` injection and
-    /// the `frame find` predicate), `fetch`, `dom_set`, `tab_close`,
+    /// kind, plus `eval` (also covers `console`/`network start` injection, the
+    /// `frame find` predicate and `dom set-html`), `fetch`, `dom_set`
+    /// (`dom set-text`, `dom set-attr`), `tab_close`,
     /// `cookie_list` (covers `cookie list` and `cookie get`), `cookie_set`,
     /// `cookie_delete`, `session_export`, `session_import`, `device` (emulation:
     /// viewport + user-agent spoofing), `context_close` (`context close [--all]`
-    /// disposes a context and all its tabs), `download` (a file the page makes
-    /// the browser write — a `deny` refuses the transfer itself). `navigate` also
-    /// covers `capture --url` and `tab new URL`.
+    /// disposes a context and all its tabs), `download` (headless only: a file
+    /// the page makes the browser write — a `deny` refuses the transfer itself).
+    /// `navigate` also covers `capture --url` and `tab new URL`.
     Set {
+        /// The key the rule gates.
         #[arg(long)]
         operation: String,
+        /// `allow` or `deny`.
         #[arg(long)]
         verdict: String,
     },

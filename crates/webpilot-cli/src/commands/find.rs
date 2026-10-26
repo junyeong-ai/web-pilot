@@ -14,21 +14,26 @@ use crate::transport::{Transport, lift_error};
 #[derive(Args, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FindArgs {
+    /// Computed ARIA role, matched exactly (button, link, textbox).
     #[arg(long)]
     #[serde(default)]
     pub role: Option<String>,
     // text / label / placeholder are arbitrary page text that can start with
     // `-` (e.g. searching for "-50%"); `fill` is typed text (e.g. a negative
     // number). Accept a leading-dash value rather than read it as a flag.
+    /// Substring of the visible text or accessible name.
     #[arg(long, allow_hyphen_values = true)]
     #[serde(default)]
     pub text: Option<String>,
+    /// Substring of the label.
     #[arg(long, allow_hyphen_values = true)]
     #[serde(default)]
     pub label: Option<String>,
+    /// Substring of the placeholder.
     #[arg(long, allow_hyphen_values = true)]
     #[serde(default)]
     pub placeholder: Option<String>,
+    /// Tag name, matched exactly (input, button).
     #[arg(long)]
     #[serde(default)]
     pub tag: Option<String>,
@@ -37,7 +42,7 @@ pub struct FindArgs {
     #[arg(long, conflicts_with = "fill")]
     #[serde(default)]
     pub click: bool,
-    /// Type into the match (the filter must match exactly one element).
+    /// Replace the match's value with this text (the filter must match exactly one element).
     /// Mutually exclusive with --click.
     #[arg(long, allow_hyphen_values = true)]
     #[serde(default)]

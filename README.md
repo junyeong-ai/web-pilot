@@ -204,7 +204,7 @@ webpilot find --label "Email" --fill "ada@acme.com"  # 라벨로 찾아 바로 �
 webpilot action click 5 --snapshot-id ID  # 인덱스로 클릭
 webpilot action type 3 "s3cret" --clear --snapshot-id ID  # 입력 (기존 값 비우고)
 webpilot action key-press Enter                      # 키 입력 (Tab·Escape·Arrow* 등)
-webpilot action select 2 "Option B" --snapshot-id ID  # <select> 옵션 선택
+webpilot action select 2 "b" --snapshot-id ID  # <select>에서 value가 "b"인 옵션 선택
 webpilot action scroll-to 7 --snapshot-id ID  # 요소가 보일 때까지 스크롤
 webpilot action upload 4 ./resume.pdf --snapshot-id ID  # 파일 업로드
 ```
@@ -301,7 +301,7 @@ webpilot device reset                                  # 에뮬레이션 해제
 | 대상 Chrome | WebPilot이 띄우는 별도 헤드리스 Chrome | 당신이 쓰는, **로그인된 실제 Chrome** |
 | SSO / 세션 | 별도 영속 프로필(첫 실행은 로그인 없음) | 기존 SSO·로그인 세션 그대로 사용 |
 | 경로 | CDP WebSocket 직결 | NM 호스트(0600 소켓) → 확장 |
-| 멀티 에이전트 | `--context <이름>`으로 격리 | 단일 에이전트 |
+| 멀티 에이전트 | `--context <이름>`으로 격리(최대 16개, 쓰는 프로세스 없이 `[context] ttl_secs`(기본 1시간)가 지나면 회수) | 단일 에이전트 |
 | 작업 탭 | 세션 자체 페이지 | 에이전트 자신의 탭: URL을 열면 새 탭을 엶. 읽기는 보고 있는 탭을 빌리고, 그 뒤에 URL을 열면 그 페이지를 덮지 않고 새 탭을 엶. 그 밖의 명령은 탭이 정해질 때까지 거절 |
 | 사전 준비 | Chrome 설치 | Chrome 설치 + 확장 + NM 호스트 등록(아래) |
 
@@ -333,7 +333,7 @@ webpilot mcp                  # stdio JSON-RPC (MCP) 서버. --browser / --conte
 
 MCP snapshot은 `include: ["dom", "text"]`를 지원합니다. 인덱스 툴에는 `snapshot_id`가 필요하며, 액션 툴은 화면 안 요소와 그 액션이 추가한 요소를 돌려주고(`browser_snapshot`은 페이지 전체를 나열합니다), `capture: false`로 DOM 반환을 생략할 수 있습니다. 성공 결과도 `structuredContent`로 제공하며(DOM 결과에는 스냅샷 ID, 페이지, 개수, 액션 효과가 담기고 요소 목록은 텍스트 블록에만 있습니다), 실행 중 ping과 대기 취소를 처리합니다. DOM 스냅샷에는 비밀번호 값을 포함하지 않습니다.
 
-MCP 호스트마다 `--context NAME`을 따로 지정하세요. 컨텍스트를 함께 쓰는 호스트들은 고정 탭과 스냅샷도 함께 쓰므로, 한쪽이 캡처하면 다른 쪽의 `snapshot_id`가 무효가 됩니다.
+헤드리스에서는 MCP 호스트마다 `--context NAME`을 따로 지정하세요(브라우저 모드는 에이전트 하나만 지원합니다). 컨텍스트를 함께 쓰는 호스트들은 고정 탭과 스냅샷도 함께 쓰므로, 한쪽이 캡처하면 다른 쪽의 `snapshot_id`가 무효가 됩니다.
 
 ## 안전 정책 (policy)
 
@@ -362,7 +362,7 @@ Blocked by policy: click. Check: webpilot policy list
 
 - `eval`은 **마스터 키**입니다. `eval`이 허용되면 페이지 JS로 다른 효과를 재현할 수 있으니, `navigate`·`fetch`·`cookie_list` 같은 좁은 deny는 보조적일 뿐입니다. **`eval`을 먼저 막으세요.**
 - 정책은 **프로세스가 브라우저에 닿는 지점**에서 강제됩니다: `LocalTransport::send`(헤드리스), NM 호스트(브라우저), `device`·`context close` 핸들러. 호스트는 모든 와이어 값을 타입 있는 `Command`로 **다시 파싱**한 뒤 검사하므로 “Rust는 거부, JS는 강제 변환” 식 우회가 불가능합니다.
-- 정책 저장소는 OS 캐시가 아니라 **영속 데이터 루트**(`policy/policies.json`)에 있어, 캐시 정리로 deny 규칙이 슬그머니 풀리지 않습니다.
+- 정책 저장소는 OS 캐시가 아니라 **영속 데이터 루트**(`policy/policies.json`, `WEBPILOT_HOME`을 지정하면 그 아래)에 있어, 캐시 정리로 deny 규칙이 슬그머니 풀리지 않습니다.
 
 > 정책은 **방향이 틀어진 에이전트에 대한 가드레일**이지, 같은 사용자 권한의 악성 프로세스를 막는 샌드박스가 아닙니다. 저장소와 `webpilot policy`는 에이전트와 같은 사용자 소유입니다 — 그 경계가 중요하다면 외부에서 보호하세요.
 
@@ -372,8 +372,8 @@ Blocked by policy: click. Check: webpilot policy list
 
 | 플래그 | 동작 |
 |---|---|
-| **(없음)** | 텍스트. 콘텐츠는 stdout, 안내와 부가 정보는 stderr. 터미널과 파이프에서 같습니다(에이전트의 셸 도구는 파이프로 읽습니다) |
-| **`--json`** | 구조화된 JSON을 stdout으로 |
+| **(없음)** | 텍스트. DOM 목록과 값(`eval`·`fetch`·`dom get-*`·`cookie get`)은 stdout으로, 목록·상태·안내·산출물 경로·오류는 stderr로 나갑니다. 터미널과 파이프에서 같습니다(에이전트의 셸 도구는 파이프로 읽습니다) |
+| **`--json`** | 결과와 오류를 구조화된 JSON으로 stdout에 |
 
 스크립트에서는 `--json`을 붙입니다:
 
@@ -403,13 +403,13 @@ webpilot status --json | jq
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
 ```
 
-릴리스의 사전 빌드 바이너리와 SHA-256 체크섬을 내려받아 검증한 뒤 `~/.local/bin/webpilot`에 설치하고, 바이너리에 **컴파일 타임에 임베드된** 스킬·확장 자산을 `webpilot setup`으로 풀어 줍니다 — 저장소를 clone할 필요가 없습니다.
+릴리스의 사전 빌드 바이너리와 SHA-256 체크섬을 내려받아 검증한 뒤 `~/.local/bin/webpilot`에 설치하고, `webpilot setup`을 실행해 바이너리에 **컴파일 타임에 임베드된** 스킬과 확장을 풀고 NM 호스트를 등록합니다. 기본으로는 묻지 않고 진행하며, 직접 고친 스킬은 유지합니다. 저장소를 clone할 필요가 없습니다.
 
 ```bash
 # 소스에서 빌드 (체크아웃 안에서; rust-toolchain.toml 이 툴체인을 고정 → rustup 이 설치)
 WEBPILOT_BUILD=source bash scripts/install.sh
 
-# 제거 — 설치한 것과 대칭인 한 줄
+# 제거 — 설치한 것과 대칭인 한 줄. 지우기 전에 확인을 묻으므로, 터미널이 없는 환경(CI, 에이전트의 셸)에서는 끝에 `-s -- --yes`를 붙입니다
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/uninstall.sh | bash
 ```
 
@@ -432,8 +432,8 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `find --role/--text/--label/--placeholder/--tag [--click\|--fill]` | 의미 기반 요소 검색(+동작) |
 | `eval <js>` | 페이지 컨텍스트에서 JS 평가 |
 | `wait <selector\|text\|navigation\|idle>` | 조건 대기 |
-| `tab <switch\|new\|close\|find>` | 탭 관리 |
-| `frame <switch\|url\|find\|main>` | iframe 전환 |
+| `tab [switch\|new\|close\|find]` | 탭 관리(하위 명령 없이 실행하면 탭 목록) |
+| `frame [switch\|url\|find\|main]` | iframe 전환(하위 명령 없이 실행하면 프레임 목록) |
 | `dom <set-html\|set-text\|set-attr\|get-html\|get-text\|get-attr>` | DOM 읽기/쓰기 |
 | `fetch <url>` | 세션 쿠키로 URL 요청 |
 | `network <start\|read\|clear>` | 네트워크 요청 모니터 |
@@ -443,7 +443,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `device <set\|preset\|reset>` | 기기 뷰포트·UA 에뮬레이션 (헤드리스) |
 | `record [--frames N \| --duration N] [--dom]` | 연속 프레임 기록 (AI 분석용, 헤드리스) |
 | `profile --duration <초>` | CPU 성능 프로파일링 (헤드리스) |
-| `diff --dom\|--screenshot` | 스냅샷 비교 |
+| `diff --dom\|--screenshot <이전> <이후>` | 저장한 DOM 스냅샷(JSON)이나 스크린샷 비교 |
 | `policy <default\|set\|list\|clear>` | 효과 기준 동작 게이트 |
 | `context <list\|close>` | 멀티 에이전트 격리 컨텍스트 |
 | `status` | 연결 상태 확인 |
@@ -467,7 +467,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | 코드 | 의미 |
 |---|---|
 | `0` | 성공 |
-| `1` | 일반 / 세션 오류 |
+| `1` | 일반 / 세션 오류, 다른 활성 프로세스가 쓰는 컨텍스트(`ContextInUse`) |
 | `2` | CLI 사용법 오류 (알 수 없는 플래그, 숫자가 아닌 인덱스 등) |
 | `3` | 인프라 (`ConnectionLost` · `BridgeUnavailable` · `VersionMismatch`) |
 | `4` | 찾지 못함 (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `NoPinnedTab` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
@@ -503,7 +503,7 @@ webpilot self uninstall        # Chrome 종료 + 바이너리가 만든 모든 �
 ## 실행 설정
 
 [설정 예제](docs/config.example.toml)를 복사하고 `WEBPILOT_CONFIG`로 경로를 지정하세요.
-기본 위치는 WebPilot 캐시 루트의 `config.toml`입니다.
+기본 위치는 WebPilot 캐시 루트의 `config.toml`입니다. 캐시 루트는 비워질 수 있는 위치이고 Linux에서는 `$XDG_RUNTIME_DIR` 아래일 수 있으므로, 오래 둘 설정은 `WEBPILOT_CONFIG`로 지정하세요.
 
 ```bash
 WEBPILOT_CONFIG=/absolute/path/config.toml webpilot status
@@ -520,7 +520,10 @@ WEBPILOT_CONFIG=/absolute/path/config.toml webpilot status
 호스트는 Chrome이 자기 환경으로 실행하므로, 셸에서 지정한 `WEBPILOT_*`
 환경변수, `WEBPILOT_CONFIG`, `WEBPILOT_HOME`, `WEBPILOT_DATA_HOME`은 전달되지
 않습니다. 브라우저 모드 설정은 기본 위치의 `config.toml`에 두거나, Chrome을
-실행하는 환경에 지정하세요.
+실행하는 환경에 지정하세요. CLI 프로세스도 `[timeouts] ipc_response_ms`와
+`[capture] max_elements`는 직접 읽고, 호스트 소켓은 자기 환경으로 찾습니다. 그래서
+셸에만 지정한 `WEBPILOT_HOME`이나 `WEBPILOT_SOCKET`은 CLI를 호스트가 열지 않은
+소켓으로 보냅니다.
 
 ---
 
@@ -531,7 +534,7 @@ WEBPILOT_CONFIG=/absolute/path/config.toml webpilot status
 Native Messaging 호스트의 stdio는 Chrome이 가져갑니다. 그래서 호스트가 본 것 — 적용한 정책 판정, 확장과의 핸드셰이크, 명령이 실패한 이유 — 은 터미널에 나오지 않습니다. 대신 여기에 기록됩니다:
 
 ```bash
-tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS 기본값; WEBPILOT_HOME 지정 시 해당 경로의 logs/
+tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS 기본값. Linux는 $XDG_RUNTIME_DIR/webpilot/logs/ (없으면 $XDG_CACHE_HOME/webpilot/logs/ 또는 ~/.cache/webpilot/logs/). Chrome 환경에 WEBPILOT_HOME을 지정했다면 그 아래 logs/
 ```
 
 옆의 `host.log.1`은 직전 로테이션입니다. 이미 끝난 세션에 대한 제보를 볼 때는 보통 이쪽이 필요합니다.

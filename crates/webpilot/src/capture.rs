@@ -28,7 +28,7 @@ pub struct CaptureOpts {
     #[serde(default)]
     pub bounds: bool,
 
-    /// Capture entire scrollable area (screenshot only; mutually exclusive with `annotate`).
+    /// Capture entire scrollable area (screenshot only; mutually exclusive with `--annotate`).
     #[arg(long)]
     #[serde(default)]
     pub full_page: bool,

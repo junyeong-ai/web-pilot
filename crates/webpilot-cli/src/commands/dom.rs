@@ -13,18 +13,21 @@ pub struct DomArgs {
 
 #[derive(Subcommand)]
 pub enum DomCommand {
+    /// Replace the innerHTML of the one element the selector matches.
     #[command(name = "set-html")]
     SetHtml {
         selector: String,
         #[arg(allow_hyphen_values = true)]
         value: String,
     },
+    /// Replace the textContent of the one element the selector matches.
     #[command(name = "set-text")]
     SetText {
         selector: String,
         #[arg(allow_hyphen_values = true)]
         value: String,
     },
+    /// Set an attribute on the one element the selector matches.
     #[command(name = "set-attr")]
     SetAttr {
         selector: String,
@@ -32,10 +35,13 @@ pub enum DomCommand {
         #[arg(allow_hyphen_values = true)]
         value: String,
     },
+    /// Print the innerHTML of the first match.
     #[command(name = "get-html")]
     GetHtml { selector: String },
+    /// Print the textContent of the first match.
     #[command(name = "get-text")]
     GetText { selector: String },
+    /// Print an HTML attribute of the first match.
     #[command(name = "get-attr")]
     GetAttr { selector: String, attr: String },
 }

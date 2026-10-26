@@ -27,7 +27,10 @@ pub enum DeviceCommand {
         user_agent: Option<String>,
     },
     /// Use a preset device profile.
-    Preset { name: String },
+    Preset {
+        /// iphone-15, iphone-15-pro, pixel-8, ipad-pro or galaxy-s24.
+        name: String,
+    },
     /// Reset to default (remove emulation).
     Reset,
 }

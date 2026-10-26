@@ -15,16 +15,15 @@ pub struct TabArgs {
 
 #[derive(Subcommand)]
 pub enum TabCommand {
-    Switch {
-        tab_id: String,
-    },
-    New {
-        url: String,
-    },
-    Close {
-        tab_id: String,
-    },
+    /// Pin a tab: later commands act on it.
+    Switch { tab_id: String },
+    /// Open a tab, load the URL in it, and pin it.
+    New { url: String },
+    /// Close a tab.
+    Close { tab_id: String },
+    /// Pin the one tab whose URL contains the pattern; several matches are an error.
     Find {
+        /// Text the URL contains; `*` matches any run of characters.
         #[arg(long)]
         url: String,
     },

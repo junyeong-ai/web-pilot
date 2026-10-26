@@ -1,3 +1,6 @@
+# A subset of the keys. crates/webpilot/src/settings.rs lists every key, its
+# default and the WEBPILOT_* variable that overrides it.
+
 [timeouts]
 navigation_ms = 15000
 download_window_ms = 2000

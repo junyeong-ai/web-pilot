@@ -20,13 +20,16 @@ pub struct ContextArgs {
 pub enum ContextCommand {
     /// List active contexts.
     List,
-    /// Close a context or all contexts.
+    /// Close a context and its tabs, or with --all every context no other
+    /// live process holds.
     Close {
-        /// A target is required up front — deferring the "name or --all" check
-        /// into the handler let the bare invocation launch Chrome on its way to
-        /// the rejection.
+        // A target is required up front — deferring the "name or --all" check
+        // into the handler let the bare invocation launch Chrome on its way to
+        // the rejection.
+        /// Context to close.
         #[arg(required_unless_present = "all")]
         name: Option<String>,
+        /// Close every context no other live process holds.
         #[arg(long, conflicts_with = "name")]
         all: bool,
     },

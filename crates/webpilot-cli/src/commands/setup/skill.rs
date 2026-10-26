@@ -22,7 +22,7 @@ use super::{StepOutcome, home_relative};
 
 #[derive(Args)]
 pub struct SkillArgs {
-    /// Replace the on-disk skill even if it is unchanged.
+    /// Rewrite the skill even when it is current, and overwrite local edits without asking.
     #[arg(long)]
     pub force: bool,
 }

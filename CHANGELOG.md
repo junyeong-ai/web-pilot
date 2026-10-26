@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image with the snapshot its `[N]` labels belong to, and that snapshot's
   `snapshot_id`. It failed with "screenshot produced no artefact" every time,
   although the image had been saved.
+- Correct the guidance against the code. Text output puts lists, status, notes
+  and artifact paths on stderr, and only the DOM listing and values on stdout.
+  In browser mode the CLI still reads `[timeouts] ipc_response_ms` and
+  `[capture] max_elements` and finds the host's socket from its own
+  environment. `action select` matches an option's value, MCP `browser_find`
+  matches the computed role exactly, `dom set-html` is gated by `eval`,
+  `tab find` needs exactly one match, and `setup --yes` or `setup skill
+  --force` overwrites a locally edited skill. `--help` now describes the `find`
+  filters, the `tab` and `dom` subcommands, `wait --timeout` in seconds,
+  `network read --since`, the device presets and `context close`.
 
 ## [0.13.1] - 2026-10-24
 

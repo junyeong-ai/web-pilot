@@ -23,7 +23,7 @@ pub struct SetupArgs {
     #[command(subcommand)]
     pub command: Option<SetupCommand>,
 
-    /// Skip prompts and take CI-safe defaults.
+    /// Answer yes to every prompt, which overwrites a locally edited skill.
     #[arg(long, short = 'y', global = true)]
     pub yes: bool,
 }

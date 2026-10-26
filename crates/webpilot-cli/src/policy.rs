@@ -66,7 +66,8 @@ pub fn enforce_key(key: PolicyKey) -> std::result::Result<(), WebPilotError> {
 /// the strict Rust types reject but the loose JS bridge would coerce — e.g. a
 /// string where a `u32` index is required — cannot slip past a deny rule. A
 /// gated-and-denied command is `PolicyDenied`. On success the parsed command is
-/// returned (the original wire value is forwarded unchanged by the caller).
+/// returned, and the caller forwards it re-serialized, without the fields the
+/// typed `Command` does not model.
 pub fn parse_and_enforce(
     command: &serde_json::Value,
 ) -> std::result::Result<Command, WebPilotError> {

@@ -41,6 +41,8 @@ pub enum NetworkCommand {
     Start,
     /// Read captured network requests.
     Read {
+        /// Only entries at or after this timestamp (ms epoch) — an incremental
+        /// cursor for polling without a destructive `network clear`.
         #[arg(long)]
         since: Option<u64>,
     },

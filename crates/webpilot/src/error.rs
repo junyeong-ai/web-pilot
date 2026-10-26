@@ -35,7 +35,7 @@ pub enum WebPilotError {
     ElementNotFound { requested: u32, available: u32 },
 
     #[error(
-        "Element [{index}] belongs to an outdated snapshot: a newer capture, a navigation, or a change to the element invalidated it. Capture the page again and act with the new snapshot ID."
+        "Element [{index}] belongs to an outdated snapshot: a newer capture, a navigation to another document, or a change to the element invalidated it. Capture the page again and act with the new snapshot ID."
     )]
     StaleSnapshot { index: u32 },
 

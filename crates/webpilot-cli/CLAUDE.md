@@ -27,12 +27,15 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       expressions), **navigation** (`navigate_reconnect` — a cross-site swap
       resets document state on the surviving session, no reconnect).
       `parse_bridge_response` lifts an `invoke_bridge` reply of
-      `{success: false, error}` into a typed `WebPilotError`. The per-command re-establishment the root `CLAUDE.md`
-      requires happens in `send`: `reconcile_binding` (which page, resolved from
-      the pin and kept its window's active tab, since headless Chrome can hold a
-      background tab's renderer commands; `bind_target` is the single "make this
-      page the bound one" step, shared with `tab switch`), `ensure_download_behavior`,
-      `ensure_device_emulation`, `ensure_monitor_hooks`.
+      `{success: false, error}` into a typed `WebPilotError`. The per-command
+      re-establishment the root `CLAUDE.md` requires happens in `send`:
+      `reconcile_binding` (which page, resolved from the pin; `bind_target` is the
+      single "make this page the bound one" step, shared with `tab switch`),
+      `ensure_download_behavior`, `ensure_device_emulation`, `ensure_monitor_hooks`.
+      The bound page is its window's active tab: `attach_to_page`, which every
+      bind passes, activates it before priming, and `reconcile_binding`
+      re-activates a page held across commands, since headless Chrome can hold a
+      background tab's renderer commands.
     - `action.rs` — page-mutating (click/type/scroll/drag, `do_action`).
       `require_main_frame` blocks viewport-coordinate actions while an iframe is
       active. Type/scroll/focus/select run via the bridge; click uses native CDP
@@ -42,7 +45,7 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       bracket a navigation + popup watch (events subscribed *before* the action
       runs): `settled_action_url` reports `url_changed` (bounded commit wait
       only when a main-frame load started and has not already stopped),
-      `adopt_click_opened_target` moves the pin to a click-opened tab — the
+      `adopt_click_opened_target` (`browser.rs`) moves the pin to a click-opened tab — the
       browser-mode `dispatchActionToPage` contract, mirrored. `--capture` runs
       after adoption and document readiness; a capture failure becomes
       `capture_error`, never a command failure (a retry would re-run the side
@@ -59,11 +62,12 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       `truncated` (the cap evicted entries) and `covers_load` (the recorder was in
       place before the document's first script). `MONITOR_SHAPE` is the whole
       recorder contract — entries AND the globals a read expects — and
-      `monitor_shape_stamp_is_in_step` fails the build if the six stamp sites
-      disagree.
+      `monitor_shape_stamp_is_in_step` fails `cargo test` if a recorder or a
+      service-worker read disagrees with it (the Rust reads interpolate it).
     - `browser.rs` — tab / frame / status. The **active-tab pin**
-      (`runtime/active_tab_<key>.json`) is the session's page identity: every
-      target `pick_active_target` binds is written there, so separate CLI
+      (`runtime/active_tab_<key>.json`, read and written in `mod.rs`) is the
+      session's page identity: every target `pick_active_target` binds is
+      written there, so separate CLI
       processes agree instead of each re-deriving from `Target.getTargets`
       (Chrome orders it by target GUID, so a re-derivation can land elsewhere).
       A pin whose tab closed STAYS on disk until the command that REPORTS it —
@@ -79,13 +83,16 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
 - `cdp.rs` — `CdpClient` (one tokio-tungstenite WebSocket to the browser
   endpoint) + `CdpSession` (a flat-protocol session on it, from
   `CdpClient::attach` → `Target.attachToTarget { flatten: true }`). id→oneshot
-  routing; heartbeat tolerates up to `HEARTBEAT_MAX_MISSES` consecutive misses
-  before declaring the connection dead; maps `ConnectionLost`/`Timeout`. Every
+  routing; the heartbeat declares the connection dead after
+  `HEARTBEAT_MAX_MISSES` consecutive beats with no frame received; maps
+  `ConnectionLost`/`Timeout`. Every
   session send is stamped with its `sessionId`; `SessionEvents` filters the
   shared event ring to one session (isolating each page's events); a detach
   watcher flips `session_alive` so an in-flight wait ends at once when the tab
   closes (backstopped by Chrome's `-32001`). The page is a `CdpSession` that
-  survives a cross-site renderer swap — no socket rebind.
+  survives a cross-site renderer swap — no socket rebind. Why this model, and
+  the rejected alternatives (child sessions for cross-origin iframes, CDP-side
+  monitors, BiDi): `docs/cdp-flat-session-migration.md`.
 - `session.rs` — Chrome lifecycle + `flock` launch lock; `headless_viewport()`
   (settings).
 - `host.rs` — NM host process (IPC ↔ stdin/stdout). The browser-mode policy sink:

@@ -52,7 +52,7 @@ const CACHE_TTL_MS: u64 = 3_600_000;
 const INSTRUCTIONS: &str = "\
 WebPilot drives a real Chrome. Observe before acting: browser_navigate and browser_snapshot \
 return interactive elements as [N] with a snapshot_id, and indexed tools need both. A newer \
-snapshot, a navigation, or a change to the element makes an old snapshot_id stale \
+snapshot, a navigation to another document, or a change to the element makes an old snapshot_id stale \
 (StaleSnapshot): take a new snapshot instead of retrying. Acting tools return a fresh snapshot \
 unless capture is false; it lists the elements in view and the ones the action added, while \
 browser_snapshot lists the whole page. browser_find searches every indexed element, including ones a \
@@ -1248,8 +1248,8 @@ fn build_tool_specs() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "role": { "type": "string", "description": "ARIA role or input type, e.g. button, link, textbox." },
-                    "text": { "type": "string", "description": "Substring of the element's visible text." },
+                    "role": { "type": "string", "description": "Computed ARIA role, matched exactly, e.g. button, link, textbox." },
+                    "text": { "type": "string", "description": "Substring of the element's visible text or accessible name." },
                     "label": { "type": "string", "description": "Substring of the element's label." },
                     "placeholder": { "type": "string", "description": "Substring of the element's placeholder." },
                     "tag": { "type": "string", "description": "Exact tag name, e.g. input, button." },

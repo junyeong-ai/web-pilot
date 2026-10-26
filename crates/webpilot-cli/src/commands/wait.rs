@@ -11,6 +11,7 @@ pub struct WaitArgs {
     #[command(subcommand)]
     pub condition: WaitCondition,
 
+    /// Timeout in seconds.
     #[arg(long, global = true, default_value_t = 10)]
     pub timeout: u64,
 }

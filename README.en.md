@@ -205,7 +205,7 @@ webpilot find --label "Email" --fill "ada@acme.com"  # find by label and fill
 webpilot action click 5 --snapshot-id ID  # click by index
 webpilot action type 3 "s3cret" --clear --snapshot-id ID  # type (clearing first)
 webpilot action key-press Enter                      # key press (Tab · Escape · Arrow* …)
-webpilot action select 2 "Option B" --snapshot-id ID  # choose a <select> option
+webpilot action select 2 "b" --snapshot-id ID  # pick the <option> whose value is "b"
 webpilot action scroll-to 7 --snapshot-id ID  # scroll until an element is in view
 webpilot action upload 4 ./resume.pdf --snapshot-id ID  # upload a file
 ```
@@ -310,7 +310,7 @@ webpilot device reset                                  # clear emulation
 | Target Chrome | A separate headless Chrome WebPilot launches | Your **real, logged-in Chrome** |
 | SSO / session | Separate persistent profile (initially logged out) | Reuses your existing SSO/login sessions |
 | Path | Direct CDP WebSocket | NM host (0600 socket) → extension |
-| Multi-agent | Isolated via `--context <name>` | Single agent |
+| Multi-agent | Isolated via `--context <name>` (up to 16; one no process holds is reclaimed after `[context] ttl_secs`, 1 h by default) | Single agent |
 | Working tab | The session's own page | A tab of its own: loading a URL opens one. A read borrows the tab you are viewing, and loading a URL then opens a new tab instead of replacing that page; other commands are refused until a tab is chosen |
 | Prerequisites | Chrome installed | Chrome + extension + NM host registration (below) |
 
@@ -342,7 +342,7 @@ The full page-interaction loop — observe (`snapshot`/`screenshot`), act (`clic
 
 MCP snapshots support `include: ["dom", "text"]`. Indexed tools require `snapshot_id`; action tools return the elements in view and the ones the action added (`browser_snapshot` lists the whole page), and accept `capture: false` when no new DOM is needed. Successful results carry `structuredContent`; for a DOM result it holds the snapshot ID, page, counts and action effects, while the element listing stays in the text block. Ping and wait cancellation remain available during running commands. Password values are omitted from DOM snapshots.
 
-Give each MCP host its own `--context NAME`. Hosts that share a context share one pinned tab and one snapshot: a capture by one makes the other's `snapshot_id` stale.
+In headless mode, give each MCP host its own `--context NAME` (browser mode serves one agent). Hosts that share a context share one pinned tab and one snapshot: a capture by one makes the other's `snapshot_id` stale.
 
 ## Safety policy
 
@@ -371,7 +371,7 @@ Blocked by policy: click. Check: webpilot policy list
 
 - `eval` is the **master key**. With `eval` allowed, page JS can reproduce other effects, so narrow denies on `navigate` / `fetch` / `cookie_list` are merely advisory. **Deny `eval` first.**
 - Policy is enforced **where a process reaches the browser**: `LocalTransport::send` (headless), the NM host (browser), and the `device` / `context close` handlers. The host **re-parses** every wire value into a typed `Command` before checking, so a “Rust rejects / JS coerces” bypass is impossible.
-- The policy store lives under the **durable data root** (`policy/policies.json`), not the OS cache — so a cache wipe can't silently reset your deny rules to allow.
+- The policy store lives under the **durable data root** (`policy/policies.json`, or under `WEBPILOT_HOME` when that is set), not the OS cache — so a cache wipe can't silently reset your deny rules to allow.
 
 > Policy is a **guardrail against a steered agent**, not a sandbox against a malicious same-user process. The store and `webpilot policy` belong to the same user the agent runs as — protect them externally if that boundary matters.
 
@@ -381,8 +381,8 @@ Blocked by policy: click. Check: webpilot policy list
 
 | Flag | Behavior |
 |---|---|
-| **(none)** | Text: content to stdout, notes and side information to stderr — the same on a terminal and in a pipe (an agent's shell tool reads a pipe) |
-| **`--json`** | The structured JSON form on stdout |
+| **(none)** | Text: the DOM listing and values (`eval`, `fetch`, `dom get-*`, `cookie get`) to stdout; lists, status, notes, artifact paths and errors to stderr — the same on a terminal and in a pipe (an agent's shell tool reads a pipe) |
+| **`--json`** | Results and errors as structured JSON on stdout |
 
 Scripts add `--json`:
 
@@ -412,13 +412,14 @@ webpilot status --json | jq
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
 ```
 
-It downloads the prebuilt binary and SHA-256 checksum, verifies them, installs to `~/.local/bin/webpilot`, and unpacks the skill/extension assets **embedded in the binary at compile time** via `webpilot setup` — no repository clone required.
+It downloads the prebuilt binary and SHA-256 checksum, verifies them, installs to `~/.local/bin/webpilot`, and runs `webpilot setup`, which unpacks the skill and extension **embedded in the binary at compile time** and registers the NM host. By default it asks nothing and keeps a skill you have edited. No repository clone is required.
 
 ```bash
 # Build from source (inside a checkout; rust-toolchain.toml pins the toolchain → rustup installs it)
 WEBPILOT_BUILD=source bash scripts/install.sh
 
-# Uninstall — a one-liner symmetric to the install
+# Uninstall — a one-liner symmetric to the install. It asks before removing anything,
+# so where there is no terminal (CI, an agent's shell) append `-s -- --yes`
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/uninstall.sh | bash
 ```
 
@@ -441,8 +442,8 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `find --role/--text/--label/--placeholder/--tag [--click\|--fill]` | Semantic element search (+ act) |
 | `eval <js>` | Evaluate JS in the page context |
 | `wait <selector\|text\|navigation\|idle>` | Wait for a condition |
-| `tab <switch\|new\|close\|find>` | Tab management |
-| `frame <switch\|url\|find\|main>` | iframe switching |
+| `tab [switch\|new\|close\|find]` | Tab management (bare `tab` lists tabs) |
+| `frame [switch\|url\|find\|main]` | iframe switching (bare `frame` lists frames) |
 | `dom <set-html\|set-text\|set-attr\|get-html\|get-text\|get-attr>` | Read/write DOM |
 | `fetch <url>` | Request a URL with the session cookies |
 | `network <start\|read\|clear>` | Network request monitor |
@@ -452,7 +453,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `device <set\|preset\|reset>` | Device viewport / UA emulation (headless) |
 | `record [--frames N \| --duration N] [--dom]` | Record sequential frames for AI analysis (headless) |
 | `profile --duration <secs>` | CPU performance profiling (headless) |
-| `diff --dom\|--screenshot` | Compare snapshots |
+| `diff --dom\|--screenshot <before> <after>` | Compare two saved DOM snapshots (JSON) or screenshots |
 | `policy <default\|set\|list\|clear>` | Effect-keyed operation gate |
 | `context <list\|close>` | Multi-agent isolation contexts |
 | `status` | Check connection status |
@@ -476,7 +477,7 @@ See `webpilot <command> --help` for the full options of each.
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1` | General / session error |
+| `1` | General / session error, or a context another live process holds (`ContextInUse`) |
 | `2` | CLI usage error (unknown flag, non-numeric index, …) |
 | `3` | Infrastructure (`ConnectionLost` · `BridgeUnavailable` · `VersionMismatch`) |
 | `4` | Not found (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `NoPinnedTab` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
@@ -512,7 +513,9 @@ The skill and extension are embedded in the binary at compile time, so the **bun
 ## Runtime settings
 
 Copy the [configuration example](docs/config.example.toml) and set `WEBPILOT_CONFIG`
-to its absolute path. The default location is `config.toml` in WebPilot's cache root.
+to its absolute path. The default location is `config.toml` in WebPilot's cache root,
+which can be cleared and on Linux may sit under `$XDG_RUNTIME_DIR`: point
+`WEBPILOT_CONFIG` at a durable path for settings you keep.
 
 ```bash
 WEBPILOT_CONFIG=/absolute/path/config.toml webpilot status
@@ -529,7 +532,10 @@ Browser mode reads its settings and policy store in the Native Messaging host,
 which Chrome starts with its own environment: `WEBPILOT_*` variables,
 `WEBPILOT_CONFIG`, `WEBPILOT_HOME` and `WEBPILOT_DATA_HOME` set in your shell do
 not reach it. Keep browser-mode settings in the default `config.toml`, or set
-those variables where Chrome is launched.
+those variables where Chrome is launched. The CLI process itself still reads
+`[timeouts] ipc_response_ms` and `[capture] max_elements`, and finds the host's
+socket from its own environment, so a `WEBPILOT_HOME` or `WEBPILOT_SOCKET` set
+only in your shell sends it to a socket the host never opened.
 
 ---
 
@@ -542,7 +548,7 @@ session — the policy verdicts it applied, the extension handshake, why a comma
 failed — is not on your terminal. It is written here instead:
 
 ```bash
-tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS default; with WEBPILOT_HOME, use its logs/ directory
+tail -f ~/Library/Caches/webpilot/logs/host.log   # macOS default. Linux: $XDG_RUNTIME_DIR/webpilot/logs/ (else $XDG_CACHE_HOME/webpilot/logs/ or ~/.cache/webpilot/logs/); with WEBPILOT_HOME set in Chrome's environment, its logs/
 ```
 
 `host.log.1` beside it holds the previous rotation, which is usually the one a

@@ -32,7 +32,7 @@ pub enum Command {
     Action(action::ActionArgs),
     /// Evaluate JavaScript in the page context
     Eval(eval::EvalArgs),
-    /// Wait for a condition (element, text, navigation)
+    /// Wait for a condition (selector, text, idle, navigation)
     Wait(wait::WaitArgs),
     /// Manage browser tabs
     Tab(tab::TabArgs),
@@ -44,13 +44,13 @@ pub enum Command {
     Fetch(fetch::FetchArgs),
     /// Compare DOM snapshots or screenshots
     Diff(diff::DiffArgs),
-    /// Find elements by role, text, label, or placeholder
+    /// Find elements by role, text, label, placeholder, or tag
     Find(find::FindArgs),
     /// Monitor network requests (fetch/XHR)
     Network(network::NetworkArgs),
     /// Capture JS console output
     Console(console::ConsoleArgs),
-    /// Export/import session state (cookies + localStorage)
+    /// Export/import session state (cookies, localStorage, sessionStorage)
     Session(session::SessionArgs),
     /// Gate operations (actions, eval, fetch) with allow/deny policies
     Policy(policy::PolicyArgs),

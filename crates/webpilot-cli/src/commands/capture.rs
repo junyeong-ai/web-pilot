@@ -12,6 +12,7 @@ pub struct CaptureArgs {
     #[arg(long, value_enum, num_args = 1.., default_values_t = vec![CaptureField::Dom])]
     pub include: Vec<CaptureField>,
 
+    /// Navigate to this URL, then capture the page it loads.
     #[arg(long)]
     pub url: Option<String>,
 

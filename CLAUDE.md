@@ -11,7 +11,7 @@ command handlers.
 # Every local pass runs the gates CI runs:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+cargo test --workspace --locked --no-fail-fast
 RUSTDOCFLAGS='-D warnings -D rustdoc::broken-intra-doc-links' cargo doc --workspace --no-deps --locked
 npm ci && npm run lint       # generated semantics + extension lint; Node in .node-version
 shellcheck scripts/*.sh
@@ -21,7 +21,8 @@ shellcheck scripts/*.sh
 # The behavioural suites launch a real Chrome, so they are opt-in (CI runs each in its own job):
 WEBPILOT_CHROME="/path/to/Chrome for Testing" \
   cargo test -p webpilot-cli --locked --test e2e_headless -- --ignored
-# The same invocation applies to --test e2e_mcp and --test e2e_browser.
+# The same invocation applies to --test e2e_mcp and --test e2e_browser. In an
+# unprivileged container, also set WEBPILOT_CHROME_NO_SANDBOX=1 as CI does.
 
 webpilot capture --include dom --url "https://example.com"   # headless (default)
 webpilot capture --include dom --browser                     # the user's Chrome; --context NAME isolates headless
@@ -109,22 +110,25 @@ document; `@landmark` is semantic context.
 | Footer | `DomSnapshot` field | Meaning |
 |---|---|---|
 | `page text clipped` | `text_truncated` | the page has more text than the capture cap |
-| `N iframe(s) not shown` | `subframes` | HTTP iframes outside the active frame; enter one with `frame url <pattern>`, or `frame switch <name>` when it has a name |
+| `N iframe(s) not shown` | `subframes` | HTTP iframes nested in the active frame that its capture does not include; enter one with `frame url <pattern>`, or `frame switch <name>` when it has a name |
 | `shadow DOM clipped` | `shadow_truncated` | the shadow-host budget ran out, so controls may be missing from the index |
 | `index shortened` | `elements_truncated` | the page has more elements than `[capture] max_elements` renders |
 | `N offscreen element(s) not listed` | `offscreen_omitted` | an action's follow-up capture (`--capture`, MCP action tools) lists only the viewport and what the action added (`DomSnapshot::omit_offscreen`); a capture lists the whole page |
 
 The last two are render-only: the browser keeps the whole index, so an omitted
-element stays addressable and `find` still matches it. `max_elements` applies
-once, in `CommandOutput::dom`, so no surface emits an unbounded index; the
-extraction caps (page text, element text, option lists, the shadow walk) live in
-the shared `bridge.js`.
+element stays addressable and `find` still matches it. `max_elements` bounds
+every snapshot in `CommandOutput::dom`, and `find` caps its match list with the
+same setting, so no surface emits an unbounded index; the extraction caps (page
+text, element text, option lists, the shadow walk) live in the shared
+`bridge.js`.
 
 ## Output Modes
 
-- **Default**: text — content → stdout, notes → stderr, on a terminal and in a
-  pipe alike (an agent's shell tool reads a pipe; the text render is written for it)
-- **`--json`**: the structured form on stdout
+- **Default**: text — the DOM listing and `Content` values (eval, fetch,
+  `dom get-*`, `cookie get`) → stdout; `Ok`, `Data` and `List` renders, notes
+  and errors → stderr, on a terminal and in a pipe alike (an agent's shell tool
+  reads a pipe; the text render is written for it)
+- **`--json`**: the structured form, errors included, on stdout
 
 `CommandOutput` → `output::render()`, a single conversion. `to_json()` supplies
 CLI JSON and MCP structured content; `to_agent_text()` the MCP text blocks.
@@ -181,7 +185,8 @@ update, reload the extension so a new host process starts.
 Two per-user roots, both mode 0700. The `dirs.rs` module doc gives their
 resolution per platform and what `WEBPILOT_HOME` / `WEBPILOT_DATA_HOME` move.
 
-- **Cache root**, evictable: `runtime/` (sockets, PIDs, locks), `contexts/`,
+- **Cache root**, evictable: `runtime/` (sockets, PIDs, locks, and the pin,
+  frame, device and monitor state per context), `contexts/`,
   `logs/` (`host.log` + one rotated predecessor; browser mode only, because
   Chrome owns the NM host's stdio), `artifacts/` (screenshots, PDFs, sessions,
   `downloads/<browser-context>/`), `chrome-profile/`, `config.toml`.
