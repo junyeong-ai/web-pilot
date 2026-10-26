@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- On macOS, a stopped headless session no longer leaves a clone of the Chrome
+  app bundle under `/var/folders/…/X/`. Chrome clones itself there at every
+  launch and deletes the clone only on a graceful exit, while webpilot stops
+  Chrome with signals, so every session's clone stayed until reboot and, after
+  a Chrome update, kept the replaced version's files on disk. Headless Chrome
+  now launches with the clone disabled, as Chrome for Testing is built.
+
 ## [0.13.1] - 2026-10-24
 
 ### Fixed

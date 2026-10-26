@@ -281,7 +281,13 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
         "--disable-default-apps",
         "--disable-popup-blocking",
         "--disable-sync",
-        "--disable-features=Translate",
+        // One list, since Chrome reads only the last `--disable-features`.
+        // `MacAppCodeSignClone` clones the app bundle under /var/folders at every
+        // launch and deletes the clone only on a graceful exit, so a session ended
+        // by a signal or a crash would strand one until reboot. The clone only keeps
+        // the code signature valid across an in-place update; Chrome for Testing is
+        // built without it.
+        "--disable-features=Translate,MacAppCodeSignClone",
         "--enable-features=NetworkService,NetworkServiceInProcess",
         "--password-store=basic",
         "--use-mock-keychain",
