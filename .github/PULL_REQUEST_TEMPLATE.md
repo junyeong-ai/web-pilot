@@ -35,6 +35,7 @@ The list CI gates on is "Build & Run" in `CLAUDE.md`.
 
 ## Security
 
-- [ ] No new dependencies, **or** the additions pass `cargo deny check`
+- [ ] No new dependencies, **or** the additions pass `cargo deny check` and `npm audit`
+- [ ] No workflow changes, **or** they pass `zizmor .`
 - [ ] No weakening of the mode-0700 cache and data roots
 - [ ] No new IPC / NM surface that bypasses policy enforcement

@@ -17,6 +17,10 @@ npm ci && npm run lint       # generated semantics + extension lint; Node in .no
 shellcheck scripts/*.sh
 # CI also checks the declared MSRV: cargo +<workspace rust-version> check --workspace --locked
 # After changing accessibility dependencies: npm run build, then npm run lint
+# When dependencies or workflows change, the Audit workflow also runs:
+cargo deny check
+npm audit
+GH_TOKEN="$(gh auth token)" zizmor .
 
 # The behavioural suites launch a real Chrome, so they are opt-in (CI runs each in its own job):
 WEBPILOT_CHROME="/path/to/Chrome for Testing" \
