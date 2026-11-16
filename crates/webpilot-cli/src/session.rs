@@ -295,7 +295,10 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
         // the code signature valid across an in-place update; Chrome for Testing is
         // built without it.
         "--disable-features=Translate,MacAppCodeSignClone",
-        "--enable-features=NetworkService,NetworkServiceInProcess",
+        // Shared memory goes to temporary files, not /dev/shm, which a container
+        // caps at 64 MB by default: a large page or a full-page screenshot there
+        // crashes the renderer.
+        "--disable-dev-shm-usage",
         "--password-store=basic",
         "--use-mock-keychain",
         &format!("--window-size={vw},{vh}"),
