@@ -47,7 +47,7 @@ webpilot capture --include dom --url "http://localhost:8700/"
 [5] button "Sign in" @form
 [6] a role=link "Forgot password?" href="/reset.html" @main
 --- Snapshot: ID_A ---
---- Page: Acme Tasks — Sign in (http://localhost:8700/) ---
+--- Page: http://localhost:8700/ "Acme Tasks — Sign in" ---
 --- Scroll: entire page visible ---
 --- 6 elements (from 20 nodes, 0ms) ---
 ```
@@ -88,7 +88,7 @@ webpilot action click 5 --capture --snapshot-id ID_B
 [3] button#new "New task" @main
 [4] input#q role=searchbox "Filter tasks" label="Filter tasks" type=search @main
 --- Snapshot: ID_C ---
---- Page: Acme Tasks — Dashboard (http://localhost:8700/dashboard.html) ---
+--- Page: http://localhost:8700/dashboard.html "Acme Tasks — Dashboard" ---
 --- Scroll: entire page visible ---
 --- 4 elements (from 16 nodes, 1ms) ---
 ```
@@ -148,7 +148,7 @@ flowchart LR
 *[1] input#query role=textbox "Search" type=text autocomplete=search @search
 [2] button "Go" @search
 --- Snapshot: ID ---
---- Page: Example (https://example.com) ---
+--- Page: https://example.com "Example" ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 2 elements (from 120 nodes, 5ms) ---
 ```
@@ -230,7 +230,7 @@ webpilot capture --include dom --url "https://example.com/invoice"
 ```
 
 ```
---- Page: Invoices (https://example.com/) ---
+--- Page: https://example.com/ "Invoices" ---
 Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<id> ("invoice.pdf" from https://example.com/invoice)
 ```
 

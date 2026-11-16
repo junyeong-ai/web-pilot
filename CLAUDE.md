@@ -98,7 +98,7 @@ its effect with `policy::enforce_key` in the handler and in `run_headless_mode`.
 *[1] input#query role=textbox "Search" type=text autocomplete=search @search
 [2] button "Go" @search
 --- Snapshot: ID ---
---- Page: Example (https://example.com) ---
+--- Page: https://example.com "Example" ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 1 iframe(s) not shown — list frames, then switch to one by URL pattern ---
 --- 2 elements (from 120 nodes, 5ms) ---

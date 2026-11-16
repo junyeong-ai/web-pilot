@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `navigate` without a permission prompt, so a page could steer an agent past
   the file permissions its host enforces. The check is an allowlist, since
   `view-source:file:` reads the same files.
+- The DOM footer reads `--- Page: <url> "<title>" ---`: the URL leads and the
+  title follows quoted and escaped. A page that put a URL in its title could
+  make it read as the address ahead of the real one.
 - MCP tool successes no longer carry `structuredContent`. Codex, and by user
   reports Claude Code, hand the model `structuredContent` in place of the
   content blocks when both are present, so the model saw an element count
