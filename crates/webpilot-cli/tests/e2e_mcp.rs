@@ -194,6 +194,19 @@ impl Tool {
     }
 }
 
+/// The first `[N]` and the `Snapshot:` id of a `browser_find` text block.
+fn found_match(text: &str) -> (u64, String) {
+    let index = text
+        .lines()
+        .find_map(|l| l.strip_prefix('[')?.split_once(']')?.0.parse().ok())
+        .unwrap_or_else(|| panic!("no match row: {text}"));
+    let snapshot_id = text
+        .lines()
+        .find_map(|l| l.strip_prefix("Snapshot: "))
+        .unwrap_or_else(|| panic!("no snapshot id: {text}"));
+    (index, snapshot_id.to_owned())
+}
+
 #[test]
 #[ignore = "requires Chrome for Testing; run with --ignored"]
 fn mcp_long_lived_transport_flow() {
@@ -367,12 +380,15 @@ fn mcp_long_lived_transport_flow() {
     mcp.notify("notifications/cancelled", json!({"requestId":wait_id}));
     let text = mcp.tool("browser_snapshot", json!({"include":["text"]}));
     assert!(text.ok(), "{}", text.text());
-    assert!(text.reply["result"]["structuredContent"]["text_content"].is_string());
+    assert!(text.text().contains("--- Page text ---"), "{}", text.text());
+    // A host that finds structuredContent forwards it in place of the content
+    // blocks, so a success carries the listing in its text block alone.
     let snapshot = mcp.tool("browser_snapshot", json!({}));
-    let listing = &snapshot.reply["result"]["structuredContent"];
     assert!(
-        listing.get("elements").is_none() && listing["element_count"].as_u64() > Some(0),
-        "the listing travels in the text block, its length in structuredContent: {listing}"
+        snapshot.reply["result"].get("structuredContent").is_none()
+            && snapshot.text().contains("[1] "),
+        "{}",
+        snapshot.reply
     );
     // An annotated screenshot draws the [N] labels of the snapshot it takes, so
     // the image comes back with that snapshot's id for acting on a label.
@@ -384,15 +400,17 @@ fn mcp_long_lived_transport_flow() {
         annotated.reply
     );
     assert!(
-        annotated.reply["result"]["structuredContent"]["snapshot_id"].is_string(),
+        annotated.reply["result"]["content"][1]["text"]
+            .as_str()
+            .is_some_and(|t| t.contains("--- Snapshot: ")),
         "{}",
         annotated.reply
     );
     let found = mcp.tool("browser_find", json!({"role":"button","text":"Go"}));
-    let found = &found.reply["result"]["structuredContent"];
+    let (index, snapshot_id) = found_match(&found.text());
     let clicked = mcp.tool(
         "browser_click",
-        json!({"index":found["matches"][0]["index"],"snapshot_id":found["snapshot_id"],"capture":false}),
+        json!({"index":index,"snapshot_id":snapshot_id,"capture":false}),
     );
     assert!(clicked.ok(), "{}", clicked.text());
 
@@ -407,9 +425,11 @@ fn mcp_long_lived_transport_flow() {
     );
     let errors = mcp.tool("browser_console", json!({"action":"read","level":"error"}));
     assert!(errors.ok(), "{}", errors.text());
-    let entries = &errors.reply["result"]["structuredContent"]["entries"];
-    assert_eq!(entries.as_array().map(Vec::len), Some(1), "{entries}");
-    assert_eq!(entries[0]["message"], "mcp-error");
+    let entries = errors.text();
+    assert!(
+        entries.contains("mcp-error") && !entries.contains("mcp-warn"),
+        "{entries}"
+    );
     let misplaced = mcp.tool("browser_console", json!({"action":"clear","level":"error"}));
     assert_eq!(misplaced.code().as_deref(), Some("InvalidArgument"));
     assert!(mcp.tool("browser_network", json!({"action":"start"})).ok());

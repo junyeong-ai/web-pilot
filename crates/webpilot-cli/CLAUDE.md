@@ -112,8 +112,9 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   `INSTRUCTIONS` is the model guidance both entry points serve. The input reader
   stays active during a serialized command so ping and cancellation remain
   responsive; cancellation interrupts waits and lets mutations finish cleanup.
-  Schemas validate inputs before opening a transport. Successes carry structured
-  output alongside text. Action tools inject the wire `kind` to reuse `Action`'s
+  Schemas validate inputs before opening a transport. A success is text (and
+  image) blocks only; an error adds the typed wire error as `structuredContent`.
+  Action tools inject the wire `kind` to reuse `Action`'s
   deserialization and defaults; `browser_find` deserializes the CLI's own
   `FindArgs`. The surface is curated to page interaction
   (act/observe/orient/wait/diagnose + `eval`) — environment management (cookies,

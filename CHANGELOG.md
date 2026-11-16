@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- MCP tool successes no longer carry `structuredContent`. Codex, and by user
+  reports Claude Code, hand the model `structuredContent` in place of the
+  content blocks when both are present, so the model saw an element count
+  without the `[N]` listing and lost the screenshot image. Errors still carry
+  the typed `{code, message, …}` there.
+
 ## [0.13.2] - 2026-10-26
 
 ### Fixed

@@ -681,7 +681,9 @@ where
     ok_reply(id, result)
 }
 
-/// Execute one tool and return its MCP content blocks.
+/// Execute one tool and return its MCP content blocks. A success carries no
+/// `structuredContent`: a host that finds one hands it to the model in place of
+/// `content`, which would drop the element listing and the screenshot image.
 async fn call_tool<T: Transport>(
     transport: &mut T,
     name: &str,
@@ -744,9 +746,7 @@ async fn call_tool<T: Transport>(
             )
             .await
             .map_err(crate::into_webpilot_error)?;
-            return Ok(
-                json!({"content": screenshot_content(&output)?, "structuredContent": output.structured_content(), "isError": false}),
-            );
+            return Ok(json!({"content": screenshot_content(&output)?, "isError": false}));
         }
         "browser_click" | "browser_type" | "browser_press_key" | "browser_scroll"
         | "browser_scroll_to" | "browser_hover" | "browser_focus" | "browser_select"
@@ -897,7 +897,6 @@ async fn call_tool<T: Transport>(
     let output = output.map_err(crate::into_webpilot_error)?;
     Ok(json!({
         "content": [{ "type": "text", "text": output.to_agent_text() }],
-        "structuredContent": output.structured_content(),
         "isError": false,
     }))
 }
@@ -1506,7 +1505,8 @@ mod tests {
         write_reply(&mut writer, &json!({"jsonrpc":"2.0", "id":3,"method":"tools/call","params":{"name":"browser_tabs","arguments":{"action":"list"}}})).await.unwrap();
         let response = reply(&mut reader).await;
         assert_eq!(response["id"], 3);
-        assert_eq!(response["result"]["structuredContent"]["value"], json!([]));
+        assert_eq!(response["result"]["isError"], false);
+        assert!(response["result"].get("structuredContent").is_none());
         assert_eq!(cancelled.load(Ordering::SeqCst), 1);
         write_reply(&mut writer, &json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"browser_eval","arguments":{"code":"1"}}})).await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())

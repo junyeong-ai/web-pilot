@@ -331,7 +331,7 @@ webpilot mcp                  # stdio JSON-RPC (MCP) 서버. --browser / --conte
 
 페이지 상호작용 전반(관찰 `snapshot`/`screenshot`, 액션 `click`/`type`/`drag`/`upload` 등, 시맨틱 검색 `find`, 탭/프레임 전환, `wait`, 콘솔·네트워크 모니터, `eval`)이 23개 `browser_*` 툴로 제공되며, CLI와 동일한 모드·정책·렌더링을 물려받습니다. MCP 2026-07-28을 상태 없이(`server/discover`, 요청별 `_meta`) 제공하면서 2025-11-25 / 2025-06-18 클라이언트의 `initialize` 핸드셰이크에도 응답하며, 두 진입점 모두 모델용 사용 지침(`instructions`)을 함께 보냅니다. 읽기 전용 툴은 `readOnlyHint` 어노테이션을 선언합니다. 모니터를 시작하면 페이지에 기록기를 주입하므로 CLI와 같은 `eval` 정책 게이트를 거칩니다. 환경 관리(쿠키·세션·디바이스·정책)는 의도적으로 CLI 전용입니다.
 
-MCP snapshot은 `include: ["dom", "text"]`를 지원합니다. 인덱스 툴에는 `snapshot_id`가 필요하며, 액션 툴은 화면 안 요소와 그 액션이 추가한 요소를 돌려주고(`browser_snapshot`은 페이지 전체를 나열합니다), `capture: false`로 DOM 반환을 생략할 수 있습니다. 성공 결과도 `structuredContent`로 제공하며(DOM 결과에는 스냅샷 ID, 페이지, 개수, 액션 효과가 담기고 요소 목록은 텍스트 블록에만 있습니다), 실행 중 ping과 대기 취소를 처리합니다. DOM 스냅샷에는 비밀번호 값을 포함하지 않습니다.
+MCP snapshot은 `include: ["dom", "text"]`를 지원합니다. 인덱스 툴에는 `snapshot_id`가 필요하며, 액션 툴은 화면 안 요소와 그 액션이 추가한 요소를 돌려주고(`browser_snapshot`은 페이지 전체를 나열합니다), `capture: false`로 DOM 반환을 생략할 수 있습니다. 성공 결과는 텍스트와 이미지 블록으로만 돌려줍니다. `structuredContent`가 있으면 그것만 모델에 넘기는 클라이언트가 있어서, 요소 목록과 스크린샷이 빠지지 않게 하기 위해서입니다. 실패 결과는 `structuredContent`에 타입이 있는 오류 코드를 담습니다. 실행 중에도 ping과 대기 취소를 처리합니다. DOM 스냅샷에는 비밀번호 값을 포함하지 않습니다.
 
 헤드리스에서는 MCP 호스트마다 `--context NAME`을 따로 지정하세요(브라우저 모드는 에이전트 하나만 지원합니다). 컨텍스트를 함께 쓰는 호스트들은 고정 탭과 스냅샷도 함께 쓰므로, 한쪽이 캡처하면 다른 쪽의 `snapshot_id`가 무효가 됩니다.
 

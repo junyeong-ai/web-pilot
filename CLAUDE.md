@@ -135,7 +135,9 @@ text, element text, option lists, the shadow walk) live in the shared
 - **`--json`**: the structured form, errors included, on stdout
 
 `CommandOutput` → `output::render()`, a single conversion. `to_json()` supplies
-CLI JSON and MCP structured content; `to_agent_text()` the MCP text blocks.
+CLI JSON; `to_agent_text()` the MCP text blocks. An MCP success carries no
+`structuredContent`, since a host that finds one shows the model that instead of
+the text and image blocks; an MCP error carries the typed wire error there.
 
 ## Error Handling
 
