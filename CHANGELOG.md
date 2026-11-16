@@ -7,42 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- A dialog raised after a headless CLI command had detached, such as a timed
-  alert or a session-expiry warning, no longer holds the page until `quit`.
-  Every headless document now carries the page-side handler browser mode used,
-  so later commands no longer fail after a 30-second `Page.enable` timeout.
-- A headless tab held by a dialog its page raised in a document built while no
-  command was attached, or by a script that does not finish, no longer stalls
-  every command for 30 seconds until `quit`. Status reports the tab as
-  `unresponsive`, page commands fail within seconds with `TabUnresponsive`
-  (exit 5), and tab management keeps working, so the agent closes that tab and
-  goes on in another.
-- A navigation, reload or history step the page refused through "leave site?"
-  fails with `NavigationFailed` instead of reporting success on the page it
-  never left; `navigate` also reported `URL changed` there.
-- `type` enters text as native input, so the page sees the trusted
-  `beforeinput` and `input` events real typing fires, and the browser fires
-  `change` when the edit is committed. It set the value and dispatched
-  synthetic `input`/`change` events, which editors built on `beforeinput`
-  (Lexical, Slate, ProseMirror) and input filters ignored. Typed controls
-  (number, date, …) still take their value directly.
-- A capture taken while an iframe was still loading counted it out of
-  `subframes`, and so missed the "N iframe(s) not shown" notice for it and any
-  frame nested in it. The count now waits, up to two seconds, for frames whose
-  `<iframe>` names an http(s) URL to commit.
-- In headless mode a download a page starts after a CLI command has finished is
-  blocked. Chrome drops the per-command download setting when the command
-  disconnects, so such a download was saved to the profile's default folder,
-  unreported and past a `download` deny. The profile now blocks downloads, and
-  each command still allows or denies them while it runs.
-- An `eval`, `fetch`, `dom set` or action whose document navigated away while
-  the call was in flight reports `OutcomeUnknown` (exit 9): the code may have
-  run, and the headless `Other` (exit 1) it gave invited a retry that repeated
-  a request. In browser mode the reverse holds: a command Chrome answered with
-  an error never ran, and is no longer reported as `OutcomeUnknown`; a stale
-  context there is retried as intended.
+## [0.14.0] - 2026-11-17
 
 ### Added
 
@@ -88,6 +53,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   content blocks when both are present, so the model saw an element count
   without the `[N]` listing and lost the screenshot image. Errors still carry
   the typed `{code, message, …}` there.
+- Building from source needs Rust 1.100 (`rust-version`), and the extension
+  toolchain Node.js 26.
+
+### Fixed
+
+- A dialog raised after a headless CLI command had detached, such as a timed
+  alert or a session-expiry warning, no longer holds the page until `quit`.
+  Every headless document now carries the page-side handler browser mode used,
+  so later commands no longer fail after a 30-second `Page.enable` timeout.
+- A headless tab held by a dialog its page raised in a document built while no
+  command was attached, or by a script that does not finish, no longer stalls
+  every command for 30 seconds until `quit`. Status reports the tab as
+  `unresponsive`, page commands fail within seconds with `TabUnresponsive`
+  (exit 5), and tab management keeps working, so the agent closes that tab and
+  goes on in another.
+- A navigation, reload or history step the page refused through "leave site?"
+  fails with `NavigationFailed` instead of reporting success on the page it
+  never left; `navigate` also reported `URL changed` there.
+- `type` enters text as native input, so the page sees the trusted
+  `beforeinput` and `input` events real typing fires, and the browser fires
+  `change` when the edit is committed. It set the value and dispatched
+  synthetic `input`/`change` events, which editors built on `beforeinput`
+  (Lexical, Slate, ProseMirror) and input filters ignored. Typed controls
+  (number, date, …) still take their value directly.
+- A capture taken while an iframe was still loading counted it out of
+  `subframes`, and so missed the "N iframe(s) not shown" notice for it and any
+  frame nested in it. The count now waits, up to two seconds, for frames whose
+  `<iframe>` names an http(s) URL to commit.
+- In headless mode a download a page starts after a CLI command has finished is
+  blocked. Chrome drops the per-command download setting when the command
+  disconnects, so such a download was saved to the profile's default folder,
+  unreported and past a `download` deny. The profile now blocks downloads, and
+  each command still allows or denies them while it runs.
+- An `eval`, `fetch`, `dom set` or action whose document navigated away while
+  the call was in flight reports `OutcomeUnknown` (exit 9): the code may have
+  run, and the headless `Other` (exit 1) it gave invited a retry that repeated
+  a request. In browser mode the reverse holds: a command Chrome answered with
+  an error never ran, and is no longer reported as `OutcomeUnknown`; a stale
+  context there is retried as intended.
+- Headless Chrome launches with `--disable-dev-shm-usage`, as Puppeteer and
+  Playwright do, so renderers keep shared memory in a temporary file rather than
+  `/dev/shm`, which Docker caps at 64 MB by default. The
+  `NetworkServiceInProcess` feature flag it also passed no longer exists in
+  Chrome and is gone.
 
 ## [0.13.2] - 2026-10-26
 

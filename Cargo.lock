@@ -1439,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "webpilot"
-version = "0.13.2"
+version = "0.14.0"
 dependencies = [
  "base64",
  "clap",
@@ -1456,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "webpilot-cli"
-version = "0.13.2"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "base64",
