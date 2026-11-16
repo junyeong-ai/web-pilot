@@ -473,7 +473,7 @@ curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/
 | `2` | CLI 사용법 오류 (알 수 없는 플래그, 숫자가 아닌 인덱스 등) |
 | `3` | 인프라 (`ConnectionLost` · `BridgeUnavailable` · `VersionMismatch`) |
 | `4` | 찾지 못함 (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `NoPinnedTab` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
-| `5` | `Timeout` |
+| `5` | `Timeout`, `TabUnresponsive` |
 | `6` | `PolicyDenied` (정책 차단) |
 | `7` | `InvalidArgument` (사용자 입력 오류) |
 | `8` | 네비게이션 (`NavigationFailed` · `NoPage`) |

@@ -4792,5 +4792,36 @@ fn headless_behavioral_flow() {
     ]));
     assert!(state.contains("paid:true 4242 localhost"), "{state}");
     assert_eq!(code(&fx.run(&["frame", "main"])), 0);
+
+    // A dialog raised in a document built while no command was attached holds
+    // its tab for good. The tab reports as unresponsive and a page command fails
+    // fast with TabUnresponsive, while status and tab management keep working,
+    // so the agent closes it and goes on in another tab.
+    assert_eq!(
+        code(&fx.run(&["tab", "new", &format!("{base}/expiring")])),
+        0
+    );
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+    let held = fx.run(&["status"]);
+    assert_eq!(code(&held), 0, "{}", stdout(&held));
+    let held: serde_json::Value = serde_json::from_str(&stdout(&held)).unwrap();
+    assert_eq!(held["pin"], "unresponsive", "{held}");
+    let refused = fx.run(&["eval", "1"]);
+    assert_eq!(code(&refused), 5, "{}", stdout(&refused));
+    assert!(
+        stdout(&refused).contains("TabUnresponsive"),
+        "{}",
+        stdout(&refused)
+    );
+    let tabs: serde_json::Value = serde_json::from_str(&stdout(&fx.run(&["tab"]))).unwrap();
+    let held_tab = tabs
+        .as_array()
+        .and_then(|tabs| tabs.iter().find(|t| t["pinned"] == true))
+        .and_then(|t| t["id"].as_str())
+        .expect("the held tab stays pinned")
+        .to_owned();
+    assert_eq!(code(&fx.run(&["tab", "close", &held_tab])), 0);
+    assert_eq!(code(&fx.run(&["tab", "new", &base])), 0);
+    assert_eq!(code(&fx.run(&["eval", "1"])), 0);
     drop(fx);
 }

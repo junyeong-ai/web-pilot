@@ -322,7 +322,7 @@ Read-only annotations do not make returned page content trusted.
 | 2 | CLI syntax; check `<command> --help` |
 | 3 | Connection/bridge/version mismatch; inspect `status`. For a stale extension, ask the user to run `webpilot setup extension` and reload the extension at `chrome://extensions` |
 | 4 | Missing/stale target, or no pinned tab (`NoPinnedTab`); capture again or select a tab/frame |
-| 5 | Timeout. `wait` takes `--timeout`; a URL load is bounded by `[timeouts] navigation_ms` (default 15000) and headless stops it, so capture to see which page the tab holds before retrying |
+| 5 | Timeout. `wait` takes `--timeout`; a URL load is bounded by `[timeouts] navigation_ms` (default 15000) and headless stops it, so capture to see which page the tab holds before retrying. `TabUnresponsive`: a dialog or a script holds the pinned tab and retrying cannot release it; `tab close` it and continue in another tab |
 | 6 | Policy denied; inspect `policy list` and report the blocked effect |
 | 7 | Invalid argument or mode combination; correct the input |
 | 8 | Navigation failure/no page; inspect the URL/network or open the intended page |

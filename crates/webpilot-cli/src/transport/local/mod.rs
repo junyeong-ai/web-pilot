@@ -87,6 +87,13 @@ pub struct LocalTransport {
     /// `reconcile_binding` recomputes it per command, and the report that consumes
     /// it moves the pin onto the fallback.
     pub(crate) pin_vanished: Option<String>,
+    /// The bound page did not answer `Page.enable` within `PROBE` when it was
+    /// attached: a dialog it raised while no command was attached — which no
+    /// later session can answer — or a script that has not finished holds its
+    /// renderer. Commands that act on the page re-attach to check again and
+    /// fail `TabUnresponsive` while it holds; tab management and status, which
+    /// need only the browser, proceed so the agent can close it.
+    pub(crate) page_held: bool,
     /// The dialog responder's answer and record, shared by every page session.
     pub(crate) dialogs: DialogDesk,
     /// Top frame id (CDP string). Refreshed on every page swap (`prime_page`, on
@@ -207,7 +214,7 @@ impl LocalTransport {
             .await?;
 
         let dialogs = DialogDesk::new(webpilot::settings::get().chrome.accept_dialogs);
-        let (mut page, browser_context_id, target_id, context_lock, pin_vanished) =
+        let (mut attached, browser_context_id, target_id, context_lock, pin_vanished) =
             resolve_target(&browser, context_name, &dialogs).await?;
 
         // Prime the page: spawn its context listener, register the bridge world,
@@ -215,7 +222,8 @@ impl LocalTransport {
         // enabled Runtime, but its initial `executionContextCreated` events (and
         // the bridge world's) predate the listener's subscription, so the re-emit
         // inside `prime_page` repopulates the maps for every existing context.
-        let (frame_contexts, bridge_contexts, main_frame_id) = prime_page(&mut page).await?;
+        let (frame_contexts, bridge_contexts, main_frame_id) =
+            prime_page(&mut attached, &target_id).await?;
 
         // Restore the bound tab's frame scope across CLI invocations VERBATIM. CLI
         // calls are separate processes, so without persistence `frame switch` would
@@ -239,10 +247,11 @@ impl LocalTransport {
 
         let mut transport = Self {
             browser,
-            page,
+            page: attached.session,
             browser_context_id,
             target_id,
             pin_vanished,
+            page_held: attached.held,
             dialogs,
             main_frame_id,
             frame_contexts,
@@ -1021,9 +1030,11 @@ impl LocalTransport {
     /// dropped with the old page: they name ids on the session that just went
     /// away.
     async fn bind_target(&mut self, target_id: &str) -> Result<()> {
-        let mut page = attach_to_page(&self.browser, target_id, &self.dialogs).await?;
-        let (frame_contexts, bridge_contexts, main_frame_id) = prime_page(&mut page).await?;
-        self.page = page;
+        let mut attached = attach_to_page(&self.browser, target_id, &self.dialogs).await?;
+        let (frame_contexts, bridge_contexts, main_frame_id) =
+            prime_page(&mut attached, target_id).await?;
+        self.page = attached.session;
+        self.page_held = attached.held;
         self.target_id = target_id.to_string();
         self.frame_contexts = frame_contexts;
         self.bridge_contexts = bridge_contexts;
@@ -1036,7 +1047,9 @@ impl LocalTransport {
         // then puts the persisted device on this page — before `tab new`'s own load
         // runs, so that load carries the emulated identity rather than the real one.
         self.device_applied = None;
-        self.ensure_device_emulation().await;
+        if !self.page_held {
+            self.ensure_device_emulation().await;
+        }
         Ok(())
     }
 
@@ -1464,7 +1477,9 @@ impl Transport for LocalTransport {
         // established before the command runs instead of being classified per
         // command and inevitably missing a path.
         self.ensure_download_behavior().await;
-        self.ensure_device_emulation().await;
+        if !self.page_held {
+            self.ensure_device_emulation().await;
+        }
         // The pinned tab closed and this transport attached to a fallback
         // survivor. A command that ACTS on the active page must not SILENTLY run
         // on it — fail loud with TabNotFound, carrying the dead id. Tab management,
@@ -1483,6 +1498,15 @@ impl Transport for LocalTransport {
             write_persisted_active_tab(self.persisted_context_key(), &self.target_id)?;
             return Err(WebPilotError::TabNotFound { tab_id: dead }.into());
         }
+        // A held page may have been released since it was attached — a script
+        // finished — so a command that acts on it attaches again to find out.
+        if self.page_held && command_needs_active_page(&command) {
+            let target = self.target_id.clone();
+            self.bind_target(&target).await?;
+            if self.page_held {
+                return Err(WebPilotError::TabUnresponsive { tab_id: target }.into());
+            }
+        }
         // Armed monitors answer to the browser's per-document injection the same
         // way the download behaviour does: their hooks must already be registered
         // when a command builds a new document, and the registration must still
@@ -1491,7 +1515,9 @@ impl Transport for LocalTransport {
         // process would leave behind. AFTER the dead-pin guard above: a command
         // that is about to be refused must not first put MAIN-world hooks on the
         // survivor page the agent has not been told it is on.
-        self.ensure_monitor_hooks().await;
+        if !self.page_held {
+            self.ensure_monitor_hooks().await;
+        }
 
         match command {
             Command::Capture {
@@ -1909,7 +1935,7 @@ async fn resolve_target(
     context: Option<&str>,
     dialogs: &DialogDesk,
 ) -> Result<(
-    CdpSession,
+    AttachedPage,
     Option<String>,
     String,
     Option<std::fs::File>,
@@ -2105,14 +2131,40 @@ async fn pick_active_target(
 /// first: headless Chrome can hold a background tab's renderer commands until
 /// the tab is activated (measured: `Page.enable` unanswered past the 30-second
 /// CDP timeout), and every command this session sends goes to that renderer.
+/// A page session as `attach_to_page` left it.
+pub(super) struct AttachedPage {
+    pub(super) session: CdpSession,
+    /// The page's renderer did not answer `Page.enable` within `PROBE`, so
+    /// nothing that needs it was set up (`LocalTransport::page_held`).
+    pub(super) held: bool,
+}
+
 pub(super) async fn attach_to_page(
     conn: &Arc<CdpClient>,
     target_id: &str,
     dialogs: &DialogDesk,
-) -> Result<CdpSession> {
+) -> Result<AttachedPage> {
     conn.activate_target(target_id).await?;
     let mut cdp = conn.attach(target_id).await?;
-    cdp.send("Page.enable", None).await?;
+    // A dialog raised while no client was attached holds the renderer for good:
+    // a later session hears no dialog event and cannot answer it, so every
+    // renderer-bound call would sit out its whole timeout. Bounding the first
+    // one tells such a page apart from one that answers.
+    match cdp.send_with_timeout("Page.enable", None, PROBE).await {
+        Ok(_) => {}
+        Err(error)
+            if matches!(
+                error.downcast_ref::<WebPilotError>(),
+                Some(WebPilotError::Timeout { .. })
+            ) =>
+        {
+            return Ok(AttachedPage {
+                session: cdp,
+                held: true,
+            });
+        }
+        Err(error) => return Err(error),
+    }
     // Page.enable makes dialog responses the attached client's responsibility.
     cdp.spawn_dialog_responder(dialogs.clone());
     // Clear Chrome's native console buffer BEFORE enabling Runtime: `Runtime.enable`
@@ -2124,7 +2176,10 @@ pub(super) async fn attach_to_page(
     // without bound across a long session.
     let _ = cdp.send("Runtime.discardConsoleEntries", None).await;
     cdp.send("Runtime.enable", None).await?;
-    Ok(cdp)
+    Ok(AttachedPage {
+        session: cdp,
+        held: false,
+    })
 }
 
 /// Toggle the Runtime domain off then on so Chrome re-announces
@@ -2256,9 +2311,18 @@ async fn install_bridge_world(page: &CdpSession) -> Result<()> {
 /// drops the half-attached page and leaves the current pin intact — never a
 /// silent retarget onto a page with no bridge world. `open` and `do_tab_switch`
 /// share this so the two priming paths cannot drift.
-async fn prime_page(page: &mut CdpSession) -> Result<(ContextMap, ContextMap, String)> {
+async fn prime_page(
+    attached: &mut AttachedPage,
+    target_id: &str,
+) -> Result<(ContextMap, ContextMap, String)> {
     let frame_contexts = ContextMap::default();
     let bridge_contexts = ContextMap::default();
+    // A held page has no renderer to prime. A page target's id is its main
+    // frame's id, so the binding still names its frame.
+    if attached.held {
+        return Ok((frame_contexts, bridge_contexts, target_id.to_owned()));
+    }
+    let page = &mut attached.session;
     let listener = spawn_frame_context_listener(
         page,
         Host::Page,

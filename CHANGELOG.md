@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alert or a session-expiry warning, no longer holds the page until `quit`.
   Every headless document now carries the page-side handler browser mode used,
   so later commands no longer fail after a 30-second `Page.enable` timeout.
+- A headless tab held by a dialog its page raised in a document built while no
+  command was attached, or by a script that does not finish, no longer stalls
+  every command for 30 seconds until `quit`. Status reports the tab as
+  `unresponsive`, page commands fail within seconds with `TabUnresponsive`
+  (exit 5), and tab management keeps working, so the agent closes that tab and
+  goes on in another.
 - A navigation, reload or history step the page refused through "leave site?"
   fails with `NavigationFailed` instead of reporting success on the page it
   never left; `navigate` also reported `URL changed` there.

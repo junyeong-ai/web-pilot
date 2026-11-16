@@ -80,6 +80,11 @@ pub enum WebPilotError {
     TabNotFound { tab_id: String },
 
     #[error(
+        "Tab {tab_id} is not responding: a dialog it raised while no command was attached, or a script that has not finished, holds it. Close that tab and continue in another one."
+    )]
+    TabUnresponsive { tab_id: String },
+
+    #[error(
         "No tab is pinned yet: take a snapshot of the page to work on, open a new tab, or switch to one."
     )]
     NoPinnedTab,
@@ -126,7 +131,7 @@ impl WebPilotError {
             | E::ContextNotFound { .. }
             | E::CookieNotFound { .. }
             | E::FrameNotFound { .. } => 4,
-            E::Timeout { .. } => 5,
+            E::Timeout { .. } | E::TabUnresponsive { .. } => 5,
             E::OutcomeUnknown { .. } => 9,
             E::PolicyDenied { .. } => 6,
             E::ConnectionLost { .. } | E::BridgeUnavailable | E::VersionMismatch { .. } => 3,
@@ -154,6 +159,7 @@ impl WebPilotError {
             E::ConnectionLost { .. } => "ConnectionLost",
             E::PolicyDenied { .. } => "PolicyDenied",
             E::TabNotFound { .. } => "TabNotFound",
+            E::TabUnresponsive { .. } => "TabUnresponsive",
             E::NoPinnedTab => "NoPinnedTab",
             E::ContextNotFound { .. } => "ContextNotFound",
             E::ContextInUse { .. } => "ContextInUse",
@@ -215,6 +221,9 @@ impl WebPilotError {
             "TabNotFound" => Self::TabNotFound {
                 tab_id: str_field("tab_id").unwrap_or(w.message),
             },
+            "TabUnresponsive" => Self::TabUnresponsive {
+                tab_id: str_field("tab_id").unwrap_or(w.message),
+            },
             "NoPinnedTab" => Self::NoPinnedTab,
             "ContextNotFound" => Self::ContextNotFound {
                 name: str_field("name").unwrap_or(w.message),
@@ -270,7 +279,9 @@ impl WebPilotError {
             }
             E::FrameNotFound { selector } => put("selector", selector.clone().into()),
             E::PolicyDenied { operation } => put("operation", operation.clone().into()),
-            E::TabNotFound { tab_id } => put("tab_id", tab_id.clone().into()),
+            E::TabNotFound { tab_id } | E::TabUnresponsive { tab_id } => {
+                put("tab_id", tab_id.clone().into())
+            }
             E::ContextNotFound { name } => put("name", name.clone().into()),
             E::ContextInUse { name } => put("name", name.clone().into()),
             E::CookieNotFound { name } => put("name", name.clone().into()),
@@ -436,6 +447,20 @@ mod tests {
         let recovered: WebPilotError = serde_json::from_value(json).unwrap();
         assert_eq!(recovered, original);
         assert_eq!(recovered.exit_code(), 4);
+    }
+
+    #[test]
+    fn tab_unresponsive_round_trips_with_exit_5() {
+        let original = WebPilotError::TabUnresponsive {
+            tab_id: "T1".into(),
+        };
+        let json = serde_json::to_value(original.to_wire()).unwrap();
+        assert_eq!(json["code"], "TabUnresponsive");
+        assert_eq!(json["tab_id"], "T1");
+
+        let recovered: WebPilotError = serde_json::from_value(json).unwrap();
+        assert_eq!(recovered, original);
+        assert_eq!(recovered.exit_code(), 5);
     }
 
     #[test]

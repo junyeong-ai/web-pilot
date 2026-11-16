@@ -141,6 +141,9 @@ impl LocalTransport {
         // An explicit re-pin answers a dead pin: the agent has chosen this tab, so
         // a long-lived transport must not keep reporting the tab it left behind.
         self.pin_vanished = None;
+        if self.page_held {
+            return Ok(action_success(None));
+        }
         self.await_live_bridge_context().await;
         // Armed monitors follow the agent's working tab, and follow it EARLY:
         // `tab new` opens its tab blank and loads into it afterwards, so
@@ -632,6 +635,29 @@ impl LocalTransport {
                 pin: Some(PinState::Closed),
                 tab_url: None,
                 tab_title: None,
+                chrome_version,
+                extension_version: None,
+            }));
+        }
+        // A held page cannot evaluate anything; the browser's own record of the
+        // target still names it.
+        if self.page_held {
+            let targets = self.browser.get_targets().await?;
+            let target = targets
+                .iter()
+                .find(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(&self.target_id));
+            let field = |key: &str| {
+                target
+                    .and_then(|t| t.get(key))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            };
+            return Ok(ResponseData::Status(StatusInfo {
+                connected: true,
+                mode: RunMode::Headless,
+                pin: Some(PinState::Unresponsive),
+                tab_url: field("url"),
+                tab_title: field("title"),
                 chrome_version,
                 extension_version: None,
             }));

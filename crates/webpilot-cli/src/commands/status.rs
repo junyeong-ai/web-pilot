@@ -22,6 +22,9 @@ fn pin_line(pin: PinState) -> &'static str {
             "none — a read borrows the tab the user is viewing; loading a URL opens a new tab"
         }
         PinState::Closed => "closed — switch to an open tab or open a new one",
+        PinState::Unresponsive => {
+            "unresponsive — a dialog or a script holds it; close it and continue in another tab"
+        }
     }
 }
 

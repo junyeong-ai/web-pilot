@@ -249,6 +249,15 @@ pub const CROSS_CHILD: &str = r#"<!doctype html><html><head><title>crosschild</t
 <body><button id="pay" onclick="document.title='paid:'+event.isTrusted">Pay</button>
 <input id="card" aria-label="Card number"></body></html>"#;
 
+/// Leaves itself, after the command that loaded it has exited, for a document
+/// that raises an alert as it loads: a dialog in a document built while nothing
+/// was attached, which no later session can answer.
+pub const EXPIRING: &str = r#"<!doctype html><html><head><title>expiring</title></head>
+<body><script>setTimeout(function () { location.href = "/expired"; }, 800);</script></body></html>"#;
+
+pub const EXPIRED: &str = r#"<!doctype html><html><head><title>expired</title></head>
+<body><script>alert('Your session has expired');</script></body></html>"#;
+
 /// A form that asks to confirm being left once it holds unsaved input.
 pub const UNSAVED: &str = r#"<!doctype html><html><head><title>unsaved</title></head>
 <body><input id="draft"><script>let dirty = false;
@@ -423,6 +432,10 @@ pub fn spawn_server() -> String {
                     (UNSAVED, "")
                 } else if req.starts_with("GET /crosschild") {
                     (CROSS_CHILD, "")
+                } else if req.starts_with("GET /expiring") {
+                    (EXPIRING, "")
+                } else if req.starts_with("GET /expired") {
+                    (EXPIRED, "")
                 } else if req.starts_with("GET /redirtarget") {
                     (REDIR_TARGET, "")
                 } else {

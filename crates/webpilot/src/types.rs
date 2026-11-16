@@ -280,6 +280,10 @@ pub enum PinState {
     /// The pinned tab is gone. Browser mode reports `TabNotFound` until another
     /// tab is chosen; headless reports it once, then moves to a surviving tab.
     Closed,
+    /// The pinned tab does not respond (headless): a dialog it raised while no
+    /// command was attached, or a script that has not finished, holds it.
+    /// Commands that act on it fail `TabUnresponsive`.
+    Unresponsive,
 }
 
 serde_plain::derive_display_from_serialize!(PinState);

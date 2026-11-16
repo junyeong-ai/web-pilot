@@ -483,7 +483,7 @@ See `webpilot <command> --help` for the full options of each.
 | `2` | CLI usage error (unknown flag, non-numeric index, …) |
 | `3` | Infrastructure (`ConnectionLost` · `BridgeUnavailable` · `VersionMismatch`) |
 | `4` | Not found (`ElementNotFound` · `StaleSnapshot` · `SelectorNotFound` · `TabNotFound` · `NoPinnedTab` · `ContextNotFound` · `CookieNotFound` · `FrameNotFound`) |
-| `5` | `Timeout` |
+| `5` | `Timeout`, `TabUnresponsive` |
 | `6` | `PolicyDenied` (blocked by policy) |
 | `7` | `InvalidArgument` (user input error) |
 | `8` | Navigation (`NavigationFailed` · `NoPage`) |
