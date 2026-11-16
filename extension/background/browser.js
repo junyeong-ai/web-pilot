@@ -109,6 +109,12 @@ async function handleTabSwitch(tabId) {
   if (target === null) {
     return tabNotFound(tabId);
   }
+  // The agent's own pin already: nothing moves, so the user's view of the
+  // window stays where they left it while an MCP call names its tab.
+  if (target === activeTabId && !activeTabBorrowed) {
+    const live = await chrome.tabs.get(target).catch(() => null);
+    if (live) return { type: "Action", success: true };
+  }
   try {
     // Make it the active tab within its own window so a user looking at that
     // window sees what the agent drives — but never raise the window to the
@@ -117,8 +123,6 @@ async function handleTabSwitch(tabId) {
     // window is frontmost. The pin below, not OS focus, is what commands follow.
     await chrome.tabs.update(target, { active: true });
     pinTab(target);
-    // A different tab has its own frame tree — drop any frame scope.
-    setActiveFrameId(0);
     // Armed console/network monitors follow the working tab, as headless does on
     // every pin move — otherwise `console read` on the switched-to tab would
     // silently miss its logs.

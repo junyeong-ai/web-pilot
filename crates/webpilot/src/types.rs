@@ -601,6 +601,10 @@ pub struct DomSnapshot {
     pub total_nodes: u32,
     pub page_url: String,
     pub page_title: String,
+    /// The tab the snapshot was taken in — the id `tab switch` and the MCP `tab`
+    /// argument take. Set by the transport; the bridge cannot know it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
     /// Scroll metrics, present only when a DOM pass actually measured them. A
     /// text/AX-only capture never reads layout, so it carries `None` and the
     /// rendered text omits the Scroll line — a zeroed struct would render as
@@ -1035,10 +1039,14 @@ impl DomSnapshot {
         // a page can set a multi-megabyte title or URL; the full values stay in
         // the JSON `page_title`/`page_url` fields.
         out.push_str(&format!(
-            "--- Page: {} {:?} ---\n",
+            "--- Page: {} {:?}",
             line_safe_clip(&self.page_url, 200),
             line_safe_clip(&self.page_title, 200)
         ));
+        if let Some(tab) = &self.tab_id {
+            out.push_str(&format!(" in tab {}", line_safe(tab)));
+        }
+        out.push_str(" ---\n");
 
         // Only a capture that measured layout may speak about scroll; a
         // text/AX-only capture carries no metrics and says nothing.
@@ -1297,6 +1305,7 @@ mod tests {
             total_nodes: 0,
             page_url: "x".into(),
             page_title: "y".into(),
+            tab_id: None,
             scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
@@ -1331,6 +1340,7 @@ mod tests {
             total_nodes: 0,
             page_url: "x".into(),
             page_title: "y".into(),
+            tab_id: None,
             scroll: None,
             scroll_percent: 0,
             extraction_ms: 0,
@@ -1379,6 +1389,7 @@ mod tests {
             total_nodes: 1,
             page_url: "x".into(),
             page_title: "y".into(),
+            tab_id: None,
             scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
@@ -1420,6 +1431,7 @@ mod tests {
                 total_nodes: 1,
                 page_url: "x".into(),
                 page_title: "y".into(),
+                tab_id: None,
                 scroll: Some(ScrollInfo::default()),
                 scroll_percent: 0,
                 extraction_ms: 0,
@@ -1462,6 +1474,7 @@ mod tests {
                 total_nodes: 1,
                 page_url: "x".into(),
                 page_title: "y".into(),
+                tab_id: None,
                 scroll: Some(ScrollInfo::default()),
                 scroll_percent: 0,
                 extraction_ms: 0,
@@ -1518,6 +1531,7 @@ mod tests {
             total_nodes: 1,
             page_url: "x".into(),
             page_title: "y".into(),
+            tab_id: None,
             scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
@@ -1546,6 +1560,7 @@ mod tests {
             total_nodes: 0,
             page_url: "x".into(),
             page_title: "y".into(),
+            tab_id: None,
             scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
@@ -1599,6 +1614,7 @@ mod tests {
             total_nodes: 3,
             page_url: String::new(),
             page_title: String::new(),
+            tab_id: None,
             scroll: None,
             scroll_percent: 0,
             extraction_ms: 0,
@@ -1640,6 +1656,7 @@ mod tests {
             total_nodes: 3,
             page_url: String::new(),
             page_title: String::new(),
+            tab_id: None,
             scroll: None,
             scroll_percent: 0,
             extraction_ms: 0,
@@ -1678,6 +1695,7 @@ mod tests {
             total_nodes: 0,
             page_url: "x".into(),
             page_title: "y".into(),
+            tab_id: None,
             // A text/AX-only capture never reads layout — no scroll metrics.
             scroll: None,
             scroll_percent: 0,
@@ -1711,6 +1729,7 @@ mod tests {
             total_nodes: 0,
             page_url: "x".into(),
             page_title: "y".into(),
+            tab_id: None,
             scroll: Some(ScrollInfo::default()),
             scroll_percent: 0,
             extraction_ms: 0,
@@ -1760,6 +1779,11 @@ mod tests {
         assert!(
             snap.to_text()
                 .contains(r#"--- Page: https://evil.example/ "" ---"#)
+        );
+        snap.tab_id = Some("7".into());
+        assert!(
+            snap.to_text()
+                .contains(r#"--- Page: https://evil.example/ "" in tab 7 ---"#)
         );
     }
 }

@@ -4,7 +4,11 @@
 
 import { rearmMonitors } from "./state.js";
 
+// The pinned tab's frame scope. Each tab keeps its own in `frameScopes`, so a
+// tab the agent returns to — by `tab switch` or an MCP `tab` argument — acts in
+// the frame it was switched into, as headless keeps one record per tab.
 let activeFrameId = 0;
+const frameScopes = {};
 let activeTabId = null;
 // A borrowed pin is the tab the user was viewing, taken by a read while nothing
 // was pinned: commands act on it, but loading a URL opens a tab of the agent's
@@ -19,7 +23,7 @@ let activeTabBorrowed = false;
 const monitoringState = { console: false, network: false };
 
 // An MV3 service worker is killed when idle and restarted on the next event,
-// losing in-memory state. The pin, `activeFrameId` and the monitoring
+// losing in-memory state. The pin, the frame scopes and the monitoring
 // flags are persisted to session storage and restored here before any command
 // runs — otherwise the first command after a restart would silently target the
 // wrong tab or the main frame instead of the iframe the agent had switched to.
@@ -40,12 +44,13 @@ function ensureRestored() {
       const data = await chrome.storage.session.get([
         "activeTabId",
         "activeTabBorrowed",
-        "activeFrameId",
+        "frameScopes",
         "monitoring",
       ]);
       if (data?.activeTabId != null) activeTabId = data.activeTabId;
       activeTabBorrowed = data?.activeTabBorrowed === true;
-      if (data?.activeFrameId != null) activeFrameId = data.activeFrameId;
+      Object.assign(frameScopes, data?.frameScopes);
+      activeFrameId = frameScopes[activeTabId] ?? 0;
       if (data?.monitoring) {
         monitoringState.console = !!data.monitoring.console;
         monitoringState.network = !!data.monitoring.network;
@@ -60,23 +65,35 @@ function ensureRestored() {
   return restorePromise;
 }
 
+// Scope the pinned tab's commands to frame `id` (0 is its main frame).
 function setActiveFrameId(id) {
   activeFrameId = id;
-  chrome.storage.session?.set({ activeFrameId: id });
+  if (activeTabId == null) return;
+  if (id === 0) delete frameScopes[activeTabId];
+  else frameScopes[activeTabId] = id;
+  chrome.storage.session?.set({ frameScopes });
 }
 
-// Pin the tab commands act on. Every pin is the agent's own unless a read
-// borrowed the user's viewed tab.
+// Drop a closed tab's frame scope. The caller has restored the session, so
+// the write cannot replace scopes not yet read back.
+function forgetFrameScope(tabId) {
+  if (!(tabId in frameScopes)) return;
+  delete frameScopes[tabId];
+  chrome.storage.session?.set({ frameScopes });
+}
+
+// Pin the tab commands act on, in its own frame scope. Every pin is the
+// agent's own unless a read borrowed the user's viewed tab.
 function pinTab(tabId, { borrowed = false } = {}) {
   activeTabId = tabId;
   activeTabBorrowed = borrowed;
+  activeFrameId = frameScopes[tabId] ?? 0;
   chrome.storage.session?.set({ activeTabId: tabId, activeTabBorrowed: borrowed });
 }
 
 // Release the pin: the next command starts over from first use.
 function unpinTab() {
   pinTab(null);
-  setActiveFrameId(0);
 }
 
 // The pin as it stands, for a command that must put it back if it fails.
@@ -212,6 +229,7 @@ export {
   applyHostConfig,
   currentPin,
   ensureRestored,
+  forgetFrameScope,
   monitoringState,
   navigationTimeoutMs,
   pinTab,

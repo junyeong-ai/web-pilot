@@ -486,6 +486,7 @@ impl LocalTransport {
         // Scoped to the active frame inside `count_http_subframes` (correct from
         // the main frame and a switched one), so no main-frame gate here.
         snapshot.subframes = self.count_http_subframes().await;
+        snapshot.tab_id = Some(self.target_id.clone());
         Ok(snapshot)
     }
 

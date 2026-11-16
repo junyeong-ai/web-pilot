@@ -298,6 +298,7 @@ impl LocalTransport {
             // `count_http_subframes` — correct from the main frame AND a switched
             // one.
             s.subframes = self.count_http_subframes().await;
+            s.tab_id = Some(self.target_id.clone());
         }
 
         // Every fallible CDP step is done — only now commit artifacts to disk, so
@@ -517,6 +518,7 @@ fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
         total_nodes: 0,
         page_url: page_url.to_string(),
         page_title: page_title.to_string(),
+        tab_id: None,
         scroll: None,
         scroll_percent: 0,
         extraction_ms: 0,

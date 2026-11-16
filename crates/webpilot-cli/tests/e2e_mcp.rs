@@ -202,7 +202,7 @@ fn found_match(text: &str) -> (u64, String) {
         .unwrap_or_else(|| panic!("no match row: {text}"));
     let snapshot_id = text
         .lines()
-        .find_map(|l| l.strip_prefix("Snapshot: "))
+        .find_map(|l| l.strip_prefix("Snapshot: ")?.split(' ').next())
         .unwrap_or_else(|| panic!("no snapshot id: {text}"));
     (index, snapshot_id.to_owned())
 }
@@ -316,7 +316,55 @@ fn mcp_long_lived_transport_flow() {
         after_repin.text()
     );
 
-    // 5. Device emulation is one record with two lifetimes: the metrics override
+    // 5. Agents sharing one server each name their tab, since the pin is one per
+    //    browser: a call naming its tab acts there whatever the last call
+    //    pinned, an indexed call follows its snapshot's tab, and each tab keeps
+    //    the frame chosen in it.
+    let opened = |tool: Tool| -> String {
+        tool.text()
+            .lines()
+            .find_map(|l| l.strip_prefix("New tab ")?.split_once(" opened:"))
+            .map(|(id, _)| id.to_owned())
+            .unwrap_or_else(|| panic!("no tab id: {}", tool.text()))
+    };
+    let first = opened(mcp.tool("browser_tabs", json!({"action": "new", "url": base})));
+    let second = opened(mcp.tool("browser_tabs", json!({"action": "new", "url": base})));
+    let framed = mcp.tool(
+        "browser_frame",
+        json!({"action": "url", "pattern": "/frame", "tab": first}),
+    );
+    assert!(framed.ok(), "{}", framed.text());
+    let found = mcp.tool(
+        "browser_find",
+        json!({"role": "button", "text": "Go", "tab": second}),
+    );
+    let (index, snapshot_id) = found_match(&found.text());
+    let in_frame = mcp.tool(
+        "browser_eval",
+        json!({"code": "location.pathname", "tab": first}),
+    );
+    assert!(
+        in_frame.text().contains("/frame"),
+        "a tab keeps the frame chosen in it while another is driven: {}",
+        in_frame.text()
+    );
+    let routed = mcp.tool(
+        "browser_click",
+        json!({"index": index, "snapshot_id": snapshot_id, "capture": false}),
+    );
+    assert!(
+        routed.ok(),
+        "an indexed call acts in its snapshot's tab, not the pin: {}",
+        routed.text()
+    );
+    let named = mcp.tool("browser_snapshot", json!({"tab": second}));
+    assert!(
+        named.text().contains(&format!(" in tab {second} ---")),
+        "a snapshot names its tab: {}",
+        named.text()
+    );
+
+    // 6. Device emulation is one record with two lifetimes: the metrics override
     //    outlives the CDP client that set it while the user-agent override reverts
     //    with it. A session that established the device once would drift into a
     //    mobile viewport behind a desktop identity — so the emulation answers to

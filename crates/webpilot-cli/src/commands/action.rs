@@ -114,7 +114,8 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
             }
             if let Some(ref tab) = new_tab {
                 msg.push_str(&format!(
-                    "\nNew tab opened: {} (switched automatically)",
+                    "\nNew tab {} opened: {} (switched automatically)",
+                    tab.id,
                     line_safe_clip(&tab.url, 200)
                 ));
             }

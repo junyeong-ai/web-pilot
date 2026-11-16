@@ -5,7 +5,7 @@
 //! structured `WebPilotError` — there is no message-string parsing.
 
 use webpilot::WebPilotError;
-use webpilot::types::{DomSnapshot, line_safe_clip};
+use webpilot::types::{DomSnapshot, line_safe, line_safe_clip};
 
 /// Text is the default whether or not stdout is a terminal: an agent's shell
 /// tool reads a pipe, and the text render is the form written for it. JSON is
@@ -125,12 +125,13 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
     // snapshot's `page_url` shows WHERE the agent landed, but only this tells it
     // the working tab MOVED to a freshly opened one (a click that opened a popup),
     // not that the same tab navigated.
-    if let Some(url) = extra
-        .get("new_tab")
-        .and_then(|t| t.get("url"))
-        .and_then(|v| v.as_str())
-    {
-        lines.push(format!("New tab: {}", line_safe_clip(url, 200)));
+    if let Some(tab) = extra.get("new_tab") {
+        let field = |key| tab.get(key).and_then(|v| v.as_str()).unwrap_or_default();
+        lines.push(format!(
+            "New tab {}: {}",
+            line_safe(field("id")),
+            line_safe_clip(field("url"), 200)
+        ));
     }
     // A download leaves the page exactly where it was, so the snapshot alone
     // reads as a command that did nothing.
@@ -178,6 +179,22 @@ impl CommandOutput {
     ) -> Self {
         snapshot.truncate_elements(webpilot::settings::get().capture.max_elements);
         Self::Dom { snapshot, extra }
+    }
+
+    /// The snapshot id this output hands the agent and the tab it was taken in:
+    /// a DOM listing's, or the one `find` matched against.
+    pub(crate) fn snapshot_in_tab(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Dom { snapshot, .. } => Some((
+                snapshot.snapshot_id.as_deref()?,
+                snapshot.tab_id.as_deref()?,
+            )),
+            Self::List { items, .. } => Some((
+                items.get("snapshot_id")?.as_str()?,
+                items.get("tab_id")?.as_str()?,
+            )),
+            _ => None,
+        }
     }
 
     /// Flatten to one agent-facing text block — the body of an MCP tool result.
@@ -339,7 +356,7 @@ mod tests {
         });
         let lines = dom_extra_lines(extra.as_object().unwrap());
         assert!(
-            lines.iter().any(|l| l == "New tab: http://x/popup"),
+            lines.iter().any(|l| l == "New tab T1: http://x/popup"),
             "new_tab must reach the text channel: {lines:?}"
         );
         // No popup → no phantom line.

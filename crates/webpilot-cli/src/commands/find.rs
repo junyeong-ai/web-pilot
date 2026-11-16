@@ -176,12 +176,18 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
     let mut items = serde_json::json!({
         "matches": listed,
         "snapshot_id": snapshot.snapshot_id,
+        "tab_id": snapshot.tab_id,
         "count": total,
         "matches_truncated": listed.len() < total,
     });
     let mut human_lines = human_lines;
     if let Some(id) = &snapshot.snapshot_id {
-        human_lines.push(format!("Snapshot: {}", line_safe(id)));
+        let tab = snapshot
+            .tab_id
+            .as_deref()
+            .map(|tab| format!(" in tab {}", line_safe(tab)))
+            .unwrap_or_default();
+        human_lines.push(format!("Snapshot: {}{tab}", line_safe(id)));
     }
 
     // The strict-selector contract (`frame url` v0.4.152, `tab find` v0.4.169):
@@ -245,7 +251,8 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
     if let Some(ref tab) = effect.new_tab {
         items["new_tab"] = serde_json::to_value(tab).expect("TabInfo serializes");
         human_lines.push(format!(
-            "→ New tab opened: {} (switched automatically)",
+            "→ New tab {} opened: {} (switched automatically)",
+            tab.id,
             line_safe_clip(&tab.url, 200)
         ));
     }

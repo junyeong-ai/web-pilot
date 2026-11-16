@@ -207,9 +207,9 @@ impl LocalTransport {
         // inside `prime_page` repopulates the maps for every existing context.
         let (frame_contexts, bridge_contexts, main_frame_id) = prime_page(&mut page).await?;
 
-        // Restore the active frame across CLI invocations VERBATIM. CLI calls are
-        // separate processes, so without persistence `frame switch` would be a
-        // no-op — the next `eval` would lose the active frame and silently fall
+        // Restore the bound tab's frame scope across CLI invocations VERBATIM. CLI
+        // calls are separate processes, so without persistence `frame switch` would
+        // be a no-op — the next `eval` would lose the active frame and silently fall
         // back to the main world. A frame that has since VANISHED is deliberately
         // KEPT, not dropped: a scoped command then resolves it as `FrameNotFound`
         // (exit 4 → recapture / re-switch) instead of SILENTLY running in the main
@@ -218,7 +218,8 @@ impl LocalTransport {
         // recovery paths that REPORT it — `frame list` re-validates against the
         // live tree and returns the reset, `frame main` / a fresh `frame switch`
         // replace it — so the agent is never silently retargeted on open.
-        let restored_active = read_persisted_active_frame(browser_context_id.as_deref());
+        let restored_active =
+            read_persisted_active_frame(browser_context_id.as_deref(), &target_id);
 
         // Restore the armed-monitor state across CLI invocations: `network
         // start` in one process must keep recording through navigations run
@@ -1019,6 +1020,7 @@ impl LocalTransport {
         self.bridge_contexts = bridge_contexts;
         self.main_frame_id = main_frame_id;
         self.monitor_hooks.lock().await.clear();
+        self.load_frame_scope().await;
         // A new session carries none of the old one's emulation overrides, so the
         // record of what is applied goes with the page it described. The reconcile
         // then puts the persisted device on this page — before `tab new`'s own load
@@ -1034,16 +1036,15 @@ impl LocalTransport {
     /// another process, puts a page held across them in the background. A
     /// long-lived transport is left in the state a fresh CLI process would find:
     /// bound to the pin, or to a fallback with the dead pin's id held for `send`
-    /// to report once. The active frame is deliberately KEPT across a rebind,
-    /// exactly as `open` keeps it — a scoped command then resolves it as
-    /// `FrameNotFound` rather than silently running in the main frame. The
-    /// context anchor is not needed here: it only breaks the tie on a context's
-    /// first command, which leaves a pin behind for every command after it.
+    /// to report once, in the frame scope that page's record holds. The context
+    /// anchor is not needed here: it only breaks the tie on a context's first
+    /// command, which leaves a pin behind for every command after it.
     async fn reconcile_binding(&mut self) -> Result<()> {
         let (target_id, vanished) =
             pick_active_target(&self.browser, self.browser_context_id.as_deref(), None).await?;
         if target_id == self.target_id {
             self.browser.activate_target(&target_id).await?;
+            self.load_frame_scope().await;
         } else {
             self.bind_target(&target_id).await?;
         }
@@ -1051,11 +1052,28 @@ impl LocalTransport {
         Ok(())
     }
 
-    /// Drop the active frame after a navigation, in memory and on disk, so the
-    /// next CLI invocation doesn't restore an iframe context the page has left.
-    async fn clear_active_frame(&self) {
+    /// Read the bound tab's frame scope from its record, which another process
+    /// may have switched or cleared since this one last looked. A frame that has
+    /// since VANISHED is kept, exactly as `open` keeps it: a scoped command then
+    /// resolves it as `FrameNotFound` rather than silently running in the main
+    /// frame.
+    pub(super) async fn load_frame_scope(&self) {
+        *self.active_frame_id.lock().await =
+            read_persisted_active_frame(self.persisted_context_key(), &self.target_id);
+    }
+
+    /// Scope the bound tab's commands to `frame_id`, in memory and on disk.
+    pub(super) async fn set_active_frame(&self, frame_id: &str) -> std::io::Result<()> {
+        write_persisted_active_frame(self.persisted_context_key(), &self.target_id, frame_id)?;
+        *self.active_frame_id.lock().await = Some(frame_id.to_string());
+        Ok(())
+    }
+
+    /// Return the bound tab to its main frame, in memory and on disk, so the next
+    /// command does not restore an iframe context the page has left.
+    pub(super) async fn clear_active_frame(&self) {
         *self.active_frame_id.lock().await = None;
-        clear_persisted_active_frame(self.persisted_context_key());
+        clear_persisted_active_frame(self.persisted_context_key(), &self.target_id);
     }
 
     /// Whether `target_id` is absent from the live target list — the tab-gone
@@ -1578,29 +1596,52 @@ impl Transport for LocalTransport {
 }
 
 // ── Active-frame persistence (survives across CLI invocations) ────────────
+//
+// One record per tab: a tab keeps the frame an agent switched into while
+// another tab is driven, so returning to it acts in that frame again. One file
+// each, rather than a shared map, so two processes scoping different tabs never
+// overwrite each other's record. The tab id is a live target id (`tab switch`
+// checks it first), a hex string safe in a file name.
 
-fn active_frame_file(browser_context_id: Option<&str>) -> PathBuf {
-    let key = browser_context_id.unwrap_or("default");
-    dirs::runtime_dir().join(format!("active_frame_{key}.json"))
+fn active_frame_prefix(browser_context_id: Option<&str>) -> String {
+    format!("active_frame_{}_", browser_context_id.unwrap_or("default"))
 }
 
-fn read_persisted_active_frame(browser_context_id: Option<&str>) -> Option<String> {
-    let path = active_frame_file(browser_context_id);
-    let raw = std::fs::read_to_string(&path).ok()?;
+fn active_frame_file(browser_context_id: Option<&str>, tab_id: &str) -> PathBuf {
+    dirs::runtime_dir().join(format!(
+        "{}{tab_id}.json",
+        active_frame_prefix(browser_context_id)
+    ))
+}
+
+fn read_persisted_active_frame(browser_context_id: Option<&str>, tab_id: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(active_frame_file(browser_context_id, tab_id)).ok()?;
     serde_json::from_str::<String>(&raw).ok()
 }
 
-pub(super) fn write_persisted_active_frame(
+fn write_persisted_active_frame(
     browser_context_id: Option<&str>,
+    tab_id: &str,
     frame_id: &str,
 ) -> std::io::Result<()> {
-    let path = active_frame_file(browser_context_id);
     let s = serde_json::to_string(frame_id).expect("a frame-id string serializes");
-    dirs::atomic_write(&path, s.as_bytes())
+    dirs::atomic_write(&active_frame_file(browser_context_id, tab_id), s.as_bytes())
 }
 
-pub(super) fn clear_persisted_active_frame(browser_context_id: Option<&str>) {
-    let _ = std::fs::remove_file(active_frame_file(browser_context_id));
+pub(super) fn clear_persisted_active_frame(browser_context_id: Option<&str>, tab_id: &str) {
+    let _ = std::fs::remove_file(active_frame_file(browser_context_id, tab_id));
+}
+
+fn clear_persisted_active_frames(browser_context_id: Option<&str>) {
+    let prefix = active_frame_prefix(browser_context_id);
+    let Ok(entries) = std::fs::read_dir(dirs::runtime_dir()) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 // ── Active-tab persistence ────────────────────────────────────────────────
@@ -2304,7 +2345,7 @@ fn spawn_frame_context_listener(
 /// dispose the CDP browser context should invoke this so no stale runtime
 /// files remain.
 pub(crate) fn clear_context_state(browser_context_id: &str) {
-    clear_persisted_active_frame(Some(browser_context_id));
+    clear_persisted_active_frames(Some(browser_context_id));
     clear_persisted_active_tab(Some(browser_context_id));
     clear_persisted_monitors(Some(browser_context_id));
     // Best-effort here: the whole context is being disposed, so a left-behind

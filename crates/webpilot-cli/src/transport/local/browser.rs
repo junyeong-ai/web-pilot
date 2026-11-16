@@ -124,14 +124,19 @@ impl LocalTransport {
         // retargeting to a page with no bridge world. Popup adoption relies on
         // this — it treats a failed switch as "not adopted" and keeps the pin on
         // the opener, so the switch must not half-commit the pin before it can
-        // fail.
-        if let Err(e) = self.bind_target(tab_id).await {
+        // fail. The tab already bound keeps its session: switching to it only
+        // re-pins it, which another process may have moved, so an MCP call naming
+        // its tab costs no re-attach. Either way the tab returns in its own frame
+        // scope.
+        let bound = if tab_id == self.target_id {
+            self.browser.activate_target(tab_id).await
+        } else {
+            self.bind_target(tab_id).await
+        };
+        if let Err(e) = bound {
             return self.tab_gone_or(e, tab_id).await;
         }
-        // An explicit tab move resets the frame scope: the frame the agent was in
-        // belonged to the page it just left.
-        *self.active_frame_id.lock().await = None;
-        super::clear_persisted_active_frame(self.persisted_context_key());
+        self.load_frame_scope().await;
         super::write_persisted_active_tab(self.persisted_context_key(), tab_id)?;
         // An explicit re-pin answers a dead pin: the agent has chosen this tab, so
         // a long-lived transport must not keep reporting the tab it left behind.
@@ -368,6 +373,7 @@ impl LocalTransport {
         {
             return self.tab_gone_or(e, tab_id).await;
         }
+        super::clear_persisted_active_frame(self.persisted_context_key(), tab_id);
         Ok(action_success(None))
     }
 
@@ -389,8 +395,7 @@ impl LocalTransport {
         if let Some(fid) = &active_frame_id
             && !frames.iter().any(|f| &f.frame_id == fid)
         {
-            *self.active_frame_id.lock().await = None;
-            super::clear_persisted_active_frame(self.persisted_context_key());
+            self.clear_active_frame().await;
             active_frame_id = None;
         }
         Ok(ResponseData::Frames {
@@ -403,8 +408,7 @@ impl LocalTransport {
         // A predicate's `eval` gate is enforced at the transport boundary
         // (`Command::policy_key`), before this handler runs.
         if matches!(selector, FrameSelector::Main) {
-            *self.active_frame_id.lock().await = None;
-            super::clear_persisted_active_frame(self.persisted_context_key());
+            self.clear_active_frame().await;
             return Ok(ResponseData::FrameSwitched {
                 success: true,
                 frame_id: None,
@@ -587,8 +591,7 @@ impl LocalTransport {
                         }),
                     });
                 }
-                *self.active_frame_id.lock().await = Some(frame.frame_id.clone());
-                super::write_persisted_active_frame(self.persisted_context_key(), &frame.frame_id)?;
+                self.set_active_frame(&frame.frame_id).await?;
                 Ok(ResponseData::FrameSwitched {
                     success: true,
                     frame_id: Some(frame.frame_id.clone()),

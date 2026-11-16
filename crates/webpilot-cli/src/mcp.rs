@@ -11,6 +11,12 @@
 //! the whole session: `initialize` and `tools/list` must answer even when
 //! Chrome is slow or unavailable, and a failed launch belongs to the tool call
 //! that needed the browser, not to the server's lifetime.
+//!
+//! Several agents can share one server — a host's parallel subagents do — while
+//! the pin is one per browser. So a page tool names the tab it acts in: its
+//! `tab` argument, or the tab its `snapshot_id` was taken in, is switched to
+//! before the tool runs. A tab keeps its own frame scope in the transport, so
+//! returning to it acts in the frame its agent chose.
 
 use std::future::Future;
 
@@ -26,6 +32,11 @@ use crate::output::CommandOutput;
 use crate::transport::{IpcTransport, LocalTransport, Transport};
 
 const MAX_PENDING_REQUESTS: usize = 32;
+
+/// How many returned snapshots keep their tab for routing. A snapshot id is
+/// valid only until its frame's next extraction, so recent ones are the ones a
+/// call can still use.
+const ROUTED_SNAPSHOTS: usize = 64;
 
 /// Revisions served statelessly: every request names its revision and the
 /// client's capabilities in `_meta`, with no handshake.
@@ -57,11 +68,15 @@ snapshot, a navigation to another document, or a change to the element makes an 
 unless capture is false; it lists the elements in view and the ones the action added, while \
 browser_snapshot lists the whole page. browser_find searches every indexed element, including ones a \
 shortened listing omits, and takes a new snapshot: use its snapshot_id afterwards.
-In the user's own Chrome, tools work in one tab. browser_navigate loads in the agent's own tab, \
-opening one when no tab is pinned. Until a tab is chosen, a read such as browser_snapshot borrows \
-the tab the user is viewing: later tools act on it, but browser_navigate opens a new tab instead of \
-loading over that page. Other tools need a tab first (NoPinnedTab). A tab chosen with \
-browser_tabs switch or find becomes the agent's own, so browser_navigate loads over it.
+Every snapshot names its tab ('in tab N'). Tools act in the pinned tab unless they pass tab, which \
+switches to that tab first; a tool given a snapshot_id acts in that snapshot's tab. When agents \
+share this server, each opens its own tab with browser_tabs new and passes it as tab: the pin is \
+one per browser. A tab keeps the frame chosen in it with browser_frame.
+In the user's own Chrome, browser_navigate loads in the agent's own tab, opening one when no tab is \
+pinned. Until a tab is chosen, a read such as browser_snapshot borrows the tab the user is viewing: \
+later tools act on it, but browser_navigate opens a new tab instead of loading over that page. \
+Other tools need a tab first (NoPinnedTab). A tab chosen with tab or browser_tabs switch or find \
+becomes the agent's own, so browser_navigate loads over it.
 Failed calls return isError with a typed code in structuredContent. OutcomeUnknown means the \
 action may already have run: observe the page before repeating it. A capture_error after an \
 action means the action ran and only the follow-up snapshot failed. PolicyDenied is the \
@@ -106,6 +121,75 @@ where
         tokio::io::stdout(),
     )
     .await
+}
+
+/// The browser one server drives across its requests: the transport, opened on
+/// the first tool call, and the tab of each snapshot this server returned.
+struct Browser<T> {
+    transport: Option<T>,
+    snapshot_tabs: SnapshotTabs,
+}
+
+impl<T> Browser<T> {
+    fn new() -> Self {
+        Self {
+            transport: None,
+            snapshot_tabs: SnapshotTabs::default(),
+        }
+    }
+}
+
+/// The tab each recent snapshot was taken in, so an indexed tool reaches it
+/// while another caller of this server holds the pin elsewhere. A snapshot past
+/// the bound routes to the pin, whose page fails it `StaleSnapshot` rather than
+/// acting on another page's element.
+#[derive(Default)]
+struct SnapshotTabs(std::collections::VecDeque<(String, String)>);
+
+impl SnapshotTabs {
+    fn record(&mut self, output: &CommandOutput) {
+        let Some((id, tab)) = output.snapshot_in_tab() else {
+            return;
+        };
+        if self.0.len() == ROUTED_SNAPSHOTS {
+            self.0.pop_front();
+        }
+        self.0.push_back((id.to_owned(), tab.to_owned()));
+    }
+
+    fn tab_of(&self, snapshot_id: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(id, _)| id == snapshot_id)
+            .map(|(_, tab)| tab.as_str())
+    }
+}
+
+/// The tab a call acts in when it is not left to the pin.
+enum Route {
+    /// The call's `tab`: a choice, so the tab becomes the agent's own pin.
+    Named(String),
+    /// The tab the call's `snapshot_id` was taken in: reached, not chosen, so a
+    /// pin already there stays as it is — one borrowed from the user's view
+    /// included, which a load must not replace.
+    Snapshot(String),
+}
+
+/// Whether `tab_id` is the pinned tab.
+async fn is_pinned<T: Transport>(transport: &mut T, tab_id: &str) -> Result<bool, WebPilotError> {
+    let tabs = transport
+        .send(webpilot::protocol::Command::TabList)
+        .await
+        .map_err(crate::into_webpilot_error)?;
+    match tabs {
+        webpilot::protocol::ResponseData::Tabs { tabs } => {
+            Ok(tabs.iter().any(|tab| tab.pinned && tab.id == tab_id))
+        }
+        webpilot::protocol::ResponseData::Error { error } => Err(error),
+        other => Err(WebPilotError::Other {
+            detail: format!("unexpected response to a tab list: {other:?}"),
+        }),
+    }
 }
 
 async fn write_reply<W: tokio::io::AsyncWrite + Unpin>(
@@ -153,7 +237,7 @@ where
     Fut: Future<Output = Result<T>>,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let mut transport = None;
+    let mut browser = Browser::new();
     let mut initialized = false;
     let mut pending = std::collections::VecDeque::new();
     let mut cancelled = std::collections::HashSet::new();
@@ -214,7 +298,7 @@ where
         let reply = {
             let work = handle_line_with_request_id(
                 &connect,
-                &mut transport,
+                &mut browser,
                 &mut initialized,
                 &line,
                 request_id.clone(),
@@ -257,7 +341,8 @@ where
                 }
             }
         };
-        if cancel_wait && let (Some(transport), Some(request_id)) = (transport.as_mut(), request_id)
+        if cancel_wait
+            && let (Some(transport), Some(request_id)) = (browser.transport.as_mut(), request_id)
         {
             let _ = transport
                 .send(webpilot::protocol::Command::WaitCancel { request_id })
@@ -332,7 +417,7 @@ async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R, max: u64) -> Result
 #[cfg(test)]
 async fn handle_line<T, F, Fut>(
     connect: &F,
-    transport: &mut Option<T>,
+    browser: &mut Browser<T>,
     initialized: &mut bool,
     line: &str,
 ) -> Option<Value>
@@ -341,12 +426,12 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    handle_line_with_request_id(connect, transport, initialized, line, None).await
+    handle_line_with_request_id(connect, browser, initialized, line, None).await
 }
 
 async fn handle_line_with_request_id<T, F, Fut>(
     connect: &F,
-    transport: &mut Option<T>,
+    browser: &mut Browser<T>,
     initialized: &mut bool,
     line: &str,
     request_id: Option<String>,
@@ -405,7 +490,7 @@ where
         .get("_meta")
         .is_some_and(|meta| meta.get(META_PROTOCOL_VERSION).is_some())
     {
-        return Some(modern_reply(connect, transport, id, method, &params, request_id).await);
+        return Some(modern_reply(connect, browser, id, method, &params, request_id).await);
     }
 
     match method {
@@ -426,7 +511,7 @@ where
             "server not initialized — send `initialize` first",
         )),
         "tools/list" => Some(ok_reply(id, json!({ "tools": tool_specs() }))),
-        "tools/call" => Some(tool_call_reply(connect, transport, id, &params, request_id).await),
+        "tools/call" => Some(tool_call_reply(connect, browser, id, &params, request_id).await),
         "server/discover" => Some(error_reply(
             id,
             -32602,
@@ -445,7 +530,7 @@ where
 /// carries `resultType` and the server's identity.
 async fn modern_reply<T, F, Fut>(
     connect: &F,
-    transport: &mut Option<T>,
+    browser: &mut Browser<T>,
     id: Value,
     method: &str,
     params: &Value,
@@ -497,7 +582,7 @@ where
             id,
             json!({ "tools": tool_specs(), "ttlMs": CACHE_TTL_MS, "cacheScope": "public" }),
         ),
-        "tools/call" => tool_call_reply(connect, transport, id, params, request_id).await,
+        "tools/call" => tool_call_reply(connect, browser, id, params, request_id).await,
         "ping" => ok_reply(id, json!({})),
         other => error_reply(id, -32601, &format!("method not found: {other}")),
     };
@@ -602,7 +687,7 @@ fn validate_tool_arguments(name: &str, args: &Value) -> std::result::Result<(), 
 /// JSON-RPC-level errors (-32602), per spec.
 async fn tool_call_reply<T, F, Fut>(
     connect: &F,
-    transport: &mut Option<T>,
+    browser: &mut Browser<T>,
     id: Value,
     params: &Value,
     request_id: Option<String>,
@@ -631,7 +716,7 @@ where
     if !tool_exists(name) {
         return error_reply(id, -32602, &format!("unknown tool: {name}"));
     }
-    let args = params
+    let mut args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
@@ -642,18 +727,35 @@ where
             json!({"content":[{"type":"text", "text":error.to_string()}], "isError":true, "structuredContent":error.to_wire()}),
         );
     }
+    // `tab` routes the call and is not the tool's own argument.
+    let route = match args.as_object_mut().and_then(|a| a.remove("tab")) {
+        Some(tab) => tab.as_str().map(|tab| Route::Named(tab.to_owned())),
+        None => args
+            .get("snapshot_id")
+            .and_then(Value::as_str)
+            .and_then(|snapshot| browser.snapshot_tabs.tab_of(snapshot))
+            .map(|tab| Route::Snapshot(tab.to_owned())),
+    };
 
     let outcome = async {
-        if transport.is_none() {
-            *transport = Some(connect().await.map_err(crate::into_webpilot_error)?);
+        if browser.transport.is_none() {
+            browser.transport = Some(connect().await.map_err(crate::into_webpilot_error)?);
         }
-        call_tool(
-            transport.as_mut().expect("just connected"),
-            name,
-            &args,
-            request_id,
-        )
-        .await
+        let transport = browser.transport.as_mut().expect("just connected");
+        let switch_to = match route {
+            Some(Route::Named(tab)) => Some(tab),
+            Some(Route::Snapshot(tab)) if !is_pinned(transport, &tab).await? => Some(tab),
+            _ => None,
+        };
+        if let Some(tab_id) = switch_to {
+            let command = Some(tab::TabCommand::Switch { tab_id });
+            tab::run(transport, tab::TabArgs { command })
+                .await
+                .map_err(crate::into_webpilot_error)?;
+        }
+        let output = call_tool(transport, name, &args, request_id).await?;
+        browser.snapshot_tabs.record(&output);
+        tool_content(name, &output)
     }
     .await;
 
@@ -665,7 +767,7 @@ where
         .as_ref()
         .is_err_and(|e| e.exit_code() == 3 || matches!(e, WebPilotError::OutcomeUnknown { .. }))
     {
-        *transport = None;
+        browser.transport = None;
     }
 
     let result = match outcome {
@@ -684,15 +786,13 @@ where
     ok_reply(id, result)
 }
 
-/// Execute one tool and return its MCP content blocks. A success carries no
-/// `structuredContent`: a host that finds one hands it to the model in place of
-/// `content`, which would drop the element listing and the screenshot image.
+/// Execute one tool through its command handler.
 async fn call_tool<T: Transport>(
     transport: &mut T,
     name: &str,
     args: &Value,
     request_id: Option<String>,
-) -> std::result::Result<Value, WebPilotError> {
+) -> std::result::Result<CommandOutput, WebPilotError> {
     let output = match name {
         "browser_navigate" => {
             capture::run(
@@ -741,7 +841,7 @@ async fn call_tool<T: Transport>(
                 annotate: bool_arg(args, "annotate")?,
                 ..CaptureOpts::default()
             };
-            let output = capture::run(
+            capture::run(
                 transport,
                 capture::CaptureArgs {
                     include: vec![CaptureField::Screenshot],
@@ -751,8 +851,6 @@ async fn call_tool<T: Transport>(
                 },
             )
             .await
-            .map_err(crate::into_webpilot_error)?;
-            return Ok(json!({"content": screenshot_content(&output)?, "isError": false}));
         }
         "browser_click" | "browser_type" | "browser_press_key" | "browser_scroll"
         | "browser_scroll_to" | "browser_hover" | "browser_focus" | "browser_select"
@@ -901,11 +999,19 @@ async fn call_tool<T: Transport>(
             });
         }
     };
-    let output = output.map_err(crate::into_webpilot_error)?;
-    Ok(json!({
-        "content": [{ "type": "text", "text": output.to_agent_text() }],
-        "isError": false,
-    }))
+    output.map_err(crate::into_webpilot_error)
+}
+
+/// A tool success as MCP content blocks. It carries no `structuredContent`: a
+/// host that finds one hands it to the model in place of `content`, which would
+/// drop the element listing and the screenshot image.
+fn tool_content(name: &str, output: &CommandOutput) -> std::result::Result<Value, WebPilotError> {
+    let content = if name == "browser_screenshot" {
+        screenshot_content(output)?
+    } else {
+        vec![json!({ "type": "text", "text": output.to_agent_text() })]
+    };
+    Ok(json!({ "content": content, "isError": false }))
 }
 
 /// Build a typed `Action` from a tool's arguments by injecting the wire `kind`
@@ -1372,6 +1478,9 @@ fn build_tool_specs() -> Value {
         if name == "browser_snapshot" {
             properties.insert("include".into(), json!({"type":"array", "items":{"type":"string", "enum":["dom","text"]}, "minItems":1, "default":["dom"]}));
         }
+        if name != "browser_tabs" {
+            properties.insert("tab".into(), json!({"type":"string", "description":"Id of the tab to act in, as a snapshot's 'in tab' or browser_tabs reports it; it becomes the pinned tab. Omitted, the tool acts in its snapshot_id's tab, else in the pinned tab."}));
+        }
         if name.starts_with("browser_")
             && matches!(
                 name.as_str(),
@@ -1586,11 +1695,11 @@ mod tests {
     #[tokio::test]
     async fn stateless_requests_need_no_initialize_and_carry_result_metadata() {
         let connect = || async { anyhow::Ok(crate::transport::IpcTransport::new()) };
-        let mut transport: Option<crate::transport::IpcTransport> = None;
+        let mut browser = Browser::<crate::transport::IpcTransport>::new();
         let mut initialized = false;
 
         let discover = modern(1, "server/discover", json!({}));
-        let reply = handle_line(&connect, &mut transport, &mut initialized, &discover)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, &discover)
             .await
             .unwrap();
         let result = &reply["result"];
@@ -1603,7 +1712,7 @@ mod tests {
         assert_eq!(result["_meta"][META_SERVER_INFO]["name"], "webpilot");
 
         let list = modern(2, "tools/list", json!({}));
-        let reply = handle_line(&connect, &mut transport, &mut initialized, &list)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, &list)
             .await
             .unwrap();
         let result = &reply["result"];
@@ -1617,7 +1726,7 @@ mod tests {
             "tools/call",
             json!({ "name": "browser_click", "arguments": { "index": 1 } }),
         );
-        let reply = handle_line(&connect, &mut transport, &mut initialized, &call)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, &call)
             .await
             .unwrap();
         let result = &reply["result"];
@@ -1634,13 +1743,16 @@ mod tests {
             !initialized,
             "stateless requests leave the legacy lifecycle alone"
         );
-        assert!(transport.is_none(), "a rejected call opens no transport");
+        assert!(
+            browser.transport.is_none(),
+            "a rejected call opens no transport"
+        );
     }
 
     #[tokio::test]
     async fn stateless_requests_reject_unknown_revisions_and_missing_capabilities() {
         let connect = || async { anyhow::Ok(crate::transport::IpcTransport::new()) };
-        let mut transport: Option<crate::transport::IpcTransport> = None;
+        let mut browser = Browser::<crate::transport::IpcTransport>::new();
         let mut initialized = false;
 
         let unsupported = json!({
@@ -1648,7 +1760,7 @@ mod tests {
             "params": { "_meta": { META_PROTOCOL_VERSION: "1900-01-01", META_CLIENT_CAPABILITIES: {} } },
         })
         .to_string();
-        let reply = handle_line(&connect, &mut transport, &mut initialized, &unsupported)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, &unsupported)
             .await
             .unwrap();
         assert_eq!(reply["error"]["code"], -32022, "{reply}");
@@ -1663,19 +1775,19 @@ mod tests {
             "params": { "_meta": { META_PROTOCOL_VERSION: MODERN_PROTOCOL_VERSIONS[0] } },
         })
         .to_string();
-        let reply = handle_line(&connect, &mut transport, &mut initialized, &no_capabilities)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, &no_capabilities)
             .await
             .unwrap();
         assert_eq!(reply["error"]["code"], -32602, "{reply}");
 
         let bare_discover = r#"{"jsonrpc":"2.0","id":3,"method":"server/discover"}"#;
-        let reply = handle_line(&connect, &mut transport, &mut initialized, bare_discover)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, bare_discover)
             .await
             .unwrap();
         assert_eq!(reply["error"]["code"], -32602, "{reply}");
 
         let unknown = modern(4, "resources/list", json!({}));
-        let reply = handle_line(&connect, &mut transport, &mut initialized, &unknown)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, &unknown)
             .await
             .unwrap();
         assert_eq!(reply["error"]["code"], -32601, "{reply}");
@@ -1796,30 +1908,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_call_acts_in_its_named_tab_or_its_snapshots_tab() {
+        use std::sync::{Arc, Mutex};
+        use webpilot::protocol::{Command, ResponseData};
+        struct Recording {
+            sent: Arc<Mutex<Vec<String>>>,
+            pin: String,
+        }
+        impl Transport for Recording {
+            async fn send(&mut self, command: Command) -> Result<ResponseData> {
+                let (label, reply) = match command {
+                    Command::TabSwitch { tab_id } => {
+                        self.pin = tab_id.clone();
+                        (
+                            format!("switch {tab_id}"),
+                            json!({"type": "Action", "success": true}),
+                        )
+                    }
+                    Command::TabList => {
+                        let tabs: Vec<Value> = ["T1", "T2"]
+                            .map(|id| json!({"id": id, "url": "http://x/", "title": "x", "pinned": self.pin == id}))
+                            .into();
+                        ("tabs".into(), json!({"type": "Tabs", "tabs": tabs}))
+                    }
+                    Command::Capture { .. } => (
+                        "capture".into(),
+                        json!({"type": "Capture", "page_url": "http://x/", "page_title": "x", "dom": {
+                            "snapshot_id": "S2", "tab_id": "T2", "elements": [], "total_nodes": 0,
+                            "page_url": "http://x/", "page_title": "x", "extraction_ms": 0,
+                        }}),
+                    ),
+                    Command::Action { .. } => {
+                        ("action".into(), json!({"type": "Action", "success": true}))
+                    }
+                    other => panic!("unexpected command {other:?}"),
+                };
+                self.sent.lock().unwrap().push(label);
+                Ok(serde_json::from_value(reply).expect("response shape"))
+            }
+        }
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let recorder = sent.clone();
+        let connect = move || {
+            let sent = recorder.clone();
+            async move {
+                anyhow::Ok(Recording {
+                    sent,
+                    pin: "T1".into(),
+                })
+            }
+        };
+        let mut browser = Browser::new();
+        let mut initialized = true;
+        let mut call = async |name: &str, arguments: Value| {
+            let line = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}});
+            let reply = handle_line(&connect, &mut browser, &mut initialized, &line.to_string())
+                .await
+                .unwrap();
+            assert_eq!(reply["result"]["isError"], false, "{reply}");
+            std::mem::take(&mut *sent.lock().unwrap())
+        };
+        let click =
+            |snapshot_id: &str| json!({"index": 1, "snapshot_id": snapshot_id, "capture": false});
+
+        assert_eq!(
+            call("browser_snapshot", json!({"tab": "T2"})).await,
+            ["switch T2", "capture"]
+        );
+        assert_eq!(
+            call("browser_click", click("S2")).await,
+            ["tabs", "action"],
+            "a pin already on the snapshot's tab is left as it is"
+        );
+        let elsewhere = json!({"action": "switch", "tab_id": "T1"});
+        assert_eq!(call("browser_tabs", elsewhere).await, ["switch T1"]);
+        assert_eq!(
+            call("browser_click", click("S2")).await,
+            ["tabs", "switch T2", "action"],
+            "an indexed call follows its snapshot's tab"
+        );
+        assert_eq!(
+            call("browser_click", click("S9")).await,
+            ["action"],
+            "a snapshot this server did not return acts on the pin"
+        );
+    }
+
+    #[tokio::test]
     async fn tools_calls_require_initialize_first() {
         // MCP lifecycle: a `tools/*` before `initialize` is -32002 and opens no
         // transport; `initialize` arms the gate; `tools/list` then passes.
         let connect = || async { anyhow::Ok(crate::transport::IpcTransport::new()) };
-        let mut transport: Option<crate::transport::IpcTransport> = None;
+        let mut browser = Browser::<crate::transport::IpcTransport>::new();
         let mut initialized = false;
 
         let call = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"browser_snapshot"}}"#;
-        let reply = handle_line(&connect, &mut transport, &mut initialized, call)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, call)
             .await
             .unwrap();
         assert_eq!(reply["error"]["code"], json!(-32002), "{reply}");
-        assert!(transport.is_none(), "no transport opens before initialize");
+        assert!(
+            browser.transport.is_none(),
+            "no transport opens before initialize"
+        );
         assert!(!initialized);
 
         let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
-        let reply = handle_line(&connect, &mut transport, &mut initialized, init)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, init)
             .await
             .unwrap();
         assert!(reply["result"].is_object());
         assert!(initialized, "initialize arms the lifecycle gate");
 
         let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
-        let reply = handle_line(&connect, &mut transport, &mut initialized, list)
+        let reply = handle_line(&connect, &mut browser, &mut initialized, list)
             .await
             .unwrap();
         assert!(

@@ -205,6 +205,7 @@ async function handleAction(command) {
           // iframe. Headless `capture_action_snapshot` is likewise unconditional.
           const frames = await chrome.webNavigation.getAllFrames({ tabId: t.id }).catch(() => []);
           dom.subframes = countHttpSubframes(frames, activeFrameId);
+          dom.tab_id = String(t.id);
           result.dom = dom;
         } else if (dom && dom.error) {
           result.capture_error = dom.error.message || JSON.stringify(dom.error);
@@ -596,9 +597,8 @@ async function dispatchActionToPage(tab, action, snapshot_id) {
       if (newTab) {
         await chrome.tabs.update(newTab.id, { active: true });
         // The agent's working tab moved — re-pin so every later command
-        // follows it, and drop any frame scope (a new tab's tree is its own).
+        // follows it, in the new tab's own (main) frame scope.
         pinTab(newTab.id);
-        setActiveFrameId(0);
         // Read the tab's identity only AFTER it leaves about:blank and commits its
         // destination: a slow or redirecting target=_blank popup reports
         // about:blank / its pre-redirect URL the instant it's created, which would

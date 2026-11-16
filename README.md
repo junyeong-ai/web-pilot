@@ -47,7 +47,7 @@ webpilot capture --include dom --url "http://localhost:8700/"
 [5] button "Sign in" @form
 [6] a role=link "Forgot password?" href="/reset.html" @main
 --- Snapshot: ID_A ---
---- Page: http://localhost:8700/ "Acme Tasks — Sign in" ---
+--- Page: http://localhost:8700/ "Acme Tasks — Sign in" in tab TAB ---
 --- Scroll: entire page visible ---
 --- 6 elements (from 20 nodes, 0ms) ---
 ```
@@ -64,7 +64,7 @@ webpilot find --label "Email" --fill "ada@acme.com"
 ```
 ```
 [2] input#email "you@acme.com" @form
-Snapshot: ID_B
+Snapshot: ID_B in tab TAB
 (1 matches)
 ```
 
@@ -88,7 +88,7 @@ webpilot action click 5 --capture --snapshot-id ID_B
 [3] button#new "New task" @main
 [4] input#q role=searchbox "Filter tasks" label="Filter tasks" type=search @main
 --- Snapshot: ID_C ---
---- Page: http://localhost:8700/dashboard.html "Acme Tasks — Dashboard" ---
+--- Page: http://localhost:8700/dashboard.html "Acme Tasks — Dashboard" in tab TAB ---
 --- Scroll: entire page visible ---
 --- 4 elements (from 16 nodes, 1ms) ---
 ```
@@ -148,7 +148,7 @@ flowchart LR
 *[1] input#query role=textbox "Search" type=text autocomplete=search @search
 [2] button "Go" @search
 --- Snapshot: ID ---
---- Page: https://example.com "Example" ---
+--- Page: https://example.com "Example" in tab TAB ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 2 elements (from 120 nodes, 5ms) ---
 ```
@@ -160,6 +160,7 @@ flowchart LR
 | `#id` | HTML 요소 id. |
 | `"텍스트"` | 접근성 이름 / 플레이스홀더 등 사람이 읽는 라벨. |
 | `@ctx` | ARIA 랜드마크 (navigation · main · banner · form · search …). |
+| `in tab` | 스냅샷을 찍은 탭. `tab switch`와 MCP `tab` 인자가 받는 ID입니다. |
 | 마지막 줄 | 추출 요소 수 / 전체 노드 수 / 소요 시간. |
 
 필요할 때 추가 푸터(`N iframe(s) not shown`, `shadow DOM clipped`, `page text clipped`, `index shortened`)가 표시되어, 목록이 완전하지 않다는 것을 에이전트가 알 수 있습니다. 액션의 `--capture`는 화면 안 요소와 그 액션이 추가한 요소를 나열하고, 나머지는 `--- N offscreen element(s) not listed ---`로 개수만 알립니다(인덱스는 그대로 유효합니다).
@@ -213,7 +214,7 @@ webpilot action upload 4 ./resume.pdf --snapshot-id ID  # 파일 업로드
 
 ```
 [5] button "Sign in" @form
-Snapshot: ID
+Snapshot: ID in tab TAB
 (1 matches)
 ```
 
@@ -230,7 +231,7 @@ webpilot capture --include dom --url "https://example.com/invoice"
 ```
 
 ```
---- Page: https://example.com/ "Invoices" ---
+--- Page: https://example.com/ "Invoices" in tab TAB ---
 Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<id> ("invoice.pdf" from https://example.com/invoice)
 ```
 
@@ -333,7 +334,7 @@ webpilot mcp                  # stdio JSON-RPC (MCP) 서버. --browser / --conte
 
 MCP snapshot은 `include: ["dom", "text"]`를 지원합니다. 인덱스 툴에는 `snapshot_id`가 필요하며, 액션 툴은 화면 안 요소와 그 액션이 추가한 요소를 돌려주고(`browser_snapshot`은 페이지 전체를 나열합니다), `capture: false`로 DOM 반환을 생략할 수 있습니다. 성공 결과는 텍스트와 이미지 블록으로만 돌려줍니다. `structuredContent`가 있으면 그것만 모델에 넘기는 클라이언트가 있어서, 요소 목록과 스크린샷이 빠지지 않게 하기 위해서입니다. 실패 결과는 `structuredContent`에 타입이 있는 오류 코드를 담습니다. 실행 중에도 ping과 대기 취소를 처리합니다. DOM 스냅샷에는 비밀번호 값을 포함하지 않습니다.
 
-헤드리스에서는 MCP 호스트마다 `--context NAME`을 따로 지정하세요(브라우저 모드는 에이전트 하나만 지원합니다). 컨텍스트를 함께 쓰는 호스트들은 고정 탭과 스냅샷도 함께 쓰므로, 한쪽이 캡처하면 다른 쪽의 `snapshot_id`가 무효가 됩니다.
+모든 페이지 툴은 선택 인자 `tab`을 받고, 모든 스냅샷은 자기 탭을 밝힙니다(`in tab …`). 고정 탭은 브라우저마다 하나이므로, 서버나 컨텍스트를 함께 쓰는 에이전트들(호스트의 병렬 서브에이전트 등)은 각자 `browser_tabs new`로 탭을 열고 그 ID를 `tab`으로 넘기세요. 툴은 그 탭으로 먼저 전환한 뒤 실행됩니다. `snapshot_id`를 받은 툴은 그 스냅샷을 찍은 탭에서 실행되고, 탭마다 그 탭에서 고른 프레임을 유지합니다. 헤드리스에서 호스트마다 `--context NAME`을 따로 주면 쿠키와 저장소까지 분리됩니다.
 
 ## 안전 정책 (policy)
 

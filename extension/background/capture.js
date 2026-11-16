@@ -327,6 +327,7 @@ async function handleCapture(command) {
   if (result.dom && result.dom.subframes === undefined) {
     result.dom.subframes = countHttpSubframes(frames, activeFrameId);
   }
+  if (result.dom) result.dom.tab_id = String(tabId);
 
   // A text/AX-only snapshot SHELL (emptyDom) carries blank page_url/title;
   // headless builds its shell with the resolved URL/title (`empty_snapshot(&

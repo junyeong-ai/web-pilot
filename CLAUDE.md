@@ -58,7 +58,7 @@ long-lived process believes a setting another process already cleared, while
 work hung off startup or off `LocalTransport::open` runs once and never again.
 Anything a command depends on is re-established **per command**, at the sink
 every command passes (`LocalTransport::send`, the host's request path): which page
-is bound, the download disposition, the device emulation, the monitor hooks — each
+is bound and its frame scope, the download disposition, the device emulation, the monitor hooks — each
 read from what the browser and the persisted record actually say, never from what
 this process set up at launch. `tests/e2e_mcp.rs` drives `webpilot mcp` over its
 stdio JSON-RPC to hold that half of the contract.
@@ -98,7 +98,7 @@ its effect with `policy::enforce_key` in the handler and in `run_headless_mode`.
 *[1] input#query role=textbox "Search" type=text autocomplete=search @search
 [2] button "Go" @search
 --- Snapshot: ID ---
---- Page: https://example.com "Example" ---
+--- Page: https://example.com "Example" in tab TAB ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 1 iframe(s) not shown — list frames, then switch to one by URL pattern ---
 --- 2 elements (from 120 nodes, 5ms) ---
@@ -109,7 +109,8 @@ take `--snapshot-id ID`, indexed MCP tools `snapshot_id`. A newer DOM extraction
 in that frame (including `find`), a different document, a removed or hidden node,
 or a changed accessible name, role, href or input type returns `StaleSnapshot`
 (exit 4). `*` marks an element new since the previous capture of the same
-document; `@landmark` is semantic context.
+document; `@landmark` is semantic context. `in tab` names the tab the snapshot
+was taken in (`tab_id`), the id `tab switch` and the MCP `tab` argument take.
 
 | Footer | `DomSnapshot` field | Meaning |
 |---|---|---|

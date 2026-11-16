@@ -48,7 +48,7 @@ webpilot capture --include dom --url "http://localhost:8700/"
 [5] button "Sign in" @form
 [6] a role=link "Forgot password?" href="/reset.html" @main
 --- Snapshot: ID_A ---
---- Page: http://localhost:8700/ "Acme Tasks — Sign in" ---
+--- Page: http://localhost:8700/ "Acme Tasks — Sign in" in tab TAB ---
 --- Scroll: entire page visible ---
 --- 6 elements (from 20 nodes, 0ms) ---
 ```
@@ -65,7 +65,7 @@ webpilot find --label "Email" --fill "ada@acme.com"
 ```
 ```
 [2] input#email "you@acme.com" @form
-Snapshot: ID_B
+Snapshot: ID_B in tab TAB
 (1 matches)
 ```
 
@@ -89,7 +89,7 @@ webpilot action click 5 --capture --snapshot-id ID_B
 [3] button#new "New task" @main
 [4] input#q role=searchbox "Filter tasks" label="Filter tasks" type=search @main
 --- Snapshot: ID_C ---
---- Page: http://localhost:8700/dashboard.html "Acme Tasks — Dashboard" ---
+--- Page: http://localhost:8700/dashboard.html "Acme Tasks — Dashboard" in tab TAB ---
 --- Scroll: entire page visible ---
 --- 4 elements (from 16 nodes, 1ms) ---
 ```
@@ -149,7 +149,7 @@ Both modes share `bridge.js`. Static parity tests check command/action routing c
 *[1] input#query role=textbox "Search" type=text autocomplete=search @search
 [2] button "Go" @search
 --- Snapshot: ID ---
---- Page: https://example.com "Example" ---
+--- Page: https://example.com "Example" in tab TAB ---
 --- Scroll: 25% (0.5 above, 1.2 below) ---
 --- 2 elements (from 120 nodes, 5ms) ---
 ```
@@ -161,6 +161,7 @@ Both modes share `bridge.js`. Static parity tests check command/action routing c
 | `#id` | HTML element id. |
 | `"text"` | Human-readable label (accessible name / placeholder / …). |
 | `@ctx` | ARIA landmark (navigation · main · banner · form · search …). |
+| `in tab` | The tab the snapshot was taken in — the id `tab switch` and the MCP `tab` argument take. |
 | Last line | Extracted-element count / total node count / elapsed time. |
 
 Extra footers appear when relevant — `N iframe(s) not shown`, `shadow DOM clipped`, `page text clipped`, `index shortened` — so the agent knows the listing is incomplete. An action's `--capture` lists the elements in view and the ones the action added; `--- N offscreen element(s) not listed ---` counts the rest, which keep their indices.
@@ -214,7 +215,7 @@ webpilot action upload 4 ./resume.pdf --snapshot-id ID  # upload a file
 
 ```
 [5] button "Sign in" @form
-Snapshot: ID
+Snapshot: ID in tab TAB
 (1 matches)
 ```
 
@@ -233,7 +234,7 @@ webpilot capture --include dom --url "https://example.com/invoice"
 ```
 
 ```
---- Page: https://example.com/ "Invoices" ---
+--- Page: https://example.com/ "Invoices" in tab TAB ---
 Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<id> ("invoice.pdf" from https://example.com/invoice)
 ```
 
@@ -342,7 +343,7 @@ The full page-interaction loop — observe (`snapshot`/`screenshot`), act (`clic
 
 MCP snapshots support `include: ["dom", "text"]`. Indexed tools require `snapshot_id`; action tools return the elements in view and the ones the action added (`browser_snapshot` lists the whole page), and accept `capture: false` when no new DOM is needed. Successful results are text and image blocks only: some clients hand the model `structuredContent` in place of the content blocks, which would drop the element listing and the screenshot. Failed results carry the typed error code in `structuredContent`. Ping and wait cancellation remain available during running commands. Password values are omitted from DOM snapshots.
 
-In headless mode, give each MCP host its own `--context NAME` (browser mode serves one agent). Hosts that share a context share one pinned tab and one snapshot: a capture by one makes the other's `snapshot_id` stale.
+Every page tool takes an optional `tab`, and every snapshot names its tab (`in tab …`). The pin is one per browser, so agents that share a server or a context, such as a host's parallel subagents, each open a tab with `browser_tabs new` and pass its id as `tab`: the call switches there first. A tool given a `snapshot_id` acts in the tab that snapshot was taken in, and each tab keeps the frame chosen in it. In headless mode, a separate `--context NAME` per host also separates cookies and storage.
 
 ## Safety policy
 

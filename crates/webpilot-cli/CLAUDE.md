@@ -114,8 +114,10 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   responsive; cancellation interrupts waits and lets mutations finish cleanup.
   Schemas validate inputs before opening a transport. A success is text (and
   image) blocks only; an error adds the typed wire error as `structuredContent`.
-  Action tools inject the wire `kind` to reuse `Action`'s
-  deserialization and defaults; `browser_find` deserializes the CLI's own
+  A page tool's `tab`, or else the tab its `snapshot_id` was taken in
+  (`SnapshotTabs`), is switched to before the tool runs, so agents sharing the
+  server each act in their own tab. Action tools inject the wire `kind` to reuse
+  `Action`'s deserialization and defaults; `browser_find` deserializes the CLI's own
   `FindArgs`. The surface is curated to page interaction
   (act/observe/orient/wait/diagnose + `eval`) — environment management (cookies,
   session, device, policy) stays CLI-only. `Execution::Mcp` puts it in the

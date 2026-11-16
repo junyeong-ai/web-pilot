@@ -93,7 +93,7 @@ async fn new_tab<T: Transport>(transport: &mut T, url: &str) -> Result<CommandOu
     // Report the tab's real landed URL/title from the response — the transport
     // settles the new tab and resolves any redirect, so we render what it
     // actually opened, never a blind echo of the requested URL.
-    let (landed, downloads) = match result {
+    let (opened, downloads) = match result {
         ResponseData::Action {
             success,
             error,
@@ -109,16 +109,19 @@ async fn new_tab<T: Transport>(transport: &mut T, url: &str) -> Result<CommandOu
             // no `new_tab` is a protocol violation, not an occasion to echo the
             // requested URL — that would report the requested address as the landed
             // one, masking a redirect (or the missing tab) behind a plausible lie.
-            let landed = new_tab
-                .map(|t| t.url)
+            let opened = new_tab
                 .ok_or_else(|| anyhow::anyhow!("tab new reported success but returned no tab"))?;
-            (landed, downloads)
+            (opened, downloads)
         }
         ResponseData::Error { error } => return Err(error.into()),
         _ => anyhow::bail!("Unexpected response shape"),
     };
-    let mut json = serde_json::json!({"success": true, "url": landed});
-    let mut human = format!("New tab opened: {}", line_safe_clip(&landed, 200));
+    let mut json = serde_json::json!({"success": true, "id": opened.id, "url": opened.url});
+    let mut human = format!(
+        "New tab {} opened: {}",
+        opened.id,
+        line_safe_clip(&opened.url, 200)
+    );
     if !downloads.is_empty() {
         json["downloads"] = serde_json::to_value(&downloads).expect("Download serializes");
         for d in &downloads {

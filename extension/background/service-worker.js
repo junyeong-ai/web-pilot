@@ -10,7 +10,7 @@ console.log("[WebPilot] Service Worker loaded");
 import { pruneCdpLock } from "./cdp.js";
 import { injectBridgeOnly, installDialogHandler } from "./content.js";
 import { connectToHost, isHostConnected } from "./host.js";
-import { activeTabId, ensureRestored } from "./session.js";
+import { activeTabId, ensureRestored, forgetFrameScope } from "./session.js";
 import { rearmMonitors } from "./state.js";
 
 // Every chrome.* event listener is registered HERE, synchronously, at the top
@@ -18,8 +18,14 @@ import { rearmMonitors } from "./state.js";
 // worker startup, and keeping them in the entry module makes that invariant
 // impossible to break from inside a domain module.
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener(async (tabId) => {
   pruneCdpLock(tabId);
+  try {
+    await ensureRestored();
+  } catch {
+    return;
+  }
+  forgetFrameScope(tabId);
 });
 
 // Every document COMMITTED in the pinned tab gets the dialog handler at the

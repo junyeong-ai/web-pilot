@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `action … --accept-dialogs`, `capture --url … --accept-dialogs` and MCP
   `accept_dialogs` answer OK to the confirm, prompt and "leave site?" dialogs of
   that one command. MCP clients had no way to accept a dialog.
+- MCP page tools take `tab`, and every snapshot names its tab (`in tab …`).
+  The call switches to that tab first, and a tool given a `snapshot_id` acts in
+  the tab that snapshot was taken in. The pin is one per browser, so agents
+  sharing one server, such as a host's parallel subagents, drove whichever tab
+  the last call had pinned. `tab new`, `--json` included, and an adopted popup
+  report the tab id as well.
 - `setup skill` also installs the skill to `~/.agents/skills/webpilot`, where
   Codex reads skills, so Codex shell users get the same guidance as Claude
   Code. `setup skill --json` lists each directory under `installs`; `action`
@@ -61,9 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `navigate` without a permission prompt, so a page could steer an agent past
   the file permissions its host enforces. The check is an allowlist, since
   `view-source:file:` reads the same files.
-- The DOM footer reads `--- Page: <url> "<title>" ---`: the URL leads and the
-  title follows quoted and escaped. A page that put a URL in its title could
-  make it read as the address ahead of the real one.
+- The DOM footer reads `--- Page: <url> "<title>" in tab <id> ---`: the URL
+  leads and the title follows quoted and escaped. A page that put a URL in its
+  title could make it read as the address ahead of the real one.
+- Each tab keeps its own frame scope: returning to a tab, by `tab switch` or an
+  MCP `tab`, acts in the frame switched into there, where `tab switch` reset
+  the scope to the main frame. Switching to the pinned tab changes nothing.
 - MCP tool successes no longer carry `structuredContent`. Codex, and by user
   reports Claude Code, hand the model `structuredContent` in place of the
   content blocks when both are present, so the model saw an element count

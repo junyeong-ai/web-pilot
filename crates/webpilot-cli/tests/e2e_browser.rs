@@ -1717,6 +1717,20 @@ fn browser_behavioral_flow() {
     );
     let _ = fx.run(&["frame", "main"]);
 
+    // 6b'. Each tab keeps its own frame scope: a tab switched away from and back
+    //      to acts in the frame chosen there, and a switch to the pinned tab
+    //      changes nothing.
+    assert_eq!(code(&fx.run(&["frame", "url", "/frame"])), 0);
+    let framed = tab_id(&pinned_tab().expect("a pinned tab"));
+    assert_eq!(code(&fx.run(&["tab", "new", &base])), 0);
+    assert_eq!(code(&fx.run(&["tab", "switch", &framed])), 0);
+    assert_eq!(code(&fx.run(&["tab", "switch", &framed])), 0);
+    assert!(
+        stdout(&fx.run(&["eval", "location.pathname"])).contains("/frame"),
+        "the tab returned to acts in its own frame"
+    );
+    let _ = fx.run(&["frame", "main"]);
+
     // 6c. `tab new` honesty (headless parity): a URL that doesn't parse is a
     //     typed InvalidArgument (7), not a generic chrome.tabs.create throw
     //     (Other, exit 1); an unreachable URL lands on Chrome's error page and
