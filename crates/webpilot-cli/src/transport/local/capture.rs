@@ -350,12 +350,40 @@ impl LocalTransport {
     /// its capture — the count behind the "N iframe(s) not shown" hint. Scoped to
     /// the active frame: from the main frame it counts every HTTP iframe in the
     /// page; from a switched iframe it counts that frame's own HTTP descendants,
-    /// so going deeper stays discoverable (without this a nested iframe inside a
-    /// switched frame was invisible, contradicting the field's contract).
+    /// so going deeper stays discoverable.
+    ///
+    /// An iframe joins the tree on its initial empty document and commits its
+    /// own a moment later, so a capture taken as the page parses can run ahead of
+    /// it — and of the frames it nests. While a frame still on that initial
+    /// document has an owner naming an HTTP(S) URL, the count waits for it,
+    /// bounded by `PROBE`; a frame left empty on purpose is never waited for.
     pub(super) async fn count_http_subframes(&self) -> u32 {
-        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
-            return 0;
-        };
+        let deadline = tokio::time::Instant::now() + super::PROBE;
+        loop {
+            let Some(tally) = self.tally_subframes().await else {
+                return 0;
+            };
+            if tokio::time::Instant::now() >= deadline {
+                return tally.http;
+            }
+            let mut uncommitted = false;
+            for frame_id in &tally.initial {
+                if self.owner_names_http_url(frame_id).await {
+                    uncommitted = true;
+                    break;
+                }
+            }
+            if !uncommitted {
+                return tally.http;
+            }
+            tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
+        }
+    }
+
+    /// The frames below the active frame: how many show an HTTP(S) document, and
+    /// which still show the initial empty one.
+    async fn tally_subframes(&self) -> Option<SubframeTally> {
+        let tree = self.page.send("Page.getFrameTree", None).await.ok()?;
         // The node whose `/frame/id` matches `fid`, anywhere in the tree. Bounded
         // by the same depth cap as the counting walk: the tree is browser-supplied,
         // so a pathological (or corrupted) depth must degrade to "not found", never
@@ -375,50 +403,110 @@ impl LocalTransport {
                 .and_then(|v| v.as_array())
                 .and_then(|kids| kids.iter().find_map(|k| find(k, fid, depth + 1)))
         }
-        // Count this node and its descendants that are HTTP frames.
-        fn count_http(node: &serde_json::Value, depth: u32, count: &mut u32) {
+        fn tally(node: &serde_json::Value, depth: u32, into: &mut SubframeTally) {
             if depth > super::MAX_FRAME_DEPTH {
                 return;
             }
-            if node
-                .pointer("/frame/url")
-                .and_then(|v| v.as_str())
-                .is_some_and(|u| u.starts_with("http"))
+            let url = node.pointer("/frame/url").and_then(|v| v.as_str());
+            if url.is_some_and(|u| u.starts_with("http")) {
+                into.http += 1;
+            } else if matches!(url, None | Some("" | "about:blank"))
+                && let Some(id) = node.pointer("/frame/id").and_then(|v| v.as_str())
             {
-                *count += 1;
+                into.initial.push(id.to_owned());
             }
             if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
                 for child in children {
-                    count_http(child, depth + 1, count);
+                    tally(child, depth + 1, into);
                 }
             }
         }
 
-        let Some(root) = tree.get("frameTree") else {
-            return 0;
-        };
+        let root = tree.get("frameTree")?;
         // The subtree to look under: the active frame's node, or the whole tree
-        // from the main frame. Count the HTTP frames strictly BELOW it — the
-        // subtree root is the frame the capture already shows.
+        // from the main frame. Count the frames strictly BELOW it — the subtree
+        // root is the frame the capture already shows.
         let active = self.active_frame_id.lock().await.clone();
         let subtree = match &active {
             Some(fid) => find(root, fid, 0),
             None => Some(root),
         };
-        let mut count = 0;
-        if let Some(node) = subtree
-            && let Some(children) = node.get("childFrames").and_then(|v| v.as_array())
+        let mut into = SubframeTally::default();
+        if let Some(children) = subtree
+            .and_then(|node| node.get("childFrames"))
+            .and_then(|v| v.as_array())
         {
-            // Each child is the entry of its own count, so it starts at depth 0 —
+            // Each child is the entry of its own walk, so it starts at depth 0 —
             // same as every other frame walk's entry, so the shared depth bound
-            // fires at the same level across all of them (the depth only bounds the
-            // stack; it never affects the count).
+            // fires at the same level across all of them.
             for child in children {
-                count_http(child, 0, &mut count);
+                tally(child, 0, &mut into);
             }
         }
-        count
+        Some(into)
     }
+
+    /// Whether frame `frame_id`'s owner element (`<iframe>`, `<frame>`) names an
+    /// HTTP(S) URL — read from its resolved `src`, as the browser loads it.
+    async fn owner_names_http_url(&self, frame_id: &str) -> bool {
+        let Ok(owner) = self
+            .page
+            .send("DOM.getFrameOwner", Some(json!({ "frameId": frame_id })))
+            .await
+        else {
+            return false;
+        };
+        let Some(backend_node_id) = owner.get("backendNodeId").cloned() else {
+            return false;
+        };
+        let Ok(resolved) = self
+            .page
+            .send(
+                "DOM.resolveNode",
+                Some(json!({ "backendNodeId": backend_node_id })),
+            )
+            .await
+        else {
+            return false;
+        };
+        let Some(object_id) = resolved
+            .pointer("/object/objectId")
+            .and_then(|v| v.as_str())
+        else {
+            return false;
+        };
+        let src = self
+            .page
+            .send(
+                "Runtime.callFunctionOn",
+                Some(json!({
+                    "objectId": object_id,
+                    "functionDeclaration": "function () { return this.src; }",
+                    "returnByValue": true,
+                })),
+            )
+            .await;
+        let _ = self
+            .page
+            .send(
+                "Runtime.releaseObject",
+                Some(json!({ "objectId": object_id })),
+            )
+            .await;
+        src.ok()
+            .and_then(|r| {
+                r.pointer("/result/value")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
+            .is_some_and(|src| src.starts_with("http://") || src.starts_with("https://"))
+    }
+}
+
+#[derive(Default)]
+struct SubframeTally {
+    http: u32,
+    initial: Vec<String>,
 }
 
 fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {
