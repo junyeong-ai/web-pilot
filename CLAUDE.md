@@ -136,26 +136,14 @@ text, element text, option lists, the shadow walk) live in the shared
 - **`--json`**: the structured form, errors included, on stdout
 
 `CommandOutput` → `output::render()`, a single conversion. `to_json()` supplies
-CLI JSON; `to_agent_text()` the MCP text blocks. An MCP success carries no
-`structuredContent`, since a host that finds one shows the model that instead of
-the text and image blocks; an MCP error carries the typed wire error there.
+CLI JSON; `to_agent_text()` the MCP text blocks.
 
 ## Error Handling
 
-| code | variant | exit |
-|---|---|---|
-| 0 | success | — |
-| 1 | `Other`, `Session`, `ContextInUse` | unknown / session / context held by another live process |
-| 2 | _(clap arg parse)_ | CLI usage error — unknown flag / non-numeric index / missing arg |
-| 3 | `ConnectionLost`, `BridgeUnavailable`, `VersionMismatch` | infra |
-| 4 | `ElementNotFound`, `StaleSnapshot`, `SelectorNotFound`, `TabNotFound`, `NoPinnedTab`, `ContextNotFound`, `CookieNotFound`, `FrameNotFound` | not-found |
-| 5 | `Timeout` | timeout |
-| 6 | `PolicyDenied` | security |
-| 7 | `InvalidArgument` | user error |
-| 8 | `NavigationFailed`, `NoPage` | navigation |
-| 9 | `OutcomeUnknown` | dispatched operation may already have run; observe before retrying |
-
-`StaleSnapshot` asks for a new capture. `VersionMismatch` means the connected
+`WebPilotError::exit_code()` is the exit-code contract and each variant's
+`Display` its guidance; a CLI usage error exits 2 from clap. README.md,
+README.en.md and the skill's exit table render it for their readers, so a new
+variant or code changes all three. `StaleSnapshot` asks for a new capture. `VersionMismatch` means the connected
 extension differs from the version bundled into the running host; after an
 update, reload the extension so a new host process starts.
 

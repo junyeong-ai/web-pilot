@@ -24,8 +24,7 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       `Transport` impl, the **isolated-world bridge** (`install_bridge_world`
       auto-loads `bridge.js` into the `webpilot_bridge` world per document;
       `bridge_context_id` vs `active_context_id` route bridge calls vs page
-      expressions), **navigation** (`navigate_reconnect` — a cross-site swap
-      resets document state on the surviving session, no reconnect).
+      expressions), **navigation** (`navigate_reconnect`, below).
       `parse_bridge_response` lifts an `invoke_bridge` reply of
       `{success: false, error}` into a typed `WebPilotError`. The per-command
       re-establishment the root `CLAUDE.md` requires happens in `send`:
@@ -97,7 +96,7 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   shared event ring to one session (isolating each page's events); a detach
   watcher flips `session_alive` so an in-flight wait ends at once when the tab
   closes (backstopped by Chrome's `-32001`). The page is a `CdpSession` that
-  survives a cross-site renderer swap — no socket rebind. Why this model, how
+  survives a cross-site renderer swap. Why this model, how
   cross-site iframes are reached, and the rejected alternatives (CDP-side
   monitors, BiDi): `docs/cdp-flat-session-migration.md`.
 - `session.rs` — Chrome lifecycle + `flock` launch lock; `headless_viewport()`
@@ -169,9 +168,9 @@ reply, every settle probe and every poll. Completion is one predicate,
 - committed = (loader_id matches) **or** (frame URL ≠ before_url)
 - ready = `readyState` is `interactive`/`complete`
 
-A URL change can swap the renderer cross-site, but the flat-protocol `CdpSession`
-is attached to the target and survives the swap — so instead of reconnecting a
-socket, `navigate_reconnect` just resets document-scoped state (clears the active
+A URL change can swap the renderer cross-site; the `CdpSession` is attached to
+the target and survives it, so `navigate_reconnect` resets only document-scoped
+state (clears the active
 frame, force-re-emits the new document's execution contexts so a dropped
 `executionContextCreated` can't strand the bridge). Same URL =
 same-site reload → the loaderId distinguishes the new document from the old. No

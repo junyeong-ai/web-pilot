@@ -30,4 +30,4 @@ paths:
 ## Forbidden
 - `unwrap_or_default()` on `serde_json::to_string*` — use `expect("static")` or surface the error.
 - `args.iter().any(|a| a.contains("..."))` heuristics for mode detection — use a strict, documented check.
-- Re-export shims, deprecated aliases, "removed for X" comments. Delete cleanly.
+- Re-export shims, deprecated aliases, "removed for X" comments. Delete cleanly. The exception is a spelling an installed external caller still invokes; its doc names that caller, as the hidden `uninstall` does.

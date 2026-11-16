@@ -1093,7 +1093,7 @@ impl DomSnapshot {
 
         if self.offscreen_omitted > 0 {
             out.push_str(&format!(
-                "--- {} offscreen element(s) not listed; they are still addressable: take a full snapshot or find them by role, text, or label ---\n",
+                "--- {} offscreen element(s) not listed; they are still addressable: capture the page or find them by role, text, or label ---\n",
                 self.offscreen_omitted,
             ));
         }
