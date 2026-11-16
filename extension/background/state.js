@@ -763,4 +763,29 @@ async function handleSessionImport(rawData) {
   }
 }
 
-export { handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, rearmMonitors, setMonitorPolicy };
+// The dialogs every document of the tab answered since the last take, cleared
+// as they are taken. The record is a page global the page can write into, so
+// only well-formed entries are kept, and a `beforeunload` there could only be
+// forged (headless `TAKE_DIALOGS_JS`).
+async function takeDialogs(tabId) {
+  try {
+    const frames = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      world: "MAIN",
+      func: () => {
+        const log = window.__webpilot_dialogs;
+        if (!Array.isArray(log)) return [];
+        window.__webpilot_dialogs = [];
+        return log
+          .filter((d) => d && ["alert", "confirm", "prompt"].includes(d.type)
+            && typeof d.message === "string" && typeof d.accepted === "boolean")
+          .map((d) => ({ type: d.type, message: d.message.slice(0, 2000), accepted: d.accepted }));
+      },
+    });
+    return frames.flatMap((frame) => (Array.isArray(frame.result) ? frame.result : []));
+  } catch {
+    return [];
+  }
+}
+
+export { handleConsoleClear, handleConsoleRead, handleConsoleStart, handleCookieDelete, handleCookieList, handleCookieSet, handleNetworkClear, handleNetworkRead, handleNetworkStart, handleSessionExport, handleSessionImport, rearmMonitors, setMonitorPolicy, takeDialogs };

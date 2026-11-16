@@ -67,6 +67,9 @@ action may already have run: observe the page before repeating it. A capture_err
 action means the action ran and only the follow-up snapshot failed. PolicyDenied is the \
 operator's boundary: report it, and do not reach the blocked effect through browser_eval or \
 another tool.
+Dialogs the page raises are answered and reported as Dialog lines. Confirm, prompt and 'leave \
+site?' are dismissed unless the tool passes accept_dialogs; a navigation the page refuses that way \
+fails with NavigationFailed and keeps its input, so accept only when leaving it is intended.
 browser_wait idle means 500 ms without DOM mutation, not network idle; navigation waits for the \
 next load and cannot confirm one that already finished. A URL load is bounded by the navigation \
 timeout (15 s by default); headless stops a load still unfinished then, so take a snapshot before \
@@ -697,6 +700,7 @@ async fn call_tool<T: Transport>(
                 capture::CaptureArgs {
                     include: vec![CaptureField::Dom],
                     url: Some(str_arg(args, "url")?),
+                    accept_dialogs: bool_arg(args, "accept_dialogs")?,
                     opts: CaptureOpts::default(),
                 },
             )
@@ -725,6 +729,7 @@ async fn call_tool<T: Transport>(
                 capture::CaptureArgs {
                     include,
                     url: None,
+                    accept_dialogs: false,
                     opts: CaptureOpts::default(),
                 },
             )
@@ -741,6 +746,7 @@ async fn call_tool<T: Transport>(
                 capture::CaptureArgs {
                     include: vec![CaptureField::Screenshot],
                     url: None,
+                    accept_dialogs: false,
                     opts,
                 },
             )
@@ -757,6 +763,7 @@ async fn call_tool<T: Transport>(
                 transport,
                 action::ActionArgs {
                     action,
+                    accept_dialogs: bool_arg(args, "accept_dialogs")?,
                     capture: args
                         .get("capture")
                         .map(|_| bool_arg(args, "capture"))
@@ -925,6 +932,7 @@ fn build_action(tool: &str, args: &Value) -> std::result::Result<Action, WebPilo
     let mut obj = args.as_object().cloned().unwrap_or_default();
     obj.remove("snapshot_id");
     obj.remove("capture");
+    obj.remove("accept_dialogs");
     obj.insert("kind".into(), json!(kind));
     serde_json::from_value(Value::Object(obj)).map_err(|e| WebPilotError::InvalidArgument {
         detail: format!("invalid arguments for {tool}: {e}"),
@@ -1033,6 +1041,11 @@ fn tool_specs() -> &'static Value {
 }
 
 fn build_tool_specs() -> Value {
+    let accept_dialogs_leave = json!({
+        "type": "boolean",
+        "default": false,
+        "description": "Answer OK if the current page asks to confirm being left (unsaved changes); otherwise it stays and the navigation fails, saying so.",
+    });
     let index = json!({
         "type": "integer",
         "minimum": 1,
@@ -1056,7 +1069,10 @@ fn build_tool_specs() -> Value {
             "description": "Navigate to a URL and return the page's interactive-element snapshot.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "url": { "type": "string", "description": "Absolute URL to load." } },
+                "properties": {
+                    "url": { "type": "string", "description": "Absolute URL to load." },
+                    "accept_dialogs": accept_dialogs_leave,
+                },
                 "required": ["url"],
                 "additionalProperties": false,
             },
@@ -1376,6 +1392,7 @@ fn build_tool_specs() -> Value {
         {
             let indexed = properties.contains_key("index") || properties.contains_key("source");
             properties.insert("capture".into(), json!({"type":"boolean", "default":true, "description":"Return a new DOM snapshot after the action, listing the elements in view and the ones the action added."}));
+            properties.insert("accept_dialogs".into(), json!({"type":"boolean", "default":false, "description":"Answer OK to the confirm, prompt and 'leave site?' dialogs this action raises; they are dismissed otherwise, and every dialog is reported."}));
             if indexed {
                 properties.insert("snapshot_id".into(), json!({"type":"string", "description":"Snapshot identifier returned with the observed elements."}));
                 tool["inputSchema"]["required"]

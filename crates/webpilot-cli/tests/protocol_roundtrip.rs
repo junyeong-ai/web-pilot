@@ -66,6 +66,7 @@ fn capture_command_uses_include_list() {
             ..Default::default()
         },
         url: Some("https://example.com".into()),
+        accept_dialogs: false,
     };
     let v = serde_json::to_value(&cmd).unwrap();
     assert_eq!(v["type"], "Capture");
@@ -147,6 +148,7 @@ fn command_policy_key_gates_by_effect() {
                 modifiers: Default::default()
             },
             capture: false,
+            accept_dialogs: false,
         }
         .policy_key(),
         Some(PolicyKey::Click)
@@ -174,6 +176,7 @@ fn command_policy_key_gates_by_effect() {
             include: vec![],
             opts: Default::default(),
             url: Some("http://x".into()),
+            accept_dialogs: false,
         }
         .policy_key(),
         Some(PolicyKey::Navigate),
@@ -279,6 +282,7 @@ fn command_policy_key_gates_by_effect() {
             include: vec![],
             opts: Default::default(),
             url: None,
+            accept_dialogs: false,
         }
         .policy_key(),
         None,
@@ -336,6 +340,7 @@ fn every_command_round_trips_with_a_stable_wire_shape_and_gate() {
             include: vec![CaptureField::Dom],
             opts: CaptureOpts::default(),
             url: None,
+            accept_dialogs: false,
         },
         Command::Action {
             snapshot_id: None,
@@ -344,6 +349,7 @@ fn every_command_round_trips_with_a_stable_wire_shape_and_gate() {
                 modifiers: Modifiers::default(),
             },
             capture: false,
+            accept_dialogs: false,
         },
         Command::Eval { code: "1".into() },
         Command::Wait {
@@ -481,6 +487,7 @@ fn response_action_carries_typed_error() {
             new_tab: None,
             capture_error: None,
             downloads: Vec::new(),
+            dialogs: Vec::new(),
         },
     };
     let v = serde_json::to_value(&r).unwrap();

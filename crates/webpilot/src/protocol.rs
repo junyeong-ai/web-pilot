@@ -10,8 +10,8 @@ use crate::action::Action;
 use crate::capture::{CaptureField, CaptureOpts};
 use crate::error::WebPilotError;
 use crate::types::{
-    ConsoleEntry, CookieInfo, DomSnapshot, Download, FrameInfo, NetworkEntry, PinState, PolicyKey,
-    SameSite, TabInfo,
+    ConsoleEntry, CookieInfo, Dialog, DomSnapshot, Download, FrameInfo, NetworkEntry, PinState,
+    PolicyKey, SameSite, TabInfo,
 };
 use crate::wait::WaitCondition;
 
@@ -47,6 +47,10 @@ pub enum Command {
         opts: CaptureOpts,
         #[serde(default)]
         url: Option<String>,
+        /// With `url`: answer OK to a beforeunload the current page raises on
+        /// being left, whatever the `accept_dialogs` setting says.
+        #[serde(default)]
+        accept_dialogs: bool,
     },
     Action {
         action: Action,
@@ -54,6 +58,10 @@ pub enum Command {
         snapshot_id: Option<String>,
         #[serde(default)]
         capture: bool,
+        /// Answer OK to the confirm, prompt and beforeunload dialogs this action
+        /// raises, whatever the `accept_dialogs` setting says.
+        #[serde(default)]
+        accept_dialogs: bool,
     },
     Eval {
         code: String,
@@ -381,6 +389,10 @@ pub enum ResponseData {
         /// command that downloaded nothing.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         downloads: Vec<Download>,
+        /// The dialogs the page raised since the previous command, and how each
+        /// was answered.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        dialogs: Vec<Dialog>,
     },
     Action {
         success: bool,
@@ -405,6 +417,10 @@ pub enum ResponseData {
         /// command that downloaded nothing.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         downloads: Vec<Download>,
+        /// The dialogs the page raised since the previous command, and how each
+        /// was answered.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        dialogs: Vec<Dialog>,
     },
     Eval {
         success: bool,

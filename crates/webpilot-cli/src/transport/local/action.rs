@@ -150,10 +150,12 @@ impl LocalTransport {
         match &action {
             Action::Navigate { url } => {
                 let url = url.clone();
+                let before = self.bound_target_url().await;
                 let downloads = self.navigate_reconnect(&url).await?;
-                // Report where the navigation actually landed (after redirects).
+                // Report where the navigation actually landed (after redirects),
+                // when that is somewhere else.
                 let landed = self.bound_target_url().await;
-                let url_changed = (!landed.is_empty()).then_some(landed);
+                let url_changed = (!landed.is_empty() && landed != before).then_some(landed);
                 return Ok(self
                     .settled_action_result(capture, url_changed, downloads)
                     .await);
@@ -186,15 +188,29 @@ impl LocalTransport {
                 let mut events = self.page.subscribe_events();
                 let deadline =
                     tokio::time::Instant::now() + webpilot::settings::timeouts().reload_wait;
+                let dialog_mark = self.dialog_mark();
                 self.page.send("Page.reload", None).await?;
+                let refused = std::sync::atomic::AtomicBool::new(false);
                 let committed = self
                     .page
                     .wait_on_receiver(
                         &mut events,
                         deadline.saturating_duration_since(tokio::time::Instant::now()),
-                        |ev| main_frame_navigated(ev).is_some(),
+                        |ev| {
+                            if self.opens_refused_leave(ev) {
+                                refused.store(true, std::sync::atomic::Ordering::Release);
+                                return true;
+                            }
+                            main_frame_navigated(ev).is_some()
+                        },
                     )
                     .await;
+                if refused.load(std::sync::atomic::Ordering::Acquire) {
+                    return Err(self
+                        .answered_leave_refusal(dialog_mark, "reload")
+                        .await
+                        .into());
+                }
                 if committed {
                     while !self.document_parsed(deadline).await {
                         if tokio::time::Instant::now() >= deadline {
@@ -453,6 +469,7 @@ impl LocalTransport {
             new_tab,
             capture_error,
             downloads,
+            dialogs: self.take_dialogs().await,
         })
     }
 
@@ -500,6 +517,7 @@ impl LocalTransport {
             new_tab: None,
             capture_error,
             downloads,
+            dialogs: self.take_dialogs().await,
         }
     }
 
@@ -1205,12 +1223,18 @@ impl LocalTransport {
         // `Page.frameNavigated` (no parentId); a same-document/bfcache hop is
         // `Page.navigatedWithinDocument` for the main frame's id.
         let main_id = self.main_frame_id.clone();
+        let dialog_mark = self.dialog_mark();
+        let refused = std::sync::atomic::AtomicBool::new(false);
         let mut traversed = self
             .page
             .wait_on_receiver(
                 &mut events,
                 webpilot::settings::timeouts().back_forward,
                 |ev| {
+                    if self.opens_refused_leave(ev) {
+                        refused.store(true, std::sync::atomic::Ordering::Release);
+                        return true;
+                    }
                     main_frame_navigated(ev).is_some()
                         || (ev.get("method").and_then(Value::as_str)
                             == Some("Page.navigatedWithinDocument")
@@ -1219,6 +1243,12 @@ impl LocalTransport {
                 },
             )
             .await;
+        if refused.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(self
+                .answered_leave_refusal(dialog_mark, expression)
+                .await
+                .into());
+        }
         // The awaited event can be lost two ways before the deadline: a busy
         // page's event burst can overflow the broadcast ring and DROP it
         // (`wait_on_receiver` can't tell that from genuine absence), or a

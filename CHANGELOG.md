@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A dialog raised after a headless CLI command had detached, such as a timed
+  alert or a session-expiry warning, no longer holds the page until `quit`.
+  Every headless document now carries the page-side handler browser mode used,
+  so later commands no longer fail after a 30-second `Page.enable` timeout.
+- A navigation, reload or history step the page refused through "leave site?"
+  fails with `NavigationFailed` instead of reporting success on the page it
+  never left; `navigate` also reported `URL changed` there.
 - `type` enters text as native input, so the page sees the trusted
   `beforeinput` and `input` events real typing fires, and the browser fires
   `change` when the edit is committed. It set the value and dispatched
@@ -33,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Every JavaScript dialog the page raises is reported in the action or capture
+  result as a `Dialog:` line (`dialogs` in JSON), with the page's text and how
+  it was answered. An alert carrying a validation message, or a dismissed
+  "Delete?", left no trace before, so the action read as a no-op.
+- `action … --accept-dialogs`, `capture --url … --accept-dialogs` and MCP
+  `accept_dialogs` answer OK to the confirm, prompt and "leave site?" dialogs of
+  that one command. MCP clients had no way to accept a dialog.
 - `setup skill` also installs the skill to `~/.agents/skills/webpilot`, where
   Codex reads skills, so Codex shell users get the same guidance as Claude
   Code. `setup skill --json` lists each directory under `installs`; `action`

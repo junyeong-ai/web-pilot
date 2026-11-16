@@ -138,6 +138,7 @@ pub async fn run(local: &mut LocalTransport, args: RecordArgs) -> Result<Command
                     include: vec![CaptureField::Dom],
                     opts: CaptureOpts::default(),
                     url: None,
+                    accept_dialogs: false,
                 })
                 .await?;
             // `--dom` promises a DOM snapshot per frame, so a frame that didn't

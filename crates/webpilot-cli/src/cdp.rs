@@ -22,6 +22,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_config};
 use webpilot::WebPilotError;
+use webpilot::types::{Dialog, DialogKind};
 
 /// CDP reported that the execution context a request targeted no longer exists
 /// — a renderer swapped the document out from under a `uniqueContextId` we still
@@ -56,6 +57,25 @@ impl std::fmt::Display for ContextDestroyedMidFlight {
 }
 
 impl std::error::Error for ContextDestroyedMidFlight {}
+
+/// How the dialog responder answers, and what it has answered: one desk per
+/// transport, shared by every page session the transport attaches, so the
+/// answer an action asks for and the record the next command reports carry
+/// across a tab switch.
+#[derive(Clone)]
+pub struct DialogDesk {
+    pub accept: Arc<AtomicBool>,
+    pub answered: Arc<std::sync::Mutex<Vec<Dialog>>>,
+}
+
+impl DialogDesk {
+    pub fn new(accept: bool) -> Self {
+        Self {
+            accept: Arc::new(AtomicBool::new(accept)),
+            answered: Arc::default(),
+        }
+    }
+}
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWriter = futures_util::stream::SplitSink<WsStream, Message>;
@@ -718,8 +738,10 @@ impl CdpSession {
         }
     }
 
-    /// Answer dialogs using the configured acceptance policy.
-    pub fn spawn_dialog_responder(&mut self) {
+    /// Answer the dialogs that reach the browser — a beforeunload, or one raised
+    /// in a document without the page-side handler — as `desk` says, and record
+    /// each on it.
+    pub fn spawn_dialog_responder(&mut self, desk: DialogDesk) {
         let mut events = self.subscribe_events();
         let conn = self.conn.clone();
         let session_id = self.session_id.clone();
@@ -732,6 +754,12 @@ impl CdpSession {
                         {
                             continue;
                         }
+                        let kind = ev
+                            .pointer("/params/type")
+                            .cloned()
+                            .and_then(|kind| serde_json::from_value::<DialogKind>(kind).ok());
+                        let accept =
+                            kind == Some(DialogKind::Alert) || desk.accept.load(Ordering::Acquire);
                         let prompt_text = ev
                             .pointer("/params/defaultPrompt")
                             .and_then(Value::as_str)
@@ -742,12 +770,27 @@ impl CdpSession {
                                 None,
                                 "Page.handleJavaScriptDialog",
                                 Some(serde_json::json!({
-                                    "accept": webpilot::settings::get().chrome.accept_dialogs,
+                                    "accept": accept,
                                     "promptText": prompt_text,
                                 })),
                                 std::time::Duration::from_secs(HEARTBEAT_TIMEOUT_S),
                             )
                             .await;
+                        if let Some(kind) = kind {
+                            let message = ev
+                                .pointer("/params/message")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned();
+                            desk.answered
+                                .lock()
+                                .expect("dialog record lock")
+                                .push(Dialog {
+                                    kind,
+                                    message,
+                                    accepted: accept,
+                                });
+                        }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -1334,7 +1377,7 @@ mod tests {
         .await;
         let conn = Arc::new(CdpClient::connect(&url).await.unwrap());
         let mut session = conn.attach("T1").await.unwrap();
-        session.spawn_dialog_responder();
+        session.spawn_dialog_responder(DialogDesk::new(false));
         // Let the spawned tasks reach their `recv` await, cloning their Arcs.
         tokio::task::yield_now().await;
         drop(session);

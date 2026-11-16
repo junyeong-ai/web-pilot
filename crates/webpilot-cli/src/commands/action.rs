@@ -20,6 +20,11 @@ pub struct ActionArgs {
     /// Auto-capture DOM after the action.
     #[arg(long, global = true)]
     pub capture: bool,
+
+    /// Answer OK to the confirm, prompt and "leave site?" dialogs this action
+    /// raises. Without it they are dismissed unless `[chrome] accept_dialogs`.
+    #[arg(long, global = true)]
+    pub accept_dialogs: bool,
 }
 
 pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Result<CommandOutput> {
@@ -59,6 +64,7 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
             action: args.action,
             snapshot_id: args.snapshot_id,
             capture: args.capture,
+            accept_dialogs: args.accept_dialogs,
         })
         .await?;
 
@@ -71,6 +77,7 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
             new_tab,
             capture_error,
             downloads,
+            dialogs,
         } => {
             lift_error(success, error, ())?;
 
@@ -81,6 +88,12 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
                     extra.insert(
                         "downloads".into(),
                         serde_json::to_value(&downloads).expect("Download serializes"),
+                    );
+                }
+                if !dialogs.is_empty() {
+                    extra.insert(
+                        "dialogs".into(),
+                        serde_json::to_value(&dialogs).expect("Dialog serializes"),
                     );
                 }
                 if let Some(ref url) = url_changed {
@@ -114,11 +127,16 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
                 msg.push('\n');
                 msg.push_str(&d.to_line());
             }
+            for d in &dialogs {
+                msg.push('\n');
+                msg.push_str(&d.to_line());
+            }
 
             if url_changed.is_some()
                 || new_tab.is_some()
                 || capture_error.is_some()
                 || !downloads.is_empty()
+                || !dialogs.is_empty()
             {
                 let mut json = serde_json::json!({"success": true});
                 if let Some(ref url) = url_changed {
@@ -133,6 +151,9 @@ pub async fn run<T: Transport>(transport: &mut T, mut args: ActionArgs) -> Resul
                 if !downloads.is_empty() {
                     json["downloads"] =
                         serde_json::to_value(&downloads).expect("Download serializes");
+                }
+                if !dialogs.is_empty() {
+                    json["dialogs"] = serde_json::to_value(&dialogs).expect("Dialog serializes");
                 }
                 Ok(CommandOutput::Data { json, human: msg })
             } else {

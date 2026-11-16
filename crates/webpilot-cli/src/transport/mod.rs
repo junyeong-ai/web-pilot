@@ -54,6 +54,7 @@ pub async fn navigate_to<T: Transport>(
             snapshot_id: None,
             action: Action::Navigate { url },
             capture: false,
+            accept_dialogs: false,
         })
         .await?
     {
@@ -65,6 +66,7 @@ pub async fn navigate_to<T: Transport>(
             url_changed: _,
             new_tab: _,
             capture_error: _,
+            dialogs: _,
         } => lift_error(success, error, downloads),
         ResponseData::Error { error } => Err(error.into()),
         other => Err(anyhow::anyhow!("unexpected navigate response: {other:?}")),

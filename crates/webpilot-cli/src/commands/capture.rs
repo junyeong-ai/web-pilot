@@ -16,6 +16,11 @@ pub struct CaptureArgs {
     #[arg(long)]
     pub url: Option<String>,
 
+    /// With --url: answer OK to the "leave site?" dialog the current page raises
+    /// on being left. Without it the page is kept unless `[chrome] accept_dialogs`.
+    #[arg(long, requires = "url")]
+    pub accept_dialogs: bool,
+
     #[command(flatten)]
     pub opts: CaptureOpts,
 }
@@ -32,6 +37,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             include: args.include,
             opts: args.opts,
             url: args.url,
+            accept_dialogs: args.accept_dialogs,
         })
         .await?;
 
@@ -51,6 +57,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
             page_url,
             page_title,
             downloads,
+            dialogs,
         } => {
             // Persist accessibility tree to a file when present.
             let mut ax_path: Option<String> = None;
@@ -82,6 +89,12 @@ pub async fn run<T: Transport>(transport: &mut T, args: CaptureArgs) -> Result<C
                 extra.insert(
                     "downloads".into(),
                     serde_json::to_value(&downloads).expect("Download serializes"),
+                );
+            }
+            if !dialogs.is_empty() {
+                extra.insert(
+                    "dialogs".into(),
+                    serde_json::to_value(&dialogs).expect("Dialog serializes"),
                 );
             }
             for (key, value) in [

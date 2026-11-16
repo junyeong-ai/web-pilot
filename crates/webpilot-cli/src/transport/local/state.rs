@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 use webpilot::WebPilotError;
 use webpilot::protocol::ResponseData;
 use webpilot::types::{
-    ConsoleEntry, ConsoleLevel, ConsoleSource, CookieInfo, NetworkEntry, PartitionKey, SameSite,
+    ConsoleEntry, ConsoleLevel, ConsoleSource, CookieInfo, Dialog, DialogKind, NetworkEntry,
+    PartitionKey, SameSite,
 };
 
 use crate::cdp::CdpSession;
@@ -876,6 +877,177 @@ async fn install_monitor_hook(page: &CdpSession, install_js: &str) -> Result<Str
             }
             .into()
         })
+}
+
+/// The page-side dialog handler both modes run, embedded from the extension
+/// that also injects it.
+const DIALOGS_JS: &str = include_str!("../../../../../extension/content/dialogs.js");
+
+/// Take and clear one document's dialog record, keeping only well-formed
+/// entries: the record is a page global the page can write into, and a
+/// `beforeunload` there could only be forged, since the handler never sees one.
+/// Browser mode's twin is `takeDialogs` in state.js.
+const TAKE_DIALOGS_JS: &str = "(() => { const log = window.__webpilot_dialogs; \
+if (!Array.isArray(log)) return []; window.__webpilot_dialogs = []; \
+return log.filter((d) => d && ['alert', 'confirm', 'prompt'].includes(d.type) \
+&& typeof d.message === 'string' && typeof d.accepted === 'boolean') \
+.map((d) => ({ type: d.type, message: d.message.slice(0, 2000), accepted: d.accepted })); })()";
+
+/// Register the dialog handler on every document of `page`: alert, confirm and
+/// prompt are answered in the page and recorded there, so none of them holds
+/// the page — not even one raised after this command has detached. A document
+/// starts out answering as the `accept_dialogs` setting says.
+pub(super) async fn install_dialog_handler(page: &CdpSession) -> Result<()> {
+    let accept = webpilot::settings::get().chrome.accept_dialogs;
+    page.send(
+        "Page.addScriptToEvaluateOnNewDocument",
+        Some(json!({
+            "source": format!("window.__webpilot_accept_dialogs = {accept};\n{DIALOGS_JS}"),
+            "runImmediately": true,
+        })),
+    )
+    .await?;
+    Ok(())
+}
+
+impl LocalTransport {
+    /// Answer OK to the dialogs a command raises when it asked to and the
+    /// setting does not already. Returns whether the setting's answer must be
+    /// restored once the command is done.
+    pub(super) async fn answer_dialogs_for(&self, accept_dialogs: bool) -> bool {
+        let restore = accept_dialogs && !webpilot::settings::get().chrome.accept_dialogs;
+        if restore {
+            self.answer_dialogs(true).await;
+        }
+        restore
+    }
+
+    pub(super) async fn restore_dialog_answer(&self, restore: bool) {
+        if restore {
+            self.answer_dialogs(false).await;
+        }
+    }
+
+    /// Set how dialogs are answered from here on: by the browser-side responder
+    /// and by the handler in every document the page holds now. A document built
+    /// later starts from the setting.
+    async fn answer_dialogs(&self, accept: bool) {
+        self.dialogs
+            .accept
+            .store(accept, std::sync::atomic::Ordering::Release);
+        let contexts: Vec<String> = self.frame_contexts.lock().await.values().cloned().collect();
+        for context in contexts {
+            let _ = self
+                .page
+                .send(
+                    "Runtime.evaluate",
+                    Some(json!({
+                        "expression": format!("window.__webpilot_accept_dialogs = {accept}"),
+                        "uniqueContextId": context,
+                    })),
+                )
+                .await;
+        }
+    }
+
+    /// The dialogs answered since the last take — each document's record and
+    /// the browser-side responder's — cleared as they are taken.
+    pub(super) async fn take_dialogs(&self) -> Vec<Dialog> {
+        let contexts: Vec<String> = self.frame_contexts.lock().await.values().cloned().collect();
+        let mut taken = Vec::new();
+        for context in contexts {
+            let Ok(reply) = self
+                .page
+                .send(
+                    "Runtime.evaluate",
+                    Some(json!({
+                        "expression": TAKE_DIALOGS_JS,
+                        "uniqueContextId": context,
+                        "returnByValue": true,
+                    })),
+                )
+                .await
+            else {
+                continue;
+            };
+            if let Some(record) = reply
+                .pointer("/result/value")
+                .and_then(|value| serde_json::from_value::<Vec<Dialog>>(value.clone()).ok())
+            {
+                taken.extend(record);
+            }
+        }
+        taken.extend(
+            self.dialogs
+                .answered
+                .lock()
+                .expect("dialog record lock")
+                .drain(..),
+        );
+        taken
+    }
+
+    /// How many dialogs the browser-side responder has answered, as a mark a
+    /// navigation compares against afterwards.
+    pub(super) fn dialog_mark(&self) -> usize {
+        self.dialogs
+            .answered
+            .lock()
+            .expect("dialog record lock")
+            .len()
+    }
+
+    /// The failure to report when the page answered Stay to a beforeunload
+    /// since `mark`: the navigation was refused, not finished.
+    pub(super) fn left_page_refused(&self, mark: usize, url: &str) -> Option<WebPilotError> {
+        let answered = self.dialogs.answered.lock().expect("dialog record lock");
+        answered
+            .get(mark..)?
+            .iter()
+            .any(|dialog| dialog.kind == DialogKind::Beforeunload && !dialog.accepted)
+            .then(|| leave_refused(url))
+    }
+
+    /// The refusal of a navigation that saw a beforeunload open which the
+    /// responder answers Stay — once the responder has answered it, bounded by
+    /// `PROBE`. Returning first would let this process exit with the dialog
+    /// still open, and an unanswered dialog holds the page for every later
+    /// command.
+    pub(super) async fn answered_leave_refusal(&self, mark: usize, url: &str) -> WebPilotError {
+        let deadline = tokio::time::Instant::now() + super::PROBE;
+        loop {
+            if let Some(refused) = self.left_page_refused(mark, url) {
+                return refused;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return leave_refused(url);
+            }
+            tokio::time::sleep(webpilot::settings::timeouts().poll_interval).await;
+        }
+    }
+
+    /// Whether `event` opens a beforeunload the responder will answer Stay: it
+    /// reads the same answer, so a navigation waiting on the page can stop there
+    /// instead of waiting out its budget for a commit that will not come.
+    pub(super) fn opens_refused_leave(&self, event: &Value) -> bool {
+        event.get("method").and_then(Value::as_str) == Some("Page.javascriptDialogOpening")
+            && event.pointer("/params/type").and_then(Value::as_str) == Some("beforeunload")
+            && !self
+                .dialogs
+                .accept
+                .load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+/// A navigation the page refused through beforeunload.
+pub(super) fn leave_refused(url: &str) -> WebPilotError {
+    WebPilotError::NavigationFailed {
+        url: url.to_owned(),
+        reason: "the page asked to confirm leaving it, which keeps its unsaved changes, and was \
+                 answered Stay; repeat accepting dialogs (`--accept-dialogs`, MCP \
+                 `accept_dialogs`) to leave it"
+            .into(),
+    }
 }
 
 /// The recorders both modes install, embedded from the extension that also

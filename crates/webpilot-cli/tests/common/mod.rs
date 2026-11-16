@@ -243,6 +243,12 @@ pub const LOAD_FRAME: &str = r#"<!doctype html><html><head><title>loadframe</tit
 /// when the action started must still be intercepted (browser mode injects the
 /// override per committed document; headless answers via the CDP responder),
 /// or the native modal wedges every later command on the tab.
+/// A form that asks to confirm being left once it holds unsaved input.
+pub const UNSAVED: &str = r#"<!doctype html><html><head><title>unsaved</title></head>
+<body><input id="draft"><script>let dirty = false;
+document.getElementById('draft').addEventListener('input', () => { dirty = true; });
+addEventListener('beforeunload', (e) => { if (dirty) e.preventDefault(); });</script></body></html>"#;
+
 pub const LATE_ALERT: &str = r#"<!doctype html><html><head><title>late-alert</title></head>
 <body><script>setTimeout(function(){alert('late')},400)</script></body></html>"#;
 
@@ -390,6 +396,8 @@ pub fn spawn_server() -> String {
                     (LOG, "")
                 } else if req.starts_with("GET /latealert") {
                     (LATE_ALERT, "")
+                } else if req.starts_with("GET /unsaved") {
+                    (UNSAVED, "")
                 } else if req.starts_with("GET /redirtarget") {
                     (REDIR_TARGET, "")
                 } else {

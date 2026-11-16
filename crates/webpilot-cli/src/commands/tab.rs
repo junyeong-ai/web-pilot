@@ -102,6 +102,7 @@ async fn new_tab<T: Transport>(transport: &mut T, url: &str) -> Result<CommandOu
             dom: _,
             url_changed: _,
             capture_error: _,
+            dialogs: _,
         } => {
             lift_error(success, error, ())?;
             // `tab new` always settles and returns the opened tab; a success with

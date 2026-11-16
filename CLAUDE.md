@@ -67,7 +67,7 @@ stdio JSON-RPC to hold that half of the contract.
 - `crates/webpilot-cli/` — the single binary (see that directory's `CLAUDE.md`)
 - `extension/` — the browser-mode extension, plus the page-side scripts both
   modes inject (headless embeds the same files): `content/bridge.js` (isolated
-  world) and `content/monitor-*.js` (MAIN world)
+  world), `content/dialogs.js` and `content/monitor-*.js` (MAIN world)
 
 ## Adding a command
 

@@ -358,6 +358,61 @@ pub struct NetworkEntry {
     pub timestamp: u64,
 }
 
+// ── Dialogs ──────────────────────────────────────────────────────────────────
+
+/// A JavaScript dialog the page raised while WebPilot drove it, and how it was
+/// answered. A dialog left to the browser would block the page until someone
+/// answered it, so WebPilot answers each one — confirm, prompt and
+/// beforeunload by the `accept_dialogs` setting or the action's own
+/// `--accept-dialogs` — and reports it, since a dismissed "Delete?" leaves no
+/// other trace of why the click changed nothing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Dialog {
+    #[serde(rename = "type")]
+    pub kind: DialogKind,
+    /// The page's own text: empty for `beforeunload`, whose wording the browser
+    /// supplies.
+    pub message: String,
+    /// Whether it was answered OK. An alert has no other answer.
+    pub accepted: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DialogKind {
+    Alert,
+    Confirm,
+    Prompt,
+    /// "Leave site?" — asked before the page unloads, when it has unsaved state.
+    Beforeunload,
+}
+serde_plain::derive_display_from_serialize!(DialogKind);
+
+impl Dialog {
+    /// One agent-facing line, shared by every surface that reports a dialog. The
+    /// message is page-controlled, so it is clipped, line-safed and quoted.
+    pub fn to_line(&self) -> String {
+        let answer = if self.accepted {
+            "accepted"
+        } else {
+            "dismissed"
+        };
+        match self.kind {
+            DialogKind::Alert => format!("Dialog: alert {:?}", line_safe_clip(&self.message, 200)),
+            DialogKind::Beforeunload if self.accepted => {
+                "Dialog: beforeunload → accepted (left the page)".to_owned()
+            }
+            DialogKind::Beforeunload => {
+                "Dialog: beforeunload → dismissed (stayed on the page)".to_owned()
+            }
+            kind => format!(
+                "Dialog: {kind} {:?} → {answer}",
+                line_safe_clip(&self.message, 200)
+            ),
+        }
+    }
+}
+
 // ── Downloads ────────────────────────────────────────────────────────────────
 
 /// A download a page started while a command ran.

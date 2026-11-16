@@ -2,13 +2,13 @@
 // navigation detection. Mirrors transport/local/action.rs.
 
 import { err, exceptionErr, noPageErr, otherErr } from "./errors.js";
-import { PROBE_MS, activeFrameId, pinTab, resolveActiveTab, setActiveFrameId, sleep, navigationTimeoutMs, viewedTab } from "./session.js";
+import { PROBE_MS, acceptDialogs, activeFrameId, pinTab, resolveActiveTab, setActiveFrameId, sleep, navigationTimeoutMs, viewedTab } from "./session.js";
 import { cdpSend, cdpSendEffect, withCdp } from "./cdp.js";
-import { ensureBridge, frameVanishedError, installDialogOverride, sendToContent } from "./content.js";
+import { ensureBridge, frameVanishedError, installDialogHandler, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitHistoryTraversed, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
 import { frameWorldContextId, resolveFrameWorld } from "./query.js";
 import { countHttpSubframes } from "./capture.js";
-import { rearmMonitors } from "./state.js";
+import { rearmMonitors, takeDialogs } from "./state.js";
 
 // ── Action ─────────────────────────────────────────────────────────────────
 
@@ -21,20 +21,20 @@ async function handleAction(command) {
   // a socket writer and is deliberately NOT a gate; writing the socket
   // directly would bypass it, which is why the host re-validates.)
 
-  // Apply the configured dialog response to every frame of the pinned tab.
+  // Answer dialogs in every frame of the pinned tab as this action asks.
   // `navigate` resolves its own target (the bound tab whatever its scheme, or a
   // fresh one) via `navigateBoundTab` below — it is how an agent REACHES an http
   // page, so it must NOT require one to start from. Every OTHER action needs an
   // injectable http page now, so it goes through the http-required
-  // `resolveActiveTab`. (`navigate` also needs no dialog override: it runs no
-  // page JS that could call alert/confirm/prompt, and a beforeunload prompt is a
-  // separate native dialog the override can't suppress anyway.)
+  // `resolveActiveTab`. (`navigate` runs no page JS that could call
+  // alert/confirm/prompt, and the "leave site?" prompt is Chrome's own, shown to
+  // the user in their browser.)
   const tab = action.kind === "navigate" ? null : await resolveActiveTab();
   if (!tab && action.kind !== "navigate") {
     return { type: "Action", success: false, error: noPageErr() };
   }
   if (tab) {
-    await installDialogOverride(tab.id, { allFrames: true });
+    await installDialogHandler(tab.id, { allFrames: true }, command.accept_dialogs || acceptDialogs());
   }
 
   // Viewport-coordinate actions (`hover`, `drag`) cannot target an iframe: their
@@ -165,6 +165,14 @@ async function handleAction(command) {
 
     default:
       result = await dispatchActionToPage(tab, action, command.snapshot_id);
+  }
+
+  // Report the dialogs the action's page answered, and put the tab back on the
+  // setting's answer (headless `restore_dialog_answer`).
+  if (tab) {
+    const dialogs = await takeDialogs(tab.id);
+    if (command.accept_dialogs) await installDialogHandler(tab.id, { allFrames: true });
+    if (result?.success && dialogs.length) result.dialogs = dialogs;
   }
 
   // Auto-capture DOM after success if requested — exactly like the headless

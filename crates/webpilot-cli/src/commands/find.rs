@@ -98,6 +98,7 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
             include: vec![CaptureField::Dom],
             opts: CaptureOpts::default(),
             url: None,
+            accept_dialogs: false,
         })
         .await?;
 
@@ -255,6 +256,12 @@ pub async fn run<T: Transport>(transport: &mut T, args: FindArgs) -> Result<Comm
             human_lines.push(format!("→ {}", d.to_line()));
         }
     }
+    if !effect.dialogs.is_empty() {
+        items["dialogs"] = serde_json::to_value(&effect.dialogs).expect("Dialog serializes");
+        for d in &effect.dialogs {
+            human_lines.push(format!("→ {}", d.to_line()));
+        }
+    }
 
     Ok(CommandOutput::List {
         items,
@@ -298,6 +305,7 @@ struct ChainEffect {
     url_changed: Option<String>,
     new_tab: Option<webpilot::types::TabInfo>,
     downloads: Vec<webpilot::types::Download>,
+    dialogs: Vec<webpilot::types::Dialog>,
 }
 
 async fn chain_action<T: Transport>(
@@ -310,6 +318,7 @@ async fn chain_action<T: Transport>(
             action,
             snapshot_id,
             capture: false,
+            accept_dialogs: false,
         })
         .await?;
     match result {
@@ -319,6 +328,7 @@ async fn chain_action<T: Transport>(
             url_changed,
             new_tab,
             downloads,
+            dialogs,
             dom: _,
             capture_error: _,
         } => {
@@ -327,6 +337,7 @@ async fn chain_action<T: Transport>(
                 url_changed,
                 new_tab,
                 downloads,
+                dialogs,
             })
         }
         ResponseData::Error { error } => Err(error.into()),

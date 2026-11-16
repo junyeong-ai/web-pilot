@@ -7,6 +7,7 @@ import { cdpSend, withCdp } from "./cdp.js";
 import { resolveFrameWorld } from "./query.js";
 import { ensureBridge, frameVanishedError, sendToContent } from "./content.js";
 import { navigateBoundTab } from "./navigation.js";
+import { takeDialogs } from "./state.js";
 
 // ── Capture ────────────────────────────────────────────────────────────────
 
@@ -337,6 +338,9 @@ async function handleCapture(command) {
     result.dom.page_url = result.dom.page_url || result.page_url || "";
     result.dom.page_title = result.dom.page_title || result.page_title || "";
   }
+
+  const dialogs = await takeDialogs(tabId);
+  if (dialogs.length) result.dialogs = dialogs;
 
   return result;
 }

@@ -40,7 +40,7 @@ use webpilot::protocol::{Command, ResponseData};
 use webpilot::types::{DomSnapshot, Download, DownloadOutcome, PolicyKey};
 use webpilot::{WebPilotError, WireError};
 
-use crate::cdp::{CdpClient, CdpSession};
+use crate::cdp::{CdpClient, CdpSession, DialogDesk};
 use crate::session;
 
 use super::Transport;
@@ -80,6 +80,8 @@ pub struct LocalTransport {
     /// `reconcile_binding` recomputes it per command, and the report that consumes
     /// it moves the pin onto the fallback.
     pub(crate) pin_vanished: Option<String>,
+    /// The dialog responder's answer and record, shared by every page session.
+    pub(crate) dialogs: DialogDesk,
     /// Top frame id (CDP string). Refreshed on every page swap (`prime_page`, on
     /// open and tab switch), so it always names the bound tab's main frame.
     /// Resolves the bridge context for the main frame when no iframe is switched.
@@ -194,8 +196,9 @@ impl LocalTransport {
             )
             .await?;
 
+        let dialogs = DialogDesk::new(webpilot::settings::get().chrome.accept_dialogs);
         let (mut page, browser_context_id, target_id, context_lock, pin_vanished) =
-            resolve_target(&browser, context_name).await?;
+            resolve_target(&browser, context_name, &dialogs).await?;
 
         // Prime the page: spawn its context listener, register the bridge world,
         // resolve the main frame, re-emit contexts. `attach_to_page` already
@@ -229,6 +232,7 @@ impl LocalTransport {
             browser_context_id,
             target_id,
             pin_vanished,
+            dialogs,
             main_frame_id,
             frame_contexts,
             bridge_contexts,
@@ -760,6 +764,7 @@ impl LocalTransport {
 
     pub(super) async fn navigate_reconnect(&mut self, url: &str) -> Result<Vec<Download>> {
         let before_url = self.bound_target_url().await;
+        let dialog_mark = self.dialog_mark();
         // Subscribed before the navigate: a download Chrome announces while the
         // command is still in flight must not fire into a gap.
         let mut download_events = self.browser.subscribe_events();
@@ -939,6 +944,9 @@ impl LocalTransport {
                         settle_by = deadline;
                         continue;
                     }
+                    if let Some(refused) = self.left_page_refused(dialog_mark, url) {
+                        return Err(refused.into());
+                    }
                     self.clear_active_frame().await;
                     return Ok(self.downloads_from(&mut download_events, is_download).await);
                 }
@@ -1003,7 +1011,7 @@ impl LocalTransport {
     /// dropped with the old page: they name ids on the session that just went
     /// away.
     async fn bind_target(&mut self, target_id: &str) -> Result<()> {
-        let mut page = attach_to_page(&self.browser, target_id).await?;
+        let mut page = attach_to_page(&self.browser, target_id, &self.dialogs).await?;
         let (frame_contexts, bridge_contexts, main_frame_id) = prime_page(&mut page).await?;
         self.page = page;
         self.target_id = target_id.to_string();
@@ -1469,14 +1477,29 @@ impl Transport for LocalTransport {
         self.ensure_monitor_hooks().await;
 
         match command {
-            Command::Capture { include, opts, url } => self.do_capture(include, opts, url).await,
+            Command::Capture {
+                include,
+                opts,
+                url,
+                accept_dialogs,
+            } => {
+                let restore = self.answer_dialogs_for(accept_dialogs).await;
+                let result = self.do_capture(include, opts, url).await;
+                self.restore_dialog_answer(restore).await;
+                result
+            }
             Command::Action {
                 action,
                 capture,
                 snapshot_id,
+                accept_dialogs,
             } => {
-                self.do_action(action, capture, snapshot_id.as_deref())
-                    .await
+                let restore = self.answer_dialogs_for(accept_dialogs).await;
+                let result = self
+                    .do_action(action, capture, snapshot_id.as_deref())
+                    .await;
+                self.restore_dialog_answer(restore).await;
+                result
             }
             Command::Eval { code } => self.do_eval(&code).await,
             Command::Wait {
@@ -1844,6 +1867,7 @@ fn clear_persisted_monitors(browser_context_id: Option<&str>) {
 async fn resolve_target(
     browser: &Arc<CdpClient>,
     context: Option<&str>,
+    dialogs: &DialogDesk,
 ) -> Result<(
     CdpSession,
     Option<String>,
@@ -1867,7 +1891,7 @@ async fn resolve_target(
         let (target_id, vanished) =
             pick_active_target(browser, Some(&browser_context_id), Some(&initial)).await?;
 
-        let cdp = attach_to_page(browser, &target_id).await?;
+        let cdp = attach_to_page(browser, &target_id, dialogs).await?;
         Ok((
             cdp,
             Some(browser_context_id),
@@ -1877,7 +1901,7 @@ async fn resolve_target(
         ))
     } else {
         let (target_id, vanished) = pick_active_target(browser, None, None).await?;
-        let cdp = attach_to_page(browser, &target_id).await?;
+        let cdp = attach_to_page(browser, &target_id, dialogs).await?;
         Ok((cdp, None, target_id, None, vanished))
     }
 }
@@ -2041,12 +2065,16 @@ async fn pick_active_target(
 /// first: headless Chrome can hold a background tab's renderer commands until
 /// the tab is activated (measured: `Page.enable` unanswered past the 30-second
 /// CDP timeout), and every command this session sends goes to that renderer.
-pub(super) async fn attach_to_page(conn: &Arc<CdpClient>, target_id: &str) -> Result<CdpSession> {
+pub(super) async fn attach_to_page(
+    conn: &Arc<CdpClient>,
+    target_id: &str,
+    dialogs: &DialogDesk,
+) -> Result<CdpSession> {
     conn.activate_target(target_id).await?;
     let mut cdp = conn.attach(target_id).await?;
     cdp.send("Page.enable", None).await?;
     // Page.enable makes dialog responses the attached client's responsibility.
-    cdp.spawn_dialog_responder();
+    cdp.spawn_dialog_responder(dialogs.clone());
     // Clear Chrome's native console buffer BEFORE enabling Runtime: `Runtime.enable`
     // REPLAYS the buffer, and Chrome keeps every console argument UNCLIPPED and
     // unbounded — but WebPilot reads console only through its own MAIN-world hook
@@ -2128,6 +2156,7 @@ pub(super) fn action_success(dom: Option<DomSnapshot>) -> ResponseData {
         new_tab: None,
         capture_error: None,
         downloads: Vec::new(),
+        dialogs: Vec::new(),
     }
 }
 
@@ -2200,6 +2229,7 @@ async fn prime_page(
         spawn_frame_context_listener(page, frame_contexts.clone(), bridge_contexts.clone());
     page.track(listener);
     install_bridge_world(page).await?;
+    state::install_dialog_handler(page).await?;
     let main_frame_id = fetch_main_frame_id(page).await?;
     reemit_execution_contexts(page).await;
     Ok((frame_contexts, bridge_contexts, main_frame_id))

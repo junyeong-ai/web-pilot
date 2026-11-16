@@ -342,6 +342,7 @@ impl LocalTransport {
             page_url,
             page_title,
             downloads,
+            dialogs: self.take_dialogs().await,
         })
     }
 

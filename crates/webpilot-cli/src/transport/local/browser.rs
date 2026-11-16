@@ -328,6 +328,7 @@ impl LocalTransport {
             }),
             capture_error: None,
             downloads,
+            dialogs: Vec::new(),
         })
     }
 

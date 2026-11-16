@@ -139,6 +139,13 @@ pub(crate) fn dom_extra_lines(extra: &serde_json::Map<String, serde_json::Value>
             .expect("`downloads` is serialized from `Vec<Download>` by the handler that set it");
         lines.extend(downloads.iter().map(webpilot::types::Download::to_line));
     }
+    // A dismissed confirm leaves the page as it was, so the snapshot alone reads
+    // as a click that did nothing.
+    if let Some(dialogs) = extra.get("dialogs") {
+        let dialogs: Vec<webpilot::types::Dialog> = serde_json::from_value(dialogs.clone())
+            .expect("`dialogs` is serialized from `Vec<Dialog>` by the handler that set it");
+        lines.extend(dialogs.iter().map(webpilot::types::Dialog::to_line));
+    }
     lines
 }
 

@@ -8,7 +8,7 @@
 console.log("[WebPilot] Service Worker loaded");
 
 import { pruneCdpLock } from "./cdp.js";
-import { injectBridgeOnly, installDialogOverride } from "./content.js";
+import { injectBridgeOnly, installDialogHandler } from "./content.js";
 import { connectToHost, isHostConnected } from "./host.js";
 import { activeTabId, ensureRestored } from "./session.js";
 import { rearmMonitors } from "./state.js";
@@ -22,7 +22,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   pruneCdpLock(tabId);
 });
 
-// Every document COMMITTED in the pinned tab gets the dialog override at the
+// Every document COMMITTED in the pinned tab gets the dialog handler at the
 // earliest moment the extension can reach it — the per-action injection covers
 // only the frames that exist when the action starts, so an iframe a click
 // handler CREATES (whose script then calls alert) would otherwise raise a
@@ -38,7 +38,7 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
     return;
   }
   if (details.tabId !== activeTabId) return;
-  await installDialogOverride(details.tabId, { frameIds: [details.frameId] });
+  await installDialogHandler(details.tabId, { frameIds: [details.frameId] });
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

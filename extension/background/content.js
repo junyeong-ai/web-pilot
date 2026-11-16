@@ -6,25 +6,23 @@
 import { acceptDialogs, sleep } from "./session.js";
 import { err } from "./errors.js";
 
-async function installDialogOverride(tabId, target) {
+// Put the page-side dialog handler (`content/dialogs.js`, which headless runs
+// too) into the target frames, answering as `accept` says. Best-effort: a frame
+// that refuses injection keeps its native dialogs.
+async function installDialogHandler(tabId, target, accept = acceptDialogs()) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId, ...target },
       world: "MAIN",
-      func: (accept) => {
-        window.__webpilot_accept_dialogs = accept;
-        if (!window.__webpilot_dialogs) {
-          window.__webpilot_dialogs = [];
-          window.alert = (msg) => { window.__webpilot_dialogs.push({ type: "alert", message: String(msg) }); };
-          window.confirm = (msg) => { window.__webpilot_dialogs.push({ type: "confirm", message: String(msg) }); return window.__webpilot_accept_dialogs; };
-          // A real `prompt` returns the DEFAULT stringified when accepted —
-          // `prompt(msg, 0)` yields "0" and `prompt(msg, null)` yields
-          // "null" (WebIDL DOMString coercion, like alert(null)); only a
-          // MISSING argument (undefined) takes the parameter default "".
-          window.prompt = (msg, def) => { window.__webpilot_dialogs.push({ type: "prompt", message: String(msg) }); return window.__webpilot_accept_dialogs ? (def === undefined ? "" : String(def)) : null; };
-        }
+      files: ["content/dialogs.js"],
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId, ...target },
+      world: "MAIN",
+      func: (answer) => {
+        window.__webpilot_accept_dialogs = answer;
       },
-      args: [acceptDialogs()],
+      args: [accept],
     });
   } catch {}
 }
@@ -158,4 +156,4 @@ async function sendToContent(tabId, message, frameId = 0, timeoutMs = 10000) {
   }
 }
 
-export { ensureBridge, frameVanishedError, injectBridgeOnly, installDialogOverride, sendToContent, sendToContentOnce };
+export { ensureBridge, frameVanishedError, injectBridgeOnly, installDialogHandler, sendToContent, sendToContentOnce };

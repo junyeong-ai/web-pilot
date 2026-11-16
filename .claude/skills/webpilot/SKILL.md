@@ -141,8 +141,13 @@ shows the elements in view and the ones the action added; a footer counts the
 rest, which keep their indices. `Capture failed (the
 action itself succeeded)` means only that observation failed: **the action
 already ran; capture again without repeating the side effect.**
-Confirm and prompt dialogs are dismissed by default. Enable acceptance explicitly
-with `[chrome] accept_dialogs = true` or `WEBPILOT_ACCEPT_DIALOGS=true`.
+Every dialog the page raises is answered and reported as a `Dialog:` line, an
+alert's text included. Confirm, prompt and "leave site?" are dismissed unless the
+action passes `--accept-dialogs` (or `[chrome] accept_dialogs = true` is set). A
+navigation the page refuses that way fails with `NavigationFailed` and keeps the
+page: repeat it with `--accept-dialogs` only if leaving the unsaved input is
+what the task wants. `reload` re-sends a page that was a POST result; navigate to
+its URL to load it fresh instead.
 `OutcomeUnknown` (exit 9) means the operation may already have run: observe its
 result before retrying.
 

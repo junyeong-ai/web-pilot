@@ -681,10 +681,17 @@ fn headless_behavioral_flow() {
     );
     let cap_dlg = fx.run(&["capture", "--include", "dom"]);
     let dlg_index = index_of(&cap_dlg, "dlg");
+    let dismissed = fx.run(&["action", "click", &dlg_index]);
+    assert_eq!(code(&dismissed), 0, "clicking the dialog button failed");
+    let dismissed: serde_json::Value =
+        serde_json::from_str(&stdout(&dismissed)).expect("click json");
     assert_eq!(
-        code(&fx.run(&["action", "click", &dlg_index])),
-        0,
-        "clicking the dialog button failed"
+        dismissed["dialogs"],
+        serde_json::json!([
+            {"type": "confirm", "message": "c?", "accepted": false},
+            {"type": "prompt", "message": "p?", "accepted": false},
+        ]),
+        "every dialog the click raised is reported with its answer: {dismissed}"
     );
     assert!(
         stdout(&fx.run(&[
@@ -693,6 +700,24 @@ fn headless_behavioral_flow() {
         ]))
         .contains("parity"),
         "confirm and prompt must be dismissed by default"
+    );
+    assert_eq!(
+        code(&fx.run(&["action", "click", &dlg_index, "--accept-dialogs"])),
+        0
+    );
+    assert!(
+        stdout(&fx.run(&[
+            "eval",
+            "window.__dlg[0] === true && window.__dlg[1] === 'dv' ? 'accepted' : JSON.stringify(window.__dlg)",
+        ]))
+        .contains("accepted"),
+        "--accept-dialogs answers OK for that action"
+    );
+    assert_eq!(code(&fx.run(&["action", "click", &dlg_index])), 0);
+    assert!(
+        stdout(&fx.run(&["eval", "window.__dlg[0] === false ? 'restored' : 'kept'"]))
+            .contains("restored"),
+        "the next action answers by the setting again"
     );
     // The click scrolled #dlg into view; restore the top so later sections'
     // captures keep the full element set (the cursor:pointer pass is
@@ -4684,6 +4709,59 @@ fn headless_behavioral_flow() {
         opaque["snapshot_id"]
             .as_str()
             .is_some_and(|id| id.len() == 32)
+    );
+
+    // An alert raised after the command that loaded the page has detached must
+    // neither hold the page nor go unreported: the next command answers.
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/latealert")])),
+        0
+    );
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    let after_alert = fx.run(&["capture", "--include", "dom"]);
+    assert_eq!(code(&after_alert), 0, "{}", stdout(&after_alert));
+    let after_alert: serde_json::Value = serde_json::from_str(&stdout(&after_alert)).unwrap();
+    assert_eq!(
+        after_alert["dialogs"],
+        serde_json::json!([{"type": "alert", "message": "late", "accepted": true}]),
+        "{after_alert}"
+    );
+
+    // A page holding unsaved input asks to confirm being left. By default the
+    // answer is Stay and the navigation reports that it did not happen; the
+    // page stays usable afterwards; `--accept-dialogs` leaves it.
+    let unsaved = fx.run(&[
+        "capture",
+        "--include",
+        "dom",
+        "--url",
+        &format!("{base}/unsaved"),
+    ]);
+    let draft = index_of(&unsaved, "draft");
+    assert_eq!(code(&fx.run(&["action", "click", &draft])), 0);
+    assert_eq!(code(&fx.run(&["action", "type", &draft, "kept"])), 0);
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/second")])),
+        8,
+        "a navigation the page refused must not report success"
+    );
+    assert_eq!(code(&fx.run(&["action", "reload"])), 8);
+    assert!(
+        stdout(&fx.run(&["eval", "document.getElementById('draft').value"])).contains("kept"),
+        "the refused page stays live and keeps its input"
+    );
+    let left = fx.run(&[
+        "action",
+        "navigate",
+        &format!("{base}/second"),
+        "--accept-dialogs",
+    ]);
+    assert_eq!(code(&left), 0, "{}", stdout(&left));
+    let left: serde_json::Value = serde_json::from_str(&stdout(&left)).unwrap();
+    assert_eq!(
+        left["dialogs"],
+        serde_json::json!([{"type": "beforeunload", "message": "", "accepted": true}]),
+        "{left}"
     );
     drop(fx);
 }
