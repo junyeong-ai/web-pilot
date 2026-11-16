@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an error never ran, and is no longer reported as `OutcomeUnknown`; a stale
   context there is retried as intended.
 
+### Added
+
+- `setup skill` also installs the skill to `~/.agents/skills/webpilot`, where
+  Codex reads skills, so Codex shell users get the same guidance as Claude
+  Code. `setup skill --json` lists each directory under `installs`; `action`
+  sums them up. `self uninstall` removes both.
+
 ### Changed
 
 - A page load refuses `file:` URLs unless `[chrome] allow_file_urls = true` or

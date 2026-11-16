@@ -30,7 +30,7 @@ pub struct SetupArgs {
 
 #[derive(Subcommand)]
 pub enum SetupCommand {
-    /// Install or refresh the Claude Code skill at ~/.claude/skills/webpilot/.
+    /// Install or refresh the agent skill in ~/.claude/skills (Claude Code) and ~/.agents/skills (Codex).
     Skill(skill::SkillArgs),
     /// Extract the Chrome extension and print integration instructions.
     Extension(extension::ExtensionArgs),

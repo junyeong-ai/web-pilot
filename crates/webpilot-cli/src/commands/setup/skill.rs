@@ -1,4 +1,5 @@
-//! `webpilot setup skill` — materialise the embedded Claude Code skill.
+//! `webpilot setup skill` — materialise the embedded agent skill in every
+//! skills directory an agent host reads ([`skill_dirs`]).
 //!
 //! The skill ships inside the binary (see `crate::assets::SKILL`) so the
 //! version on disk always matches the binary version. Re-running this
@@ -42,42 +43,49 @@ pub(crate) fn install(yes: bool) -> Result<StepOutcome> {
 }
 
 fn install_inner(yes: bool, force: bool) -> Result<StepOutcome> {
-    let dest = skill_dir()?;
-    let skill_md = dest.join("SKILL.md");
-
     let embedded = assets::SKILL
         .get_file("SKILL.md")
         .context("embedded skill is missing SKILL.md — build artefact corrupted")?
         .contents();
+    // Read once, before any write: every directory is judged against what
+    // WebPilot wrote LAST time, not against a write this run just made.
+    let record = read_record();
 
-    let on_disk = std::fs::read(&skill_md).ok();
-    let unchanged = on_disk.as_deref() == Some(embedded);
-
-    let action = match decide(
-        provenance(on_disk.as_deref(), embedded, read_record().as_deref()),
-        unchanged,
-        force,
-    ) {
-        Some(action) => action,
-        // Fail-closed default `false`: overwriting a skill WebPilot did not
-        // write is destructive, so a non-interactive run (piped/CI, no `--yes`)
-        // keeps the local copy instead of silently clobbering it. Only an
-        // explicit `y` at the prompt, or `--yes`, replaces it.
-        None => {
-            if !super::confirm("Skill has local edits — overwrite?", false, yes) {
-                return Ok(outcome("kept", &skill_md));
+    let mut installs = Vec::new();
+    for dest in skill_dirs()? {
+        let skill_md = dest.join("SKILL.md");
+        let on_disk = std::fs::read(&skill_md).ok();
+        let unchanged = on_disk.as_deref() == Some(embedded);
+        let action = match decide(
+            provenance(on_disk.as_deref(), embedded, record.as_deref()),
+            unchanged,
+            force,
+        ) {
+            Some(action) => action,
+            // Fail-closed default `false`: overwriting a skill WebPilot did not
+            // write is destructive, so a non-interactive run (piped/CI, no
+            // `--yes`) keeps the local copy instead of silently clobbering it.
+            // Only an explicit `y` at the prompt, or `--yes`, replaces it.
+            None if !super::confirm(
+                &format!("{} has local edits — overwrite?", home_relative(&skill_md)),
+                false,
+                yes,
+            ) =>
+            {
+                Action::Kept
             }
-            Action::Updated
+            None => Action::Updated,
+        };
+        if action.writes() {
+            assets::write_dir(&assets::SKILL, &dest, assets::Leftovers::Keep)
+                .with_context(|| format!("write skill to {}", dest.display()))?;
         }
-    };
-
-    if action.writes() {
-        assets::write_dir(&assets::SKILL, &dest, assets::Leftovers::Keep)
-            .with_context(|| format!("write skill to {}", dest.display()))?;
+        installs.push((action, skill_md));
     }
-    write_record(&digest(embedded));
-
-    Ok(outcome(action.label(), &skill_md))
+    if installs.iter().any(|(action, _)| *action != Action::Kept) {
+        write_record(&digest(embedded));
+    }
+    Ok(outcome(&installs))
 }
 
 /// Who the copy on disk belongs to.
@@ -119,22 +127,24 @@ fn decide(provenance: Provenance, unchanged: bool, force: bool) -> Option<Action
 /// last one that can still recognise its own output, and the record it leaves is
 /// what lets the incoming build refresh a copy the user never touched.
 pub(crate) fn record_if_ours() {
-    let Ok(dest) = skill_dir() else { return };
     let Some(embedded) = assets::SKILL.get_file("SKILL.md").map(|f| f.contents()) else {
         return;
     };
-    let Ok(disk) = std::fs::read(dest.join("SKILL.md")) else {
-        return;
-    };
-    if disk == embedded {
-        write_record(&digest(&disk));
+    let ours = skill_dirs()
+        .unwrap_or_default()
+        .iter()
+        .any(|dest| std::fs::read(dest.join("SKILL.md")).is_ok_and(|disk| disk == embedded));
+    if ours {
+        write_record(&digest(embedded));
     }
 }
 
-/// The deployed `SKILL.md`, if the skill is installed at all.
-pub(crate) fn installed_path() -> Option<PathBuf> {
-    let skill_md = skill_dir().ok()?.join("SKILL.md");
-    skill_md.exists().then_some(skill_md)
+/// Whether the skill is deployed in any skills directory.
+pub(crate) fn installed() -> bool {
+    skill_dirs()
+        .unwrap_or_default()
+        .iter()
+        .any(|dest| dest.join("SKILL.md").exists())
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -158,17 +168,19 @@ fn write_record(digest: &str) {
     let _ = webpilot::dirs::atomic_write(&webpilot::dirs::skill_record_file(), digest.as_bytes());
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum Action {
     Installed,
     Reinstalled,
     Updated,
     Unchanged,
+    /// Local edits the user declined to overwrite.
+    Kept,
 }
 
 impl Action {
     fn writes(self) -> bool {
-        !matches!(self, Action::Unchanged)
+        !matches!(self, Action::Unchanged | Action::Kept)
     }
     fn label(self) -> &'static str {
         match self {
@@ -176,29 +188,61 @@ impl Action {
             Action::Reinstalled => "reinstalled",
             Action::Updated => "updated",
             Action::Unchanged => "unchanged",
+            Action::Kept => "kept",
         }
     }
 }
 
-fn outcome(action: &str, skill_md: &std::path::Path) -> StepOutcome {
+/// `action` sums the directories up for a caller that reads one word — `self
+/// update` reads it from the next release's binary — and `installs` itemises
+/// them: local edits kept anywhere win, then a shared action, else `updated`.
+fn outcome(installs: &[(Action, PathBuf)]) -> StepOutcome {
     StepOutcome {
-        human: format!("✓ Skill {action:<11} {}", home_relative(skill_md)),
+        human: installs
+            .iter()
+            .map(|(action, skill_md)| {
+                format!("✓ Skill {:<11} {}", action.label(), home_relative(skill_md))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         json: serde_json::json!({
-            "path": skill_md.display().to_string(),
-            "action": action,
+            "action": summary(installs).label(),
+            "installs": installs
+                .iter()
+                .map(|(action, skill_md)| serde_json::json!({
+                    "path": skill_md.display().to_string(),
+                    "action": action.label(),
+                }))
+                .collect::<Vec<_>>(),
         }),
     }
 }
 
-/// Where Claude Code reads the skill from. Derived from `$HOME`: an unset
-/// home is an error, never a `/tmp` guess — installing to a path Claude will
-/// never read would report a broken install as success.
-fn skill_dir() -> Result<PathBuf> {
+fn summary(installs: &[(Action, PathBuf)]) -> Action {
+    if installs.iter().any(|(action, _)| *action == Action::Kept) {
+        return Action::Kept;
+    }
+    match installs {
+        [(first, _), rest @ ..] if rest.iter().all(|(action, _)| action == first) => *first,
+        _ => Action::Updated,
+    }
+}
+
+/// Every directory the skill is deployed to: `~/.claude/skills` for Claude Code,
+/// and `~/.agents/skills` for Codex and the other hosts of the shared Agent
+/// Skills layout. Claude Code does not read the second, so no host lists the
+/// skill twice. Derived from `$HOME`: an unset home is an error, never a `/tmp`
+/// guess — installing to a path no agent reads would report a broken install
+/// as success.
+pub(crate) fn skill_dirs() -> Result<Vec<PathBuf>> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|h| !h.as_os_str().is_empty())
-        .context("HOME is not set — cannot locate ~/.claude/skills")?;
-    Ok(home.join(".claude").join("skills").join("webpilot"))
+        .context("HOME is not set — cannot locate the skills directories")?;
+    Ok([".claude", ".agents"]
+        .into_iter()
+        .map(|host| home.join(host).join("skills").join("webpilot"))
+        .collect())
 }
 
 #[cfg(test)]
@@ -257,6 +301,23 @@ mod tests {
         let p = provenance(Some(PREVIOUS), EMBEDDED, None);
         assert_eq!(p, Provenance::Local);
         assert!(decide(p, false, false).is_none());
+    }
+
+    #[test]
+    fn the_summary_names_kept_edits_first_then_a_shared_action() {
+        let at = |action| (action, PathBuf::from("x"));
+        assert_eq!(
+            summary(&[at(Action::Updated), at(Action::Kept)]),
+            Action::Kept
+        );
+        assert_eq!(
+            summary(&[at(Action::Unchanged), at(Action::Unchanged)]),
+            Action::Unchanged
+        );
+        assert_eq!(
+            summary(&[at(Action::Unchanged), at(Action::Installed)]),
+            Action::Updated
+        );
     }
 
     #[test]

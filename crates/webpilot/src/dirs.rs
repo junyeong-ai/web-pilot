@@ -220,7 +220,7 @@ pub fn extension_dir_path() -> PathBuf {
     data_root_path().join(EXTENSION_SUBDIR)
 }
 
-/// Digest of the Claude skill this binary last wrote to `~/.claude/skills`.
+/// Digest of the skill this binary last wrote to the agent skills directories.
 /// The skill is the one deployed artefact a user may legitimately edit, and an
 /// edited copy is indistinguishable from an outdated one by content alone — so
 /// what WebPilot wrote is recorded, and a later install compares against it to

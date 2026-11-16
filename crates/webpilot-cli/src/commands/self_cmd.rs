@@ -194,7 +194,7 @@ fn update(args: UpdateArgs) -> Result<CommandOutput> {
     // which alone carries the new content. Run without `--yes` and with no stdin:
     // a copy WebPilot wrote refreshes on its own, and one the user edited is kept
     // and named rather than silently overwritten.
-    let skill = if crate::commands::setup::skill::installed_path().is_none() {
+    let skill = if !crate::commands::setup::skill::installed() {
         "not_installed"
     } else {
         Command::new(&dest)

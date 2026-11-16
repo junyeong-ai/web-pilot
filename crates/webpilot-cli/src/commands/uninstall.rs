@@ -60,8 +60,17 @@ async fn execute(plan: Plan) -> Result<CommandOutput> {
         }
     }
 
+    let mut skill_removed = false;
+    for path in &plan.skills {
+        match remove_path(path) {
+            Ok(()) => skill_removed = true,
+            Err(e) => warnings.push(format!("skill at {} ({e})", path.display())),
+        }
+    }
+    if skill_removed {
+        removed.push("skill");
+    }
     for (label, path) in [
-        ("skill", plan.skill.as_deref()),
         ("extension", plan.extension.as_deref()),
         // Removed BEFORE the root purges below, so an emptied cache/data root is
         // reclaimed instead of being kept alive by its own `policy/` subdir and
@@ -161,7 +170,7 @@ async fn execute(plan: Plan) -> Result<CommandOutput> {
 struct Plan {
     chrome_running: bool,
     binary: Option<PathBuf>,
-    skill: Option<PathBuf>,
+    skills: Vec<PathBuf>,
     extension: Option<PathBuf>,
     nm_hosts: Vec<PathBuf>,
     policy: Option<PathBuf>,
@@ -172,7 +181,7 @@ impl Plan {
     fn is_empty(&self) -> bool {
         !self.chrome_running
             && self.binary.is_none()
-            && self.skill.is_none()
+            && self.skills.is_empty()
             && self.extension.is_none()
             && self.nm_hosts.is_empty()
             && self.policy.is_none()
@@ -184,14 +193,14 @@ impl Plan {
         if self.chrome_running {
             out.push("● Headless Chrome (running)".into());
         }
-        for (label, path) in [
-            ("Binary", self.binary.as_deref()),
-            ("Skill", self.skill.as_deref()),
-            ("Extension", self.extension.as_deref()),
-        ] {
-            if let Some(p) = path {
-                out.push(format!("● {label}: {}", p.display()));
-            }
+        if let Some(p) = &self.binary {
+            out.push(format!("● Binary: {}", p.display()));
+        }
+        for p in &self.skills {
+            out.push(format!("● Skill: {}", p.display()));
+        }
+        if let Some(p) = &self.extension {
+            out.push(format!("● Extension: {}", p.display()));
         }
         for p in &self.nm_hosts {
             out.push(format!("● NM host: {}", p.display()));
@@ -217,15 +226,11 @@ fn collect_plan() -> Plan {
         .and_then(|p| p.canonicalize().ok())
         .filter(|p| p.exists());
 
-    let skill = std::env::var_os("HOME")
-        .filter(|h| !h.is_empty())
-        .map(|h| {
-            PathBuf::from(h)
-                .join(".claude")
-                .join("skills")
-                .join("webpilot")
-        })
-        .filter(|p| p.is_dir());
+    let skills = crate::commands::setup::skill::skill_dirs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.is_dir())
+        .collect();
 
     let extension = Some(webpilot::dirs::extension_dir_path()).filter(|p| p.is_dir());
     let nm_hosts = nm_host::nm_manifest_paths()
@@ -244,7 +249,7 @@ fn collect_plan() -> Plan {
     Plan {
         chrome_running: crate::session::get_existing_session().is_some(),
         binary,
-        skill,
+        skills,
         extension,
         nm_hosts,
         policy,

@@ -92,8 +92,8 @@ pub enum Leftovers {
     /// file dropped or renamed between releases must not linger where Chrome
     /// would still load it. Nothing there is the user's.
     Prune,
-    /// Leave them. Right for the skill, which lives in the user's
-    /// `~/.claude/skills` alongside whatever else they keep there — WebPilot
+    /// Leave them. Right for the skill, which lives in the user's skills
+    /// directories alongside whatever else they keep there — WebPilot
     /// writes the files it ships and touches nothing it did not.
     Keep,
 }
