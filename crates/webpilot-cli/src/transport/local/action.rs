@@ -215,9 +215,7 @@ impl LocalTransport {
                 self.require_main_frame("drag").await?;
                 self.do_drag(*source, *target, *steps, snapshot_id)
                     .await
-                    .map_err(|error| {
-                        crate::into_webpilot_error(error).with_unknown_outcome("drag")
-                    })?;
+                    .map_err(|error| super::unconfirmed_effect(error, "drag"))?;
                 let downloads = self.downloads_from(&mut download_events, false).await;
                 return Ok(self.settled_action_result(capture, None, downloads).await);
             }
@@ -271,9 +269,9 @@ impl LocalTransport {
         // page-mutating action runs in the page via the bridge.
         let (nav_hint, frame_navigates, download_hint, opens_context, named_frame) = match &action {
             Action::KeyPress { key, modifiers } => {
-                self.do_key_press(key, modifiers).await.map_err(|error| {
-                    crate::into_webpilot_error(error).with_unknown_outcome("key_press")
-                })?;
+                self.do_key_press(key, modifiers)
+                    .await
+                    .map_err(|error| super::unconfirmed_effect(error, "key_press"))?;
                 // Enter can submit a form, and that navigation is QUEUED (HTML
                 // spec) — its start event may land after the key-dispatch response,
                 // so the buffered drain alone can miss it and `--capture` would
@@ -290,7 +288,7 @@ impl LocalTransport {
                 } else {
                     self
                     .invoke_bridge(&json!({"type": "executeAction", "action": action_json, "snapshot_id": snapshot_id}))
-                    .await.map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome(action.kind().to_string()))?
+                    .await.map_err(|error| super::unconfirmed_effect(error, action.kind().to_string()))?
                 };
                 let resp = Self::parse_bridge_response(raw)?;
                 // `navigates`: a click that will load a new TOP document (drives
@@ -577,8 +575,8 @@ impl LocalTransport {
             }
             let pressed = self.page.send("Input.dispatchMouseEvent", Some({let mut p=params.clone();p["type"]=json!("mousePressed");p})).await;
             let released = self.page.send("Input.dispatchMouseEvent", Some({let mut p=params;p["type"]=json!("mouseReleased");p})).await;
-            pressed.map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("click"))?;
-            released.map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("click"))?;
+            pressed.map_err(|error| super::unconfirmed_effect(error, "click"))?;
+            released.map_err(|error| super::unconfirmed_effect(error, "click"))?;
             if let Ok(effects) = self.invoke_bridge(&json!({"type":"finishClick"})).await {
                 let cancelled = effects["click_cancelled"] == true;
                 for key in ["navigates", "frame_navigates"] {
@@ -659,8 +657,7 @@ impl LocalTransport {
                 Some(json!({"objectId": object_id})),
             )
             .await;
-        outcome
-            .map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("upload"))?;
+        outcome.map_err(|error| super::unconfirmed_effect(error, "upload"))?;
         Ok(())
     }
 

@@ -1164,6 +1164,26 @@ fn is_stale_context(err: &anyhow::Error) -> bool {
     err.downcast_ref::<crate::cdp::ContextGone>().is_some()
 }
 
+/// The typed error for a page effect `operation` whose call failed after it was
+/// sent. A lost or timed-out reply and a document torn down mid-call
+/// ([`crate::cdp::ContextDestroyedMidFlight`]) leave the effect possibly
+/// applied, so they become `OutcomeUnknown`; every other error keeps its type.
+pub(super) fn unconfirmed_effect(
+    error: anyhow::Error,
+    operation: impl Into<String>,
+) -> WebPilotError {
+    if error
+        .downcast_ref::<crate::cdp::ContextDestroyedMidFlight>()
+        .is_some()
+    {
+        return WebPilotError::OutcomeUnknown {
+            operation: operation.into(),
+            reason: error.to_string(),
+        };
+    }
+    crate::into_webpilot_error(error).with_unknown_outcome(operation)
+}
+
 /// Per-probe time box: a context busy with an in-flight renderer swap can stall
 /// an evaluate, so each readiness check is bounded and the caller's deadline
 /// governs the overall wait.
@@ -2345,5 +2365,38 @@ mod navigation_settled_tests {
         let url = mock_cdp(serve_frame("L1", "https://same", "loading")).await;
         let page = mock_page(&url).await;
         assert!(!navigation_settled(&page, Some("L1"), "https://same", one_probe()).await);
+    }
+}
+
+#[cfg(test)]
+mod unconfirmed_effect_tests {
+    use super::*;
+
+    #[test]
+    fn an_effect_cut_off_mid_call_is_an_unknown_outcome() {
+        let cut_off = unconfirmed_effect(crate::cdp::ContextDestroyedMidFlight.into(), "eval");
+        assert!(
+            matches!(cut_off, WebPilotError::OutcomeUnknown { .. }),
+            "{cut_off}"
+        );
+        let lost = unconfirmed_effect(
+            WebPilotError::ConnectionLost {
+                detail: "socket closed".into(),
+            }
+            .into(),
+            "click",
+        );
+        assert!(
+            matches!(lost, WebPilotError::OutcomeUnknown { .. }),
+            "{lost}"
+        );
+        let definite = unconfirmed_effect(
+            WebPilotError::FrameNotFound {
+                selector: "frame x".into(),
+            }
+            .into(),
+            "eval",
+        );
+        assert_eq!(definite.exit_code(), 4, "{definite}");
     }
 }

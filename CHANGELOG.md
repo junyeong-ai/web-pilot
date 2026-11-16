@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- An `eval`, `fetch`, `dom set` or action whose document navigated away while
+  the call was in flight reports `OutcomeUnknown` (exit 9): the code may have
+  run, and the headless `Other` (exit 1) it gave invited a retry that repeated
+  a request. In browser mode the reverse holds: a command Chrome answered with
+  an error never ran, and is no longer reported as `OutcomeUnknown`; a stale
+  context there is retried as intended.
+
 ### Changed
 
 - A page load refuses `file:` URLs unless `[chrome] allow_file_urls = true` or

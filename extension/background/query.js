@@ -3,7 +3,7 @@
 
 import { err, exceptionErr, lineSafeClip, noPageErr, otherErr, timeoutErr } from "./errors.js";
 import { PROBE_MS, activeFrameId, activeTabId, navigationTimeoutMs, resolveActiveTab, resolveTabForRead, sleep } from "./session.js";
-import { cdpSend, cdpSendEffect, cdpEnableRuntime, cdpReemitContexts, withCdp } from "./cdp.js";
+import { cdpSend, cdpSendEffect, cdpEnableRuntime, cdpReemitContexts, isStaleContext, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, sendToContent, sendToContentOnce } from "./content.js";
 
 // ── Eval ───────────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ async function handleEval(command) {
         try {
           return await cdpEval(tid, command.code, uniqueContextId);
         } catch (e) {
-          if (attempt === 0 && /Cannot find context with specified id/i.test(e?.message || "")) {
+          if (attempt === 0 && isStaleContext(e)) {
             continue;
           }
           throw e;

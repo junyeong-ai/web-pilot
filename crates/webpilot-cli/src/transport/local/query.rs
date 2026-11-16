@@ -80,21 +80,11 @@ impl LocalTransport {
                 result: Some(serde_json::to_string(&v).expect("a JSON value serializes")),
                 error: None,
             }),
-            Err(e) => {
-                // Keep a typed error typed (e.g. FrameNotFound from a vanished
-                // switched frame → exit 4); only wrap genuinely unknown ones.
-                let error = match e.downcast::<WebPilotError>() {
-                    Ok(typed) => typed.with_unknown_outcome("eval"),
-                    Err(e) => WebPilotError::Other {
-                        detail: e.to_string(),
-                    },
-                };
-                Ok(ResponseData::Eval {
-                    success: false,
-                    result: None,
-                    error: Some(error),
-                })
-            }
+            Err(e) => Ok(ResponseData::Eval {
+                success: false,
+                result: None,
+                error: Some(super::unconfirmed_effect(e, "eval")),
+            }),
         }
     }
 
@@ -302,7 +292,7 @@ impl LocalTransport {
         let raw = self
             .invoke_bridge(&msg)
             .await
-            .map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("dom_set"))?;
+            .map_err(|error| super::unconfirmed_effect(error, "dom_set"))?;
         let _ = Self::parse_bridge_response(raw)?;
         Ok(ResponseData::CommandResult {
             success: true,
@@ -367,7 +357,7 @@ impl LocalTransport {
             .page
             .evaluate(&js)
             .await
-            .map_err(|error| crate::into_webpilot_error(error).with_unknown_outcome("fetch"))?;
+            .map_err(|error| super::unconfirmed_effect(error, "fetch"))?;
         // A network-level failure (refused/unresolved host, blocked request, CORS
         // denial) caught inside the IIFE. Surface the browser's opaque reason
         // sanitized — never the raw V8 message-with-stack the bare rejection would
