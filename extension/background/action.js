@@ -512,7 +512,9 @@ async function dispatchActionToPage(tab, action, snapshot_id) {
         return { type: "Action", success: false, error: frameGone };
       }
       await ensureBridge(tab.id, activeFrameId);
-      r = await sendToContent(tab.id, { type: "executeAction", action, snapshot_id }, activeFrameId);
+      r = action.kind === "type"
+        ? await dispatchType(tab.id, action, snapshot_id)
+        : await sendToContent(tab.id, { type: "executeAction", action, snapshot_id }, activeFrameId);
     }
     const result = { type: "Action", ...r };
     // `navigates` (a new TOP document), `frame_navigates` (the CURRENT frame) and
@@ -619,6 +621,17 @@ async function dispatchActionToPage(tab, action, snapshot_id) {
     chrome.tabs.onCreated.removeListener(onCreated);
     chrome.webNavigation.onCreatedNavigationTarget.removeListener(onNavTarget);
   }
+}
+
+// Type as a keyboard does (headless twin: `do_type`): the content script vets
+// the target and readies it — a typed control (number, date, …) takes its value
+// there — and any text it hands back goes in as native input, so the page sees
+// the trusted `beforeinput`/`input` of real typing.
+async function dispatchType(tabId, action, snapshot_id) {
+  const ready = await sendToContent(tabId, { type: "prepareType", action, snapshot_id }, activeFrameId);
+  if (ready?.success === false || typeof ready?.insert !== "string") return ready;
+  await withCdp(tabId, (tid) => cdpSendEffect(tid, "Input.insertText", { text: ready.insert }, "type"));
+  return { success: true };
 }
 
 async function handleUpload(tabId, action, snapshot_id) {

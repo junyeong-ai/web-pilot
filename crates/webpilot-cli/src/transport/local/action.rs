@@ -285,6 +285,8 @@ impl LocalTransport {
                 let action_json = serde_json::to_value(&action)?;
                 let raw = if let Action::Click { index, modifiers } = &action {
                     self.do_click(*index, modifiers, snapshot_id).await?
+                } else if let Action::Type { .. } = &action {
+                    self.do_type(&action_json, snapshot_id).await?
                 } else {
                     self
                     .invoke_bridge(&json!({"type": "executeAction", "action": action_json, "snapshot_id": snapshot_id}))
@@ -516,6 +518,27 @@ impl LocalTransport {
             .into());
         }
         Ok(())
+    }
+
+    /// Type as a keyboard does: the bridge vets the target and readies it — a
+    /// typed control (number, date, …) takes its value there — and any text it
+    /// hands back goes in as native input, so the page sees the trusted
+    /// `beforeinput`/`input` of real typing (browser-mode twin: `dispatchType`).
+    async fn do_type(&self, action: &Value, snapshot_id: Option<&str>) -> Result<Value> {
+        let ready = self
+            .invoke_bridge(
+                &json!({"type": "prepareType", "action": action, "snapshot_id": snapshot_id}),
+            )
+            .await
+            .map_err(|error| super::unconfirmed_effect(error, "type"))?;
+        let prepared = Self::parse_bridge_response(ready.clone())?;
+        if let Some(text) = prepared.get("insert").and_then(Value::as_str) {
+            self.page
+                .send("Input.insertText", Some(json!({ "text": text })))
+                .await
+                .map_err(|error| super::unconfirmed_effect(error, "type"))?;
+        }
+        Ok(ready)
     }
 
     async fn do_click(

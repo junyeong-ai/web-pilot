@@ -1026,75 +1026,81 @@
     return effects.result;
   }
 
-  function reliableType(el, text, clear) {
+  // `type`'s first half: resolve and vet the target, then ready it for the text
+  // (`readyForText`). The transport sends the returned `insert` as native input.
+  function prepareType(action) {
+    const r = resolveTarget(action);
+    if (r.error) return r.error;
+    if (!isTextEditable(r.target)) {
+      return err(
+        "InvalidArgument",
+        `Cannot type into <${r.target.tagName.toLowerCase()}${
+          r.target.tagName === "INPUT" ? ` type=${r.target.type}` : ""
+        }>: not a text field — use action click for buttons/links, action select for dropdowns`,
+      );
+    }
+    // Script can edit a disabled or read-only field though a user can't — and
+    // the page then never submits a disabled value, and resets or ignores a
+    // read-only one. Reject loudly rather than report a success the page won't
+    // honor.
+    if (isDisabled(r.target)) {
+      return err(
+        "InvalidArgument",
+        "Cannot type into a disabled field — its value is never submitted",
+      );
+    }
+    if (r.target.readOnly) {
+      return err(
+        "InvalidArgument",
+        "Cannot type into a read-only field — the page rejects edits to it",
+      );
+    }
+    const ready = readyForText(r.target, action.text, action.clear);
+    if (ready.success === false) return ready;
+    return { success: true, ...ready };
+  }
+
+  // Ready `el` for `text` the way a user would type it. A typed control
+  // (number, date, …) parses rather than takes keystrokes, so its value is set
+  // here and this returns `{}`. A free-text field or an editable region is
+  // focused with the caret at its end — or, for `clear`, a selection over its
+  // content — and `{ insert }` comes back: the transport sends that text as
+  // native input (`Input.insertText`), which fires the trusted `beforeinput` /
+  // `input` a keyboard does and leaves `change` to the browser's own commit
+  // (blur, Enter). An error object comes back when the field refuses.
+  function readyForText(el, text, clear) {
     el.scrollIntoView({ block: "center", behavior: "instant" });
     el.focus();
 
     if (el.isContentEditable) {
-      if (clear) {
-        // Clear via the editing pipeline (select-all + delete), NOT `innerHTML =
-        // ""`: a direct innerHTML wipe clobbers a rich editor's nested structure
-        // (<p>/<span>/…) and desyncs a framework that manages its own DOM
-        // (Draft/Slate/ProseMirror). selectAll+delete fires beforeinput/input the
-        // framework observes, so its model stays consistent. For a plain
-        // contenteditable it likewise empties the element.
-        document.execCommand("selectAll", false, null);
-        document.execCommand("delete", false, null);
-      } else {
-        // Append at the end, matching the <input>/<textarea> path below: after a
-        // programmatic focus() the caret sits at a stale or start position, so a
-        // bare insertText would prepend or splice into the middle instead of
-        // extending the field. Collapse the selection to the end of the
-        // element's contents first.
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
+      // The selection, not `innerHTML`: a rich editor keeps its own model of the
+      // DOM and follows edits only through the editing pipeline, so the insert
+      // replaces this range there.
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      if (!clear) range.collapse(false);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      if (text === "") {
+        if (clear) document.execCommand("delete", false, null);
+        return {};
       }
-      // execCommand fires `input` on its own when it inserts — but an empty
-      // `text`, an unsupported command, or a framework that swallowed it fires
-      // none, and a contenteditable never fires `change` — so a framework-bound
-      // editor (a React onChange) could miss the edit. PROBE whether the native
-      // `input` actually fired and dispatch the fallback only when it did not:
-      // unconditionally dispatching doubled the event on every successful
-      // insert (one action, two `input`s — a raw oninput counter or an
-      // append-per-input editor sees a phantom second edit). The probe listens
-      // on DOCUMENT capture, not on `el`: rich editors register their own
-      // capture listener on the editing host and stopImmediatePropagation()
-      // there would starve a same-node probe (registered later) into a false
-      // "never fired" → double dispatch. A document-capture listener runs
-      // before any target-phase handler can cut it off; composedPath keeps it
-      // scoped to this element (shadow hosts included).
-      let nativeInputFired = false;
-      const probe = (e) => { if (e.composedPath().includes(el)) nativeInputFired = true; };
-      document.addEventListener("input", probe, { capture: true });
-      document.execCommand("insertText", false, text);
-      document.removeEventListener("input", probe, { capture: true });
-      if (!nativeInputFired) {
-        el.dispatchEvent(new InputEvent("input", {
-          bubbles: true, inputType: "insertText", data: text,
-        }));
-      }
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      return;
+      return { insert: text };
     }
 
     const newVal = clear ? text : (el.value || "") + text;
+    const freeText =
+      el instanceof HTMLTextAreaElement ||
+      (el instanceof HTMLInputElement && FREE_TEXT_INPUT_TYPES.has(el.type));
 
     // `maxlength` bounds what a USER can type — a real keyboard stops at the
-    // cap — but a programmatic value set sails past it, leaving the field
-    // holding a value the UI can never produce while the command reports
-    // success. Reject typed instead, BEFORE any mutation. Enforced only where
-    // the browser itself enforces maxlength (textarea + the textual input
-    // types); e.g. `type=number` ignores the attribute, so rejecting there
-    // would invent a constraint the page doesn't have.
-    const maxlengthApplies =
-      el instanceof HTMLTextAreaElement ||
-      (el instanceof HTMLInputElement &&
-        ["text", "search", "url", "tel", "email", "password"].includes(el.type));
-    if (maxlengthApplies && el.maxLength >= 0 && newVal.length > el.maxLength) {
+    // cap — and native input would silently cut the text there. Reject typed
+    // instead, BEFORE any mutation. Enforced only where the browser itself
+    // enforces maxlength (the free-text fields); e.g. `type=number` ignores the
+    // attribute, so rejecting there would invent a constraint the page doesn't
+    // have.
+    if (freeText && el.maxLength >= 0 && newVal.length > el.maxLength) {
       return err(
         "InvalidArgument",
         `The field caps input at ${el.maxLength} characters (maxlength) but the result would be ${newVal.length} — a real keyboard would stop at the cap; send a shorter value`,
@@ -1102,14 +1108,35 @@
       );
     }
 
+    if (freeText) {
+      if (deepActiveElement() !== el) {
+        return err(
+          "InvalidArgument",
+          "The field did not keep focus — the page moved it elsewhere; click the field, then type again",
+          { requested: text },
+        );
+      }
+      // A field without a caret API (`type=email`) takes the whole new value
+      // over a full selection.
+      const caretless = el.selectionStart === null;
+      if (clear || caretless) {
+        el.select();
+      } else {
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+      const insert = clear || caretless ? newVal : text;
+      if (insert === "") {
+        if (el.value !== "") document.execCommand("delete", false, null);
+        return {};
+      }
+      return { insert };
+    }
+
     // The native value setter (frameworks like React/Vue track it), with
     // `el.value` as the fallback. Wrapped so the SAME path can restore the prior
     // value if the write is rejected below — a rejected type must leave the field
     // exactly as it was.
-    const proto = el instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement
-      : HTMLInputElement;
-    const valueSetter = Object.getOwnPropertyDescriptor(proto.prototype, "value")?.set;
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     const setNativeValue = (v) => {
       try {
         if (valueSetter) valueSetter.call(el, v);
@@ -1121,14 +1148,13 @@
     const priorValue = el.value;
     setNativeValue(newVal);
 
-    // A typed control (number/date/time/…) silently sanitizes a value it can't
-    // parse to the empty string — "abc" into `<input type=number>` leaves the
-    // field blank. Firing input/change and reporting success would claim a value
-    // that never landed. A non-empty target that the control blanked is a
-    // rejection, not a no-op: fail typed so the agent retries with a valid
-    // format instead of trusting an empty field. (A control that merely
-    // normalises a valid value — "3.0" → "3" — keeps a non-empty value and is
-    // left alone.)
+    // A typed control silently sanitizes a value it can't parse to the empty
+    // string — "abc" into `<input type=number>` leaves the field blank. Firing
+    // input/change and reporting success would claim a value that never
+    // landed. A non-empty target that the control blanked is a rejection, not a
+    // no-op: fail typed so the agent retries with a valid format instead of
+    // trusting an empty field. (A control that merely normalises a valid value —
+    // "3.0" → "3" — keeps a non-empty value and is left alone.)
     if (newVal !== "" && el.value === "") {
       // The setter just blanked the field. In APPEND mode (the default) that
       // would DESTROY a valid existing value (`5` + "abc" → ""), so restore the
@@ -1146,6 +1172,7 @@
       bubbles: true, inputType: "insertText", data: text,
     }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
+    return {};
   }
 
   // `<input>` types that hold user-typed text. Excludes the toggles/pickers
@@ -1155,6 +1182,9 @@
     "text", "search", "email", "url", "tel", "password", "number",
     "date", "time", "datetime-local", "month", "week",
   ]);
+  // The input types that take arbitrary text through the editing pipeline. The
+  // rest of TEXT_INPUT_TYPES parse what they get and blank what they can't.
+  const FREE_TEXT_INPUT_TYPES = new Set(["text", "search", "email", "url", "tel", "password"]);
 
   // Whether `action type` can meaningfully enter text here: a contenteditable, a
   // textarea, or a text-admitting input. Anything else (a link, button, div,
@@ -1192,39 +1222,8 @@
     try {
       switch (action.kind) {
         case "click":
-          return err("InvalidArgument", "click requires native browser input");
-
-        case "type": {
-          const r = resolveTarget(action);
-          if (r.error) return r.error;
-          if (!isTextEditable(r.target)) {
-            return err(
-              "InvalidArgument",
-              `Cannot type into <${r.target.tagName.toLowerCase()}${
-                r.target.tagName === "INPUT" ? ` type=${r.target.type}` : ""
-              }>: not a text field — use action click for buttons/links, action select for dropdowns`,
-            );
-          }
-          // A `.value` setter succeeds on a disabled/read-only field via JS even
-          // though a real user can't edit it — and the page then never submits a
-          // disabled value, and resets or ignores a read-only one. Reject loudly
-          // rather than report a success the page won't honor.
-          if (isDisabled(r.target)) {
-            return err(
-              "InvalidArgument",
-              "Cannot type into a disabled field — its value is never submitted",
-            );
-          }
-          if (r.target.readOnly) {
-            return err(
-              "InvalidArgument",
-              "Cannot type into a read-only field — the page rejects edits to it",
-            );
-          }
-          const typeError = reliableType(r.target, action.text, action.clear);
-          if (typeError) return typeError;
-          return { success: true };
-        }
+        case "type":
+          return err("InvalidArgument", `${action.kind} requires native browser input`);
 
         case "scroll": {
           // `amount` is optional (absent → 600). An explicit 0 is a no-op the
@@ -1326,7 +1325,7 @@
           // A real selection fires `input` THEN `change` (both bubble). The
           // bridge fired only `change`, so a <select> wired to `oninput` — or a
           // framework that observes `input` — silently ignored the choice while
-          // the command still reported success. Fire both, like `reliableType`.
+          // the command still reported success. Fire both, like a typed control.
           r.target.dispatchEvent(new Event("input", { bubbles: true }));
           r.target.dispatchEvent(new Event("change", { bubbles: true }));
           return { success: true };
@@ -1819,6 +1818,8 @@
         return { success: true };
       case "executeAction":
         return executeAction(msg.action);
+      case "prepareType":
+        return prepareType(msg.action);
       case "cancelWait":
         state.waits.get(msg.request_id)?.();
         return { success: true };

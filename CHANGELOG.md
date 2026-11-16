@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `type` enters text as native input, so the page sees the trusted
+  `beforeinput` and `input` events real typing fires, and the browser fires
+  `change` when the edit is committed. It set the value and dispatched
+  synthetic `input`/`change` events, which editors built on `beforeinput`
+  (Lexical, Slate, ProseMirror) and input filters ignored. Typed controls
+  (number, date, …) still take their value directly.
+- A capture taken while an iframe was still loading counted it out of
+  `subframes`, and so missed the "N iframe(s) not shown" notice for it and any
+  frame nested in it. The count now waits, up to two seconds, for frames whose
+  `<iframe>` names an http(s) URL to commit.
 - In headless mode a download a page starts after a CLI command has finished is
   blocked. Chrome drops the per-command download setting when the command
   disconnects, so such a download was saved to the profile's default folder,

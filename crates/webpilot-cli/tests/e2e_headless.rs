@@ -534,12 +534,17 @@ fn headless_behavioral_flow() {
         "type of a leading-dash value with --clear failed: {}",
         stdout(&typed)
     );
-    let tv = fx.run(&["eval", "document.getElementById('q').value === '-99'"]);
+    // Typing goes through the editing pipeline, so the page sees the trusted
+    // `input` a keyboard produces rather than a synthetic one.
+    let tv = fx.run(&[
+        "eval",
+        "document.getElementById('q').value === '-99' && window.__qtrusted === true",
+    ]);
     let tvj: serde_json::Value = serde_json::from_str(&stdout(&tv)).expect("eval json");
     assert_eq!(
         tvj["result"].as_str(),
         Some("true"),
-        "the leading-dash value must land exactly and --clear must still apply: {}",
+        "the leading-dash value must land exactly, through a trusted input event, and --clear must still apply: {}",
         stdout(&tv)
     );
 
