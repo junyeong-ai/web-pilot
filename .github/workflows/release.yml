@@ -48,11 +48,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Both Linux targets build on one fixed Ubuntu release: the glibc a
+          # binary links against sets the oldest glibc it runs on, so a moving
+          # `-latest` label would raise that floor without a commit.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          # ARM runners have no -latest alias — a concrete GA label is required.
+            os: ubuntu-26.04
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
+            os: ubuntu-26.04-arm
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
