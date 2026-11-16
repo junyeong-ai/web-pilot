@@ -73,6 +73,11 @@ pub struct Timeouts {
 #[derive(Debug, Clone)]
 pub struct Chrome {
     pub accept_dialogs: bool,
+    /// Load `file:` URLs. Off by default: a local file read through the
+    /// browser bypasses every file permission the agent's host enforces on its
+    /// own tools, and Chrome itself keeps an extension off `file:` until the
+    /// user allows it.
+    pub allow_file_urls: bool,
     /// Explicit Chrome/Chromium binary path. `None` falls back to platform
     /// auto-detection in the session launcher.
     pub binary: Option<String>,
@@ -253,6 +258,7 @@ impl Settings {
             },
             chrome: Chrome {
                 accept_dialogs: bool_var("WEBPILOT_ACCEPT_DIALOGS", c.accept_dialogs, false),
+                allow_file_urls: bool_var("WEBPILOT_ALLOW_FILE_URLS", c.allow_file_urls, false),
                 binary: string_var("WEBPILOT_CHROME").or(c.binary),
                 viewport_width: u32_var("WEBPILOT_VIEWPORT_WIDTH", c.viewport_width, 1280),
                 viewport_height: u32_var("WEBPILOT_VIEWPORT_HEIGHT", c.viewport_height, 720),
@@ -382,6 +388,7 @@ struct FileTimeouts {
 #[serde(default, deny_unknown_fields)]
 struct FileChrome {
     accept_dialogs: Option<bool>,
+    allow_file_urls: Option<bool>,
     binary: Option<String>,
     viewport_width: Option<u32>,
     viewport_height: Option<u32>,
@@ -527,6 +534,7 @@ mod tests {
             },
             chrome: Chrome {
                 accept_dialogs: false,
+                allow_file_urls: false,
                 binary: None,
                 viewport_width: 1280,
                 viewport_height: 720,

@@ -360,6 +360,7 @@ webpilot action click 5 --snapshot-id ID  # default deny 상태
 Blocked by policy: click. Check: webpilot policy list
 ```
 
+- 페이지 로드(`navigate`, `capture --url`, `tab new`)는 `http(s)`, `data:`, `about:blank` URL만 받습니다. `file:` URL은 `[chrome] allow_file_urls = true` 또는 `WEBPILOT_ALLOW_FILE_URLS=true`를 설정해야 열립니다. 브라우저로 로컬 파일을 읽으면 Claude Code 같은 에이전트 호스트가 자체 도구에 거는 파일 권한을 우회하기 때문입니다. 그 밖의 스킴은 종료 코드 7로 거부합니다.
 - `eval`은 **마스터 키**입니다. `eval`이 허용되면 페이지 JS로 다른 효과를 재현할 수 있으니, `navigate`·`fetch`·`cookie_list` 같은 좁은 deny는 보조적일 뿐입니다. **`eval`을 먼저 막으세요.**
 - 정책은 **프로세스가 브라우저에 닿는 지점**에서 강제됩니다: `LocalTransport::send`(헤드리스), NM 호스트(브라우저), `device`·`context close` 핸들러. 호스트는 모든 와이어 값을 타입 있는 `Command`로 **다시 파싱**한 뒤 검사하므로 “Rust는 거부, JS는 강제 변환” 식 우회가 불가능합니다.
 - 정책 저장소는 OS 캐시가 아니라 **영속 데이터 루트**(`policy/policies.json`, `WEBPILOT_HOME`을 지정하면 그 아래)에 있어, 캐시 정리로 deny 규칙이 슬그머니 풀리지 않습니다.

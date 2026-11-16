@@ -201,6 +201,20 @@ impl Command {
         Ok(())
     }
 
+    /// The URL this command loads into a browsing context: the effect the
+    /// `navigate` key gates.
+    pub fn loaded_url(&self) -> Option<&str> {
+        match self {
+            Command::Action {
+                action: Action::Navigate { url },
+                ..
+            }
+            | Command::Capture { url: Some(url), .. }
+            | Command::TabNew { url } => Some(url),
+            _ => None,
+        }
+    }
+
     /// The policy key this command is gated by, if any. Drives the single
     /// enforcement point at the transport boundary. Read-only observation
     /// (capture, status, list/read commands) returns `None` — only operations

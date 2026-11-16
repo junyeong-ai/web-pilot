@@ -169,6 +169,11 @@ update, reload the extension so a new host process starts.
   `IpcTransport` and the extension only carry commands; `webpilot policy` edits
   the store locally, with no wire command. The store, its fail-closed reads and
   each sink: the `policy.rs` module doc; what each key gates: `PolicyKey`.
+- A page load (`navigate`, `capture --url`, `tab new`) takes an `http(s)`,
+  `data:` or `about:blank` URL, and `file:` only with `[chrome]
+  allow_file_urls`: a local file read through the browser bypasses the file
+  permissions the agent's host enforces on its own tools. The check runs in
+  `policy::enforce`, so it holds at both sinks.
 - `eval` is the master key: with `eval` allowed, narrower denies (navigate /
   fetch / cookie_list / session_export) are advisory — page JS reproduces those
   effects. Deny `eval` first; `policy default deny` + allowlist is the

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A page load refuses `file:` URLs unless `[chrome] allow_file_urls = true` or
+  `WEBPILOT_ALLOW_FILE_URLS=true`, and any scheme other than `http(s)`, `data:`
+  and `about:blank`, with `InvalidArgument` (exit 7). `capture --url
+  file:///…` printed any local file, and the shipped skill runs `capture` and
+  `navigate` without a permission prompt, so a page could steer an agent past
+  the file permissions its host enforces. The check is an allowlist, since
+  `view-source:file:` reads the same files.
 - MCP tool successes no longer carry `structuredContent`. Codex, and by user
   reports Claude Code, hand the model `structuredContent` in place of the
   content blocks when both are present, so the model saw an element count

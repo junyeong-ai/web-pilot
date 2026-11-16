@@ -7,6 +7,7 @@ download_window_ms = 2000
 
 [chrome]
 accept_dialogs = false
+allow_file_urls = false
 viewport_width = 1280
 viewport_height = 720
 no_sandbox = false

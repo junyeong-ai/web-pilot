@@ -369,6 +369,7 @@ webpilot action click 5 --snapshot-id ID  # under default deny
 Blocked by policy: click. Check: webpilot policy list
 ```
 
+- A page load (`navigate`, `capture --url`, `tab new`) accepts `http(s)`, `data:` and `about:blank` URLs. `file:` URLs load only after `[chrome] allow_file_urls = true` or `WEBPILOT_ALLOW_FILE_URLS=true`: reading a local file through the browser would bypass the file permissions an agent host such as Claude Code enforces on its own tools. Any other scheme is refused with exit code 7.
 - `eval` is the **master key**. With `eval` allowed, page JS can reproduce other effects, so narrow denies on `navigate` / `fetch` / `cookie_list` are merely advisory. **Deny `eval` first.**
 - Policy is enforced **where a process reaches the browser**: `LocalTransport::send` (headless), the NM host (browser), and the `device` / `context close` handlers. The host **re-parses** every wire value into a typed `Command` before checking, so a “Rust rejects / JS coerces” bypass is impossible.
 - The policy store lives under the **durable data root** (`policy/policies.json`, or under `WEBPILOT_HOME` when that is set), not the OS cache — so a cache wipe can't silently reset your deny rules to allow.

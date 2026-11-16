@@ -39,11 +39,51 @@ fn policy_file() -> PathBuf {
 /// Enforce policy for a command before it reaches the browser. Returns the
 /// typed `PolicyDenied` error when the command's gated operation is set to
 /// `deny`, so callers can both propagate it (`?`) and reconstruct the wire
-/// envelope from it.
+/// envelope from it. A URL the command would load is checked first:
+/// [`check_loaded_url`].
 pub fn enforce(command: &Command) -> std::result::Result<(), WebPilotError> {
+    if let Some(url) = command.loaded_url() {
+        check_loaded_url(url, webpilot::settings::get().chrome.allow_file_urls)?;
+    }
     match command.policy_key() {
         Some(key) => enforce_key(key),
         None => Ok(()),
+    }
+}
+
+/// A page load takes an absolute `http(s)`, `data:` or `about:blank` URL, and a
+/// `file:` URL only with `[chrome] allow_file_urls`. The check is an allowlist:
+/// a wrapping scheme such as `view-source:file:` reads the same local files.
+fn check_loaded_url(url: &str, allow_file_urls: bool) -> std::result::Result<(), WebPilotError> {
+    // The URL Standard strips leading and trailing C0 controls and spaces
+    // before it parses; any other character outside the scheme grammar refuses.
+    let url = url.trim_matches(|c: char| c <= ' ');
+    let scheme = url
+        .split_once(':')
+        .map(|(scheme, _)| scheme)
+        .filter(|scheme| {
+            scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        })
+        .map(str::to_ascii_lowercase);
+    let refuse = |detail: String| Err(WebPilotError::InvalidArgument { detail });
+    match scheme.as_deref() {
+        Some("http" | "https" | "data") => Ok(()),
+        Some("about") if url.eq_ignore_ascii_case("about:blank") => Ok(()),
+        Some("file") if allow_file_urls => Ok(()),
+        Some("file") => refuse(
+            "file: URLs load only when the operator allows them \
+             ([chrome] allow_file_urls = true or WEBPILOT_ALLOW_FILE_URLS=true)"
+                .into(),
+        ),
+        Some(other) => refuse(format!(
+            "{other}: URLs are not loaded; use an http(s), data: or about:blank URL"
+        )),
+        None => refuse(format!(
+            "not an absolute URL: {url}; use an http(s), data: or about:blank URL"
+        )),
     }
 }
 
@@ -288,6 +328,45 @@ mod tests {
         let err = parse_and_enforce(&bad).expect_err("string index must be rejected");
         assert!(matches!(err, WebPilotError::InvalidArgument { .. }));
         assert_eq!(err.exit_code(), 7);
+    }
+
+    #[test]
+    fn page_loads_accept_web_urls_and_file_urls_only_when_allowed() {
+        for url in [
+            "https://example.com/",
+            "HTTP://example.com",
+            " http://example.com/\n",
+            "data:text/html,<p>x",
+            "about:blank",
+        ] {
+            assert!(check_loaded_url(url, false).is_ok(), "{url}");
+        }
+        assert!(check_loaded_url("file:///etc/hosts", true).is_ok());
+        for url in [
+            "file:///etc/hosts",
+            "FILE:///etc/hosts",
+            "view-source:file:///etc/hosts",
+            "javascript:document.title",
+            "chrome://version",
+            "about:version",
+            "example.com",
+            "fi\tle:///etc/hosts",
+        ] {
+            let err = check_loaded_url(url, false).expect_err(url);
+            assert_eq!(err.exit_code(), 7, "{url}");
+        }
+    }
+
+    #[test]
+    fn enforce_refuses_a_file_url_before_reading_the_store() {
+        let err = enforce(&Command::TabNew {
+            url: "file:///etc/hosts".into(),
+        })
+        .expect_err("file: is off by default");
+        assert!(
+            matches!(err, WebPilotError::InvalidArgument { .. }),
+            "{err}"
+        );
     }
 
     #[test]
