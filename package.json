@@ -2,7 +2,7 @@
   "name": "webpilot-development",
   "private": true,
   "engines": {
-    "node": ">=24"
+    "node": ">=26"
   },
   "scripts": {
     "lint": "node scripts/build-semantics.mjs --check && oxlint --deny-warnings extension/",
@@ -12,6 +12,9 @@
     "aria-query": "5.3.2",
     "dom-accessibility-api": "0.7.1",
     "esbuild": "0.28.2",
-    "oxlint": "1.89.0"
+    "oxlint": "1.93.0"
+  },
+  "allowScripts": {
+    "esbuild": false
   }
 }
