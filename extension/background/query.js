@@ -17,17 +17,30 @@ import { ensureBridge, frameVanishedError, sendToContent, sendToContentOnce } fr
 // carries the stamp is that world's context. URL matching would be ambiguous
 // for same-URL sibling frames; the nonce never is, and because the stamp is
 // written only in `world`, the matching context is unambiguously that world's
-// (no auxData-type guess). A cross-origin out-of-process iframe has no context
-// in the tab's session and resolves to null — the same boundary headless has.
-// Resolve a switched frame's `{ contextId, frameId }` in `world`: the
-// `uniqueContextId` for evaluation, and the CDP `frameId` (from the matched
-// context's auxData) for frame-scoped CDP calls like Accessibility.getFullAXTree.
-// `frameWorldContextId` is the thin wrapper that returns only the contextId.
+// (no auxData-type guess).
+//
+// A cross-site iframe renders in a process of its own, which the tab's session
+// does not reach. When the frame's process is not the main frame's, the tab's
+// debugger attaches each such iframe as a child session — nested ones through
+// their parent's — and the stamp is looked for in their contexts too.
+//
+// Returns `{ contextId, frameId, sessionId, sessions }`: the `uniqueContextId`
+// to evaluate in; the CDP `frameId` for frame-scoped calls such as
+// Accessibility.getFullAXTree; the child session both belong to (undefined for
+// the tab's own); and every child session attached on the way, by id, with its
+// parent session and the frame it renders — the chain `frameBoundaries` walks.
+// Null when no context carries the stamp.
 async function resolveFrameWorld(tid, tabId, frameId, world) {
   const contexts = [];
+  const sessions = new Map();
+  const attached = [];
   const onEvent = (source, method, params) => {
-    if (source.tabId === tabId && method === "Runtime.executionContextCreated") {
-      contexts.push(params.context);
+    if (source.tabId !== tabId) return;
+    if (method === "Runtime.executionContextCreated") {
+      contexts.push({ context: params.context, sessionId: source.sessionId });
+    } else if (method === "Target.attachedToTarget" && params.targetInfo?.type === "iframe") {
+      sessions.set(params.sessionId, { parent: source.sessionId, frameId: params.targetInfo.targetId });
+      attached.push(params.sessionId);
     }
   };
   chrome.debugger.onEvent.addListener(onEvent);
@@ -52,11 +65,20 @@ async function resolveFrameWorld(tid, tabId, frameId, world) {
       // as a generic Other/exit 1.
       return null;
     }
+    if (await rendersElsewhere(tabId, frameId)) {
+      await cdpSend(tid, "Target.setAutoAttach", AUTO_ATTACH);
+    }
     const deadline = Date.now() + PROBE_MS;
     const probed = new Set();
     while (Date.now() < deadline) {
+      // A child attached since the last pass attaches its own children and
+      // announces its contexts.
+      for (const sessionId of attached.splice(0)) {
+        await cdpSend(tid, "Target.setAutoAttach", AUTO_ATTACH, sessionId).catch(() => {});
+        await cdpEnableRuntime(tid, sessionId).catch(() => {});
+      }
       const matches = [];
-      for (const c of contexts) {
+      for (const { context: c, sessionId } of contexts) {
         // A context with no string uniqueId can't be addressed unambiguously
         // (omitting it would silently target the default context), so skip it —
         // the headless listener applies the same guard before mapping.
@@ -66,19 +88,19 @@ async function resolveFrameWorld(tid, tabId, frameId, world) {
           expression: `window[${JSON.stringify(key)}]`,
           uniqueContextId: c.uniqueId,
           returnByValue: true,
-        }).catch(() => null);
+        }, sessionId).catch(() => null);
         // Return the uniqueContextId, not the reusable integer id: it stays
         // valid across a renderer swap and can never resolve to a different
         // context that reused the integer.
-        if (r?.result?.value === nonce) matches.push(c);
+        if (r?.result?.value === nonce) matches.push({ c, sessionId });
       }
       // Exactly one context must carry the nonce. The stamp is written only in
       // the targeted frame+world, so a second match means a same-origin page
       // copied the probe global across windows to spoof the target — refuse to
       // guess which is real rather than returning the wrong frame's context.
       if (matches.length === 1) {
-        const m = matches[0];
-        return { contextId: m.uniqueId, frameId: m.auxData?.frameId ?? null };
+        const { c, sessionId } = matches[0];
+        return { contextId: c.uniqueId, frameId: c.auxData?.frameId ?? null, sessionId, sessions };
       }
       if (matches.length > 1) return null;
       await sleep(25);
@@ -95,11 +117,48 @@ async function resolveFrameWorld(tid, tabId, frameId, world) {
   }
 }
 
-// The uniqueContextId alone — what evaluation needs. `null` when the frame's
-// world can't be resolved (removed frame / cross-origin OOPIF), same boundary.
-async function frameWorldContextId(tid, tabId, frameId, world) {
-  const resolved = await resolveFrameWorld(tid, tabId, frameId, world);
-  return resolved ? resolved.contextId : null;
+const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: false, flatten: true };
+
+// Whether `frameId` renders in another process than the tab's main frame: a
+// cross-site iframe, or a frame inside one.
+async function rendersElsewhere(tabId, frameId) {
+  if (frameId === 0) return false;
+  const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+  const processOf = (id) => frames?.find((f) => f.frameId === id)?.processId;
+  const own = processOf(frameId);
+  return own !== undefined && own !== processOf(0);
+}
+
+// The `<iframe>` boundaries between a resolved frame's session and the tab,
+// innermost first: for each, the session of the document that holds it
+// (undefined for the tab's), the `<iframe>`'s backendNodeId there, and the
+// origin of its content box in that document's viewport — where the child's
+// own viewport starts. Headless `frame_boundaries` is the twin.
+async function frameBoundaries(tid, resolved) {
+  const boundaries = [];
+  for (let sessionId = resolved.sessionId; sessionId; ) {
+    const child = resolved.sessions.get(sessionId);
+    const owner = await cdpSend(tid, "DOM.getFrameOwner", { frameId: child.frameId }, child.parent);
+    const model = await cdpSend(tid, "DOM.getBoxModel", { backendNodeId: owner.backendNodeId }, child.parent);
+    const content = model?.model?.content;
+    if (!Array.isArray(content) || content.length !== 8) {
+      throw Object.assign(new Error("the frame's <iframe> has no layout box"), { code: "InvalidArgument" });
+    }
+    boundaries.push({ sessionId: child.parent, owner: owner.backendNodeId, x: content[0], y: content[1] });
+    sessionId = child.parent;
+  }
+  return boundaries;
+}
+
+// The element at `(x, y)` of a session's viewport, as DOM.getNodeForLocation
+// reports it (`backendNodeId`, `frameId`).
+async function nodeAt(tid, sessionId, x, y) {
+  const metrics = await cdpSend(tid, "Page.getLayoutMetrics", {}, sessionId);
+  return cdpSend(tid, "DOM.getNodeForLocation", {
+    x: Math.round(x + metrics.cssLayoutViewport.pageX),
+    y: Math.round(y + metrics.cssLayoutViewport.pageY),
+    includeUserAgentShadowDOM: true,
+  }, sessionId);
 }
 
 // One evaluation contract for every frame: decide the form by COMPILING
@@ -123,8 +182,8 @@ const EVAL_DEADLINE_REACHED = Symbol("eval-deadline-reached");
 // `send_with_timeout(cdp_send)`. Only an awaitPromise evaluate needs this — every
 // other cdpSend settles promptly. Returns the CDP response, or the deadline
 // sentinel.
-async function evaluateAwaitingPromise(tid, params, operation = "eval") {
-  const evalCall = cdpSendEffect(tid, "Runtime.evaluate", params, operation);
+async function evaluateAwaitingPromise(tid, params, operation = "eval", sessionId) {
+  const evalCall = cdpSendEffect(tid, "Runtime.evaluate", params, operation, sessionId);
   evalCall.catch(() => {});
   let timer;
   return Promise.race([
@@ -135,11 +194,13 @@ async function evaluateAwaitingPromise(tid, params, operation = "eval") {
   ]).finally(() => clearTimeout(timer));
 }
 
-async function cdpEval(tid, code, uniqueContextId) {
+// `frame` is a resolved frame world (`resolveFrameWorld`), or undefined for the
+// tab's default context.
+async function cdpEval(tid, code, frame) {
   // The form probe compiles WITHOUT a context — a parse (expression vs
   // statements) is context-independent, and compileScript takes only the
   // integer executionContextId, never a uniqueContextId. The real evaluation
-  // targets the frame's context by its stable uniqueContextId.
+  // targets the frame's context by its stable uniqueContextId, on its session.
   const compiled = await cdpSend(tid, "Runtime.compileScript", {
     expression: `(${code})`,
     sourceURL: "webpilot://eval-form-probe",
@@ -150,8 +211,8 @@ async function cdpEval(tid, code, uniqueContextId) {
     expression: form,
     returnByValue: true,
     awaitPromise: true,
-    ...(uniqueContextId != null ? { uniqueContextId } : {}),
-  });
+    ...(frame ? { uniqueContextId: frame.contextId } : {}),
+  }, "eval", frame?.sessionId);
   if (ev === EVAL_DEADLINE_REACHED) {
     return { success: false, error: err("OutcomeUnknown", "Eval outcome is unknown; observe before retrying", { operation: "eval", reason: `response deadline reached after ${navigationTimeoutMs()}ms` }) };
   }
@@ -195,8 +256,8 @@ async function handleEval(command) {
       // mid-flight "Execution context was destroyed" is NOT retried: user code may
       // have run, so re-issuing would double a side effect.
       for (let attempt = 0; ; attempt++) {
-        const uniqueContextId = await frameWorldContextId(tid, tab.id, activeFrameId, "MAIN");
-        if (uniqueContextId == null) {
+        const frame = await resolveFrameWorld(tid, tab.id, activeFrameId, "MAIN");
+        if (frame == null) {
           return {
             success: false,
             error: err(
@@ -207,7 +268,7 @@ async function handleEval(command) {
           };
         }
         try {
-          return await cdpEval(tid, command.code, uniqueContextId);
+          return await cdpEval(tid, command.code, frame);
         } catch (e) {
           if (attempt === 0 && isStaleContext(e)) {
             continue;
@@ -516,4 +577,4 @@ async function handleWaitCancel(command) {
   return { type:"Wait", success:true };
 }
 
-export { cdpEval, frameWorldContextId, handleDomGet, handleDomSet, handleEval, handleFetch, handleWait, handleWaitCancel, resolveFrameWorld };
+export { cdpEval, frameBoundaries, handleDomGet, handleDomSet, handleEval, handleFetch, handleWait, handleWaitCancel, nodeAt, resolveFrameWorld };

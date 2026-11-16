@@ -28,24 +28,33 @@ backstopped by Chrome's `-32001`), and teardown of every task a session spawned
 (`CdpSession::Drop`), without which a long-lived `webpilot mcp` leaked a client
 per Chrome restart.
 
-## Cross-origin iframes through child sessions (rejected)
+## Cross-site iframes through child sessions (adopted in 0.14)
 
-The hoped-for payoff was reaching out-of-process iframes through
-`Target.setAutoAttach { flatten: true }` child sessions. Measured on Chrome for
-Testing 150.0.7871.115 with the launch flags of that time: a parent on
-`http://127.0.0.1:PORT` embedding `<iframe src="http://localhost:PORT/child">`
-never produced a `Target.attachedToTarget` for the iframe, nor an `iframe` or
-`page` entry in `Target.getTargets`, under per-session or browser-level
-auto-attach, with or without `--site-per-process`. The iframe appears in
-`Page.getFrameTree` only as a placeholder with an empty URL, which is why
-`count_http_subframes` counts it as 0 and `frame switch` returns
-`FrameNotFound`.
+Site isolation renders a cross-site iframe in a process of its own. The page's
+session sees it only from outside: `Page.getFrameTree` leaves it out and its
+documents' contexts never reach the page's `Runtime`. Chrome lists each one
+as a `Target.getTargets` entry of type `iframe` whose id is its frame id, with
+`parentId` naming the parent target; a flat session attached to it reaches
+its frames, and the root of its `Page.getFrameTree` names the owning frame
+as `parentId`. Measured on Chrome for Testing 157.0.8103.78 with WebPilot's
+launch flags: a click dispatched on the page's session at the `<iframe>`'s
+content-box origin (`DOM.getFrameOwner` + `DOM.getBoxModel` in the parent's
+session) plus the element's quad in the child's session lands as a trusted
+click; `Input.insertText` and key events on the page's session reach the
+focused input inside the iframe; a dialog raised inside it is reported on the
+page's session; and when the iframe navigates to its parent's site its
+session detaches and the frame rejoins the parent's tree.
 
-There is nothing to attach to, so the design could not deliver or even be
-verified against a local fixture. Cross-origin iframes in a signed-in browser
-are a browser-mode concern, handled by the extension, which this headless code
-cannot help. Revisit if a later Chrome lists headless cross-site iframes as
-attachable targets: rerun the fixture above first.
+So every frame has a host session (`transport/local/frames.rs`). Remote
+sessions are attached from the target list when a command needs them, rather
+than by `Target.setAutoAttach`, so the set a command sees is the browser's
+at that moment and needs no event ordering. Browser mode reaches the same
+frames through child sessions the tab's debugger auto-attaches, only when
+`webNavigation` reports the frame in another process than the main frame.
+
+This was rejected in 0.7 on Chrome for Testing 150, whose headless mode listed
+no `iframe` target for a cross-site iframe under any auto-attach setting;
+Chrome 155 and later list them.
 
 ## Console and network monitors stay in the page (decided)
 

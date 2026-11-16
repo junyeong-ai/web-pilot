@@ -6,7 +6,7 @@ import { PROBE_MS, acceptDialogs, activeFrameId, pinTab, resolveActiveTab, setAc
 import { cdpSend, cdpSendEffect, withCdp } from "./cdp.js";
 import { ensureBridge, frameVanishedError, installDialogHandler, sendToContent } from "./content.js";
 import { adoptedDocumentReady, documentReady, navigateBoundTab, settledActionUrl, waitActiveFrameSettled, waitHistoryTraversed, waitNavigationSettled, watchMainFrameCommit } from "./navigation.js";
-import { frameWorldContextId, resolveFrameWorld } from "./query.js";
+import { frameBoundaries, nodeAt, resolveFrameWorld } from "./query.js";
 import { countHttpSubframes } from "./capture.js";
 import { rearmMonitors, takeDialogs } from "./state.js";
 
@@ -396,10 +396,13 @@ async function dispatchClick(tabId, action, snapshot_id) {
       const resolved = await resolveFrameWorld(tid, tabId, activeFrameId, "ISOLATED");
       const uniqueContextId = resolved?.contextId;
       if (!uniqueContextId) return { success: false, error: err("FrameNotFound", "Click frame is unavailable", { selector: String(activeFrameId) }) };
+      // The target's quads and hit test are its session's; the pointer events go
+      // to the tab, at the point the frame boundaries put it.
+      const session = resolved.sessionId;
       const remote = await cdpSend(tid, "Runtime.evaluate", {
         expression: "(()=>{const t=window.__webpilot_state.pointerTarget;return t&&t.isConnected?t:null;})()",
         uniqueContextId, returnByValue: false,
-      });
+      }, session);
       const objectId = remote.result?.objectId;
       if (!objectId) return { success: false, error: err("StaleSnapshot", "Click target left the document", { index: action.index }) };
       try {
@@ -407,7 +410,7 @@ async function dispatchClick(tabId, action, snapshot_id) {
         let previous = null;
         let quad;
         for (;;) {
-          const geometry = await cdpSend(tid, "DOM.getContentQuads", { objectId });
+          const geometry = await cdpSend(tid, "DOM.getContentQuads", { objectId }, session);
           quad = geometry.quads?.[prep.fragment_index];
           if (!quad || quad.length !== 8) return { success: false, error: err("InvalidArgument", "Click target has no content quad") };
           if (previous && quad.every((value, i) => value === previous[i])) break;
@@ -420,20 +423,31 @@ async function dispatchClick(tabId, action, snapshot_id) {
         if (ready.fragment_index !== prep.fragment_index) return { success: false, error: err("InvalidArgument", "Click target layout changed during preparation; capture again") };
         const x = quad[0] + (quad[2] - quad[0]) * ready.x_fraction + (quad[6] - quad[0]) * ready.y_fraction;
         const y = quad[1] + (quad[3] - quad[1]) * ready.x_fraction + (quad[7] - quad[1]) * ready.y_fraction;
+        const boundaries = await frameBoundaries(tid, resolved);
+        const pageX = boundaries.reduce((sum, b) => sum + b.x, x);
+        const pageY = boundaries.reduce((sum, b) => sum + b.y, y);
         const m = action.modifiers || {};
         const modifiers = (m.alt ? 1 : 0) | (m.ctrl ? 2 : 0) | (m.meta ? 4 : 0) | (m.shift ? 8 : 0);
-        const params = { x, y, button: "left", clickCount: 1, modifiers };
-        await cdpSend(tid, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers });
+        const params = { x: pageX, y: pageY, button: "left", clickCount: 1, modifiers };
+        await cdpSend(tid, "Input.dispatchMouseEvent", { type: "mouseMoved", x: pageX, y: pageY, modifiers });
         const verified = await prepare();
         if (verified.success === false) return verified;
-        const geometry = await cdpSend(tid, "DOM.getContentQuads", { objectId });
+        const geometry = await cdpSend(tid, "DOM.getContentQuads", { objectId }, session);
         const currentQuad = geometry.quads?.[prep.fragment_index];
         if (!currentQuad || currentQuad.length !== quad.length || !quad.every((value, i) => value === currentQuad[i]) || verified.fragment_index !== ready.fragment_index || verified.x_fraction !== ready.x_fraction || verified.y_fraction !== ready.y_fraction) {
           return { success: false, error: err("InvalidArgument", "Click target moved after pointer positioning; capture again") };
         }
-        const metrics = await cdpSend(tid, "Page.getLayoutMetrics");
-        const hit = await cdpSend(tid, "DOM.getNodeForLocation", { x: Math.round(x + metrics.cssLayoutViewport.pageX), y: Math.round(y + metrics.cssLayoutViewport.pageY), includeUserAgentShadowDOM: true });
-        if (hit.frameId !== resolved.frameId) return { success: false, error: err("InvalidArgument", "Click target is covered by another frame or page element") };
+        const covered = { success: false, error: err("InvalidArgument", "Click target is covered by another frame or page element") };
+        if ((await nodeAt(tid, session, x, y)).frameId !== resolved.frameId) return covered;
+        // Each <iframe> on the way up must be what the point lands on in the
+        // document that holds it, or that document draws over the frame.
+        let outerX = x;
+        let outerY = y;
+        for (const boundary of boundaries) {
+          outerX += boundary.x;
+          outerY += boundary.y;
+          if ((await nodeAt(tid, boundary.sessionId, outerX, outerY)).backendNodeId !== boundary.owner) return covered;
+        }
         let pressError = null;
         try {
           await cdpSend(tid, "Input.dispatchMouseEvent", { ...params, type: "mousePressed" });
@@ -454,7 +468,7 @@ async function dispatchClick(tabId, action, snapshot_id) {
         }
         return prep;
       } finally {
-        await cdpSend(tid, "Runtime.releaseObject", { objectId }).catch(() => {});
+        await cdpSend(tid, "Runtime.releaseObject", { objectId }, session).catch(() => {});
       }
     });
   } finally {
@@ -659,8 +673,8 @@ async function handleUpload(tabId, action, snapshot_id) {
       }
 
       const outcome = await withCdp(tabId, async (tid) => {
-        const uniqueContextId = await frameWorldContextId(tid, tabId, activeFrameId, "ISOLATED");
-        if (uniqueContextId == null) {
+        const frame = await resolveFrameWorld(tid, tabId, activeFrameId, "ISOLATED");
+        if (frame == null) {
           return { success: false, error: otherErr("upload: could not reach the content-script context") };
         }
         const ev = await cdpSend(tid, "Runtime.evaluate", {
@@ -669,17 +683,17 @@ async function handleUpload(tabId, action, snapshot_id) {
           // here must resolve to null and become a StaleSnapshot, never a silent
           // file-set on an orphaned input.
           expression: "(()=>{const t=window.__webpilot_state.uploadTarget;return t&&t.isConnected?t:null;})()",
-          uniqueContextId,
+          uniqueContextId: frame.contextId,
           returnByValue: false,
-        });
+        }, frame.sessionId);
         const objectId = ev?.result?.objectId;
         if (!objectId) {
           return { success: false, error: err("StaleSnapshot", `[${action.index}] left the DOM before upload`, { index: action.index }) };
         }
         try {
-          await cdpSendEffect(tid, "DOM.setFileInputFiles", { objectId, files: [action.path] }, "upload");
+          await cdpSendEffect(tid, "DOM.setFileInputFiles", { objectId, files: [action.path] }, "upload", frame.sessionId);
         } finally {
-          await cdpSend(tid, "Runtime.releaseObject", { objectId }).catch(() => {});
+          await cdpSend(tid, "Runtime.releaseObject", { objectId }, frame.sessionId).catch(() => {});
         }
         return { success: true };
       });

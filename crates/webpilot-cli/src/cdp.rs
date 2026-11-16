@@ -719,6 +719,12 @@ impl CdpSession {
             .await
     }
 
+    /// Whether Chrome still holds this session: false once it announced the
+    /// detach, or the session was dropped.
+    pub fn is_alive(&self) -> bool {
+        self.session_alive.load(Ordering::Acquire)
+    }
+
     /// Hand a task spawned for this session (e.g. the frame-context listener,
     /// spawned by the transport with the maps it feeds) to the session so `Drop`
     /// aborts it — the same deterministic teardown the detach watcher and dialog

@@ -208,8 +208,8 @@ Captures never merge frame indices. The iframe footer counts
 frames outside the current capture; switch into the desired frame before acting.
 `hover`/`drag` require the main frame. Upload resolves the active frame's captured
 file input, including hidden inputs and open shadow roots; visibility is not
-required for upload. Cross-origin out-of-process frames that
-cannot be reached report `FrameNotFound`.
+required for upload. A cross-site iframe (a payment field, an embedded sign-in)
+is switched into and acted in like any other frame.
 
 `status` says how the tab is pinned, and `tab` marks the pinned tab and, in
 browser mode, the one the user is viewing:

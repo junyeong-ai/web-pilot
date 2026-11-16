@@ -23,8 +23,11 @@ async function withCdp(tabId, fn) {
   return op;
 }
 
-async function cdpSend(tabId, method, params = {}) {
-  return chrome.debugger.sendCommand({ tabId }, method, params);
+// `sessionId` addresses a child session the tab's debugger attached — a
+// cross-site iframe rendered in a process of its own; without it the command
+// goes to the tab's own session.
+async function cdpSend(tabId, method, params = {}, sessionId) {
+  return chrome.debugger.sendCommand(sessionId ? { tabId, sessionId } : { tabId }, method, params);
 }
 
 // The protocol error a command was answered with: `chrome.debugger` rejects with
@@ -48,9 +51,9 @@ function isStaleContext(error) {
 // An effect whose command was rejected either never ran — the browser answered
 // with a protocol error — or may have: no answer arrived, or the document was torn
 // down mid-call (headless `unconfirmed_effect`). Only the second is OutcomeUnknown.
-async function cdpSendEffect(tabId, method, params, operation) {
+async function cdpSendEffect(tabId, method, params, operation, sessionId) {
   try {
-    return await cdpSend(tabId, method, params);
+    return await cdpSend(tabId, method, params, sessionId);
   } catch (error) {
     const answered = protocolError(error);
     const cutOff = /Execution context was destroyed|Inspected target navigated or closed/.test(answered?.message ?? "");
@@ -69,11 +72,11 @@ async function cdpSendEffect(tabId, method, params, operation) {
 // discard is best-effort; the enable is the operation. The browser-mode twin of
 // headless `reemit_execution_contexts` / the connect-time prime in mod.rs, so the
 // discard-before-enable invariant holds in BOTH modes.
-async function cdpEnableRuntime(tabId) {
+async function cdpEnableRuntime(tabId, sessionId) {
   try {
-    await cdpSend(tabId, "Runtime.discardConsoleEntries", {});
+    await cdpSend(tabId, "Runtime.discardConsoleEntries", {}, sessionId);
   } catch {}
-  await cdpSend(tabId, "Runtime.enable", {});
+  await cdpSend(tabId, "Runtime.enable", {}, sessionId);
 }
 
 // Toggle the domain so existing contexts re-announce into our listener,

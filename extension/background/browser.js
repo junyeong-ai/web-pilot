@@ -4,7 +4,7 @@
 import { err, exceptionErr, lineSafeClip, noPageErr, topErr } from "./errors.js";
 import { activeFrameId, activeTabBorrowed, activeTabId, ensureRestored, pinTab, resolveActiveTab, resolveTabForRead, setActiveFrameId, unpinTab, viewedTab } from "./session.js";
 import { cdpEnableRuntime, withCdp } from "./cdp.js";
-import { cdpEval, frameWorldContextId } from "./query.js";
+import { cdpEval, resolveFrameWorld } from "./query.js";
 import { navigateBoundTab } from "./navigation.js";
 import { rearmMonitors } from "./state.js";
 import { isHostConnected } from "./host.js";
@@ -341,11 +341,11 @@ async function handleFrameSwitch(selector) {
       let error = null;
       const frames = [];
       for (const f of httpFrames) {
-        const uniqueContextId = await frameWorldContextId(tid, tab.id, f.frameId, "MAIN");
-        if (uniqueContextId == null) continue;
+        const frame = await resolveFrameWorld(tid, tab.id, f.frameId, "MAIN");
+        if (frame == null) continue;
         let r;
         try {
-          r = await cdpEval(tid, selector.js, uniqueContextId);
+          r = await cdpEval(tid, selector.js, frame);
         } catch (e) {
           // The eval itself faulted (not a clean false). Remember it and surface
           // it after the loop, never swallow it into a FrameNotFound — only an
@@ -388,7 +388,7 @@ async function handleFrameSwitch(selector) {
     if (selector.by !== "predicate") {
       const resolvable = await withCdp(tab.id, async (tid) => {
         await cdpEnableRuntime(tid);
-        return (await frameWorldContextId(tid, tab.id, matched.frameId, "MAIN")) != null;
+        return (await resolveFrameWorld(tid, tab.id, matched.frameId, "MAIN")) != null;
       }).catch(() => false);
       if (!resolvable) {
         const sel = JSON.stringify(selector);

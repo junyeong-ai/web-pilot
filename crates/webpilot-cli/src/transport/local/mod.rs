@@ -11,7 +11,8 @@
 //! content script. Per-frame routing splits in two: `bridge_contexts` (the
 //! isolated world, for `__webpilot_handle` calls) and `frame_contexts` (the
 //! MAIN world, for page expressions and monitors). Both are set up in `open`
-//! and rebound on page swaps (navigation, tab switch).
+//! and rebound on page swaps (navigation, tab switch). Each context names its
+//! host session, the page's or a cross-site iframe's (`frames`).
 //!
 //! The `do_*` command handlers are split across sibling modules by domain:
 //!   - `action`  — page-mutating actions (click/type/scroll/drag/navigate/...)
@@ -19,10 +20,12 @@
 //!   - `query`   — eval, wait, dom get/set, fetch
 //!   - `state`   — cookies, console + network monitoring, session
 //!   - `browser` — tab list/switch/new/close, frame list/switch, status
+//!   - `frames`  — the frame forest across renderer processes
 
 mod action;
 mod browser;
 mod capture;
+mod frames;
 mod query;
 mod state;
 
@@ -42,6 +45,7 @@ use webpilot::{WebPilotError, WireError};
 
 use crate::cdp::{CdpClient, CdpSession, DialogDesk};
 use crate::session;
+use frames::{FrameContext, Host, RemoteFrame};
 
 use super::Transport;
 use super::local_context;
@@ -66,6 +70,9 @@ const BRIDGE_WORLD: &str = "webpilot_bridge";
 /// source for every frame walk in this module and its siblings.
 pub(super) const MAX_FRAME_DEPTH: u32 = 256;
 
+/// frame_id (CDP string) → one world's context in that frame.
+type ContextMap = Arc<Mutex<HashMap<String, FrameContext>>>;
+
 pub struct LocalTransport {
     pub(crate) browser: Arc<CdpClient>,
     pub(crate) page: CdpSession,
@@ -87,15 +94,18 @@ pub struct LocalTransport {
     /// Resolves the bridge context for the main frame when no iframe is switched.
     pub(crate) main_frame_id: String,
     /// frame_id (CDP string) → MAIN-world **`uniqueContextId`**, for page
-    /// expressions. Populated by the background subscriber from each frame's
-    /// default (`isDefault`) `Runtime.executionContextCreated`. The unique id
-    /// (not the reusable integer `id`) is stored so a stale entry can never
-    /// resolve to a different context after a cross-process navigation.
-    pub(crate) frame_contexts: Arc<Mutex<HashMap<String, String>>>,
+    /// expressions. Populated by each host's background subscriber from each
+    /// frame's default (`isDefault`) `Runtime.executionContextCreated`. The
+    /// unique id (not the reusable integer `id`) is stored so a stale entry can
+    /// never resolve to a different context after a cross-process navigation.
+    pub(crate) frame_contexts: ContextMap,
     /// frame_id (CDP string) → the bridge isolated world's `uniqueContextId`.
-    /// Populated by the same subscriber from the `BRIDGE_WORLD`-named context
+    /// Populated by the same subscribers from the `BRIDGE_WORLD`-named context
     /// that `Page.addScriptToEvaluateOnNewDocument` creates per document.
-    pub(crate) bridge_contexts: Arc<Mutex<HashMap<String, String>>>,
+    pub(crate) bridge_contexts: ContextMap,
+    /// The cross-site iframes of the bound page this transport has attached,
+    /// by frame id (`frames`). Dropped with the binding.
+    pub(crate) remote_frames: Mutex<HashMap<String, Arc<RemoteFrame>>>,
     /// Active frame for evaluation. `None` means the page's main world.
     pub(crate) active_frame_id: Arc<Mutex<Option<String>>>,
     /// The device emulation this transport has put on the page it is bound to, so
@@ -237,6 +247,7 @@ impl LocalTransport {
             main_frame_id,
             frame_contexts,
             bridge_contexts,
+            remote_frames: Mutex::new(HashMap::new()),
             active_frame_id: Arc::new(Mutex::new(restored_active)),
             device_applied: None,
             console_monitoring: Arc::new(AtomicBool::new(console_armed)),
@@ -272,7 +283,7 @@ impl LocalTransport {
     /// listener repopulates the map asynchronously after open/rebind — is a
     /// typed `FrameNotFound`, never a silent fall-through to the main world:
     /// that would run the agent's code in a frame it did not choose.
-    async fn active_context_id(&self) -> Result<Option<String>> {
+    async fn active_context_id(&self) -> Result<Option<FrameContext>> {
         let active = self.active_frame_id.lock().await.clone();
         let Some(fid) = active else { return Ok(None) };
         Ok(Some(self.await_context(&self.frame_contexts, &fid).await?))
@@ -284,21 +295,22 @@ impl LocalTransport {
     /// `BRIDGE_WORLD` context the auto-injected script creates, surfacing a
     /// typed `FrameNotFound` if it never appears rather than silently routing a
     /// bridge call into the page's main world.
-    async fn bridge_context_id(&self) -> Result<String> {
+    async fn bridge_context_id(&self) -> Result<FrameContext> {
         let active = self.active_frame_id.lock().await.clone();
         let fid = active.unwrap_or_else(|| self.main_frame_id.clone());
         self.await_context(&self.bridge_contexts, &fid).await
     }
 
-    /// Poll `map` for frame `fid`'s `uniqueContextId` until it appears or `PROBE`
-    /// elapses — the contexts populate asynchronously as the listener observes
-    /// `executionContextCreated`, so a just-navigated frame may not be mapped
-    /// the instant a command fires.
-    async fn await_context(
-        &self,
-        map: &Arc<Mutex<HashMap<String, String>>>,
-        fid: &str,
-    ) -> Result<String> {
+    /// Poll `map` for frame `fid`'s context until it appears or `PROBE` elapses —
+    /// the contexts populate asynchronously as the listeners observe
+    /// `executionContextCreated`, so a just-navigated frame may not be mapped the
+    /// instant a command fires. A subframe no known context names may render in
+    /// a process of its own that this process has not attached yet, so the
+    /// remote frames are brought in first.
+    async fn await_context(&self, map: &ContextMap, fid: &str) -> Result<FrameContext> {
+        if fid != self.main_frame_id && !map.lock().await.contains_key(fid) {
+            self.sync_remote_frames().await?;
+        }
         let deadline = std::time::Instant::now() + PROBE;
         loop {
             if let Some(cid) = map.lock().await.get(fid).cloned() {
@@ -337,6 +349,11 @@ impl LocalTransport {
             }
         }
         reemit_execution_contexts(&self.page).await;
+        let remotes: Vec<Arc<RemoteFrame>> =
+            self.remote_frames.lock().await.values().cloned().collect();
+        for remote in remotes {
+            remote.reemit_execution_contexts().await;
+        }
         for _ in 0..20 {
             let all_present = {
                 let map = self.frame_contexts.lock().await;
@@ -349,16 +366,17 @@ impl LocalTransport {
         }
     }
 
-    /// Evaluate `expression` in `context` (a `uniqueContextId`; the default
-    /// world when `None`), returning either its serialized value or — when
-    /// `by_value` is false — the `objectId` of the remote result under
-    /// `/result/objectId`. `uniqueContextId` (not the reusable integer id) means
-    /// a context destroyed between map read and send fails cleanly instead of
-    /// landing in a different context that reused the integer.
+    /// Evaluate `expression` in `context` (the page's default world when `None`),
+    /// on the session of the context's host, returning either its serialized
+    /// value or — when `by_value` is false — the `objectId` of the remote result
+    /// under `/result/objectId`. `uniqueContextId` (not the reusable integer id)
+    /// means a context destroyed between map read and send fails cleanly instead
+    /// of landing in a different context that reused the integer; so does one
+    /// whose remote frame the binding no longer holds.
     pub(super) async fn eval_in_context(
         &self,
         expression: &str,
-        context: Option<&str>,
+        context: Option<&FrameContext>,
         by_value: bool,
     ) -> Result<Value> {
         self.eval_in_context_with_timeout(
@@ -380,7 +398,7 @@ impl LocalTransport {
     pub(super) async fn eval_in_context_with_timeout(
         &self,
         expression: &str,
-        context: Option<&str>,
+        context: Option<&FrameContext>,
         by_value: bool,
         timeout: std::time::Duration,
     ) -> Result<Value> {
@@ -389,11 +407,14 @@ impl LocalTransport {
             "returnByValue": by_value,
             "awaitPromise": true,
         });
-        if let Some(cid) = context {
-            params["uniqueContextId"] = cid.into();
+        let host = context.map_or(&Host::Page, |c| &c.host);
+        if let Some(context) = context {
+            params["uniqueContextId"] = context.unique_id.as_str().into();
         }
-        let result = self
-            .page
+        let Some(session) = self.host_session(host).await else {
+            return Err(crate::cdp::ContextGone.into());
+        };
+        let result = session
             .send_with_timeout("Runtime.evaluate", Some(params), timeout)
             .await?;
         if let Some(exception) = result.get("exceptionDetails") {
@@ -411,7 +432,7 @@ impl LocalTransport {
     /// `frame find`, readyState/title probes).
     pub(super) async fn eval_in_active(&self, expression: &str) -> Result<Value> {
         let cid = self.active_context_id().await?;
-        match self.eval_in_context(expression, cid.as_deref(), true).await {
+        match self.eval_in_context(expression, cid.as_ref(), true).await {
             Ok(result) => Ok(decode_eval_result(&result)),
             Err(e) if is_stale_context(&e) => {
                 // The active frame's MAIN-world context was destroyed by a
@@ -422,11 +443,14 @@ impl LocalTransport {
                 // then waits for the new document's context), retrying once: the
                 // MAIN-world mirror of the bridge path's renderer-swap retry.
                 if let Some(stale) = &cid {
-                    self.frame_contexts.lock().await.retain(|_, v| v != stale);
+                    self.frame_contexts
+                        .lock()
+                        .await
+                        .retain(|_, v| v.unique_id != stale.unique_id);
                 }
                 let fresh = self.active_context_id().await?;
                 let result = self
-                    .eval_in_context(expression, fresh.as_deref(), true)
+                    .eval_in_context(expression, fresh.as_ref(), true)
                     .await?;
                 Ok(decode_eval_result(&result))
             }
@@ -440,14 +464,15 @@ impl LocalTransport {
     /// state lives. `None` when the result is not an object (a primitive,
     /// `null`, or `undefined`), which the caller maps to its own typed error;
     /// keeping the object by reference (`returnByValue: false`) means identity,
-    /// not a serialized copy, crosses to CDP.
-    pub(super) async fn eval_object_id(&self, expression: &str) -> Result<Option<String>> {
+    /// not a serialized copy, crosses to CDP. The object belongs to the host
+    /// returned beside it: only that host's session can act on it.
+    pub(super) async fn eval_object_id(&self, expression: &str) -> Result<Option<(String, Host)>> {
         let cid = self.bridge_context_id().await?;
         let result = self.eval_in_context(expression, Some(&cid), false).await?;
         Ok(result
             .get("objectId")
             .and_then(|v| v.as_str())
-            .map(String::from))
+            .map(|id| (id.to_owned(), cid.host)))
     }
 
     // ── Bridge invocation ────────────────────────────────────────────────
@@ -493,7 +518,10 @@ impl LocalTransport {
                 // re-resolve — `bridge_context_id` then waits for the new
                 // document's context — and retry once. This is the renderer-swap
                 // race Puppeteer/Playwright also retry through.
-                self.bridge_contexts.lock().await.retain(|_, v| *v != cid);
+                self.bridge_contexts
+                    .lock()
+                    .await
+                    .retain(|_, v| v.unique_id != cid.unique_id);
                 let fresh = self.bridge_context_id().await?;
                 let result = self
                     .eval_in_context_with_timeout(&js, Some(&fresh), true, timeout)
@@ -574,7 +602,7 @@ impl LocalTransport {
                 return;
             }
             if let Ok(cid) = self.bridge_context_id().await
-                && Some(&cid) != before.as_ref()
+                && Some(&cid.unique_id) != before.as_ref()
             {
                 let parsed = self
                     .eval_in_context_with_timeout("document.readyState", Some(&cid), true, PROBE)
@@ -732,31 +760,12 @@ impl LocalTransport {
         self.credit_downloads(sweep, None).await
     }
 
-    /// Every frame id in the driven page's tree, main frame included.
+    /// Every frame id of the driven page, main frame included.
     pub(super) async fn page_frame_ids(&self) -> std::collections::HashSet<String> {
-        fn walk(node: &Value, depth: u32, out: &mut std::collections::HashSet<String>) {
-            if depth > MAX_FRAME_DEPTH {
-                return;
-            }
-            if let Some(id) = node.pointer("/frame/id").and_then(Value::as_str) {
-                out.insert(id.to_string());
-            }
-            for kid in node
-                .get("childFrames")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                walk(kid, depth + 1, out);
-            }
-        }
-        let mut ids = std::collections::HashSet::new();
-        if let Ok(tree) = self.page.send("Page.getFrameTree", None).await
-            && let Some(root) = tree.get("frameTree")
-        {
-            walk(root, 0, &mut ids);
-        }
-        ids
+        self.frame_forest()
+            .await
+            .map(|forest| forest.into_iter().map(|f| f.info.frame_id).collect())
+            .unwrap_or_default()
     }
 
     fn downloads_dir(&self) -> PathBuf {
@@ -1020,6 +1029,7 @@ impl LocalTransport {
         self.bridge_contexts = bridge_contexts;
         self.main_frame_id = main_frame_id;
         self.monitor_hooks.lock().await.clear();
+        self.remote_frames.lock().await.clear();
         self.load_frame_scope().await;
         // A new session carries none of the old one's emulation overrides, so the
         // record of what is applied goes with the page it described. The reconcile
@@ -1092,30 +1102,19 @@ impl LocalTransport {
         )
     }
 
-    /// Whether the switched-into frame is still in the tree. `true` when no frame
-    /// is active (nothing to lose) or it is still present; `false` only when a
-    /// frame was switched and the document that held it is gone — so the caller
-    /// resets the scope instead of resolving a dead context. An unreadable tree
-    /// returns `true`: don't tear down a live scope on an uncertain read.
+    /// Whether the switched-into frame is still in the forest. `true` when no
+    /// frame is active (nothing to lose) or it is still present; `false` only
+    /// when a frame was switched and the document that held it is gone — so the
+    /// caller resets the scope instead of resolving a dead context. An unreadable
+    /// forest returns `true`: don't tear down a live scope on an uncertain read.
     async fn active_frame_still_present(&self) -> bool {
         let Some(fid) = self.active_frame_id.lock().await.clone() else {
             return true;
         };
-        let Ok(tree) = self.page.send("Page.getFrameTree", None).await else {
-            return true;
-        };
-        fn contains(node: &Value, fid: &str, depth: u32) -> bool {
-            if depth > MAX_FRAME_DEPTH {
-                return false;
-            }
-            node.pointer("/frame/id").and_then(Value::as_str) == Some(fid)
-                || node
-                    .get("childFrames")
-                    .and_then(Value::as_array)
-                    .is_some_and(|kids| kids.iter().any(|k| contains(k, fid, depth + 1)))
+        match self.frame_forest().await {
+            Ok(forest) => forest.iter().any(|f| f.info.frame_id == fid),
+            Err(_) => true,
         }
-        tree.get("frameTree")
-            .is_some_and(|root| contains(root, &fid, 0))
     }
 
     /// `(target_id, url)` of the page WebPilot is bound to — the target it just
@@ -2257,17 +2256,15 @@ async fn install_bridge_world(page: &CdpSession) -> Result<()> {
 /// drops the half-attached page and leaves the current pin intact — never a
 /// silent retarget onto a page with no bridge world. `open` and `do_tab_switch`
 /// share this so the two priming paths cannot drift.
-async fn prime_page(
-    page: &mut CdpSession,
-) -> Result<(
-    Arc<Mutex<HashMap<String, String>>>,
-    Arc<Mutex<HashMap<String, String>>>,
-    String,
-)> {
-    let frame_contexts = Arc::new(Mutex::new(HashMap::new()));
-    let bridge_contexts = Arc::new(Mutex::new(HashMap::new()));
-    let listener =
-        spawn_frame_context_listener(page, frame_contexts.clone(), bridge_contexts.clone());
+async fn prime_page(page: &mut CdpSession) -> Result<(ContextMap, ContextMap, String)> {
+    let frame_contexts = ContextMap::default();
+    let bridge_contexts = ContextMap::default();
+    let listener = spawn_frame_context_listener(
+        page,
+        Host::Page,
+        frame_contexts.clone(),
+        bridge_contexts.clone(),
+    );
     page.track(listener);
     install_bridge_world(page).await?;
     state::install_dialog_handler(page).await?;
@@ -2278,11 +2275,12 @@ async fn prime_page(
 
 #[must_use = "track the listener on its session so Drop aborts it"]
 fn spawn_frame_context_listener(
-    page: &CdpSession,
-    main: Arc<Mutex<HashMap<String, String>>>,
-    bridge: Arc<Mutex<HashMap<String, String>>>,
+    session: &CdpSession,
+    host: Host,
+    main: ContextMap,
+    bridge: ContextMap,
 ) -> tokio::task::JoinHandle<()> {
-    let mut events = page.subscribe_events();
+    let mut events = session.subscribe_events();
     tokio::spawn(async move {
         loop {
             match events.recv().await {
@@ -2306,11 +2304,15 @@ fn spawn_frame_context_listener(
                             let is_bridge =
                                 ctx.and_then(|c| c.get("name")).and_then(|v| v.as_str())
                                     == Some(BRIDGE_WORLD);
-                            if let (Some(fid), Some(uid)) = (frame_id, unique) {
+                            if let (Some(fid), Some(unique_id)) = (frame_id, unique) {
+                                let context = FrameContext {
+                                    host: host.clone(),
+                                    unique_id,
+                                };
                                 if is_default {
-                                    main.lock().await.insert(fid, uid);
+                                    main.lock().await.insert(fid, context);
                                 } else if is_bridge {
-                                    bridge.lock().await.insert(fid, uid);
+                                    bridge.lock().await.insert(fid, context);
                                 }
                             }
                         }
@@ -2322,19 +2324,24 @@ fn spawn_frame_context_listener(
                                 .pointer("/params/executionContextUniqueId")
                                 .and_then(|v| v.as_str())
                             {
-                                main.lock().await.retain(|_, v| v != uid);
-                                bridge.lock().await.retain(|_, v| v != uid);
+                                main.lock().await.retain(|_, v| v.unique_id != uid);
+                                bridge.lock().await.retain(|_, v| v.unique_id != uid);
                             }
                         }
                         "Runtime.executionContextsCleared" => {
-                            main.lock().await.clear();
-                            bridge.lock().await.clear();
+                            main.lock().await.retain(|_, v| v.host != host);
+                            bridge.lock().await.retain(|_, v| v.host != host);
                         }
                         _ => {}
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(_) => break,
+                Err(_) => {
+                    // The session detached, and every context it reached with it.
+                    main.lock().await.retain(|_, v| v.host != host);
+                    bridge.lock().await.retain(|_, v| v.host != host);
+                    break;
+                }
             }
         }
     })

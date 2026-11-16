@@ -9,6 +9,7 @@ use webpilot::protocol::ResponseData;
 use webpilot::types::DomSnapshot;
 
 use super::LocalTransport;
+use super::frames::Host;
 
 impl LocalTransport {
     pub(super) async fn do_capture(
@@ -224,7 +225,7 @@ impl LocalTransport {
             // the whole match, so locking inline would hold the frame-pin
             // mutex across `bridge_context_id().await` — which locks it again.
             let active = self.active_frame_id.lock().await.clone();
-            let params = match active {
+            let (params, host) = match active {
                 Some(fid) => {
                     // Validate the pinned frame through the same resolver every
                     // bridge call uses: a dead pin (the frame navigated away
@@ -232,14 +233,15 @@ impl LocalTransport {
                     // or `frame main`), never the generic CDP error a raw
                     // getFullAXTree against a gone frame would surface as
                     // Other — the split browser mode's live context resolution
-                    // already makes.
-                    self.bridge_context_id().await?;
-                    Some(json!({ "frameId": fid }))
+                    // already makes. Its host is the session that holds its tree.
+                    let context = self.bridge_context_id().await?;
+                    (Some(json!({ "frameId": fid })), context.host)
                 }
-                None => None,
+                None => (None, Host::Page),
             };
             let r = self
-                .page
+                .require_host_session(&host)
+                .await?
                 .send("Accessibility.getFullAXTree", params)
                 .await?;
             ax_tree_json = Some(serde_json::to_string_pretty(&r)?);
@@ -369,8 +371,8 @@ impl LocalTransport {
                 return tally.http;
             }
             let mut uncommitted = false;
-            for frame_id in &tally.initial {
-                if self.owner_names_http_url(frame_id).await {
+            for (frame_id, owner_host) in &tally.initial {
+                if self.owner_names_http_url(frame_id, owner_host).await {
                     uncommitted = true;
                     break;
                 }
@@ -382,77 +384,59 @@ impl LocalTransport {
         }
     }
 
-    /// The frames below the active frame: how many show an HTTP(S) document, and
-    /// which still show the initial empty one.
+    /// The frames below the active frame, in every process: how many show an
+    /// HTTP(S) document, and which still show the initial empty one.
     async fn tally_subframes(&self) -> Option<SubframeTally> {
-        let tree = self.page.send("Page.getFrameTree", None).await.ok()?;
-        // The node whose `/frame/id` matches `fid`, anywhere in the tree. Bounded
-        // by the same depth cap as the counting walk: the tree is browser-supplied,
-        // so a pathological (or corrupted) depth must degrade to "not found", never
-        // overflow the stack.
-        fn find<'a>(
-            node: &'a serde_json::Value,
-            fid: &str,
-            depth: u32,
-        ) -> Option<&'a serde_json::Value> {
-            if depth > super::MAX_FRAME_DEPTH {
-                return None;
-            }
-            if node.pointer("/frame/id").and_then(|v| v.as_str()) == Some(fid) {
-                return Some(node);
-            }
-            node.get("childFrames")
-                .and_then(|v| v.as_array())
-                .and_then(|kids| kids.iter().find_map(|k| find(k, fid, depth + 1)))
-        }
-        fn tally(node: &serde_json::Value, depth: u32, into: &mut SubframeTally) {
-            if depth > super::MAX_FRAME_DEPTH {
-                return;
-            }
-            let url = node.pointer("/frame/url").and_then(|v| v.as_str());
-            if url.is_some_and(|u| u.starts_with("http")) {
-                into.http += 1;
-            } else if matches!(url, None | Some("" | "about:blank"))
-                && let Some(id) = node.pointer("/frame/id").and_then(|v| v.as_str())
-            {
-                into.initial.push(id.to_owned());
-            }
-            if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
-                for child in children {
-                    tally(child, depth + 1, into);
+        let forest = self.frame_forest().await.ok()?;
+        let parents: std::collections::HashMap<&str, Option<&str>> = forest
+            .iter()
+            .map(|f| (f.info.frame_id.as_str(), f.info.parent_frame_id.as_deref()))
+            .collect();
+        // The frame the capture already shows: the active one, or the main frame.
+        let active = self.active_frame_id.lock().await.clone();
+        let shown = match &active {
+            Some(fid) => fid.as_str(),
+            None => forest
+                .iter()
+                .find(|f| f.info.is_main)?
+                .info
+                .frame_id
+                .as_str(),
+        };
+        // Strictly below `shown`, bounded like every frame walk: the forest is
+        // browser-supplied, so a pathological depth degrades to "not below".
+        let below = |frame: &str| {
+            let mut parent = parents.get(frame).copied().flatten();
+            for _ in 0..=super::MAX_FRAME_DEPTH {
+                match parent {
+                    Some(p) if p == shown => return true,
+                    Some(p) => parent = parents.get(p).copied().flatten(),
+                    None => return false,
                 }
             }
-        }
-
-        let root = tree.get("frameTree")?;
-        // The subtree to look under: the active frame's node, or the whole tree
-        // from the main frame. Count the frames strictly BELOW it — the subtree
-        // root is the frame the capture already shows.
-        let active = self.active_frame_id.lock().await.clone();
-        let subtree = match &active {
-            Some(fid) => find(root, fid, 0),
-            None => Some(root),
+            false
         };
         let mut into = SubframeTally::default();
-        if let Some(children) = subtree
-            .and_then(|node| node.get("childFrames"))
-            .and_then(|v| v.as_array())
-        {
-            // Each child is the entry of its own walk, so it starts at depth 0 —
-            // same as every other frame walk's entry, so the shared depth bound
-            // fires at the same level across all of them.
-            for child in children {
-                tally(child, 0, &mut into);
+        for frame in forest.iter().filter(|f| below(&f.info.frame_id)) {
+            let url = frame.info.url.as_str();
+            if url.starts_with("http") {
+                into.http += 1;
+            } else if matches!(url, "" | "about:blank") {
+                into.initial
+                    .push((frame.info.frame_id.clone(), frame.owner_host.clone()));
             }
         }
         Some(into)
     }
 
-    /// Whether frame `frame_id`'s owner element (`<iframe>`, `<frame>`) names an
-    /// HTTP(S) URL — read from its resolved `src`, as the browser loads it.
-    async fn owner_names_http_url(&self, frame_id: &str) -> bool {
-        let Ok(owner) = self
-            .page
+    /// Whether frame `frame_id`'s owner element (`<iframe>`, `<frame>`), in the
+    /// document `owner_host` reaches, names an HTTP(S) URL — read from its
+    /// resolved `src`, as the browser loads it.
+    async fn owner_names_http_url(&self, frame_id: &str, owner_host: &Host) -> bool {
+        let Some(session) = self.host_session(owner_host).await else {
+            return false;
+        };
+        let Ok(owner) = session
             .send("DOM.getFrameOwner", Some(json!({ "frameId": frame_id })))
             .await
         else {
@@ -461,8 +445,7 @@ impl LocalTransport {
         let Some(backend_node_id) = owner.get("backendNodeId").cloned() else {
             return false;
         };
-        let Ok(resolved) = self
-            .page
+        let Ok(resolved) = session
             .send(
                 "DOM.resolveNode",
                 Some(json!({ "backendNodeId": backend_node_id })),
@@ -477,8 +460,7 @@ impl LocalTransport {
         else {
             return false;
         };
-        let src = self
-            .page
+        let src = session
             .send(
                 "Runtime.callFunctionOn",
                 Some(json!({
@@ -488,8 +470,7 @@ impl LocalTransport {
                 })),
             )
             .await;
-        let _ = self
-            .page
+        let _ = session
             .send(
                 "Runtime.releaseObject",
                 Some(json!({ "objectId": object_id })),
@@ -508,7 +489,9 @@ impl LocalTransport {
 #[derive(Default)]
 struct SubframeTally {
     http: u32,
-    initial: Vec<String>,
+    /// Each frame still on its initial document, with the host of the document
+    /// holding its `<iframe>`.
+    initial: Vec<(String, Host)>,
 }
 
 fn empty_snapshot(page_url: &str, page_title: &str) -> DomSnapshot {

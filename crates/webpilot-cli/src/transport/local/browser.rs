@@ -158,12 +158,12 @@ impl LocalTransport {
     /// frame renames itself, so a click targeting the attribute's value opens a
     /// new context while one targeting the live name loads the frame.
     pub(super) async fn frame_named(&self, name: &str) -> Option<String> {
-        let tree = self.page.send("Page.getFrameTree", None).await.ok()?;
-        let mut all = Vec::new();
-        collect_frames(tree.get("frameTree")?, 0, &mut all);
-        all.into_iter()
-            .find(|f| f.name.as_deref() == Some(name))
-            .map(|f| f.frame_id)
+        self.frame_forest()
+            .await
+            .ok()?
+            .into_iter()
+            .find(|f| f.info.name.as_deref() == Some(name))
+            .map(|f| f.info.frame_id)
     }
 
     /// Adopt a tab the acted-on page opened during the action window — the
@@ -380,11 +380,12 @@ impl LocalTransport {
     // ── Frames ───────────────────────────────────────────────────────────
 
     pub(super) async fn do_frame_list(&self) -> Result<ResponseData> {
-        let result = self.page.send("Page.getFrameTree", None).await?;
-        let mut frames = Vec::new();
-        if let Some(tree) = result.get("frameTree") {
-            collect_frames(tree, 0, &mut frames);
-        }
+        let frames: Vec<FrameInfo> = self
+            .frame_forest()
+            .await?
+            .into_iter()
+            .map(|f| f.info)
+            .collect();
         let mut active_frame_id = self.active_frame_id.lock().await.clone();
         // A persisted active-frame id can outlive its frame — a prior process
         // switched into it, then the page dropped it. `frame list` is the recovery
@@ -418,11 +419,12 @@ impl LocalTransport {
             });
         }
 
-        let tree = self.page.send("Page.getFrameTree", None).await?;
-        let mut all = Vec::new();
-        if let Some(t) = tree.get("frameTree") {
-            collect_frames(t, 0, &mut all);
-        }
+        let all: Vec<FrameInfo> = self
+            .frame_forest()
+            .await?
+            .into_iter()
+            .map(|f| f.info)
+            .collect();
 
         // Only HTTP(S) subframes are switch targets — the same scheme filter
         // browser mode applies and the same one `count_http_subframes` uses to
@@ -483,15 +485,15 @@ impl LocalTransport {
                 self.settle_frame_contexts(&candidate_ids).await;
                 // Resolve every candidate's context CONCURRENTLY under one
                 // shared PROBE budget. `settle` already waited 500ms best-effort;
-                // a still-missing candidate is either a same-process frame
-                // churning slower than that budget (live — its context WILL
-                // land) or a cross-origin OOPIF with none in this session at
-                // all. Waiting per-candidate SERIALLY would pay PROBE (2s) for
-                // EACH missing one — a page with many OOPIFs would stall N×2s.
-                // Racing them together bounds the whole resolve at one PROBE: a
-                // live-but-slow frame is judged rather than silently missed (a
-                // false-negative `FrameNotFound`), an OOPIF still times out to a
-                // clean skip (treated like a non-match).
+                // a still-missing candidate is a frame churning slower than that
+                // budget (live — its context WILL land) or one that has no
+                // document to evaluate in. Waiting per-candidate SERIALLY would
+                // pay PROBE (2s) for EACH missing one — a page with many frames
+                // would stall N×2s. Racing them together bounds the whole resolve
+                // at one PROBE: a live-but-slow frame is judged rather than
+                // silently missed (a false-negative `FrameNotFound`), one with no
+                // context still times out to a clean skip (treated like a
+                // non-match).
                 let resolved: Vec<_> =
                     futures_util::future::join_all(candidates.iter().map(|f| async move {
                         self.await_context(&self.frame_contexts, &f.frame_id)
@@ -568,12 +570,11 @@ impl LocalTransport {
                     self.settle_frame_contexts(std::slice::from_ref(&frame.frame_id))
                         .await;
                 }
-                // A cross-origin OOPIF has no execution context in this tab's CDP
-                // session, so it never resolves: committing the switch would return
-                // success, then fail every later eval/capture with FrameNotFound
-                // (after a per-command probe). Fail loud AT THE SWITCH instead — the
-                // documented OOPIF boundary the predicate path already enforces by
-                // dropping unresolved candidates; Url/Name now agree.
+                // A frame whose context never resolves would fail every later
+                // eval/capture with FrameNotFound (after a per-command probe), so
+                // committing the switch would report a success nothing can use.
+                // Fail loud AT THE SWITCH instead, as the predicate path does by
+                // dropping unresolved candidates.
                 if !self
                     .frame_contexts
                     .lock()
@@ -657,42 +658,6 @@ impl LocalTransport {
             chrome_version,
             extension_version: None,
         }))
-    }
-}
-
-// ── Frame-tree walking helper ────────────────────────────────────────────
-
-fn collect_frames(node: &Value, depth: u32, out: &mut Vec<FrameInfo>) {
-    if depth > super::MAX_FRAME_DEPTH {
-        return;
-    }
-    if let Some(frame) = node.get("frame") {
-        out.push(FrameInfo {
-            frame_id: frame
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            url: frame
-                .get("url")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            name: frame
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            parent_frame_id: frame
-                .get("parentId")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            is_main: frame.get("parentId").is_none(),
-        });
-    }
-    if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
-        for child in children {
-            collect_frames(child, depth + 1, out);
-        }
     }
 }
 

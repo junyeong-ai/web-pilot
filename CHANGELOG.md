@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `action … --accept-dialogs`, `capture --url … --accept-dialogs` and MCP
   `accept_dialogs` answer OK to the confirm, prompt and "leave site?" dialogs of
   that one command. MCP clients had no way to accept a dialog.
+- Cross-site iframes, such as a payment field or an embedded sign-in, are
+  counted, listed, switched into and acted in, in both modes. Chrome renders
+  them in a process of their own: headless left them out of the count and the
+  frame list, and switching into one failed `FrameNotFound` in both modes.
 - MCP page tools take `tab`, and every snapshot names its tab (`in tab …`).
   The call switches to that tab first, and a tool given a `snapshot_id` acts in
   the tab that snapshot was taken in. The pin is one per browser, so agents

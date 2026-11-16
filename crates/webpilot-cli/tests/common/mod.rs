@@ -243,6 +243,12 @@ pub const LOAD_FRAME: &str = r#"<!doctype html><html><head><title>loadframe</tit
 /// when the action started must still be intercepted (browser mode injects the
 /// override per committed document; headless answers via the CDP responder),
 /// or the native modal wedges every later command on the tab.
+/// The cross-site child of `/crossparent`: a payment widget of the shape that
+/// lives in another site's iframe.
+pub const CROSS_CHILD: &str = r#"<!doctype html><html><head><title>crosschild</title></head>
+<body><button id="pay" onclick="document.title='paid:'+event.isTrusted">Pay</button>
+<input id="card" aria-label="Card number"></body></html>"#;
+
 /// A form that asks to confirm being left once it holds unsaved input.
 pub const UNSAVED: &str = r#"<!doctype html><html><head><title>unsaved</title></head>
 <body><input id="draft"><script>let dirty = false;
@@ -308,6 +314,23 @@ pub fn spawn_server() -> String {
                     let _ = stream.flush();
                     std::thread::sleep(std::time::Duration::from_millis(250));
                     let _ = stream.write_all(end.as_bytes());
+                    return;
+                }
+                // `localhost` is another site than `127.0.0.1`, so Chrome renders
+                // this child in a process of its own.
+                if req.starts_with("GET /crossparent") {
+                    let body = format!(
+                        "<!doctype html><html><head><title>crossparent</title></head><body>\
+                         <button id=\"top\">Top</button><iframe name=\"pay\" \
+                         src=\"http://localhost:{port}/crosschild\" width=\"400\" height=\"200\"></iframe>\
+                         </body></html>"
+                    );
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
                     return;
                 }
                 if req.starts_with("GET /many") {
@@ -398,6 +421,8 @@ pub fn spawn_server() -> String {
                     (LATE_ALERT, "")
                 } else if req.starts_with("GET /unsaved") {
                     (UNSAVED, "")
+                } else if req.starts_with("GET /crosschild") {
+                    (CROSS_CHILD, "")
                 } else if req.starts_with("GET /redirtarget") {
                     (REDIR_TARGET, "")
                 } else {

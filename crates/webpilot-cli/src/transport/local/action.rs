@@ -271,7 +271,7 @@ impl LocalTransport {
         // context), and a context id different from this one is how the settle
         // below knows to wait for the new page rather than capture the old one.
         let active_cid_before = if self.active_frame_id.lock().await.is_some() {
-            self.bridge_context_id().await.ok()
+            self.bridge_context_id().await.ok().map(|c| c.unique_id)
         } else {
             None
         };
@@ -572,14 +572,17 @@ impl LocalTransport {
             )
             .await?,
         )?;
-        let object_id = self.eval_object_id("(()=>{const t=window.__webpilot_state.pointerTarget;return t&&t.isConnected?t:null;})()")
+        let (object_id, host) = self.eval_object_id("(()=>{const t=window.__webpilot_state.pointerTarget;return t&&t.isConnected?t:null;})()")
             .await?.ok_or(WebPilotError::StaleSnapshot { index })?;
+        // The target's quads and hit test are its host's; the pointer events go
+        // to the page, at the point the frame boundaries put it.
+        let session = self.require_host_session(&host).await?;
         let outcome = async {
             let fragment = prep["fragment_index"].as_u64().ok_or_else(|| WebPilotError::Other { detail:"Click preparation omitted its layout fragment".into() })? as usize;
             let deadline = tokio::time::Instant::now() + webpilot::settings::timeouts().navigation;
             let mut previous = Value::Null;
             let quad = loop {
-                let geometry = self.page.send("DOM.getContentQuads", Some(json!({"objectId":object_id}))).await?;
+                let geometry = session.send("DOM.getContentQuads", Some(json!({"objectId":object_id}))).await?;
                 let quad = geometry["quads"].as_array().and_then(|quads| quads.get(fragment)).cloned()
                     .ok_or_else(|| WebPilotError::InvalidArgument { detail: "Click target has no content quad".into() })?;
                 if quad == previous { break quad; }
@@ -599,21 +602,31 @@ impl LocalTransport {
             if q.len() != 8 { anyhow::bail!("Malformed content quad"); }
             let x = q[0] + (q[2]-q[0])*fx + (q[6]-q[0])*fy;
             let y = q[1] + (q[3]-q[1])*fx + (q[7]-q[1])*fy;
-            let params = json!({"x":x,"y":y,"button":"left","clickCount":1,"modifiers":modifier_mask(modifiers)});
-            self.page.send("Input.dispatchMouseEvent", Some(json!({"type":"mouseMoved", "x":x, "y":y, "modifiers":modifier_mask(modifiers)}))).await?;
+            let boundaries = self.frame_boundaries(&host).await?;
+            let (page_x, page_y) = boundaries.iter().fold((x, y), |(x, y), b| (x + b.origin.0, y + b.origin.1));
+            let params = json!({"x":page_x,"y":page_y,"button":"left","clickCount":1,"modifiers":modifier_mask(modifiers)});
+            self.page.send("Input.dispatchMouseEvent", Some(json!({"type":"mouseMoved", "x":page_x, "y":page_y, "modifiers":modifier_mask(modifiers)}))).await?;
             let verified = Self::parse_bridge_response(self.invoke_bridge(&json!({"type":"prepareClick", "index":index, "snapshot_id":snapshot_id})).await?)?;
-            let geometry = self.page.send("DOM.getContentQuads", Some(json!({"objectId":object_id}))).await?;
+            let geometry = session.send("DOM.getContentQuads", Some(json!({"objectId":object_id}))).await?;
             let current_quad: Vec<f64> = serde_json::from_value(geometry["quads"][fragment].clone()).map_err(|_| WebPilotError::InvalidArgument { detail:"Click target has no content quad after pointer positioning".into() })?;
             if current_quad != q || verified["fragment_index"] != ready["fragment_index"] || coord(&verified, "x_fraction")? != fx || coord(&verified, "y_fraction")? != fy {
                 return Err(WebPilotError::InvalidArgument { detail:"Click target moved after pointer positioning; capture again".into() }.into());
             }
-            let metrics = self.page.send("Page.getLayoutMetrics", None).await?;
-            let page_x = coord(&metrics["cssLayoutViewport"], "pageX")?;
-            let page_y = coord(&metrics["cssLayoutViewport"], "pageY")?;
-            let hit = self.page.send("DOM.getNodeForLocation", Some(json!({"x":(x+page_x).round() as i64,"y":(y+page_y).round() as i64,"includeUserAgentShadowDOM":true}))).await?;
+            let covered = || WebPilotError::InvalidArgument { detail:"Click target is covered by another frame or page element".into() };
             let frame = self.active_frame_id.lock().await.clone().unwrap_or_else(|| self.main_frame_id.clone());
-            if hit["frameId"].as_str() != Some(frame.as_str()) {
-                return Err(WebPilotError::InvalidArgument { detail:"Click target is covered by another frame or page element".into() }.into());
+            if super::frames::node_at(&session, x, y).await?["frameId"].as_str() != Some(frame.as_str()) {
+                return Err(covered().into());
+            }
+            // Each <iframe> on the way up must be what the point lands on in the
+            // document that holds it, or that document draws over the frame.
+            let (mut outer_x, mut outer_y) = (x, y);
+            for boundary in &boundaries {
+                outer_x += boundary.origin.0;
+                outer_y += boundary.origin.1;
+                let outer = self.require_host_session(&boundary.host).await?;
+                if super::frames::node_at(&outer, outer_x, outer_y).await?["backendNodeId"] != boundary.owner {
+                    return Err(covered().into());
+                }
             }
             let pressed = self.page.send("Input.dispatchMouseEvent", Some({let mut p=params.clone();p["type"]=json!("mousePressed");p})).await;
             let released = self.page.send("Input.dispatchMouseEvent", Some({let mut p=params;p["type"]=json!("mouseReleased");p})).await;
@@ -629,8 +642,7 @@ impl LocalTransport {
             }
             Ok(prep)
         }.await;
-        let _ = self
-            .page
+        let _ = session
             .send("Runtime.releaseObject", Some(json!({"objectId":object_id})))
             .await;
         let _ = self.invoke_bridge(&json!({"type":"clearPointer"})).await;
@@ -678,22 +690,21 @@ impl LocalTransport {
     /// page removed between `prepareUpload` and here into a typed `StaleSnapshot`,
     /// never a silent file-set on an orphaned input.
     async fn set_upload_target_file(&self, index: u32, path: &std::path::Path) -> Result<()> {
-        let object_id = self
+        let (object_id, host) = self
             .eval_object_id(
                 "(()=>{const t=window.__webpilot_state.uploadTarget;return t&&t.isConnected?t:null;})()",
             )
             .await?
             .ok_or(WebPilotError::StaleSnapshot { index })?;
+        let session = self.require_host_session(&host).await?;
 
-        let outcome = self
-            .page
+        let outcome = session
             .send(
                 "DOM.setFileInputFiles",
                 Some(json!({"objectId": object_id, "files": [path.to_string_lossy()]})),
             )
             .await;
-        let _ = self
-            .page
+        let _ = session
             .send(
                 "Runtime.releaseObject",
                 Some(json!({"objectId": object_id})),

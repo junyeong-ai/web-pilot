@@ -185,16 +185,18 @@ async function handleCapture(command) {
         // footer/URL report the iframe. Resolve the active frame's CDP frameId via
         // the same nonce path eval uses (unambiguous for same-URL siblings).
         let params;
+        let sessionId;
         if (activeFrameId !== 0) {
           const resolved = await resolveFrameWorld(tid, tabId, activeFrameId, "MAIN");
-          // A cross-origin OOPIF has no context in this tab's session, so its CDP
-          // frameId can't be resolved. Fail like eval/find do — an unscoped tree
-          // here would be the ROOT under an iframe-scoped envelope: coherent but
-          // factually wrong. `null` is the sentinel the caller maps to that error.
+          // A frame whose context does not resolve has no CDP frameId to scope
+          // by. Fail like eval/find do — an unscoped tree here would be the ROOT
+          // under an iframe-scoped envelope: coherent but factually wrong. `null`
+          // is the sentinel the caller maps to that error.
           if (!resolved?.frameId) return null;
           params = { frameId: resolved.frameId };
+          sessionId = resolved.sessionId;
         }
-        return cdpSend(tid, "Accessibility.getFullAXTree", params);
+        return cdpSend(tid, "Accessibility.getFullAXTree", params, sessionId);
       });
       if (ax === null) {
         return topErr(

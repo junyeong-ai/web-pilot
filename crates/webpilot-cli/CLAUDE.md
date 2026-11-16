@@ -52,6 +52,13 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
       effect).
     - `capture.rs` — DOM / screenshot / PDF / accessibility tree;
       `count_http_subframes` → `DomSnapshot.subframes`.
+    - `frames.rs` — the frame forest across renderer processes. Every frame has
+      a `Host`: the page's session, or the session of the cross-site iframe
+      whose process renders it, attached from `Target.getTargets` when a
+      command needs it and dropped with the binding. The context maps carry
+      each context's host, so evaluation, object ids and quads go to the right
+      session; a click adds the `<iframe>` boundaries to reach the page's
+      viewport and hit-tests each one.
     - `query.rs` — eval (`do_eval`) / wait / dom get·set / fetch.
     - `state.rs` — cookies / console·network monitors / session. Monitors set an
       armed flag — persisted per context, so later CLI processes keep arming — and
@@ -90,8 +97,8 @@ The single `webpilot` binary. `main.rs` branches by role at startup: **CLI**
   shared event ring to one session (isolating each page's events); a detach
   watcher flips `session_alive` so an in-flight wait ends at once when the tab
   closes (backstopped by Chrome's `-32001`). The page is a `CdpSession` that
-  survives a cross-site renderer swap — no socket rebind. Why this model, and
-  the rejected alternatives (child sessions for cross-origin iframes, CDP-side
+  survives a cross-site renderer swap — no socket rebind. Why this model, how
+  cross-site iframes are reached, and the rejected alternatives (CDP-side
   monitors, BiDi): `docs/cdp-flat-session-migration.md`.
 - `session.rs` — Chrome lifecycle + `flock` launch lock; `headless_viewport()`
   (settings).

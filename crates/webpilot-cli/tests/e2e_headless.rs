@@ -4763,5 +4763,34 @@ fn headless_behavioral_flow() {
         serde_json::json!([{"type": "beforeunload", "message": "", "accepted": true}]),
         "{left}"
     );
+
+    // A cross-site iframe renders in a process of its own, yet it is counted,
+    // listed and entered like any frame, and a click, typed text, eval and a
+    // capture reach its document.
+    let cross = fx.run(&[
+        "capture",
+        "--include",
+        "dom",
+        "--url",
+        &format!("{base}/crossparent"),
+    ]);
+    let cross: serde_json::Value = serde_json::from_str(&stdout(&cross)).unwrap();
+    assert_eq!(cross["subframes"], 1, "{cross}");
+    let listed = stdout(&fx.run(&["frame"]));
+    assert!(listed.contains("/crosschild"), "{listed}");
+    let entered = fx.run(&["frame", "url", "/crosschild"]);
+    assert_eq!(code(&entered), 0, "{}", stdout(&entered));
+    let inner = fx.run(&["capture", "--include", "dom"]);
+    let pay = index_of(&inner, "pay");
+    let card = index_of(&inner, "card");
+    let paid = fx.run(&["action", "click", &pay]);
+    assert_eq!(code(&paid), 0, "{}", stdout(&paid));
+    assert_eq!(code(&fx.run(&["action", "type", &card, "4242"])), 0);
+    let state = stdout(&fx.run(&[
+        "eval",
+        "[document.title, document.getElementById('card').value, location.hostname].join(' ')",
+    ]));
+    assert!(state.contains("paid:true 4242 localhost"), "{state}");
+    assert_eq!(code(&fx.run(&["frame", "main"])), 0);
     drop(fx);
 }

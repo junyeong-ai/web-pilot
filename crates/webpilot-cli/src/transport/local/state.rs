@@ -935,17 +935,11 @@ impl LocalTransport {
         self.dialogs
             .accept
             .store(accept, std::sync::atomic::Ordering::Release);
-        let contexts: Vec<String> = self.frame_contexts.lock().await.values().cloned().collect();
+        let contexts: Vec<_> = self.frame_contexts.lock().await.values().cloned().collect();
+        let expression = format!("window.__webpilot_accept_dialogs = {accept}");
         for context in contexts {
             let _ = self
-                .page
-                .send(
-                    "Runtime.evaluate",
-                    Some(json!({
-                        "expression": format!("window.__webpilot_accept_dialogs = {accept}"),
-                        "uniqueContextId": context,
-                    })),
-                )
+                .eval_in_context(&expression, Some(&context), true)
                 .await;
         }
     }
@@ -953,25 +947,17 @@ impl LocalTransport {
     /// The dialogs answered since the last take — each document's record and
     /// the browser-side responder's — cleared as they are taken.
     pub(super) async fn take_dialogs(&self) -> Vec<Dialog> {
-        let contexts: Vec<String> = self.frame_contexts.lock().await.values().cloned().collect();
+        let contexts: Vec<_> = self.frame_contexts.lock().await.values().cloned().collect();
         let mut taken = Vec::new();
         for context in contexts {
             let Ok(reply) = self
-                .page
-                .send(
-                    "Runtime.evaluate",
-                    Some(json!({
-                        "expression": TAKE_DIALOGS_JS,
-                        "uniqueContextId": context,
-                        "returnByValue": true,
-                    })),
-                )
+                .eval_in_context(TAKE_DIALOGS_JS, Some(&context), true)
                 .await
             else {
                 continue;
             };
             if let Some(record) = reply
-                .pointer("/result/value")
+                .get("value")
                 .and_then(|value| serde_json::from_value::<Vec<Dialog>>(value.clone()).ok())
             {
                 taken.extend(record);

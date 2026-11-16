@@ -1731,6 +1731,35 @@ fn browser_behavioral_flow() {
     );
     let _ = fx.run(&["frame", "main"]);
 
+    // 6b''. A cross-site iframe renders in a process of its own, yet it is
+    //       entered like any frame, and a click, typed text and eval reach it.
+    assert_eq!(
+        code(&fx.run(&["action", "navigate", &format!("{base}/crossparent")])),
+        0
+    );
+    let entered = fx.run(&["frame", "url", "/crosschild"]);
+    assert_eq!(code(&entered), 0, "{}", stdout(&entered));
+    let inner: serde_json::Value =
+        serde_json::from_str(&stdout(&fx.run(&["capture", "--include", "dom"]))).unwrap();
+    let index_of = |id: &str| {
+        inner["elements"]
+            .as_array()
+            .and_then(|elements| elements.iter().find(|e| e["id"] == id))
+            .and_then(|e| e["index"].as_u64())
+            .unwrap_or_else(|| panic!("#{id} not captured: {inner}"))
+            .to_string()
+    };
+    let (pay, card) = (index_of("pay"), index_of("card"));
+    let paid = fx.run(&["action", "click", &pay]);
+    assert_eq!(code(&paid), 0, "{}", stdout(&paid));
+    assert_eq!(code(&fx.run(&["action", "type", &card, "4242"])), 0);
+    let state = stdout(&fx.run(&[
+        "eval",
+        "[document.title, document.getElementById('card').value, location.hostname].join(' ')",
+    ]));
+    assert!(state.contains("paid:true 4242 localhost"), "{state}");
+    let _ = fx.run(&["frame", "main"]);
+
     // 6c. `tab new` honesty (headless parity): a URL that doesn't parse is a
     //     typed InvalidArgument (7), not a generic chrome.tabs.create throw
     //     (Other, exit 1); an unreachable URL lands on Chrome's error page and
