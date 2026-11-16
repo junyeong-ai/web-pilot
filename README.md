@@ -236,7 +236,7 @@ Downloaded: ~/Library/Caches/webpilot/artifacts/downloads/default/<id> ("invoice
 
 파일은 다운로드 id로 이름 지어져 WebPilot의 아티팩트 루트(`--context`별로 분리)에 저장됩니다 — 서버가 보낸 파일명이 디스크 경로가 되는 일은 없습니다. `webpilot policy set --operation download --verdict deny`는 브라우저에서 전송 자체를 거부하며, 시도는 경로 없이 그대로 보고됩니다.
 
-`downloads`의 `saved`는 저장 완료, `in_progress`는 진행 중입니다. 진행 중인 파일은 반환된 `path`가 실제로 생긴 뒤 읽으세요. `denied`·`canceled`에는 사용 가능한 경로가 없습니다. 명령은 `[timeouts] download_window_ms`(기본 2000ms) 동안 추가 다운로드를 관찰하며, 더 늦게 시작된 다운로드는 결과에 포함되지 않을 수 있습니다.
+`downloads`의 `saved`는 저장 완료, `in_progress`는 진행 중입니다. 진행 중인 파일은 반환된 `path`가 실제로 생긴 뒤 읽으세요. `denied`·`canceled`에는 사용 가능한 경로가 없습니다. 명령은 `[timeouts] download_window_ms`(기본 2000ms) 동안 추가 다운로드를 관찰하며, 더 늦게 시작된 다운로드는 결과에 포함되지 않을 수 있습니다. CLI 명령이 끝난 뒤 시작된 다운로드는 저장하지 않고 차단합니다. `webpilot mcp`는 툴 호출 사이에도 연결을 유지하므로, 거기서 늦게 시작된 다운로드는 마지막 호출의 설정을 따릅니다. 즉 아티팩트 루트에 저장되지만 보고되지 않거나, `download` deny 아래에서는 거부됩니다.
 
 헤드리스 전용입니다. `--browser`에서는 사용자의 Chrome이 자기 다운로드 폴더와 규칙을 그대로 씁니다. Chrome 확장 API는 다운로드를 시작한 탭을 알려주지 않아, 보고하려면 사용자가 마침 받고 있던 파일까지 에이전트 명령 탓으로 돌리게 됩니다 — 그래서 브라우저 모드에서는 보고도 게이트도 하지 않습니다.
 

@@ -242,7 +242,7 @@ Files are named by their download id and land under WebPilot's artifact root
 on disk. `webpilot policy set --operation download --verdict deny` refuses the
 transfer in the browser; the attempt is still reported, without a path.
 
-In `downloads`, `saved` means complete and `in_progress` means the transfer is still running. Wait for the returned `path` to exist before reading an in-progress file. `denied` and `canceled` provide no usable path. Commands watch for additional downloads for `[timeouts] download_window_ms` (default 2000ms); downloads starting later may be absent from the result.
+In `downloads`, `saved` means complete and `in_progress` means the transfer is still running. Wait for the returned `path` to exist before reading an in-progress file. `denied` and `canceled` provide no usable path. Commands watch for additional downloads for `[timeouts] download_window_ms` (default 2000ms); downloads starting later may be absent from the result. A download that starts after a CLI command has finished is blocked rather than saved. `webpilot mcp` stays attached between tool calls, so a late download there follows the last call's setting: saved under the artifact root but unreported, or refused under a `download` deny.
 
 Headless only. Under `--browser` the user's own Chrome keeps its own download
 folder and its own rules; Chrome's extension API reports no initiating tab for a

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- In headless mode a download a page starts after a CLI command has finished is
+  blocked. Chrome drops the per-command download setting when the command
+  disconnects, so such a download was saved to the profile's default folder,
+  unreported and past a `download` deny. The profile now blocks downloads, and
+  each command still allows or denies them while it runs.
 - An `eval`, `fetch`, `dom set` or action whose document navigated away while
   the call was in flight reports `OutcomeUnknown` (exit 9): the code may have
   run, and the headless `Other` (exit 1) it gave invited a retry that repeated

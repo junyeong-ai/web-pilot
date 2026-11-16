@@ -259,6 +259,35 @@ pub fn read_pid() -> i32 {
         .unwrap_or(0)
 }
 
+/// Chrome's `DownloadRestrictions` value that blocks every download.
+const BLOCK_ALL_DOWNLOADS: u8 = 3;
+
+/// Make a download possible only while a command allows it. Each command sets
+/// `Browser.setDownloadBehavior`, but Chrome drops that setting when the
+/// command's connection closes, and a download a page starts afterwards would
+/// otherwise land in the profile's folder unreported, past a `download` deny.
+/// The profile blocks every download; the per-command setting still overrides
+/// it while a command is attached (measured on Chrome 157, default and isolated
+/// browser contexts alike).
+fn block_unattended_downloads(profile_dir: &Path) -> Result<()> {
+    let path = profile_dir.join("Default").join("Preferences");
+    // A file Chrome cannot parse is one it resets anyway, so it is replaced.
+    let mut prefs = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    prefs["download_restrictions"] = BLOCK_ALL_DOWNLOADS.into();
+    std::fs::create_dir_all(profile_dir.join("Default"))
+        .and_then(|()| {
+            dirs::atomic_write(
+                &path,
+                &serde_json::to_vec(&prefs).expect("a JSON value serializes"),
+            )
+        })
+        .with_context(|| format!("write {}", path.display()))
+}
+
 pub async fn launch_chrome() -> Result<(u32, String)> {
     let chrome = find_chrome()?;
     let profile_dir = dirs::chrome_profile_dir();
@@ -266,6 +295,7 @@ pub async fn launch_chrome() -> Result<(u32, String)> {
     // Clean stale DevToolsActivePort
     let devtools_port_file = profile_dir.join("DevToolsActivePort");
     let _ = std::fs::remove_file(&devtools_port_file);
+    block_unattended_downloads(&profile_dir)?;
 
     tracing::info!("Launching headless Chrome...");
 
