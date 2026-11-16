@@ -48,13 +48,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Both Linux targets build on one fixed Ubuntu release: the glibc a
-          # binary links against sets the oldest glibc it runs on, so a moving
-          # `-latest` label would raise that floor without a commit.
+          # Linux binaries link against zig's glibc 2.17 stubs, the floor of
+          # Rust's own *-linux-gnu targets. Linked against the runner's glibc,
+          # a binary would require whatever glibc that image ships.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-26.04
+            os: ubuntu-latest
+            glibc: "2.17"
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-26.04-arm
+            os: ubuntu-latest
+            glibc: "2.17"
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
@@ -73,10 +75,43 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        if: matrix.glibc
+        with:
+          version: 0.17.1
+          use-cache: false
+
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        if: matrix.glibc
+        with:
+          tool: cargo-zigbuild
+
       - name: Build
         env:
           TARGET: ${{ matrix.target }}
-        run: cargo build --release --locked --target "${TARGET}" --bin webpilot
+          GLIBC: ${{ matrix.glibc }}
+        run: |
+          if [ -n "${GLIBC}" ]; then
+            cargo zigbuild --release --locked --target "${TARGET}.${GLIBC}" --bin webpilot
+          else
+            cargo build --release --locked --target "${TARGET}" --bin webpilot
+          fi
+
+      # zig links against another glibc, without a word, once it no longer
+      # ships the one requested.
+      - name: Check the glibc floor
+        if: matrix.glibc
+        env:
+          TARGET: ${{ matrix.target }}
+          GLIBC: ${{ matrix.glibc }}
+        run: |
+          set -euo pipefail
+          needed="$(readelf --version-info --wide "target/${TARGET}/release/webpilot" \
+            | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -1)"
+          if [ "$(printf '%s\n%s\n' "${needed}" "${GLIBC}" | sort -V | tail -1)" != "${GLIBC}" ]; then
+            echo "::error::webpilot for ${TARGET} needs glibc ${needed}, above the ${GLIBC} floor"
+            exit 1
+          fi
 
       - name: Package
         id: package

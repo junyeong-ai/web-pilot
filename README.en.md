@@ -414,7 +414,7 @@ webpilot status --json | jq
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
 ```
 
-It downloads the prebuilt binary and SHA-256 checksum, verifies them, installs to `~/.local/bin/webpilot`, and runs `webpilot setup`, which unpacks the skill and extension **embedded in the binary at compile time** and registers the NM host. By default it asks nothing and keeps a skill you have edited. No repository clone is required.
+It downloads the prebuilt binary (x86_64 or arm64; macOS, or Linux with glibc 2.17 or newer) and SHA-256 checksum, verifies them, installs to `~/.local/bin/webpilot`, and runs `webpilot setup`, which unpacks the skill and extension **embedded in the binary at compile time** and registers the NM host. By default it asks nothing and keeps a skill you have edited. No repository clone is required.
 
 ```bash
 # Build from source (inside a checkout; rust-toolchain.toml pins the toolchain → rustup installs it)

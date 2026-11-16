@@ -405,7 +405,7 @@ webpilot status --json | jq
 curl -fsSL https://raw.githubusercontent.com/junyeong-ai/web-pilot/main/scripts/install.sh | bash
 ```
 
-릴리스의 사전 빌드 바이너리와 SHA-256 체크섬을 내려받아 검증한 뒤 `~/.local/bin/webpilot`에 설치하고, `webpilot setup`을 실행해 바이너리에 **컴파일 타임에 임베드된** 스킬과 확장을 풀고 NM 호스트를 등록합니다. 기본으로는 묻지 않고 진행하며, 직접 고친 스킬은 유지합니다. 저장소를 clone할 필요가 없습니다.
+릴리스의 사전 빌드 바이너리(x86_64 또는 arm64. macOS, 또는 glibc 2.17 이상의 Linux)와 SHA-256 체크섬을 내려받아 검증한 뒤 `~/.local/bin/webpilot`에 설치하고, `webpilot setup`을 실행해 바이너리에 **컴파일 타임에 임베드된** 스킬과 확장을 풀고 NM 호스트를 등록합니다. 기본으로는 묻지 않고 진행하며, 직접 고친 스킬은 유지합니다. 저장소를 clone할 필요가 없습니다.
 
 ```bash
 # 소스에서 빌드 (체크아웃 안에서; rust-toolchain.toml 이 툴체인을 고정 → rustup 이 설치)

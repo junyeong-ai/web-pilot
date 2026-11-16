@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Linux release binaries link against glibc 2.17, the floor of Rust's own
+  Linux targets, so they run on any glibc from 2.17 on. They were linked against
+  the build image's glibc: the aarch64 binary would not start below glibc 2.39,
+  as on Ubuntu 22.04, Debian 12 or RHEL 9, and there the x86_64 binary printed a
+  dynamic-loader warning on every run.
+
 ## [0.14.0] - 2026-11-17
 
 ### Added
